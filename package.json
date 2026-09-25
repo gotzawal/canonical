@@ -30,6 +30,10 @@
     },
     "scripts": {
         "dev": "vite",
+        "editor": "vite --config editor/vite.config.js",
+        "editor:build": "vite build --config editor/vite.config.js",
+        "editor:preview": "vite preview --config editor/vite.config.js",
+        "editor:typecheck": "tsc --noEmit -p editor/tsconfig.json",
         "build": "tsc --p tsconfig.build.json && vite build && npm run build:types && npm run minify",
         "build:test": "tsc --p tsconfig.build.json && vite build && npm run build:packages",
         "build:packages": "npm run build:physics && npm run build:media && npm run build:stats && npm run build:particle && npm run build:graphic && npm run build:geometry && npm run build:atmosphere",
