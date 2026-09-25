@@ -137,6 +137,20 @@ Please read the [Docs](https://www.orillusion.com/guide/) to Learn More.
 - [Documentation](https://www.orillusion.com/guide/)
 - [Forum](https://forum.orillusion.com/)
 
+## Editor
+`editor/` is a scene editor that runs entirely in the browser: no install, no server. It is built from the engine source in this repository and published to GitHub Pages every time `main` is updated:
+
+**https://gotzawal.github.io/canonical/**
+
+- Create primitives, lights and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
+- Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
+- Edit materials, lights, sky, exposure, bloom, ambient occlusion and fog
+- Scenes autosave to the browser (imported files live in IndexedDB); `Ctrl+S` downloads a `.scene.json` with assets embedded, `Ctrl+O` opens one
+
+Run it locally with `pnpm run editor` (http://localhost:8100). `pnpm run editor:build` writes the static site to `editor/dist`.
+
+The Pages deployment is done by `.github/workflows/editor-pages.yml`. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+
 ## Dev and Contribution
 Please make sure to read the [Contributing Guide](.github/contributing.md) before developing or making a pull request.
 
