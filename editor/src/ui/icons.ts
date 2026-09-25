@@ -44,6 +44,23 @@ const PATHS: Record<string, string> = {
     keyboard: '<rect x="2.5" y="6" width="19" height="12" rx="2"/><path d="M6 10h.01M9.5 10h.01M13 10h.01M16.5 10h.01M6.5 14.5h11"/>',
     github: '<path d="M9 19c-4 1.3-4-2-5.5-2.5M14.5 21v-3.4c0-1 .1-1.4-.5-2 2.8-.3 5.5-1.4 5.5-6a4.7 4.7 0 0 0-1.3-3.2 4.4 4.4 0 0 0-.1-3.2s-1-.3-3.4 1.3a11.6 11.6 0 0 0-6.2 0C6.1 3 5.1 3.3 5.1 3.3A4.4 4.4 0 0 0 5 6.4a4.7 4.7 0 0 0-1.3 3.2c0 4.6 2.7 5.7 5.5 6-.6.6-.6 1.2-.5 2V21"/>',
     play: '<path d="M7 4.5v15l12-7.5Z"/>',
+    pause: '<path d="M8 5v14M16 5v14"/>',
+    stop: '<rect x="6" y="6" width="12" height="12" rx="1.5"/>',
+    step: '<path d="M6 5v14l9-7ZM18 5v14"/>',
+    camera: '<rect x="3" y="7" width="13" height="10" rx="1.5"/><path d="m16 11 5-3v8l-5-3"/>',
+    code: '<path d="m8.5 7-5 5 5 5M15.5 7l5 5-5 5M13.5 4.5l-3 15"/>',
+    script: '<path d="M6 3.5h9l4 4V20a.5.5 0 0 1-.5.5h-12a.5.5 0 0 1-.5-.5V4a.5.5 0 0 1 .5-.5Z"/><path d="M15 3.5V8h4M9.5 12l-2 2 2 2M14.5 12l2 2-2 2"/>',
+    shader: '<circle cx="12" cy="12" r="8.5"/><path d="M12 3.5a8.5 8.5 0 0 0 0 17Z" fill="currentColor" stroke="none" opacity=".35"/><path d="M5 9h14M4.5 13h15M6 17h12"/>',
+    graph: '<rect x="3" y="4" width="6" height="5" rx="1"/><rect x="15" y="4" width="6" height="5" rx="1"/><rect x="9" y="15" width="6" height="5" rx="1"/><path d="M9 6.5h6M6 9v3.5a2 2 0 0 0 2 2h1M18 9v3.5a2 2 0 0 1-2 2h-1"/>',
+    sparkle: '<path d="M12 3.5 13.8 9 19.5 10.8 13.8 12.6 12 18.5 10.2 12.6 4.5 10.8 10.2 9Z"/><path d="M18.5 3.5v3M17 5h3M5.5 16.5v3M4 18h3"/>',
+    send: '<path d="m4 12 16-8-6 16-2.5-6.5Z"/><path d="M11.5 13.5 20 4"/>',
+    refresh: '<path d="M20 11a8 8 0 0 0-14.4-4.3L4 8.5M4 13a8 8 0 0 0 14.4 4.3L20 15.5"/><path d="M4 4v4.5h4.5M20 20v-4.5h-4.5"/>',
+    arrowUp: '<path d="M12 19V5M6 11l6-6 6 6"/>',
+    arrowDown: '<path d="M12 5v14M6 13l6 6 6-6"/>',
+    gear: '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 0 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.6 1.7 1.7 0 0 0-1.8.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 0 1 0-4h.1a1.7 1.7 0 0 0 1.6-1.1 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 0 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 0 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/>',
+    link: '<path d="M10 14a4.5 4.5 0 0 0 6.4 0l3-3a4.5 4.5 0 0 0-6.4-6.4l-1.2 1.2"/><path d="M14 10a4.5 4.5 0 0 0-6.4 0l-3 3a4.5 4.5 0 0 0 6.4 6.4l1.2-1.2"/>',
+    panelBottom: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M3.5 14.5h17"/>',
+    user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
     home: '<path d="M4 11 12 4l8 7M6 9.5V20h12V9.5"/>',
     dots: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
 };
@@ -58,8 +75,9 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown }): string {
+export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown }): string {
     if (node.light) return node.light.type === 'directional' ? 'sun' : node.light.type === 'point' ? 'bulb' : 'spot';
+    if (node.camera) return 'camera';
     if (node.model) return 'model';
     if (node.mesh) {
         const t = node.mesh.geometry.type;

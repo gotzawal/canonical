@@ -15,8 +15,13 @@ function toolButton(iconName: string, title: string, onClick: (e: MouseEvent) =>
     return h('button', { class: 'tool-btn', title, attrs: { type: 'button', 'aria-label': title }, on: { click: onClick } }, icon(iconName, 17));
 }
 
-/** Viewport toolbar: tools, gizmo space, snapping, view helpers. */
-export function toolbar(editor: Editor, createMenu: () => MenuItem[]): HTMLElement {
+export interface ToolbarActions {
+    toggleDock(): void;
+    showAI(): void;
+}
+
+/** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls. */
+export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: ToolbarActions): HTMLElement {
     const store = editor.store;
     const toolButtons = TOOLS.map((t) => {
         const b = toolButton(t.icon, `${t.label} (${t.key})`, () => editor.setTool(t.tool));
@@ -34,6 +39,25 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[]): HTMLEleme
         const r = add.getBoundingClientRect();
         showMenu(createMenu(), r.left, r.bottom + 4);
     });
+
+    const play = h('button', { class: 'tool-btn wide play-btn', attrs: { type: 'button' } });
+    play.addEventListener('click', () => editor.togglePlay());
+    const pause = toolButton('pause', `Pause (${shortcutLabel('Mod+Shift+P')})`, () => editor.pausePlay());
+    const step = toolButton('step', 'Next frame (while paused)', () => editor.player.step());
+    const updatePlay = () => {
+        const st = editor.player.state;
+        play.classList.toggle('active', st !== 'stopped');
+        play.replaceChildren(icon(st === 'stopped' ? 'play' : 'stop', 15), h('span', { text: st === 'stopped' ? 'Play' : 'Stop' }));
+        play.title = st === 'stopped' ? `Play the scene and run scripts (${shortcutLabel('Mod+P')})` : `Stop and restore the scene (${shortcutLabel('Mod+P')})`;
+        pause.disabled = st === 'stopped';
+        pause.classList.toggle('active', st === 'paused');
+        step.disabled = st !== 'paused';
+    };
+    editor.player.on('state', updatePlay);
+    updatePlay();
+    const dock = toolButton('panelBottom', `Code and render graph panel (${shortcutLabel('Mod+J')})`, () => actions.toggleDock());
+    const ai = h('button', { class: 'tool-btn wide', title: 'AI assistant (OpenRouter)', attrs: { type: 'button' } }, icon('sparkle', 16), h('span', { text: 'AI' }));
+    ai.addEventListener('click', () => actions.showAI());
 
     const update = () => {
         const p = store.prefs;
@@ -57,10 +81,13 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[]): HTMLEleme
         'div',
         { class: 'toolbar', attrs: { role: 'toolbar', 'aria-label': 'Viewport tools' } },
         h('div', { class: 'tool-group' }, toolButtons),
-        h('div', { class: 'tool-group' }, space, snap),
-        h('div', { class: 'tool-group' }, undo, redo),
-        h('div', { class: 'tool-group' }, frame, grid),
+        h('div', { class: 'tool-group space-group' }, space, snap),
+        h('div', { class: 'tool-group history-group' }, undo, redo),
+        h('div', { class: 'tool-group view-group' }, frame, grid),
         h('div', { class: 'spacer' }),
+        h('div', { class: 'tool-group play-group' }, play, pause, step),
+        h('div', { class: 'spacer' }),
+        h('div', { class: 'tool-group' }, dock, ai),
         add,
     );
 }

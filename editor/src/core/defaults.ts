@@ -1,6 +1,6 @@
 import type {
-    CameraState, EnvironmentDoc, GeometryDoc, GeometryType, LightDoc, LightType,
-    MaterialDoc, NodeDoc, SceneDoc, Vec3,
+    CameraDoc, CameraState, EnvironmentDoc, GeometryDoc, GeometryType, LightDoc, LightType,
+    MaterialDoc, NodeDoc, RenderGraphDoc, SceneDoc, Vec3,
 } from './types';
 
 export function uid(prefix = 'n'): string {
@@ -58,6 +58,14 @@ export function defaultEnvironment(): EnvironmentDoc {
         fxaa: true,
         fog: { enable: false, color: '#aab4be', near: 5, far: 80, intensity: 1 },
     };
+}
+
+export function defaultRenderGraph(): RenderGraphDoc {
+    return { disabled: [], posts: [] };
+}
+
+export function defaultCameraDoc(): CameraDoc {
+    return { fov: 60, near: 0.1, far: 1000, main: true };
 }
 
 export function defaultCamera(): CameraState {
@@ -118,6 +126,15 @@ export function makeLightNode(type: LightType, parent: string | null = null): No
     return node;
 }
 
+export function makeCameraNode(parent: string | null = null): NodeDoc {
+    const node = makeNode('Camera', parent);
+    node.camera = defaultCameraDoc();
+    // Cameras look down their local +Z axis: this one faces the origin.
+    node.position = [0, 2, 8];
+    node.rotation = [14, 180, 0];
+    return node;
+}
+
 export function newScene(): SceneDoc {
     const sun = makeLightNode('directional');
     sun.name = 'Sun';
@@ -141,6 +158,9 @@ export function newScene(): SceneDoc {
         name: 'Untitled Scene',
         environment: defaultEnvironment(),
         assets: [],
+        scripts: [],
+        shaders: [],
+        renderGraph: defaultRenderGraph(),
         nodes: [sun, ground, cube, sphere],
     };
 }
@@ -154,6 +174,9 @@ export function emptyScene(): SceneDoc {
         name: 'Untitled Scene',
         environment: defaultEnvironment(),
         assets: [],
+        scripts: [],
+        shaders: [],
+        renderGraph: defaultRenderGraph(),
         nodes: [sun],
     };
 }

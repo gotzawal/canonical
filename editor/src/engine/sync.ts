@@ -1,15 +1,16 @@
 import {
-    BoxGeometry, CylinderGeometry, DirectLight, GeometryBase, LightBase, LitMaterial, Material, MeshRenderer,
-    Object3D, PlaneGeometry, PointLight, RenderNode, SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
+    BoxGeometry, Color, CylinderGeometry, DirectLight, GeometryBase, LightBase, LitMaterial, Material, MeshRenderer,
+    Object3D, PlaneGeometry, PointLight, RenderNode, RendererMask, SphereGeometry, SpotLight, Texture, TorusGeometry,
+    UnLitMaterial,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
 import { hexToColor } from './color';
+import { inspectModel, ModelInfo, ModelOverrides } from './modelParts';
 import type { Runtime } from './runtime';
-
-type AnyMaterial = LitMaterial | UnLitMaterial;
+import { applyProps, setBlended, type ShaderManager } from './shaders';
 
 interface ModelState {
     asset: string;
@@ -17,6 +18,11 @@ interface ModelState {
     obj: Object3D | null;
     status: 'loading' | 'ready' | 'error';
     error?: string;
+    /** Parts and material slots, once loaded. */
+    info: ModelInfo | null;
+    overrides: ModelOverrides | null;
+    /** Overrides last applied, to skip unchanged updates. */
+    key: string;
 }
 
 /** Engine-side state of one document node. */
@@ -31,11 +37,13 @@ export interface Entry {
     mesh: MeshRenderer | null;
     geometry: GeometryBase | null;
     geometryKey: string;
-    material: AnyMaterial | null;
-    materialType: MaterialDoc['type'] | null;
+    material: Material | null;
+    /** 'lit', 'unlit', 'shader:<id>:<version>' or 'shader-missing'. */
+    materialKind: string;
     materialKey: string;
     defaultBaseMap: Texture | null;
     mapAsset: string | null;
+    paramAssets: Record<string, string>;
     alphaMode: string;
     light: LightBase | null;
     lightType: LightType | null;
@@ -63,12 +71,17 @@ let loadToken = 0;
  */
 export class SceneSync extends Emitter<SyncEvents> {
     readonly entries = new Map<string, Entry>();
+    /** Nodes whose objects a script destroyed in Play mode; they stay out of the scene until Stop. */
+    readonly detached = new Set<string>();
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     private textures = new Map<string, Promise<Texture | null>>();
 
-    constructor(private runtime: Runtime, private store: Store) {
+    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager) {
         super();
+        // A shader that finished compiling changes the materials built from it.
+        shaders.on('compiled', () => this.sync());
+        shaders.on('status', () => this.sync());
     }
 
     // ---------------------------------------------------------------- sync
@@ -92,12 +105,21 @@ export class SceneSync extends Emitter<SyncEvents> {
             // Re-parent before destroying so surviving children of removed
             // nodes are moved out of the subtree that is about to die.
             for (const node of doc.nodes) this.parent(node);
-            for (const [id, entry] of this.entries) {
+            for (const [id, entry] of Array.from(this.entries)) {
                 if (!alive.has(id)) this.destroy(entry);
             }
             for (const node of doc.nodes) this.apply(node);
         }
         this.updateVisibility();
+    }
+
+    /**
+     * Destroys every engine object and builds the scene again from the
+     * document. Play mode uses this to throw away what scripts changed.
+     */
+    rebuild() {
+        for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        this.sync();
     }
 
     /** Resolves an engine object (possibly deep inside a model) to its node id. */
@@ -113,6 +135,11 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     modelState(id: string): ModelState | null {
         return this.entries.get(id)?.model ?? null;
+    }
+
+    /** Parts and material slots of a loaded model node. */
+    modelInfo(id: string): ModelInfo | null {
+        return this.entries.get(id)?.model?.info ?? null;
     }
 
     /** Renderers that belong to a node itself (its mesh and model), not to child nodes. */
@@ -145,10 +172,11 @@ export class SceneSync extends Emitter<SyncEvents> {
             geometry: null,
             geometryKey: '',
             material: null,
-            materialType: null,
+            materialKind: '',
             materialKey: '',
             defaultBaseMap: null,
             mapAsset: null,
+            paramAssets: {},
             alphaMode: 'OPAQUE',
             light: null,
             lightType: null,
@@ -161,6 +189,7 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private parent(node: NodeDoc) {
         const entry = this.entries.get(node.id)!;
+        if (this.detached.has(node.id)) return;
         if (entry.parent === node.parent && entry.obj.transform.parent) return;
         const parentObj = node.parent ? this.entries.get(node.parent)?.obj : null;
         (parentObj ?? this.runtime.scene).addChild(entry.obj);
@@ -169,7 +198,10 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private destroy(entry: Entry) {
         this.entries.delete(entry.id);
-        if (entry.model) entry.model.token = -1;
+        if (entry.model) {
+            entry.model.token = -1;
+            entry.model.overrides?.dispose();
+        }
         entry.obj.removeFromParent();
         entry.obj.destroy();
     }
@@ -232,10 +264,11 @@ export class SceneSync extends Emitter<SyncEvents> {
                 entry.mesh = null;
                 entry.geometry = null;
                 entry.material = null;
-                entry.materialType = null;
+                entry.materialKind = '';
                 entry.geometryKey = '';
                 entry.materialKey = '';
                 entry.mapAsset = null;
+                entry.paramAssets = {};
             }
             return;
         }
@@ -254,16 +287,33 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (old) this.disposeLater(old);
         }
 
-        if (!entry.material || entry.materialType !== mesh.material.type) {
+        const kind = this.materialKind(entry, mesh.material);
+        if (!entry.material || entry.materialKind !== kind) {
             const old = entry.material;
             const ctx = this.runtime.engine.context3D;
-            entry.material = mesh.material.type === 'unlit' ? new UnLitMaterial(ctx) : new LitMaterial(ctx);
-            entry.defaultBaseMap = entry.material.baseMap ?? null;
-            entry.materialType = mesh.material.type;
+            let mat: Material | null = null;
+            let shaderId: string | null = null;
+            if (kind.startsWith('shader:')) {
+                shaderId = mesh.material.shader!;
+                mat = this.shaders.createMaterial(shaderId);
+            }
+            if (!mat) {
+                if (kind === 'unlit') mat = new UnLitMaterial(ctx);
+                else if (kind === 'shader-missing') mat = errorMaterial(ctx);
+                else mat = new LitMaterial(ctx);
+            }
+            entry.material = mat;
+            entry.defaultBaseMap = mat.shader.getTexture('baseMap') ?? null;
+            entry.materialKind = kind;
             entry.materialKey = '';
             entry.mapAsset = null;
+            entry.paramAssets = {};
             entry.alphaMode = 'OPAQUE';
-            mr.material = entry.material;
+            // Vertex shaders that move vertices cannot use the depth prepass,
+            // which draws the undisplaced mesh.
+            if (shaderId && this.shaders.movesVertices(shaderId)) mr.addRendererMask(RendererMask.IgnoreDepthPass);
+            else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
+            mr.material = mat;
             if (old) this.disposeLater(old);
         }
 
@@ -276,8 +326,20 @@ export class SceneSync extends Emitter<SyncEvents> {
         mr.receiveShadow = mesh.receiveShadow;
     }
 
+    private materialKind(entry: Entry, md: MaterialDoc): string {
+        if (md.type !== 'shader') return md.type;
+        const id = md.shader;
+        if (id && this.shaders.isValid(id)) return `shader:${id}:${this.shaders.version(id)}`;
+        // While a first version compiles, keep the current look, or show a
+        // plain lit material: magenta is for shaders that failed.
+        if (id && this.shaders.status(id).state === 'compiling') return entry.material ? entry.materialKind : 'lit';
+        return 'shader-missing';
+    }
+
     private applyMaterial(entry: Entry, md: MaterialDoc) {
         const mat = entry.material!;
+        const kind = entry.materialKind;
+        if (kind === 'shader-missing') return;
         const opacity = clamp01(md.opacity);
         mat.baseColor = hexToColor(md.color, opacity);
         if (mat instanceof LitMaterial) {
@@ -285,26 +347,41 @@ export class SceneSync extends Emitter<SyncEvents> {
             mat.roughness = clamp01(md.roughness);
             mat.emissiveColor = hexToColor(md.emissive);
             mat.emissiveIntensity = Math.max(0, md.emissiveIntensity);
+        } else if (kind.startsWith('shader:')) {
+            const sh = mat.shader;
+            sh.setUniformFloat('metallic', clamp01(md.metallic));
+            sh.setUniformFloat('roughness', clamp01(md.roughness));
+            sh.setUniformColor('emissiveColor', hexToColor(md.emissive));
+            sh.setUniformFloat('emissiveIntensity', Math.max(0, md.emissiveIntensity));
+            const assets = applyProps(sh, this.shaders.props(md.shader!), md.params ?? {}, this.runtime.engine.context3D);
+            for (const { name, asset } of assets) {
+                if (entry.paramAssets[name] === asset) continue;
+                entry.paramAssets[name] = asset;
+                this.loadTexture(asset).then((tex) => {
+                    if (tex && entry.material === mat && entry.paramAssets[name] === asset) sh.setTexture(name, tex);
+                });
+            }
         }
-        (mat as Material).doubleSide = !!md.doubleSide;
+        mat.doubleSide = !!md.doubleSide;
 
         const alphaMode = opacity < 0.999 ? 'BLEND' : 'OPAQUE';
         if (alphaMode !== entry.alphaMode) {
-            mat.alphaMode = alphaMode;
+            if (mat instanceof LitMaterial || mat instanceof UnLitMaterial) mat.alphaMode = alphaMode;
+            else setBlended(mat, alphaMode === 'BLEND');
             entry.alphaMode = alphaMode;
         }
 
         if (md.map !== entry.mapAsset) {
             entry.mapAsset = md.map;
             if (!md.map) {
-                if (entry.defaultBaseMap) mat.baseMap = entry.defaultBaseMap;
+                if (entry.defaultBaseMap) mat.shader.setTexture('baseMap', entry.defaultBaseMap);
             } else {
                 const asset = md.map;
                 this.loadTexture(asset).then((tex) => {
                     if (!tex || entry.material !== mat || entry.mapAsset !== asset) return;
                     // The texture is decoded from sRGB by the GPU, so skip the shader's own decode.
                     mat.setDefine('USE_SRGB_ALBEDO', (tex as any).format === 'rgba8unorm-srgb');
-                    mat.baseMap = tex;
+                    mat.shader.setTexture('baseMap', tex);
                 });
             }
         }
@@ -352,10 +429,13 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
             return;
         }
-        if (entry.model && entry.model.asset === model.asset) return;
+        if (entry.model && entry.model.asset === model.asset) {
+            this.applyModelOverrides(entry, model);
+            return;
+        }
         if (entry.model) this.dropModel(entry);
         const token = ++loadToken;
-        const state: ModelState = { asset: model.asset, token, obj: null, status: 'loading' };
+        const state: ModelState = { asset: model.asset, token, obj: null, status: 'loading', info: null, overrides: null, key: '' };
         entry.model = state;
         this.loadPrefab(model.asset)
             .then((prefab) => {
@@ -365,6 +445,23 @@ export class SceneSync extends Emitter<SyncEvents> {
                 entry.obj.addChild(instance);
                 state.obj = instance;
                 state.status = 'ready';
+                const ctx = this.runtime.engine.context3D;
+                try {
+                    state.info = inspectModel(instance, ctx);
+                    state.overrides = new ModelOverrides(state.info, {
+                        shaders: this.shaders,
+                        loadTexture: (id) => this.loadTexture(id),
+                        dispose: (m) => this.disposeLater(m, true),
+                        ctx,
+                    });
+                    const current = this.store.node(entry.id)?.model;
+                    if (current) this.applyModelOverrides(entry, current);
+                } catch (e) {
+                    // The model still renders; it just cannot be edited part by part.
+                    console.warn('[editor] could not read the parts of the model', e);
+                    state.info = null;
+                    state.overrides = null;
+                }
                 this.setEnabled(entry, entry.visible, true);
                 this.emit('model', entry.id);
             })
@@ -377,10 +474,24 @@ export class SceneSync extends Emitter<SyncEvents> {
             });
     }
 
+    private applyModelOverrides(entry: Entry, model: ModelDoc) {
+        const st = entry.model;
+        if (!st?.overrides) return;
+        // Recompiled shaders need a re-apply even when the overrides did not change.
+        const versions = Object.values(model.materials ?? {})
+            .map((o) => (o.shader ? `${o.shader}:${this.shaders.version(o.shader)}` : ''))
+            .join(',');
+        const key = JSON.stringify([model.materials ?? {}, model.parts ?? {}, versions]);
+        if (key === st.key) return;
+        st.key = key;
+        st.overrides.apply(model, entry.visible);
+    }
+
     private dropModel(entry: Entry) {
         const m = entry.model;
         if (!m) return;
         m.token = -1;
+        m.overrides?.dispose();
         if (m.obj) {
             m.obj.removeFromParent();
             m.obj.destroy();
@@ -410,6 +521,11 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.visible = visible;
         if (entry.mesh) entry.mesh.enable = visible;
         if (entry.light) entry.light.enable = visible;
+        const model = this.store.node(entry.id)?.model;
+        if (entry.model?.overrides && model) {
+            entry.model.overrides.setVisible(model, visible);
+            return;
+        }
         entry.model?.obj?.traverse((o: Object3D) => {
             o.components.forEach((c) => {
                 if (c instanceof RenderNode) c.enable = visible;
@@ -435,12 +551,12 @@ export class SceneSync extends Emitter<SyncEvents> {
         return p;
     }
 
-    private loadTexture(assetId: string): Promise<Texture | null> {
+    loadTexture(assetId: string): Promise<Texture | null> {
         let p = this.textures.get(assetId);
         if (!p) {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
-                if (!meta) return null;
+                if (!meta || meta.kind !== 'texture') return null;
                 const url = await getAssetUrl(meta);
                 if (!url) return null;
                 return (await this.runtime.engine.res.loadTexture(url, undefined, false, 'srgb')) as Texture;
@@ -454,11 +570,20 @@ export class SceneSync extends Emitter<SyncEvents> {
         return p;
     }
 
-    /** Frees GPU resources once the GPU has finished frames that may still use them. */
-    private disposeLater(res: { destroy(force?: boolean): void }) {
+    /**
+     * Frees GPU resources once the GPU has finished frames that may still use
+     * them. `keepTextures` protects textures shared with other materials
+     * (model materials share the textures of the file).
+     */
+    disposeLater(res: { destroy(force?: boolean): void }, keepTextures = false) {
         const device = this.runtime.engine.context3D.device;
         const run = () => {
             try {
+                if (keepTextures && res instanceof Material && res.shader) {
+                    for (const list of res.shader.passShader.values()) {
+                        for (const pass of list) pass.textures = {};
+                    }
+                }
                 res.destroy();
             } catch (e) {
                 console.warn('[editor] dispose failed', e);
@@ -466,6 +591,13 @@ export class SceneSync extends Emitter<SyncEvents> {
         };
         device.queue.onSubmittedWorkDone().then(() => requestAnimationFrame(() => requestAnimationFrame(run)), run);
     }
+}
+
+function errorMaterial(ctx: any): Material {
+    // The classic "shader missing" magenta.
+    const mat = new UnLitMaterial(ctx);
+    mat.baseColor = new Color(1, 0, 1, 1);
+    return mat;
 }
 
 function nonZero(v: number): number {

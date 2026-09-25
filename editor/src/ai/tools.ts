@@ -1,0 +1,918 @@
+import type { Editor } from '../editor';
+import {
+    defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode,
+} from '../core/defaults';
+import { tidy } from '../core/math';
+import type {
+    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
+} from '../core/types';
+import { normalizeHex } from '../engine/color';
+import { recentLogs } from '../ui/statusbar';
+import type { ToolDef } from './openrouter';
+
+export interface ToolResult {
+    /** JSON-able result sent back to the model. */
+    data: unknown;
+    /** A data: URL image to show the model (vision models only). */
+    image?: string;
+    /** Short line for the chat log. */
+    summary?: string;
+}
+
+export interface ToolEnv {
+    editor: Editor;
+    allowPlay(): boolean;
+    screenshots(): boolean;
+}
+
+type Json = Record<string, any>;
+
+// ------------------------------------------------------------------ schemas
+
+const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
+const color = { type: 'string', description: '#rrggbb (CSS color names also work)' };
+const materialSchema = {
+    type: 'object',
+    description: 'Material of a primitive.',
+    properties: {
+        type: { type: 'string', enum: ['lit', 'unlit', 'shader'] },
+        color,
+        opacity: { type: 'number' },
+        metallic: { type: 'number' },
+        roughness: { type: 'number' },
+        emissive: color,
+        emissive_intensity: { type: 'number' },
+        double_side: { type: 'boolean' },
+        texture: { type: ['string', 'null'], description: 'Texture asset id, or null for none.' },
+        shader: { type: ['string', 'null'], description: 'Material shader id or name; sets type to "shader". null goes back to lit.' },
+        params: { type: 'object', description: 'Values of the shader\'s @property declarations.' },
+    },
+};
+const lightSchema = {
+    type: 'object',
+    properties: {
+        type: { type: 'string', enum: ['directional', 'point', 'spot'] },
+        color,
+        intensity: { type: 'number' },
+        cast_shadow: { type: 'boolean' },
+        range: { type: 'number' },
+        radius: { type: 'number' },
+        angle: { type: 'number', description: 'Spot cone angle in degrees.' },
+        inner_angle: { type: 'number', description: 'Spot inner cone, percent of the angle.' },
+    },
+};
+const cameraSchema = {
+    type: 'object',
+    properties: { fov: { type: 'number' }, near: { type: 'number' }, far: { type: 'number' }, main: { type: 'boolean' } },
+};
+const objectFields = {
+    name: { type: 'string' },
+    parent: { type: ['string', 'null'], description: 'Parent object id or name; null for the scene root.' },
+    position: vec3,
+    rotation: { ...vec3, description: 'Euler degrees.' },
+    scale: vec3,
+    visible: { type: 'boolean' },
+    size: { type: 'array', items: { type: 'number' }, description: 'box: [width, height, depth]; plane: [width, length].' },
+    radius: { type: 'number', description: 'sphere / torus radius, cylinder radius (both ends).' },
+    height: { type: 'number', description: 'cylinder height' },
+    tube: { type: 'number', description: 'torus tube radius' },
+    segments: { type: 'number' },
+    material: materialSchema,
+    light: lightSchema,
+    camera: cameraSchema,
+    cast_shadow: { type: 'boolean' },
+    receive_shadow: { type: 'boolean' },
+};
+const TYPES = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
+
+function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
+    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
+}
+
+export function toolDefs(env: ToolEnv): ToolDef[] {
+    const defs: ToolDef[] = [
+        def('get_scene', 'Summary of the project: objects (ids, types, transforms, materials, scripts), assets, scripts, shaders, render graph settings, selection and play state.'),
+        def('get_object', 'Full details of one object, including its world position and bounding box.', { id: { type: 'string', description: 'Object id or name.' } }, ['id']),
+        def('create_objects', 'Create primitives, lights, cameras or empty groups. Returns their ids.', {
+            objects: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: TYPES }, ...objectFields }, required: ['type'] } },
+        }, ['objects']),
+        def('update_objects', 'Change objects: name, parent, transform, visibility, material, primitive size, light or camera settings.', {
+            updates: {
+                type: 'array',
+                items: { type: 'object', properties: { id: { type: 'string' }, shape: { type: 'string', enum: ['box', 'sphere', 'plane', 'cylinder', 'torus'] }, ...objectFields }, required: ['id'] },
+            },
+        }, ['updates']),
+        def('delete_objects', 'Delete objects and their children.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
+        def('set_environment', 'Change sky, exposure and post processing settings.', {
+            scene_name: { type: 'string' },
+            sky: { type: 'string', enum: ['atmospheric', 'color'] },
+            sky_color: color,
+            sun_x: { type: 'number', description: 'Atmospheric sun azimuth 0..1' },
+            sun_y: { type: 'number', description: 'Atmospheric sun elevation 0..1' },
+            sky_exposure: { type: 'number' },
+            exposure: { type: 'number' },
+            fxaa: { type: 'boolean' },
+            bloom: { type: 'object', properties: { enable: { type: 'boolean' }, intensity: { type: 'number' }, threshold: { type: 'number' } } },
+            ao: { type: 'object', properties: { enable: { type: 'boolean' }, strength: { type: 'number' }, distance: { type: 'number' } } },
+            fog: { type: 'object', properties: { enable: { type: 'boolean' }, color, near: { type: 'number' }, far: { type: 'number' }, intensity: { type: 'number' } } },
+        }),
+        def('list_model_parts', 'Material slots and mesh parts of an imported model object, with their current values and overrides.', { id: { type: 'string' } }, ['id']),
+        def('set_model_material', 'Override a material slot of imported model objects. Missing fields keep their value; reset clears the slot.', {
+            ids: { type: 'array', items: { type: 'string' } },
+            slot: { type: 'string' },
+            reset: { type: 'boolean' },
+            color,
+            opacity: { type: 'number' },
+            metallic: { type: 'number' },
+            roughness: { type: 'number' },
+            emissive: color,
+            emissive_intensity: { type: 'number' },
+            double_side: { type: 'boolean' },
+            texture: { type: ['string', 'null'], description: 'Texture asset id, null for none, "file" for the model\'s own.' },
+            shader: { type: ['string', 'null'], description: 'Material shader id or name to replace the material; null removes it.' },
+            params: { type: 'object' },
+        }, ['ids', 'slot']),
+        def('set_model_part', 'Override a mesh part of imported model objects (visibility, shadows, material slot, local transform). reset clears the part.', {
+            ids: { type: 'array', items: { type: 'string' } },
+            path: { type: 'string' },
+            reset: { type: 'boolean' },
+            visible: { type: 'boolean' },
+            cast_shadow: { type: 'boolean' },
+            receive_shadow: { type: 'boolean' },
+            material_slot: { type: 'string' },
+            position: vec3,
+            rotation: vec3,
+            scale: vec3,
+        }, ['ids', 'path']),
+        def('add_model', 'Add another instance of an imported model asset to the scene.', { asset: { type: 'string' }, name: { type: 'string' }, position: vec3 }, ['asset']),
+        def('write_script', 'Create a script, or replace the code of an existing one (pass id, or an existing name). Optionally attach it to objects. Returns the compile result, fields and methods.', {
+            name: { type: 'string', description: 'File name, e.g. "Orbit.js".' },
+            code: { type: 'string' },
+            id: { type: 'string' },
+            attach_to: { type: 'array', items: { type: 'string' }, description: 'Object ids or names.' },
+            props: { type: 'object', description: 'Field values for the attached objects.' },
+        }, ['name', 'code']),
+        def('read_script', 'Code, compile status and runtime errors of a script.', { script: { type: 'string', description: 'Script id or name.' } }, ['script']),
+        def('attach_script', 'Attach a script to objects, with optional field values.', {
+            script: { type: 'string' },
+            object_ids: { type: 'array', items: { type: 'string' } },
+            props: { type: 'object' },
+        }, ['script', 'object_ids']),
+        def('detach_script', 'Remove a script from an object.', { object_id: { type: 'string' }, script: { type: 'string' } }, ['object_id', 'script']),
+        def('set_script_props', 'Set field values of a script attached to an object.', { object_id: { type: 'string' }, script: { type: 'string' }, props: { type: 'object' } }, ['object_id', 'script', 'props']),
+        def('delete_script', 'Delete a script asset (it is removed from every object).', { script: { type: 'string' } }, ['script']),
+        def('write_shader', 'Create a WGSL shader, or replace an existing one (pass id, or an existing name). Waits for the GPU compiler and returns errors with line numbers and the declared properties.', {
+            name: { type: 'string', description: 'File name, e.g. "Hologram.wgsl".' },
+            kind: { type: 'string', enum: ['material', 'post'] },
+            lighting: { type: 'string', enum: ['lit', 'unlit'], description: 'Material shaders only.' },
+            code: { type: 'string' },
+            id: { type: 'string' },
+        }, ['name', 'kind', 'code']),
+        def('read_shader', 'Code and compile status of a shader.', { shader: { type: 'string' } }, ['shader']),
+        def('assign_shader', 'Render primitive objects with a material shader (null goes back to the lit material).', {
+            shader: { type: ['string', 'null'] },
+            object_ids: { type: 'array', items: { type: 'string' } },
+            params: { type: 'object' },
+        }, ['shader', 'object_ids']),
+        def('delete_shader', 'Delete a shader asset.', { shader: { type: 'string' } }, ['shader']),
+        def('get_render_graph', 'Render passes in execution order with the resources they read and write, and the post effect chain.'),
+        def('set_render_pass', 'Switch a render pass off or on. Refused with a reason when the graph could not run.', { name: { type: 'string' }, enabled: { type: 'boolean' } }, ['name', 'enabled']),
+        def('add_post_effect', 'Add a post shader to the post chain.', { shader: { type: 'string' }, params: { type: 'object' }, enabled: { type: 'boolean' } }, ['shader']),
+        def('update_post_effect', 'Change a custom post effect: enabled, params, or move it (negative = earlier).', {
+            id: { type: 'string' },
+            enabled: { type: 'boolean' },
+            params: { type: 'object' },
+            move: { type: 'number' },
+        }, ['id']),
+        def('remove_post_effect', 'Remove a custom post effect from the chain.', { id: { type: 'string' } }, ['id']),
+        def('get_console', 'Recent editor console messages (errors, warnings, script logs).', { limit: { type: 'number' }, errors_only: { type: 'boolean' } }),
+        def('select_objects', 'Select objects in the editor and frame them in the view.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
+    ];
+    if (env.allowPlay()) {
+        defs.push(
+            def('run_play_test', 'Run the scene in Play mode for a few seconds, then stop and restore it. Returns script logs and errors. Use it to test scripts.', {
+                seconds: { type: 'number', description: '0.5 to 20, default 3.' },
+            }),
+            def('play', 'Start Play mode and leave it running for the user.'),
+            def('stop', 'Stop Play mode (restores the scene).'),
+        );
+    }
+    if (env.screenshots()) {
+        defs.push(def('capture_viewport', 'Take a picture of the viewport as it is now (the editor view, or the game camera while playing).'));
+    }
+    return defs;
+}
+
+// ---------------------------------------------------------------- helpers
+
+class ToolError extends Error {}
+
+const r3 = (v: number) => tidy(v, 3);
+const rv = (v: number[]) => v.map(r3);
+
+let colorCtx: CanvasRenderingContext2D | null = null;
+function hex(v: unknown, what = 'color'): string {
+    if (typeof v !== 'string' || !v.trim()) throw new ToolError(`${what} must be a color string like "#ff8800".`);
+    const s = v.trim();
+    if (/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) return normalizeHex(s.startsWith('#') ? s : '#' + s);
+    colorCtx ??= document.createElement('canvas').getContext('2d');
+    if (colorCtx) {
+        colorCtx.fillStyle = '#010203';
+        colorCtx.fillStyle = s;
+        const out = String(colorCtx.fillStyle);
+        if (out !== '#010203' && /^#[0-9a-f]{6}$/i.test(out)) return out;
+    }
+    throw new ToolError(`"${s}" is not a color.`);
+}
+
+function num(v: unknown, what: string): number {
+    const n = typeof v === 'string' ? Number(v) : v;
+    if (typeof n !== 'number' || !Number.isFinite(n)) throw new ToolError(`${what} must be a number.`);
+    return n;
+}
+
+function v3(v: unknown, what: string): Vec3 {
+    if (!Array.isArray(v) || v.length !== 3) throw new ToolError(`${what} must be an array of 3 numbers.`);
+    return [num(v[0], what), num(v[1], what), num(v[2], what)];
+}
+
+function params(v: unknown): Record<string, ParamValue> {
+    if (v === undefined || v === null) return {};
+    if (typeof v !== 'object' || Array.isArray(v)) throw new ToolError('params must be an object.');
+    const out: Record<string, ParamValue> = {};
+    for (const [k, x] of Object.entries(v as Json)) {
+        if (typeof x === 'number' || typeof x === 'boolean') out[k] = x;
+        else if (typeof x === 'string') out[k] = /^#?[0-9a-f]{6}$/i.test(x) ? hex(x) : x;
+        else if (Array.isArray(x) && x.every((n) => typeof n === 'number')) out[k] = x;
+        else throw new ToolError(`params.${k} has an unsupported value.`);
+    }
+    return out;
+}
+
+function node(doc: SceneDoc, ref: unknown): NodeDoc {
+    if (typeof ref !== 'string' || !ref) throw new ToolError('Missing object id.');
+    const n = doc.nodes.find((x) => x.id === ref) ?? doc.nodes.find((x) => x.name === ref);
+    if (!n) throw new ToolError(`No object "${ref}". Call get_scene for the ids.`);
+    return n;
+}
+
+function script(doc: SceneDoc, ref: unknown) {
+    if (typeof ref !== 'string') throw new ToolError('Missing script id or name.');
+    const want = ref.toLowerCase().replace(/\.js$/, '');
+    const s = doc.scripts.find((x) => x.id === ref) ?? doc.scripts.find((x) => x.name.toLowerCase().replace(/\.js$/, '') === want);
+    if (!s) throw new ToolError(`No script "${ref}".`);
+    return s;
+}
+
+function shader(doc: SceneDoc, ref: unknown) {
+    if (typeof ref !== 'string') throw new ToolError('Missing shader id or name.');
+    const want = ref.toLowerCase().replace(/\.wgsl$/, '');
+    const s = doc.shaders.find((x) => x.id === ref) ?? doc.shaders.find((x) => x.name.toLowerCase().replace(/\.wgsl$/, '') === want);
+    if (!s) throw new ToolError(`No shader "${ref}".`);
+    return s;
+}
+
+function nodeType(n: NodeDoc): string {
+    if (n.light) return `${n.light.type}_light`;
+    if (n.camera) return 'camera';
+    if (n.model) return 'model';
+    if (n.mesh) return n.mesh.geometry.type;
+    return 'empty';
+}
+
+function materialSummary(m: MaterialDoc): Json {
+    const out: Json = { type: m.type, color: m.color };
+    if (m.opacity < 1) out.opacity = r3(m.opacity);
+    if (m.type !== 'unlit') {
+        out.metallic = r3(m.metallic);
+        out.roughness = r3(m.roughness);
+    }
+    if (m.emissive !== '#000000' && m.emissiveIntensity > 0) {
+        out.emissive = m.emissive;
+        out.emissive_intensity = r3(m.emissiveIntensity);
+    }
+    if (m.map) out.texture = m.map;
+    if (m.type === 'shader') {
+        out.shader = m.shader;
+        if (m.params && Object.keys(m.params).length) out.params = m.params;
+    }
+    return out;
+}
+
+function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
+    const out: Json = { id: n.id, name: n.name, type: nodeType(n) };
+    if (n.parent) out.parent = n.parent;
+    out.position = rv(n.position);
+    if (n.rotation.some((v) => v !== 0)) out.rotation = rv(n.rotation);
+    if (n.scale.some((v) => v !== 1)) out.scale = rv(n.scale);
+    if (!n.visible) out.visible = false;
+    if (n.mesh) {
+        out.material = materialSummary(n.mesh.material);
+        const g: Json = { ...n.mesh.geometry };
+        delete g.type;
+        out.geometry = g;
+    }
+    if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
+    if (n.camera) out.camera = { ...n.camera };
+    if (n.model) {
+        out.model = { asset: n.model.asset, asset_name: doc.assets.find((a) => a.id === n.model!.asset)?.name };
+        const o = Object.keys(n.model.materials ?? {}).length + Object.keys(n.model.parts ?? {}).length;
+        if (o) out.model.overrides = o;
+    }
+    if (n.scripts?.length) {
+        out.scripts = n.scripts.map((r) => ({
+            script: doc.scripts.find((s) => s.id === r.script)?.name ?? r.script,
+            ...(r.enabled ? {} : { enabled: false }),
+            ...(Object.keys(r.props).length ? { props: r.props } : {}),
+        }));
+    }
+    return out;
+}
+
+function resolveParent(doc: SceneDoc, ref: unknown, batch: NodeDoc[]): string | null {
+    if (ref === null || ref === undefined || ref === '') return null;
+    if (typeof ref !== 'string') throw new ToolError('parent must be an object id or name.');
+    const found = batch.find((n) => n.id === ref || n.name === ref) ?? doc.nodes.find((n) => n.id === ref) ?? doc.nodes.find((n) => n.name === ref);
+    if (!found) throw new ToolError(`Parent "${ref}" does not exist.`);
+    return found.id;
+}
+
+/** Applies the shared object fields (create and update) to a node. */
+function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch: NodeDoc[]) {
+    if (spec.name !== undefined) n.name = String(spec.name).trim() || n.name;
+    if (spec.parent !== undefined) {
+        const p = resolveParent(doc, spec.parent, batch);
+        if (p === n.id) throw new ToolError('An object cannot be its own parent.');
+        n.parent = p;
+    }
+    if (spec.position !== undefined) n.position = v3(spec.position, 'position');
+    if (spec.rotation !== undefined) n.rotation = v3(spec.rotation, 'rotation');
+    if (spec.scale !== undefined) n.scale = v3(spec.scale, 'scale');
+    if (spec.visible !== undefined) n.visible = !!spec.visible;
+    if (n.mesh) {
+        if (spec.shape !== undefined && spec.shape !== n.mesh.geometry.type) {
+            if (!['box', 'sphere', 'plane', 'cylinder', 'torus'].includes(spec.shape)) throw new ToolError(`Unknown shape "${spec.shape}".`);
+            n.mesh.geometry = defaultGeometry(spec.shape as GeometryType);
+        }
+        const g = n.mesh.geometry as any;
+        if (spec.size !== undefined) {
+            const s = Array.isArray(spec.size) ? spec.size.map((x: unknown) => num(x, 'size')) : [num(spec.size, 'size')];
+            if (g.type === 'box') [g.width, g.height, g.depth] = [s[0], s[1] ?? s[0], s[2] ?? s[0]];
+            else if (g.type === 'plane') [g.width, g.height] = [s[0], s[1] ?? s[0]];
+            else if (g.type === 'sphere') g.radius = s[0] / 2;
+        }
+        if (spec.radius !== undefined) {
+            const r = num(spec.radius, 'radius');
+            if (g.type === 'cylinder') g.radiusTop = g.radiusBottom = r;
+            else if ('radius' in g) g.radius = r;
+        }
+        if (spec.height !== undefined && 'height' in g) g.height = num(spec.height, 'height');
+        if (spec.tube !== undefined && g.type === 'torus') g.tube = num(spec.tube, 'tube');
+        if (spec.segments !== undefined && 'segments' in g) g.segments = Math.round(num(spec.segments, 'segments'));
+        if (spec.cast_shadow !== undefined) n.mesh.castShadow = !!spec.cast_shadow;
+        if (spec.receive_shadow !== undefined) n.mesh.receiveShadow = !!spec.receive_shadow;
+        if (spec.material) applyMaterial(env, doc, n.mesh.material, spec.material);
+    } else if (spec.material) {
+        throw new ToolError(`"${n.name}" has no mesh. Use set_model_material for imported models.`);
+    }
+    if (spec.light) {
+        if (!n.light) throw new ToolError(`"${n.name}" is not a light.`);
+        const l = spec.light;
+        if (l.type !== undefined && l.type !== n.light.type) n.light = { ...defaultLight(l.type as LightType), color: n.light.color };
+        if (l.color !== undefined) n.light.color = hex(l.color);
+        if (l.intensity !== undefined) n.light.intensity = Math.max(0, num(l.intensity, 'intensity'));
+        if (l.cast_shadow !== undefined) n.light.castShadow = !!l.cast_shadow;
+        if (l.range !== undefined) n.light.range = Math.max(0.01, num(l.range, 'range'));
+        if (l.radius !== undefined) n.light.radius = Math.max(0, num(l.radius, 'radius'));
+        if (l.angle !== undefined) n.light.outerAngle = Math.min(179, Math.max(1, num(l.angle, 'angle')));
+        if (l.inner_angle !== undefined) n.light.innerAngle = Math.min(100, Math.max(0, num(l.inner_angle, 'inner_angle')));
+    }
+    if (spec.camera) {
+        if (!n.camera) throw new ToolError(`"${n.name}" is not a camera.`);
+        const c = spec.camera;
+        if (c.fov !== undefined) n.camera.fov = Math.min(170, Math.max(1, num(c.fov, 'fov')));
+        if (c.near !== undefined) n.camera.near = Math.max(0.001, num(c.near, 'near'));
+        if (c.far !== undefined) n.camera.far = Math.max(0.01, num(c.far, 'far'));
+        if (c.main !== undefined) {
+            n.camera.main = !!c.main;
+            if (n.camera.main) for (const o of doc.nodes) if (o !== n && o.camera) o.camera.main = false;
+        }
+    }
+}
+
+function applyMaterial(_env: ToolEnv, doc: SceneDoc, m: MaterialDoc, p: Json) {
+    if (p.type !== undefined) {
+        if (!['lit', 'unlit', 'shader'].includes(p.type)) throw new ToolError(`Unknown material type "${p.type}".`);
+        m.type = p.type;
+    }
+    if (p.color !== undefined) m.color = hex(p.color);
+    if (p.opacity !== undefined) m.opacity = Math.min(1, Math.max(0, num(p.opacity, 'opacity')));
+    if (p.metallic !== undefined) m.metallic = Math.min(1, Math.max(0, num(p.metallic, 'metallic')));
+    if (p.roughness !== undefined) m.roughness = Math.min(1, Math.max(0, num(p.roughness, 'roughness')));
+    if (p.emissive !== undefined) m.emissive = hex(p.emissive, 'emissive');
+    if (p.emissive_intensity !== undefined) m.emissiveIntensity = Math.max(0, num(p.emissive_intensity, 'emissive_intensity'));
+    if (p.double_side !== undefined) m.doubleSide = !!p.double_side;
+    if (p.texture !== undefined) {
+        if (p.texture !== null && !doc.assets.some((a) => a.id === p.texture && a.kind === 'texture')) throw new ToolError(`No texture asset "${p.texture}".`);
+        m.map = p.texture;
+    }
+    if (p.shader !== undefined) {
+        if (p.shader === null) {
+            m.type = 'lit';
+            m.shader = null;
+        } else {
+            const s = shader(doc, p.shader);
+            if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader; use add_post_effect.`);
+            m.type = 'shader';
+            m.shader = s.id;
+        }
+    }
+    if (m.type === 'shader' && !m.shader) throw new ToolError('Material type "shader" needs a shader.');
+    if (p.params !== undefined) m.params = { ...(m.params ?? {}), ...params(p.params) };
+}
+
+function makeTyped(type: string): NodeDoc {
+    switch (type) {
+        case 'box':
+        case 'sphere':
+        case 'plane':
+        case 'cylinder':
+        case 'torus':
+            return makeMeshNode(type);
+        case 'empty':
+            return makeNode('Empty');
+        case 'directional_light':
+            return makeLightNode('directional');
+        case 'point_light':
+            return makeLightNode('point');
+        case 'spot_light':
+            return makeLightNode('spot');
+        case 'camera': {
+            const c = makeCameraNode();
+            c.camera = defaultCameraDoc();
+            return c;
+        }
+    }
+    throw new ToolError(`Unknown object type "${type}". Use one of ${TYPES.join(', ')}.`);
+}
+
+const PAUSED_TOOL_ERROR =
+    'Scripts in this scene are paused because it was opened from a file. Only the user can enable them (the "Enable Scripts" button above the viewport); ask them to review the scripts and enable them.';
+
+function compiledInfo(env: ToolEnv, id: string): Json {
+    const c = env.editor.compiler.get(id);
+    if (!c) return { ok: false, error: 'missing' };
+    if (c.paused) return { ok: false, paused: true, error: PAUSED_TOOL_ERROR };
+    const out: Json = { ok: !c.error };
+    if (c.error) out.error = { line: c.error.line, column: c.error.column, message: c.error.message };
+    if (c.fieldError) out.field_error = c.fieldError;
+    out.class = c.className;
+    out.fields = c.fields.map((f) => ({ name: f.name, type: f.type, default: f.default }));
+    out.methods = c.methods;
+    return out;
+}
+
+async function shaderInfo(env: ToolEnv, id: string): Promise<Json> {
+    await env.editor.shaders.whenIdle();
+    const st = env.editor.shaders.status(id);
+    return {
+        ok: st.state === 'ok',
+        state: st.state,
+        errors: st.messages.filter((m) => m.severity === 'error').map((m) => ({ line: m.line, column: m.column, message: m.message })),
+        warnings: st.messages.filter((m) => m.severity === 'warning').map((m) => ({ line: m.line, message: m.message })),
+        properties: env.editor.shaders.props(id).map((p) => ({ name: p.name, type: p.type, default: p.default, ...(p.min !== undefined ? { min: p.min, max: p.max } : {}) })),
+        in_use: st.state !== 'ok' && env.editor.shaders.isValid(id) ? 'the previous valid version is still rendering' : undefined,
+    };
+}
+
+// ------------------------------------------------------------------ runner
+
+/** Runs one tool call against the editor. */
+export async function runTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult> {
+    const ed = env.editor;
+    const store = ed.store;
+    const doc = () => store.doc;
+    try {
+        switch (name) {
+            case 'get_scene': {
+                const d = doc();
+                const nodes = d.nodes.slice(0, 400).map((n) => nodeSummary(d, n));
+                return {
+                    summary: `${d.nodes.length} objects`,
+                    data: {
+                        name: d.name,
+                        selection: store.selection,
+                        play_state: ed.player.state,
+                        environment: {
+                            sky: d.environment.sky,
+                            ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
+                            exposure: d.environment.exposure,
+                            bloom: d.environment.bloom,
+                            ao: d.environment.ao,
+                            fog: d.environment.fog,
+                            fxaa: d.environment.fxaa,
+                        },
+                        objects: nodes,
+                        ...(d.nodes.length > nodes.length ? { truncated: d.nodes.length - nodes.length } : {}),
+                        assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+                        scripts: d.scripts.map((s) => {
+                            const c = ed.compiler.get(s.id);
+                            if (c?.paused) return { id: s.id, name: s.name, paused: true };
+                            return { id: s.id, name: s.name, ok: !c?.error, ...(c?.error ? { error: `line ${c.error.line}: ${c.error.message}` } : {}) };
+                        }),
+                        shaders: d.shaders.map((s) => ({ id: s.id, name: s.name, kind: s.kind, lighting: s.kind === 'material' ? s.lighting : undefined, state: ed.shaders.status(s.id).state })),
+                        render_graph: { disabled_passes: d.renderGraph.disabled, post_effects: d.renderGraph.posts.map((p) => ({ id: p.id, shader: p.shader, enabled: p.enabled })) },
+                    },
+                };
+            }
+            case 'get_object': {
+                const n = node(doc(), args.id);
+                const box = ed.picker.bounds(n.id);
+                const m = ed.picker.worldMatrix(n.id);
+                const out: Json = { ...nodeSummary(doc(), n), raw: n };
+                if (m) out.world_position = rv([m[12], m[13], m[14]]);
+                if (box) out.bounds = { min: rv(box.min), max: rv(box.max), size: rv([box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]]) };
+                const children = doc().nodes.filter((c) => c.parent === n.id).map((c) => c.id);
+                if (children.length) out.children = children;
+                return { data: out, summary: n.name };
+            }
+            case 'create_objects': {
+                const specs: Json[] = Array.isArray(args.objects) ? args.objects : [];
+                if (!specs.length) throw new ToolError('objects is empty.');
+                const created: NodeDoc[] = [];
+                const d = JSON.parse(JSON.stringify(doc())) as SceneDoc;
+                for (const spec of specs) {
+                    const n = makeTyped(String(spec.type));
+                    if (!n.camera && spec.camera) throw new ToolError('camera settings need type "camera".');
+                    applyFields(env, d, n, spec, created);
+                    n.name = uniqueIn(d, created, spec.name ? n.name : n.name, n.parent);
+                    created.push(n);
+                }
+                store.commit('AI: Create Objects', (dd) => {
+                    dd.nodes.push(...created);
+                    // Only one camera is used by Play: a new camera becomes main when
+                    // asked to, or when there is no main camera yet.
+                    for (const c of created.filter((n) => n.camera)) {
+                        const spec = specs[created.indexOf(c)];
+                        const others = dd.nodes.filter((n) => n.camera && n !== c);
+                        const wantMain = spec.camera?.main === true || !others.some((n) => n.camera!.main);
+                        c.camera!.main = spec.camera?.main === false ? false : wantMain;
+                        if (c.camera!.main) for (const o of others) o.camera!.main = false;
+                    }
+                });
+                return { data: { created: created.map((n) => ({ id: n.id, name: n.name })) }, summary: created.map((n) => n.name).join(', ') };
+            }
+            case 'update_objects': {
+                const updates: Json[] = Array.isArray(args.updates) ? args.updates : [];
+                if (!updates.length) throw new ToolError('updates is empty.');
+                // Validate against a copy first so a bad entry changes nothing.
+                const draft = JSON.parse(JSON.stringify(doc())) as SceneDoc;
+                for (const u of updates) applyFields(env, draft, node(draft, u.id), u, []);
+                store.commit('AI: Edit Objects', (d) => {
+                    d.nodes = draft.nodes;
+                });
+                return { data: { updated: updates.length }, summary: `${updates.length} object(s)` };
+            }
+            case 'delete_objects': {
+                const ids: string[] = (Array.isArray(args.ids) ? args.ids : []).map((r: unknown) => node(doc(), r).id);
+                const all = new Set<string>();
+                for (const id of ids) {
+                    all.add(id);
+                    for (const c of store.descendants(id)) all.add(c.id);
+                }
+                store.commit('AI: Delete Objects', (d) => {
+                    d.nodes = d.nodes.filter((n) => !all.has(n.id));
+                });
+                store.select(store.selection.filter((id) => !all.has(id)));
+                return { data: { deleted: all.size }, summary: `${all.size} object(s)` };
+            }
+            case 'set_environment': {
+                store.commit('AI: Environment', (d) => {
+                    const e = d.environment;
+                    if (args.scene_name !== undefined) d.name = String(args.scene_name).trim() || d.name;
+                    if (args.sky !== undefined) e.sky = args.sky === 'color' ? 'color' : 'atmospheric';
+                    if (args.sky_color !== undefined) e.skyColor = hex(args.sky_color);
+                    if (args.sun_x !== undefined) e.sunX = Math.min(1, Math.max(0, num(args.sun_x, 'sun_x')));
+                    if (args.sun_y !== undefined) e.sunY = Math.min(1, Math.max(0, num(args.sun_y, 'sun_y')));
+                    if (args.sky_exposure !== undefined) e.skyExposure = Math.max(0, num(args.sky_exposure, 'sky_exposure'));
+                    if (args.exposure !== undefined) e.exposure = Math.max(0, num(args.exposure, 'exposure'));
+                    if (args.fxaa !== undefined) e.fxaa = !!args.fxaa;
+                    for (const k of ['bloom', 'ao', 'fog'] as const) {
+                        const src = args[k];
+                        if (!src || typeof src !== 'object') continue;
+                        for (const [key, val] of Object.entries(src)) {
+                            if (!(key in e[k])) continue;
+                            (e[k] as any)[key] = key === 'enable' ? !!val : key === 'color' ? hex(val) : num(val, `${k}.${key}`);
+                        }
+                    }
+                }, { env: true });
+                return { data: { ok: true } };
+            }
+            case 'list_model_parts': {
+                const n = node(doc(), args.id);
+                if (!n.model) throw new ToolError(`"${n.name}" is not an imported model.`);
+                const info = ed.sync.modelInfo(n.id);
+                if (!info) return { data: { status: ed.sync.modelState(n.id)?.status ?? 'loading', note: 'The model has not finished loading; try again shortly.' } };
+                const mats = n.model.materials ?? {};
+                const parts = n.model.parts ?? {};
+                return {
+                    summary: `${info.slots.length} materials, ${info.parts.length} meshes`,
+                    data: {
+                        slots: info.slots.map((s) => ({
+                            key: s.key,
+                            meshes: s.parts.length,
+                            file: { color: s.base.color, opacity: r3(s.base.opacity), metallic: r3(s.base.metallic), roughness: r3(s.base.roughness), emissive: s.base.emissive, emissive_intensity: r3(s.base.emissiveIntensity), double_side: s.base.doubleSide, has_texture: s.base.hasMap },
+                            ...(mats[s.key] ? { override: mats[s.key] } : {}),
+                        })),
+                        parts: info.parts.slice(0, 300).map((p) => ({ path: p.path, name: p.name, slot: p.slot, triangles: p.triangles, ...(parts[p.path] ? { override: parts[p.path] } : {}) })),
+                        ...(info.parts.length > 300 ? { truncated: info.parts.length - 300 } : {}),
+                    },
+                };
+            }
+            case 'set_model_material': {
+                const ids = modelIds(doc(), args.ids);
+                const slot = String(args.slot ?? '');
+                const info = ed.sync.modelInfo(ids[0]);
+                if (info && !info.slot(slot)) throw new ToolError(`No material slot "${slot}". Slots: ${info.slots.map((s) => s.key).join(', ')}`);
+                if (args.reset) {
+                    ed.setModelMaterial(ids, slot, null, 'AI: Reset Model Material');
+                    return { data: { ok: true } };
+                }
+                const patch: Partial<MaterialOverride> = {};
+                if (args.color !== undefined) patch.color = hex(args.color);
+                if (args.opacity !== undefined) patch.opacity = Math.min(1, Math.max(0, num(args.opacity, 'opacity')));
+                if (args.metallic !== undefined) patch.metallic = Math.min(1, Math.max(0, num(args.metallic, 'metallic')));
+                if (args.roughness !== undefined) patch.roughness = Math.min(1, Math.max(0, num(args.roughness, 'roughness')));
+                if (args.emissive !== undefined) patch.emissive = hex(args.emissive, 'emissive');
+                if (args.emissive_intensity !== undefined) patch.emissiveIntensity = Math.max(0, num(args.emissive_intensity, 'emissive_intensity'));
+                if (args.double_side !== undefined) patch.doubleSide = !!args.double_side;
+                if (args.texture !== undefined) {
+                    if (args.texture === 'file') patch.map = undefined;
+                    else if (args.texture === null) patch.map = null;
+                    else if (!doc().assets.some((a) => a.id === args.texture && a.kind === 'texture')) throw new ToolError(`No texture asset "${args.texture}".`);
+                    else patch.map = args.texture;
+                }
+                if (args.shader !== undefined) {
+                    if (args.shader === null) patch.shader = undefined;
+                    else {
+                        const s = shader(doc(), args.shader);
+                        if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader.`);
+                        patch.shader = s.id;
+                    }
+                }
+                if (args.params !== undefined) {
+                    const cur = doc().nodes.find((n) => n.id === ids[0])?.model?.materials?.[slot]?.params ?? {};
+                    patch.params = { ...cur, ...params(args.params) };
+                }
+                ed.setModelMaterial(ids, slot, patch, 'AI: Model Material');
+                return { data: { ok: true }, summary: slot };
+            }
+            case 'set_model_part': {
+                const ids = modelIds(doc(), args.ids);
+                const path = String(args.path ?? '');
+                const info = ed.sync.modelInfo(ids[0]);
+                if (info && !info.part(path)) throw new ToolError(`No mesh part "${path}". Call list_model_parts.`);
+                if (args.reset) {
+                    ed.setModelPart(ids, path, null, 'AI: Reset Mesh');
+                    return { data: { ok: true } };
+                }
+                const patch: Partial<PartOverride> = {};
+                if (args.visible !== undefined) patch.visible = args.visible ? undefined : false;
+                if (args.cast_shadow !== undefined) patch.castShadow = !!args.cast_shadow;
+                if (args.receive_shadow !== undefined) patch.receiveShadow = !!args.receive_shadow;
+                if (args.material_slot !== undefined) {
+                    if (info && !info.slot(args.material_slot)) throw new ToolError(`No material slot "${args.material_slot}".`);
+                    patch.material = args.material_slot;
+                }
+                if (args.position !== undefined) patch.position = v3(args.position, 'position');
+                if (args.rotation !== undefined) patch.rotation = v3(args.rotation, 'rotation');
+                if (args.scale !== undefined) patch.scale = v3(args.scale, 'scale');
+                ed.setModelPart(ids, path, patch, 'AI: Mesh Part');
+                return { data: { ok: true }, summary: path };
+            }
+            case 'add_model': {
+                const asset = doc().assets.find((a) => (a.id === args.asset || a.name === args.asset) && a.kind === 'model');
+                if (!asset) throw new ToolError(`No model asset "${args.asset}".`);
+                const before = new Set(doc().nodes.map((n) => n.id));
+                ed.addModel(asset.id, args.position !== undefined ? v3(args.position, 'position') : undefined);
+                const created = doc().nodes.find((n) => !before.has(n.id));
+                if (created && args.name) ed.rename(created.id, String(args.name));
+                return { data: { id: created?.id }, summary: asset.name };
+            }
+            case 'write_script': {
+                const code = String(args.code ?? '');
+                if (!code.trim()) throw new ToolError('code is empty.');
+                const name = String(args.name ?? 'Script.js');
+                const existing = args.id ? script(doc(), args.id) : doc().scripts.find((s) => s.name.toLowerCase() === name.toLowerCase() || s.name.toLowerCase() === (name + '.js').toLowerCase());
+                let id: string;
+                if (existing) {
+                    id = existing.id;
+                    ed.updateScript(id, code);
+                    if (args.id && name && name !== existing.name) ed.renameScript(id, name);
+                } else {
+                    id = ed.createScript({ name, code, open: false }).id;
+                }
+                if (Array.isArray(args.attach_to) && args.attach_to.length) {
+                    const targets = args.attach_to.map((r: unknown) => node(doc(), r).id);
+                    const fresh = targets.filter((t: string) => !store.node(t)?.scripts?.some((r) => r.script === id));
+                    if (fresh.length) ed.attachScript(fresh, id, params(args.props));
+                    else if (args.props) setScriptProps(env, targets, id, params(args.props));
+                }
+                const info = compiledInfo(env, id);
+                return { data: { id, name: doc().scripts.find((s) => s.id === id)?.name, ...info }, summary: `${name}${info.ok ? '' : ' (errors)'}` };
+            }
+            case 'read_script': {
+                const s = script(doc(), args.script);
+                const issues = ed.player.issues.filter((i) => i.script === s.id).map((i) => ({ method: i.method, line: i.line, message: i.message, object: i.node }));
+                return { data: { id: s.id, name: s.name, code: s.code, ...compiledInfo(env, s.id), ...(issues.length ? { runtime_errors: issues } : {}) }, summary: s.name };
+            }
+            case 'attach_script': {
+                const s = script(doc(), args.script);
+                const targets = (Array.isArray(args.object_ids) ? args.object_ids : []).map((r: unknown) => node(doc(), r).id);
+                if (!targets.length) throw new ToolError('object_ids is empty.');
+                ed.attachScript(targets, s.id, params(args.props));
+                return { data: { ok: true, ...compiledInfo(env, s.id) }, summary: s.name };
+            }
+            case 'detach_script': {
+                const n = node(doc(), args.object_id);
+                const s = script(doc(), args.script);
+                const i = n.scripts?.findIndex((r) => r.script === s.id) ?? -1;
+                if (i < 0) throw new ToolError(`"${n.name}" does not have ${s.name}.`);
+                ed.detachScript(n.id, i);
+                return { data: { ok: true } };
+            }
+            case 'set_script_props': {
+                const n = node(doc(), args.object_id);
+                const s = script(doc(), args.script);
+                if (!n.scripts?.some((r) => r.script === s.id)) throw new ToolError(`"${n.name}" does not have ${s.name}; attach it first.`);
+                setScriptProps(env, [n.id], s.id, params(args.props));
+                return { data: { ok: true } };
+            }
+            case 'delete_script': {
+                const s = script(doc(), args.script);
+                await ed.deleteScript(s.id, false);
+                return { data: { ok: true }, summary: s.name };
+            }
+            case 'write_shader': {
+                const kind = args.kind === 'post' ? 'post' : 'material';
+                const lighting = args.lighting === 'unlit' ? 'unlit' : 'lit';
+                const code = String(args.code ?? '');
+                if (!code.trim()) throw new ToolError('code is empty.');
+                const name = String(args.name ?? 'Shader.wgsl');
+                const existing = args.id ? shader(doc(), args.id) : doc().shaders.find((s) => s.name.toLowerCase() === name.toLowerCase() || s.name.toLowerCase() === (name + '.wgsl').toLowerCase());
+                let id: string;
+                if (existing) {
+                    id = existing.id;
+                    ed.updateShader(id, { code, kind, lighting });
+                } else {
+                    id = ed.createShader({ name, code, kind, lighting, open: false }).id;
+                }
+                const info = await shaderInfo(env, id);
+                return { data: { id, name: doc().shaders.find((s) => s.id === id)?.name, kind, ...(kind === 'material' ? { lighting } : {}), ...info }, summary: `${name}${info.ok ? '' : ' (errors)'}` };
+            }
+            case 'read_shader': {
+                const s = shader(doc(), args.shader);
+                return { data: { id: s.id, name: s.name, kind: s.kind, lighting: s.lighting, code: s.code, ...(await shaderInfo(env, s.id)) }, summary: s.name };
+            }
+            case 'assign_shader': {
+                const targets: string[] = (Array.isArray(args.object_ids) ? args.object_ids : []).map((r: unknown) => node(doc(), r).id);
+                const meshes = targets.filter((id) => store.node(id)?.mesh);
+                if (!meshes.length) throw new ToolError('None of these objects is a primitive with a material. For imported models use set_model_material with shader.');
+                if (args.shader === null) {
+                    ed.assignShader(meshes, null);
+                    return { data: { ok: true } };
+                }
+                const s = shader(doc(), args.shader);
+                if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader; use add_post_effect.`);
+                ed.assignShader(meshes, s.id);
+                if (args.params) {
+                    const p = params(args.params);
+                    store.commit('AI: Shader Params', (d) => {
+                        for (const n of d.nodes) if (meshes.includes(n.id) && n.mesh) n.mesh.material.params = { ...(n.mesh.material.params ?? {}), ...p };
+                    }, { nodes: meshes });
+                }
+                return { data: { ok: true, objects: meshes.length, ...(await shaderInfo(env, s.id)) }, summary: s.name };
+            }
+            case 'delete_shader': {
+                const s = shader(doc(), args.shader);
+                await ed.deleteShader(s.id, false);
+                return { data: { ok: true }, summary: s.name };
+            }
+            case 'get_render_graph': {
+                const info = ed.graph.info();
+                return {
+                    summary: `${info.passes.length} passes`,
+                    data: {
+                        passes: info.passes
+                            .slice()
+                            .sort((a, b) => (a.order < 0 ? 1e6 : a.order) - (b.order < 0 ? 1e6 : b.order))
+                            .map((p) => ({ name: p.name, enabled: p.enabled, order: p.order, reads: p.reads, writes: p.writes, ...(p.deps.length ? { after: p.deps } : {}), ...(p.essential ? { required: true } : {}) })),
+                        post_chain: ed.graph.chain().map((c) => ({ name: c.name, enabled: c.enabled, ...(c.custom ? { id: c.custom } : {}), ...(c.final ? { final: true } : {}) })),
+                        custom_post_effects: doc().renderGraph.posts,
+                        error: info.error || undefined,
+                    },
+                };
+            }
+            case 'set_render_pass': {
+                const err = ed.setPassEnabled(String(args.name), !!args.enabled);
+                if (err) throw new ToolError(err);
+                return { data: { ok: true }, summary: `${args.name} ${args.enabled ? 'on' : 'off'}` };
+            }
+            case 'add_post_effect': {
+                const s = shader(doc(), args.shader);
+                if (s.kind !== 'post') throw new ToolError(`"${s.name}" is a material shader.`);
+                const id = ed.addPostEffect(s.id);
+                if (!id) throw new ToolError('Could not add the effect.');
+                if (args.params || args.enabled === false) ed.updatePostEffect(id, { params: params(args.params), enabled: args.enabled !== false }, 'AI: Post Effect');
+                return { data: { id, ...(await shaderInfo(env, s.id)) }, summary: s.name };
+            }
+            case 'update_post_effect': {
+                const p = doc().renderGraph.posts.find((x) => x.id === args.id);
+                if (!p) throw new ToolError(`No post effect "${args.id}".`);
+                if (args.enabled !== undefined || args.params !== undefined) {
+                    ed.updatePostEffect(p.id, { enabled: args.enabled, params: args.params ? params(args.params) : undefined }, 'AI: Post Effect');
+                }
+                if (args.move) ed.movePostEffect(p.id, Math.sign(num(args.move, 'move')));
+                return { data: { ok: true } };
+            }
+            case 'remove_post_effect': {
+                if (!doc().renderGraph.posts.some((x) => x.id === args.id)) throw new ToolError(`No post effect "${args.id}".`);
+                ed.removePostEffect(String(args.id));
+                return { data: { ok: true } };
+            }
+            case 'get_console': {
+                const limit = Math.min(200, Math.max(1, Number(args.limit) || 40));
+                return { data: { messages: recentLogs(limit, args.errors_only ? ['error'] : ['error', 'warn', 'info']) } };
+            }
+            case 'select_objects': {
+                const ids = (Array.isArray(args.ids) ? args.ids : []).map((r: unknown) => node(doc(), r).id);
+                store.select(ids);
+                if (ids.length) ed.viewport.frameNodes(ids);
+                return { data: { ok: true } };
+            }
+            case 'run_play_test': {
+                if (!env.allowPlay()) throw new ToolError('Play tests are turned off in the AI settings.');
+                if (!ed.compiler.trusted && ed.store.doc.scripts.length) throw new ToolError(PAUSED_TOOL_ERROR);
+                const seconds = Math.min(20, Math.max(0.5, Number(args.seconds) || 3));
+                const res = await ed.player.runFor(seconds);
+                return {
+                    summary: `${seconds}s, ${res.issues.length} error(s)`,
+                    data: {
+                        seconds,
+                        frames: res.frames,
+                        errors: res.issues.map((i) => ({ script: i.scriptName, object: i.node, method: i.method, line: i.line, message: i.message, at: r3(i.time) })),
+                        logs: res.logs.slice(-60).map((l) => `${r3(l.time)}s ${l.level}: ${l.text}`),
+                        note: res.frames < 2 ? 'Very few frames ran; the tab may be in the background.' : undefined,
+                    },
+                };
+            }
+            case 'play': {
+                if (!env.allowPlay()) throw new ToolError('Play is turned off in the AI settings.');
+                if (!ed.compiler.trusted && ed.store.doc.scripts.length) throw new ToolError(PAUSED_TOOL_ERROR);
+                ed.play();
+                return { data: { state: ed.player.state } };
+            }
+            case 'stop': {
+                ed.stopPlay();
+                return { data: { state: ed.player.state } };
+            }
+            case 'capture_viewport': {
+                const image = await ed.runtime.capture(768);
+                return { data: { ok: true, note: 'The screenshot is attached in the next message.' }, image, summary: 'screenshot' };
+            }
+        }
+        throw new ToolError(`Unknown tool "${name}".`);
+    } catch (e: any) {
+        const message = e instanceof ToolError ? e.message : `${e?.name || 'Error'}: ${e?.message || e}`;
+        if (!(e instanceof ToolError)) console.error('[ai] tool failed', name, e);
+        return { data: { error: message }, summary: 'error' };
+    }
+}
+
+function modelIds(doc: SceneDoc, refs: unknown): string[] {
+    const list = Array.isArray(refs) ? refs : typeof refs === 'string' ? [refs] : [];
+    const ids = list.map((r) => node(doc, r)).filter((n) => {
+        if (!n.model) throw new ToolError(`"${n.name}" is not an imported model.`);
+        return true;
+    }).map((n) => n.id);
+    if (!ids.length) throw new ToolError('ids is empty.');
+    return ids;
+}
+
+function setScriptProps(env: ToolEnv, ids: string[], scriptId: string, props: Record<string, ParamValue>) {
+    env.editor.store.commit('AI: Script Fields', (d) => {
+        for (const n of d.nodes) {
+            if (!ids.includes(n.id)) continue;
+            for (const r of n.scripts ?? []) if (r.script === scriptId) r.props = { ...r.props, ...props };
+        }
+    }, { nodes: ids });
+}
+
+function uniqueIn(doc: SceneDoc, batch: NodeDoc[], base: string, parent: string | null): string {
+    const stem = base.replace(/\s\(\d+\)$/, '');
+    const names = new Set([...doc.nodes, ...batch].filter((n) => n.parent === parent).map((n) => n.name));
+    if (!names.has(stem)) return stem;
+    let i = 1;
+    while (names.has(`${stem} (${i})`)) i++;
+    return `${stem} (${i})`;
+}

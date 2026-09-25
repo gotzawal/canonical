@@ -1,6 +1,6 @@
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset } from './assets';
 import { sanitize, Store } from './store';
-import type { CameraState, SceneDoc, SceneFile } from './types';
+import type { CameraState, ParamValue, SceneDoc, SceneFile } from './types';
 
 const AUTOSAVE_KEY = 'canonical-editor/autosave';
 
@@ -8,6 +8,8 @@ export interface Autosave {
     doc: SceneDoc;
     camera?: CameraState;
     savedAt: string;
+    /** The scene's scripts came from an opened file and were not enabled yet. */
+    scriptsPaused?: boolean;
 }
 
 export function readAutosave(): Autosave | null {
@@ -16,7 +18,7 @@ export function readAutosave(): Autosave | null {
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!parsed || !parsed.doc) return null;
-        return { doc: sanitize(parsed.doc), camera: parsed.camera, savedAt: parsed.savedAt };
+        return { doc: sanitize(parsed.doc), camera: parsed.camera, savedAt: parsed.savedAt, scriptsPaused: parsed.scriptsPaused === true };
     } catch {
         return null;
     }
@@ -27,11 +29,17 @@ export class AutoSaver {
     private timer = 0;
     lastSaved = '';
     onSaved: (time: Date) => void = () => {};
+    /** Saved with the scene so a reload keeps untrusted scripts paused. */
+    scriptsPaused = false;
 
     constructor(private store: Store) {
         store.on('commit', () => this.schedule());
         store.on('load', () => this.schedule());
         store.on('camera', () => this.schedule(1500));
+        // Play mode edits are thrown away on Stop, so they are never saved.
+        store.on('playing', (playing) => {
+            if (!playing) this.schedule();
+        });
         window.addEventListener('beforeunload', () => this.flush());
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'hidden') this.flush();
@@ -45,15 +53,16 @@ export class AutoSaver {
 
     flush() {
         clearTimeout(this.timer);
-        const payload = JSON.stringify({
+        if (this.store.playing) return;
+        const content = JSON.stringify({
             doc: this.store.doc,
             camera: this.store.camera,
-            savedAt: new Date().toISOString(),
+            scriptsPaused: this.scriptsPaused || undefined,
         });
-        if (payload === this.lastSaved) return;
+        if (content === this.lastSaved) return;
         try {
-            localStorage.setItem(AUTOSAVE_KEY, payload);
-            this.lastSaved = payload;
+            localStorage.setItem(AUTOSAVE_KEY, `${content.slice(0, -1)},"savedAt":${JSON.stringify(new Date().toISOString())}}`);
+            this.lastSaved = content;
             this.onSaved(new Date());
         } catch (e) {
             console.warn('[editor] autosave failed', e);
@@ -101,9 +110,24 @@ export async function importSceneFile(text: string): Promise<{ doc: SceneDoc; ca
 
 export function usedAssetIds(doc: SceneDoc): Set<string> {
     const ids = new Set<string>();
+    const known = new Set(doc.assets.map((a) => a.id));
+    // Texture properties of custom shaders hold asset ids as values.
+    const params = (values?: Record<string, ParamValue>) => {
+        for (const v of Object.values(values ?? {})) if (typeof v === 'string' && known.has(v)) ids.add(v);
+    };
     for (const n of doc.nodes) {
         if (n.model?.asset) ids.add(n.model.asset);
         if (n.mesh?.material.map) ids.add(n.mesh.material.map);
+        params(n.mesh?.material.params);
+        for (const o of Object.values(n.model?.materials ?? {})) {
+            if (o.map) ids.add(o.map);
+            params(o.params);
+        }
+    }
+    for (const p of doc.renderGraph.posts) params(p.params);
+    // ... and a property's default may name one in the shader code.
+    for (const s of doc.shaders) {
+        for (const id of known) if (s.code.includes(id)) ids.add(id);
     }
     return ids;
 }

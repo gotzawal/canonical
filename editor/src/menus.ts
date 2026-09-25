@@ -1,8 +1,10 @@
 import { version as engineVersion } from '../../package.json';
 import type { Editor } from './editor';
+import { createAssetMenu } from './ui/assetsPanel';
 import { buildInfo } from './ui/statusbar';
 import { h, shortcutLabel } from './ui/dom';
 import { dialog, MenuItem } from './ui/overlays';
+import { showReference } from './ui/reference';
 
 export function createMenu(editor: Editor): MenuItem[] {
     return [
@@ -18,11 +20,17 @@ export function createMenu(editor: Editor): MenuItem[] {
         { label: 'Point Light', icon: 'bulb', action: () => editor.createLight('point') },
         { label: 'Spot Light', icon: 'spot', action: () => editor.createLight('spot') },
         { separator: true },
+        { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },
+        { separator: true },
+        ...createAssetMenu(editor),
     ];
 }
 
-export function menuDefinitions(editor: Editor, panels: { rename: () => void; toggleLeft: () => void; toggleRight: () => void }) {
+export function menuDefinitions(
+    editor: Editor,
+    panels: { rename: () => void; toggleLeft: () => void; toggleRight: () => void; toggleDock: () => void; showGraph: () => void; showAI: () => void },
+) {
     const store = editor.store;
     const hasSel = () => store.selection.length > 0;
     let history = { canUndo: false, canRedo: false, undoLabel: '', redoLabel: '' };
@@ -94,12 +102,27 @@ export function menuDefinitions(editor: Editor, panels: { rename: () => void; to
                 { separator: true },
                 { label: 'Toggle Hierarchy Panel', action: panels.toggleLeft },
                 { label: 'Toggle Inspector Panel', action: panels.toggleRight },
+                { label: 'Toggle Code Panel', icon: 'panelBottom', shortcut: 'Mod+J', action: panels.toggleDock },
+                { label: 'Render Graph', icon: 'graph', action: panels.showGraph },
+                { label: 'AI Assistant', icon: 'sparkle', action: panels.showAI },
             ],
+        },
+        {
+            label: 'Play',
+            items: (): MenuItem[] => {
+                const st = editor.player.state;
+                return [
+                    { label: st === 'stopped' ? 'Play' : 'Stop', icon: st === 'stopped' ? 'play' : 'stop', shortcut: 'Mod+P', action: () => editor.togglePlay() },
+                    { label: st === 'paused' ? 'Resume' : 'Pause', icon: 'pause', shortcut: 'Mod+Shift+P', enabled: () => st !== 'stopped', action: () => editor.pausePlay() },
+                    { label: 'Next Frame', icon: 'step', enabled: () => st === 'paused', action: () => editor.player.step() },
+                ];
+            },
         },
         {
             label: 'Help',
             items: (): MenuItem[] => [
                 { label: 'Keyboard Shortcuts', icon: 'keyboard', shortcut: '?', action: () => showShortcuts() },
+                { label: 'Scripting & Shader Reference', icon: 'code', action: () => showReference() },
                 { label: 'About', icon: 'info', action: () => showAbout(editor) },
             ],
         },
@@ -125,6 +148,10 @@ const SHORTCUTS: [string, string][] = [
     ['F2', 'Rename'],
     ['Mod+S / Mod+O', 'Save / open scene file'],
     ['Esc', 'Cancel drag or clear selection'],
+    ['Mod+P / Mod+Shift+P', 'Play or stop / pause'],
+    ['Mod+J', 'Show or hide the code and render graph panel'],
+    ['Mod+S in the code editor', 'Apply the script or shader'],
+    ['Mod+/ in the code editor', 'Comment or uncomment lines'],
 ];
 
 export function showShortcuts() {
@@ -141,7 +168,7 @@ export function showAbout(editor: Editor) {
     const body = h(
         'div',
         { class: 'about' },
-        h('p', { text: 'A scene editor for the Canonical WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere.' }),
+        h('p', { text: 'A scene editor for the Canonical WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere. The optional AI assistant sends your messages and a description of the scene to OpenRouter, only when you use it.' }),
         h(
             'dl',
             null,
