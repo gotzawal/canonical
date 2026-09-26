@@ -10,7 +10,8 @@ import { imageModelId } from '../design/paintover';
 import { generateSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom } from '../design/swatches';
 import { MAX_IMAGES } from './images';
 import type { ToolDef } from './openrouter';
-import type { ToolEnv, ToolResult } from './tools';
+import { allowedGroups, type ToolEnv, type ToolResult } from './tools';
+import { stageDef } from '../design/stages';
 import { hex, node, num, optStr, r3, str, ToolError, type Json } from './toolUtil';
 
 function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
@@ -82,6 +83,10 @@ export async function runMaterialTool(env: ToolEnv, name: string, args: Json): P
     switch (name) {
         case 'set_material_slot': {
             const existing = args.slot !== undefined ? findSlot(env, args.slot) : undefined;
+            // Outside the stages that edit materials, only slots no object uses yet can change (planning).
+            if (existing && !allowedGroups(env).has('materials') && slotUsers(ed.store.doc, existing.id).length) {
+                throw new ToolError(`${existing.name} is used by objects, and materials are not edited in the ${stageDef(ed.store.doc.design.stage).title} stage.`);
+            }
             if (!existing && !(typeof args.name === 'string' && args.name.trim())) throw new ToolError('Give a name for the new slot.');
             const patch: SlotPatch = {};
             if (args.name !== undefined) patch.name = str(args.name, 'name', 200);
