@@ -3,7 +3,9 @@ import { kvDelete, kvGet, kvSet } from '../core/db';
 import { assetImageDataUrl } from '../core/images';
 import { Emitter } from '../core/events';
 import { designSummary, pipelineSummary } from '../design/context';
-import { chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from './openrouter';
+import { uid } from '../core/ids';
+import { cacheStyle } from './caching';
+import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from './openrouter';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { aiSettings } from './settings';
 import { runTool, toolDefs, type ToolEnv } from './tools';
@@ -63,6 +65,8 @@ interface SessionData {
     history: ChatMessage[];
     usage: Agent['usage'];
     savedAt: string;
+    /** Key of the conversation for OpenRouter's sticky routing (a new conversation gets a new one). */
+    conversation?: string;
 }
 
 /** Hard limit: older requests are dropped when the history grows past it mid-request. */
@@ -72,6 +76,10 @@ const COMPACT_CHARS = 90_000;
 /** Requests kept word for word when compacting. */
 const KEEP_REQUESTS = 2;
 const MAX_TOOL_RESULT = 30_000;
+/** What an image in the history counts for in historySize (about the text of its tokens), whatever the size of its data. */
+const IMAGE_CHARS = 4_000;
+/** Images a request keeps sending, for models with a prompt cache, before they are replaced by notes. */
+const MAX_KEPT_IMAGES = 8;
 /** User messages that only carry images a tool asked for start with this. */
 const TOOL_IMAGES = '[tool images]';
 const SESSION_PREFIX = 'ai-session:';
@@ -97,9 +105,11 @@ export class Agent extends Emitter<AgentEvents> {
     busy = false;
     /** Compaction or memo refresh running (the Send button waits). */
     working = false;
-    usage = { prompt: 0, completion: 0, cached: 0, cost: 0, requests: 0 };
+    usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
     lastModel = '';
     private sessionKey = '';
+    /** Sent as OpenRouter's session_id, so the requests of a conversation stay with the provider holding its prompt cache. */
+    private conversation = uid('c');
     private saveTimer = 0;
     private loading: Promise<void> = Promise.resolve();
 
@@ -132,10 +142,12 @@ export class Agent extends Emitter<AgentEvents> {
         this.turns = [];
         this.history = [];
         this.placeholders.clear();
-        this.usage = { prompt: 0, completion: 0, cached: 0, cost: 0, requests: 0 };
+        this.usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
+        this.conversation = uid('c');
         this.emit('update', null);
         const data = await kvGet<SessionData>(key).catch(() => undefined);
         if (this.sessionKey !== key || !data || data.version !== 1) return;
+        if (typeof data.conversation === 'string' && data.conversation) this.conversation = data.conversation;
         this.turns = Array.isArray(data.turns) ? data.turns : [];
         this.history = Array.isArray(data.history) ? data.history : [];
         if (data.usage) this.usage = { ...this.usage, ...data.usage };
@@ -169,7 +181,7 @@ export class Agent extends Emitter<AgentEvents> {
                 })
                 .reverse()
                 .map((t) => (t.tool?.result && t.tool.result.length > 6000 ? { ...t, tool: { ...t.tool, result: t.tool.result.slice(0, 6000) + '...' } } : t));
-            const data: SessionData = { version: 1, turns, history: this.history, usage: this.usage, savedAt: new Date().toISOString() };
+            const data: SessionData = { version: 1, turns, history: this.history, usage: this.usage, savedAt: new Date().toISOString(), conversation: this.conversation };
             void kvSet(key, data);
         }, 600);
     }
@@ -180,6 +192,7 @@ export class Agent extends Emitter<AgentEvents> {
         this.turns = [];
         this.history = [];
         this.placeholders.clear();
+        this.conversation = uid('c');
         this.emit('update', null);
         this.saveSession();
     }
@@ -195,9 +208,9 @@ export class Agent extends Emitter<AgentEvents> {
         return t;
     }
 
-    /** Characters in the history, roughly proportional to its tokens. */
+    /** Characters in the history, roughly proportional to its tokens (an image counts as IMAGE_CHARS, not its data). */
     historySize(): number {
-        return this.history.reduce((n, m) => n + (typeof m.content === 'string' ? m.content.length : JSON.stringify(m.content ?? '').length) + JSON.stringify(m.tool_calls ?? '').length, 0);
+        return this.history.reduce((n, m) => n + contentChars(m) + JSON.stringify(m.tool_calls ?? '').length, 0);
     }
 
     get hasHistory(): boolean {
@@ -211,11 +224,18 @@ export class Agent extends Emitter<AgentEvents> {
     }
 
     private addUsage(u: Usage | null | undefined) {
+        const cache = cacheTokens(u);
         this.usage.requests++;
         this.usage.prompt += u?.prompt_tokens ?? 0;
         this.usage.completion += u?.completion_tokens ?? 0;
-        this.usage.cached += u?.prompt_tokens_details?.cached_tokens ?? 0;
+        this.usage.cached += cache.read;
+        this.usage.written += cache.written;
         this.usage.cost += u?.cost ?? 0;
+    }
+
+    /** The cache fields every request of this conversation carries (see caching.ts). */
+    private get cacheRequest(): { sessionId: string; longCache: boolean } {
+        return { sessionId: `canonical-${this.editor.store.doc.design.id}-${this.conversation}`, longCache: aiSettings.value.cacheLong };
     }
 
     // ------------------------------------------------------------ requests
@@ -252,10 +272,13 @@ export class Agent extends Emitter<AgentEvents> {
         let error = '';
         let stopped = false;
         let vision = false;
+        let caches = false;
         let begun = false;
         try {
             const models = await listModels().catch(() => []);
-            vision = supportsImages(models.find((m) => m.id === model));
+            const info = models.find((m) => m.id === model);
+            vision = supportsImages(info);
+            caches = cacheStyle(model, info?.pricing) !== 'unknown';
             if (this.historySize() > COMPACT_CHARS) await this.compact(signal, true);
 
             const ctx = this.context();
@@ -277,6 +300,7 @@ export class Agent extends Emitter<AgentEvents> {
                         messages: [{ role: 'system', content: SYSTEM_PROMPT }, ...this.history],
                         tools: toolDefs(this.env),
                         temperature: aiSettings.value.temperature,
+                        ...this.cacheRequest,
                     },
                     {
                         signal,
@@ -289,8 +313,11 @@ export class Agent extends Emitter<AgentEvents> {
                 this.lastModel = res.model;
                 this.addUsage(res.usage);
                 this.history.push(res.message);
-                // Images are sent once; later requests only mention them.
-                this.retireImages();
+                // Images are sent once; later requests only mention them. With a
+                // prompt cache they stay until the request ends (up to
+                // MAX_KEPT_IMAGES): replacing them now would change the start of
+                // the next step and miss the cache.
+                if (!caches || this.imageCount() > MAX_KEPT_IMAGES) this.retireImages();
                 if (turn.text.trim()) answer = turn.text;
                 else {
                     // Only tool calls: drop the empty bubble.
@@ -395,6 +422,12 @@ export class Agent extends Emitter<AgentEvents> {
         return msg;
     }
 
+    private imageCount(): number {
+        let n = 0;
+        for (const m of this.history) if (Array.isArray(m.content)) for (const p of m.content) if (p.type === 'image_url') n++;
+        return n;
+    }
+
     /** Replaces images the model has seen by short notes, so they are not sent again. */
     private retireImages() {
         for (const m of this.history) {
@@ -444,6 +477,8 @@ export class Agent extends Emitter<AgentEvents> {
                     ],
                     temperature: 0.2,
                     max_tokens: 1500,
+                    ...this.cacheRequest,
+                    cacheable: false,
                 },
                 { signal },
             );
@@ -526,6 +561,8 @@ export class Agent extends Emitter<AgentEvents> {
                 ],
                 temperature: 0.2,
                 max_tokens: 800,
+                ...this.cacheRequest,
+                cacheable: false,
             });
             this.addUsage(res.usage);
             this.saveSession();
@@ -543,6 +580,13 @@ export class Agent extends Emitter<AgentEvents> {
             this.emit('busy', this.busy);
         }
     }
+}
+
+function contentChars(m: ChatMessage): number {
+    if (typeof m.content === 'string') return m.content.length;
+    let n = 0;
+    for (const p of m.content ?? []) n += p.type === 'text' ? p.text.length : IMAGE_CHARS;
+    return n;
 }
 
 function firstText(m: ChatMessage): string {

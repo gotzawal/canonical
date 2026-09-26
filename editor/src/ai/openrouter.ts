@@ -1,7 +1,9 @@
 // Minimal OpenRouter client (OpenAI compatible chat completions with tool
-// calling and streaming). Requests go straight from the browser to
-// openrouter.ai with the user's own key; nothing passes through a server of
-// ours.
+// calling and streaming; prompt caching is in caching.ts). Requests go
+// straight from the browser to openrouter.ai with the user's own key;
+// nothing passes through a server of ours.
+
+import { cacheFields, refusedField } from './caching';
 
 export const OPENROUTER_URL = 'https://openrouter.ai/api/v1';
 
@@ -10,14 +12,16 @@ export interface OpenRouterModel {
     name: string;
     created?: number;
     context_length?: number;
-    pricing?: { prompt?: string; completion?: string };
+    pricing?: { prompt?: string; completion?: string; input_cache_read?: string; input_cache_write?: string };
     supported_parameters?: string[];
     architecture?: { input_modalities?: string[] };
 }
 
-/** Anthropic style prompt cache breakpoint (OpenRouter passes it to providers that support it). */
+/** Prompt cache breakpoint (OpenRouter passes it to the providers that take it; see caching.ts). */
 export interface CacheControl {
     type: 'ephemeral';
+    /** Claude only: '1h' keeps the entry for an hour instead of five minutes. */
+    ttl?: '1h';
 }
 
 export type ContentPart =
@@ -37,48 +41,6 @@ export interface ChatMessage {
     tool_call_id?: string;
 }
 
-/** Explicit prompt caching: models that only cache at cache_control breakpoints. */
-export function usesCacheBreakpoints(model: string): boolean {
-    return model.startsWith('anthropic/');
-}
-
-/**
- * Adds cache breakpoints for models that need them: one after the system
- * prompt (with the tool definitions it covers the fixed prefix of every
- * request) and one on the last user message, so the next steps of a request
- * read the conversation so far from the cache. Returns a new array; the
- * history itself is left untouched.
- */
-export function withCacheBreakpoints(messages: ChatMessage[]): ChatMessage[] {
-    const out = messages.map((m) => ({ ...m }));
-    const mark = (m: ChatMessage) => {
-        if (typeof m.content === 'string') {
-            if (!m.content) return;
-            m.content = [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }];
-            return;
-        }
-        if (!Array.isArray(m.content)) return;
-        const parts = m.content.map((p) => ({ ...p })) as ContentPart[];
-        for (let i = parts.length - 1; i >= 0; i--) {
-            const p = parts[i];
-            if (p.type === 'text') {
-                parts[i] = { ...p, cache_control: { type: 'ephemeral' } };
-                break;
-            }
-        }
-        m.content = parts;
-    };
-    const system = out.find((m) => m.role === 'system');
-    if (system) mark(system);
-    for (let i = out.length - 1; i >= 0; i--) {
-        if (out[i].role === 'user') {
-            mark(out[i]);
-            break;
-        }
-    }
-    return out;
-}
-
 export interface ToolDef {
     type: 'function';
     function: { name: string; description: string; parameters: Record<string, unknown> };
@@ -90,8 +52,19 @@ export interface Usage {
     total_tokens?: number;
     /** Credits spent, when OpenRouter reports it. */
     cost?: number;
-    /** Prompt tokens read from the provider's cache. */
+    /** Prompt tokens read from (cached_tokens) and written to (cache_write_tokens) the provider's cache. */
     prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    /** The same in Anthropic's shape, when a route reports it that way. */
+    cache_read_input_tokens?: number;
+    cache_creation_input_tokens?: number;
+}
+
+/** Prompt tokens read from the cache and written to it in a usage report. */
+export function cacheTokens(u: Usage | null | undefined): { read: number; written: number } {
+    return {
+        read: u?.prompt_tokens_details?.cached_tokens ?? u?.cache_read_input_tokens ?? 0,
+        written: u?.prompt_tokens_details?.cache_write_tokens ?? u?.cache_creation_input_tokens ?? 0,
+    };
 }
 
 export interface ChatRequest {
@@ -100,7 +73,16 @@ export interface ChatRequest {
     tools?: ToolDef[];
     temperature?: number;
     max_tokens?: number;
+    /** Key of the conversation for OpenRouter's sticky routing, so its requests reach the provider holding its cache. */
+    sessionId?: string;
+    /** Claude: keep prompt cache entries for an hour instead of five minutes. */
+    longCache?: boolean;
+    /** False for one-off requests (summaries): nothing is marked, since no later request would read it back. */
+    cacheable?: boolean;
 }
+
+/** Cache fields providers refused in this session, per model: they are left out from then on. */
+const refused = new Map<string, { topLevel?: boolean; markers?: boolean; session?: boolean }>();
 
 export interface ChatResult {
     message: ChatMessage;
@@ -177,26 +159,51 @@ export function pickDefaultModel(models: OpenRouterModel[]): string {
  * as it arrives; tool calls are assembled from their streamed fragments.
  */
 export async function chat(key: string, req: ChatRequest, opts: { signal?: AbortSignal; onText?: (delta: string) => void } = {}): Promise<ChatResult> {
-    const body: Record<string, unknown> = {
-        model: req.model,
-        messages: usesCacheBreakpoints(req.model) ? withCacheBreakpoints(req.messages) : req.messages,
-        stream: true,
-        usage: { include: true },
-    };
-    if (req.tools?.length) {
-        body.tools = req.tools;
-        body.tool_choice = 'auto';
-    }
-    if (req.temperature !== undefined) body.temperature = req.temperature;
-    if (req.max_tokens) body.max_tokens = req.max_tokens;
+    let res: Response;
+    // A provider that refuses a cache field gets the request again without it (see caching.ts).
+    for (let attempt = 0; ; attempt++) {
+        const r = refused.get(req.model) ?? {};
+        const once = req.cacheable === false;
+        const cache = cacheFields(req.model, req.messages, { longTtl: req.longCache, noTopLevel: r.topLevel || once, noMarkers: r.markers || once });
+        const body: Record<string, unknown> = {
+            model: req.model,
+            messages: cache.messages,
+            stream: true,
+            usage: { include: true },
+        };
+        if (cache.cache_control) body.cache_control = cache.cache_control;
+        if (req.sessionId && !r.session) body.session_id = req.sessionId.slice(0, 256);
+        if (req.tools?.length) {
+            body.tools = req.tools;
+            body.tool_choice = 'auto';
+        }
+        if (req.temperature !== undefined) body.temperature = req.temperature;
+        if (req.max_tokens) body.max_tokens = req.max_tokens;
 
-    const res = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-        method: 'POST',
-        headers: headers(key),
-        body: JSON.stringify(body),
-        signal: opts.signal,
-    });
-    if (!res.ok) throw new OpenRouterError(errorText(await res.text(), res.status), res.status);
+        res = await fetch(`${OPENROUTER_URL}/chat/completions`, {
+            method: 'POST',
+            headers: headers(key),
+            body: JSON.stringify(body),
+            signal: opts.signal,
+        });
+        if (res.ok) break;
+        const text = errorText(await res.text(), res.status);
+        const field = attempt < 3 ? refusedField(res.status, text) : null;
+        if (field === 'session' && body.session_id) {
+            refused.set(req.model, { ...r, session: true });
+            continue;
+        }
+        // Without the top-level field first (Claude), then without the markers.
+        if (field === 'cache' && body.cache_control) {
+            refused.set(req.model, { ...r, topLevel: true });
+            continue;
+        }
+        if (field === 'cache' && cache.marked) {
+            refused.set(req.model, { ...r, markers: true });
+            continue;
+        }
+        throw new OpenRouterError(text, res.status);
+    }
 
     const type = res.headers.get('content-type') || '';
     if (!type.includes('text/event-stream') || !res.body) {

@@ -6,6 +6,7 @@ import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../ai/openrouter';
 import { aiSettings } from '../ai/settings';
+import { describeCache } from '../ai/caching';
 import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
 import { highlight } from './codeEditor';
 import { clear, h } from './dom';
@@ -245,9 +246,10 @@ export class AIPanel {
         this.modelLabel.textContent = s.model ? model?.name ?? s.model : 'Choose a model';
         this.modelLabel.title = s.model ? `${s.model}${model && !supportsTools(model) ? ' (does not support tools)' : ''}` : 'Choose a model';
         const u = this.agent.usage;
-        this.usageLabel.textContent = u.requests ? `${((u.prompt + u.completion) / 1000).toFixed(1)}k tok${u.cost ? ` · $${u.cost.toFixed(4)}` : ''}` : '';
+        const hit = u.prompt ? Math.round((u.cached / u.prompt) * 100) : 0;
+        this.usageLabel.textContent = u.requests ? `${((u.prompt + u.completion) / 1000).toFixed(1)}k tok${u.cached ? ` · ${hit}% cached` : ''}${u.cost ? ` · $${u.cost.toFixed(4)}` : ''}` : '';
         this.usageLabel.title = u.requests
-            ? `${u.requests} requests, ${u.prompt} prompt + ${u.completion} completion tokens${u.cached ? `, ${u.cached} prompt tokens read from the cache` : ''}`
+            ? `${u.requests} requests, ${u.prompt} prompt + ${u.completion} completion tokens${u.cached ? `, ${u.cached} prompt tokens read from the cache (${hit}%)` : ', no prompt tokens read from a cache yet'}${u.written ? `, ${u.written} written to it` : ''}`
             : '';
         this.sendBtn.replaceChildren(icon(this.agent.busy ? 'stop' : 'send', 14), h('span', { text: this.agent.busy ? 'Stop' : this.agent.working ? 'Wait' : 'Send' }));
         this.sendBtn.disabled = !this.agent.busy && this.agent.working;
@@ -401,7 +403,7 @@ export class AIPanel {
             modelInfo.textContent = !this.models.length
                 ? 'Model list unavailable (offline?). Type a model id.'
                 : cur
-                  ? `${cur.name}${cur.context_length ? ` · ${Math.round(cur.context_length / 1000)}k context` : ''}${supportsImages(cur) ? ' · sees images' : ''}${supportsTools(cur) ? '' : ' · no tool support, pick another'}${cur.pricing?.prompt ? ` · $${(Number(cur.pricing.prompt) * 1e6).toFixed(2)} / $${(Number(cur.pricing.completion) * 1e6).toFixed(2)} per M tokens` : ''}`
+                  ? `${cur.name}${cur.context_length ? ` · ${Math.round(cur.context_length / 1000)}k context` : ''}${supportsImages(cur) ? ' · sees images' : ''}${supportsTools(cur) ? '' : ' · no tool support, pick another'}${cur.pricing?.prompt ? ` · $${(Number(cur.pricing.prompt) * 1e6).toFixed(2)} / $${(Number(cur.pricing.completion) * 1e6).toFixed(2)} per M tokens` : ''} · ${describeCache(cur.id, cur.pricing)}${Number(cur.pricing?.input_cache_read) > 0 ? ` ($${(Number(cur.pricing!.input_cache_read) * 1e6).toFixed(2)} per M cached)` : ''}`
                   : `${usable.length} models with tool support. Type to search.`;
         };
         modelInput.addEventListener('input', fillModels);
@@ -417,6 +419,7 @@ export class AIPanel {
         const shots = new CheckboxField(s.screenshots, () => {}, 'Send viewport screenshots to vision models');
         const memo = new CheckboxField(s.memo, () => {}, 'Keep a scene memo up to date at checkpoints');
         const stageTools = new CheckboxField(s.stageTools, () => {}, 'The pipeline stage decides which tools the assistant gets');
+        const cacheLong = new CheckboxField(s.cacheLong, () => {}, 'Keep the prompt cache for an hour (Claude)');
         const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (paintovers, swatches)');
         const imageModel = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-image-models', spellcheck: 'false', placeholder: DEFAULT_IMAGE_MODEL } });
         imageModel.value = s.imageModel;
@@ -449,6 +452,7 @@ export class AIPanel {
             row('Model', h('div', { class: 'inline' }, modelInput, refresh)),
             row('', modelInfo),
             datalist,
+            row('', cacheLong.el, 'Claude keeps cached prompts for five minutes; an hour keeps the conversation cached while you look at the result between requests. Writing the cache costs 2x the input price instead of 1.25x, reading it 0.1x either way.'),
             row('Temperature', temperature.el),
             row('Max steps', steps.el, 'Model calls per request'),
             row('', allowPlay.el),
@@ -459,7 +463,7 @@ export class AIPanel {
             imageList,
             row('', stageTools.el),
             row('', memo.el, 'The memo is a few lines about the scene stored in the project, so a new conversation (or another session) knows where the work stands.'),
-            h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code), images and screenshots are sent to OpenRouter and the model provider you choose. Each project keeps its conversation in this browser; long conversations are compacted into a summary. The key is stored in this browser only.' }),
+            h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code), images and screenshots are sent to OpenRouter and the model provider you choose. Each project keeps its conversation in this browser; long conversations are compacted into a summary. Requests carry a session id (random, per conversation) so OpenRouter keeps a conversation with one provider and its prompt cache. The key is stored in this browser only.' }),
         );
         const result = await dialog('AI Assistant Settings', body, [
             { label: 'Remove key', value: 'remove', danger: true },
@@ -480,6 +484,7 @@ export class AIPanel {
             allowPlay: box(allowPlay),
             screenshots: box(shots),
             allowImages: box(images),
+            cacheLong: box(cacheLong),
             imageModel: imageModel.value.trim(),
             stageTools: box(stageTools),
             memo: box(memo),

@@ -19,6 +19,8 @@ export interface AISettings {
     allowImages: boolean;
     /** Image generation model (OpenRouter image API). */
     imageModel: string;
+    /** Claude: keep the prompt cache for an hour instead of five minutes (cache writes cost more). */
+    cacheLong: boolean;
 }
 
 const SETTINGS_KEY = 'canonical-editor/ai';
@@ -36,6 +38,7 @@ function defaults(): AISettings {
         stageTools: true,
         allowImages: true,
         imageModel: '',
+        cacheLong: false,
     };
 }
 
