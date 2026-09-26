@@ -1,3 +1,4 @@
+import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
@@ -7,12 +8,13 @@ import {
 import { Emitter } from './core/events';
 import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
 import {
-    AutoSaver, collectGarbage, download, exportSceneFile, fileNameFor, importSceneFile, pickFiles, usedAssetIds,
+    AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
+    projectFileNameFor, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
-    GeometryType, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, ScriptDoc, ShaderDoc,
+    GeometryType, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
     ShaderKind, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
@@ -24,7 +26,12 @@ import type { ScriptCompiler } from './play/compiler';
 import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
+import type { Checkpoints } from './design/checkpoints';
+import { Pipeline } from './design/pipeline';
+import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
+import type { WalkController } from './viewport/walk';
+import type { ReferenceRoom } from './viewport/referenceRoom';
 import { exampleShowcase } from './examples';
 
 export interface EditorServices {
@@ -43,6 +50,18 @@ interface EditorEvents {
     'ai-prompt': { text: string; send: boolean };
     /** Show the render graph tab of the dock. */
     'show-graph': void;
+    /** The scene (Ctrl+S) or the whole project was written to a file. */
+    saved: 'scene' | 'project';
+    /** Show the Design tab (pipeline, brief, shots). */
+    'show-design': void;
+    /** Show the Scene tab (sky, exposure, post effects, GI). */
+    'show-scene': void;
+    /** Open the planning brief screen. */
+    'show-brief': void;
+    /** A prefab instance is edited on its own (id of its root), or editing ended (null). */
+    isolate: string | null;
+    /** The walk camera started or stopped. */
+    walk: boolean;
 }
 
 /** Editor commands shared by menus, shortcuts, panels and the AI tools. */
@@ -54,6 +73,16 @@ export class Editor extends Emitter<EditorEvents> {
     readonly graph: RenderGraphController;
     /** Model part picked last, shown highlighted in the inspector. */
     focusedPart: { node: string; path: string } | null = null;
+    /** Save checkpoints (set up by main.ts once the assistant exists). */
+    checkpoints: Checkpoints | null = null;
+    /** Stage gates, checklists, shots and snapshots of the planning pipeline. */
+    readonly pipeline: Pipeline;
+    /** Root of the prefab instance being edited on its own (everything else hidden). */
+    isolated: string | null = null;
+    /** First person walk camera (set up by main.ts). */
+    walk: WalkController | null = null;
+    /** Neutral room to check swatches in (set up by main.ts). */
+    room: ReferenceRoom | null = null;
 
     constructor(
         readonly store: Store,
@@ -69,11 +98,39 @@ export class Editor extends Emitter<EditorEvents> {
         this.compiler = services.compiler;
         this.player = services.player;
         this.graph = services.graph;
+        this.pipeline = new Pipeline(this);
+        // Parts added while a prefab instance is edited on its own stay visible.
+        store.on('change', () => {
+            if (!this.isolated) return;
+            if (!store.node(this.isolated)) {
+                this.isolated = null;
+                sync.setIsolation(null);
+                this.emit('isolate', null);
+                return;
+            }
+            sync.setIsolation(new Set([this.isolated, ...store.descendants(this.isolated).map((n) => n.id)]));
+        });
+        store.on('load', () => {
+            if (!this.isolated) return;
+            this.isolated = null;
+            sync.setIsolation(null);
+            this.emit('isolate', null);
+        });
     }
 
     // ------------------------------------------------------------ creation
 
     private insert(nodes: NodeDoc[], label: string, select = true) {
+        // While a prefab instance is edited on its own, new objects become its parts.
+        const root = this.isolated ? this.picker.worldMatrix(this.isolated) : null;
+        if (this.isolated && root) {
+            const inv = invert(root) ?? mat4();
+            for (const n of nodes) {
+                if (n.parent) continue;
+                n.parent = this.isolated;
+                n.position = tidy3(transformPoint(inv, n.position), 4);
+            }
+        }
         this.store.commit(label, (doc) => {
             doc.nodes.push(...nodes);
         });
@@ -81,6 +138,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     createPrimitive(type: GeometryType) {
+        if (!this.canAddObjects()) return;
         const node = makeMeshNode(type);
         if (type !== 'plane') {
             const p = this.viewport.spawnPoint();
@@ -100,6 +158,16 @@ export class Editor extends Emitter<EditorEvents> {
         this.insert([node], 'Create ' + node.name);
     }
 
+    /** A particle emitter from a preset (fire, smoke, sparks...), in front of the view. Effects may be added while placement is locked. */
+    createParticles(preset = 'fire'): string {
+        const node = makeNode(this.uniqueName(PARTICLE_PRESETS.find((p) => p.id === preset)?.label ?? 'Particles', null), null);
+        node.particles = presetParticles(preset);
+        const p = this.viewport.spawnPoint();
+        node.position = [round(p[0]), round(p[1]), round(p[2])];
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
+    }
+
     createEmpty(parent: string | null = null) {
         const node = makeNode(this.uniqueName('Empty', parent), parent);
         if (!parent) {
@@ -112,7 +180,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Groups the selection under a new empty at the selection's center. */
     groupSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length) return;
+        if (!roots.length || !this.pipeline.canPlace(roots)) return;
         const parent = this.store.node(roots[0])?.parent ?? null;
         const group = makeNode(this.uniqueName('Group', parent), parent);
         // Put the group's origin at the center of what it contains.
@@ -139,7 +207,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ------------------------------------------------------------- editing
 
+    /** False (with a message) while the pipeline stage locks placement. */
+    canAddObjects(): boolean {
+        if (!this.pipeline.placementLocked) return true;
+        toast('Placement is locked in this stage: new objects would change the level. Unlock it in the pipeline bar first.', 'info', 4500);
+        return false;
+    }
+
     deleteSelection() {
+        if (!this.pipeline.canPlace(this.store.selection)) return;
         const ids = new Set<string>();
         for (const id of this.store.selection) {
             ids.add(id);
@@ -155,7 +231,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     duplicateSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length) return;
+        if (!roots.length || !this.pipeline.canPlace(roots)) return;
         const newRoots: string[] = [];
         this.store.commit('Duplicate', (doc) => {
             for (const rootId of roots) {
@@ -198,7 +274,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     resetTransform(part: 'position' | 'rotation' | 'scale' | 'all' = 'all') {
         const ids = this.store.selection;
-        if (!ids.length) return;
+        if (!ids.length || !this.pipeline.canPlace(ids)) return;
         this.store.commit('Reset Transform', (doc) => {
             for (const n of doc.nodes) {
                 if (!ids.includes(n.id)) continue;
@@ -212,6 +288,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Drops objects onto the ground (y of their lowest point = 0). */
     dropToGround() {
         const ids = this.store.selectionRoots();
+        if (!this.pipeline.canPlace(ids)) return;
         const moves: { id: string; dy: number }[] = [];
         for (const id of ids) {
             const box = this.picker.bounds(id);
@@ -285,7 +362,7 @@ export class Editor extends Emitter<EditorEvents> {
         for (const file of files) {
             const lower = file.name.toLowerCase();
             try {
-                if (lower.endsWith('.json')) {
+                if (lower.endsWith('.json') || lower.endsWith('.zip')) {
                     await this.openSceneFromFile(file);
                     continue;
                 }
@@ -318,7 +395,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     addModel(assetId: string, at?: Vec3, frame = false) {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
-        if (!meta) return;
+        if (!meta || !this.canAddObjects()) return;
         const spot = at ?? this.viewport.spawnPoint();
         const node = makeNode(this.uniqueName(meta.name.replace(/\.(glb|gltf)$/i, ''), null), null, spot);
         node.position = tidy3(node.position, 3);
@@ -381,6 +458,269 @@ export class Editor extends Emitter<EditorEvents> {
         this.store.commit('Remove Asset', (doc) => {
             doc.assets = doc.assets.filter((a) => a.id !== assetId);
         });
+    }
+
+    // ------------------------------------------------------------- prefabs
+
+    /** What a click on `id` selects: generated parts of a prefab instance select the instance. */
+    selectable(id: string): string {
+        const node = this.store.node(id);
+        if (!node?.prefabChild) return id;
+        if (this.isolated && (id === this.isolated || this.store.isAncestor(this.isolated, id))) return id;
+        return instanceRootOf(this.store.doc, id)?.id ?? id;
+    }
+
+    prefab(ref: string | null | undefined): PrefabDoc | undefined {
+        if (!ref) return undefined;
+        const list = this.store.doc.prefabs;
+        return list.find((p) => p.id === ref) ?? list.find((p) => p.name.toLowerCase() === ref.toLowerCase());
+    }
+
+    instancesOf(prefabId: string): NodeDoc[] {
+        return this.store.doc.nodes.filter((n) => n.prefab === prefabId);
+    }
+
+    /**
+     * Turns the selected objects into a prefab (pivot at their bottom
+     * center) and puts one instance where they were.
+     */
+    createPrefab(name?: string, ids = this.store.selectionRoots()): { prefab: PrefabDoc; instance: string } | null {
+        const roots = ids.filter((id) => {
+            const n = this.store.node(id);
+            return n && !n.prefab && !n.prefabChild;
+        });
+        if (!roots.length) {
+            toast('Select the objects to make a prefab from (prefab instances cannot be nested).', 'info');
+            return null;
+        }
+        if (!this.pipeline.canPlace(roots)) return null;
+        let box: { min: Vec3; max: Vec3 } | null = null;
+        for (const id of roots) {
+            const b = this.picker.bounds(id);
+            if (!b) continue;
+            box = box
+                ? { min: [0, 1, 2].map((i) => Math.min(box!.min[i], b.min[i])) as Vec3, max: [0, 1, 2].map((i) => Math.max(box!.max[i], b.max[i])) as Vec3 }
+                : { min: [...b.min] as Vec3, max: [...b.max] as Vec3 };
+        }
+        if (!box) {
+            toast('The selection has no meshes to make a prefab from.', 'info');
+            return null;
+        }
+        const first = this.store.node(roots[0])!;
+        const stem = (name?.trim() || first.name).replace(/\s\(\d+\)$/, '');
+        const { prefab, pivot } = prefabFrom(this.store.doc, roots, stem, box, (id) => this.picker.worldMatrix(id));
+        // Keep the instance under the objects' common parent.
+        const parent = roots.every((id) => this.store.node(id)?.parent === first.parent) ? first.parent : null;
+        const parentWorld = parent ? this.picker.worldMatrix(parent) : null;
+        const local = parentWorld ? transformPoint(invert(parentWorld) ?? mat4(), pivot) : pivot;
+        const nodes = makeInstance(prefab, tidy3(local, 4), this.uniqueName(stem, parent));
+        nodes[0].parent = parent;
+        const doomed = new Set<string>();
+        for (const id of roots) {
+            doomed.add(id);
+            for (const d of this.store.descendants(id)) doomed.add(d.id);
+        }
+        this.store.commit('Create Prefab', (doc) => {
+            const at = doc.nodes.findIndex((n) => n.id === roots[0]);
+            doc.nodes = doc.nodes.filter((n) => !doomed.has(n.id));
+            doc.nodes.splice(Math.max(0, Math.min(at, doc.nodes.length)), 0, ...nodes);
+            doc.prefabs.push(prefab);
+        });
+        this.store.select([nodes[0].id]);
+        return { prefab, instance: nodes[0].id };
+    }
+
+    /** Places an instance of a prefab (at the view's ground point by default). */
+    placePrefab(prefabId: string, at?: Vec3, rotationY = 0, select = true): string | null {
+        const prefab = this.prefab(prefabId);
+        if (!prefab || !this.canAddObjects()) return null;
+        const spot = at ?? this.viewport.spawnPoint();
+        const nodes = makeInstance(prefab, tidy3(spot, 3), this.uniqueName(prefab.name, null), rotationY);
+        this.insert(nodes, 'Place Prefab', select);
+        return nodes[0].id;
+    }
+
+    renamePrefab(prefabId: string, name: string) {
+        const clean = name.trim();
+        if (!clean) return;
+        this.store.commit('Rename Prefab', (doc) => {
+            const p = doc.prefabs.find((x) => x.id === prefabId);
+            if (p) p.name = clean;
+        });
+    }
+
+    /** Hides everything but one instance so its parts can be edited; Apply updates every instance. */
+    editPrefab(rootId: string) {
+        const root = this.store.node(rootId);
+        const prefab = this.prefab(root?.prefab);
+        if (!root || !prefab) return;
+        if (prefab.useModel) {
+            toast('This prefab shows its model. Switch it back to the greybox template to edit the template.', 'info', 5000);
+            return;
+        }
+        if (!this.pipeline.canPlace([rootId])) return;
+        this.isolated = rootId;
+        const ids = new Set([rootId, ...this.store.descendants(rootId).map((n) => n.id)]);
+        this.sync.setIsolation(ids);
+        this.store.select([rootId]);
+        this.viewport.frameNodes([rootId]);
+        this.emit('isolate', rootId);
+    }
+
+    /** Ends prefab editing: apply the edited parts to every instance, or discard them. */
+    finishPrefabEdit(apply: boolean) {
+        const rootId = this.isolated;
+        if (!rootId) return;
+        const root = this.store.node(rootId);
+        const prefabId = root?.prefab;
+        this.isolated = null;
+        this.sync.setIsolation(null);
+        this.emit('isolate', null);
+        if (!root || !prefabId) return;
+        const others = this.instancesOf(prefabId).filter((n) => n.id !== rootId).map((n) => n.id);
+        if (apply) {
+            this.store.commit('Apply Prefab', (doc) => {
+                const p = doc.prefabs.find((x) => x.id === prefabId);
+                if (!p) return;
+                p.nodes = templateFromInstance(doc, rootId);
+                // The edited parts become generated parts again.
+                const mark = (pid: string) => {
+                    for (const n of doc.nodes) {
+                        if (n.parent !== pid) continue;
+                        n.prefabChild = true;
+                        mark(n.id);
+                    }
+                };
+                mark(rootId);
+                regenerate(doc, prefabId, others);
+            });
+            toast(others.length ? `Updated ${others.length + 1} instances.` : 'Prefab updated.', 'success');
+        } else {
+            this.store.commit('Discard Prefab Edit', (doc) => regenerate(doc, prefabId, [rootId]));
+        }
+        this.store.select([rootId]);
+    }
+
+    /** Makes an instance ordinary objects that no longer follow the prefab. */
+    unpackInstance(rootId: string) {
+        this.store.commit('Unpack Prefab', (doc) => {
+            const walk = (pid: string) => {
+                for (const n of doc.nodes) {
+                    if (n.parent !== pid) continue;
+                    delete n.prefabChild;
+                    walk(n.id);
+                }
+            };
+            const root = doc.nodes.find((n) => n.id === rootId);
+            if (root) delete root.prefab;
+            walk(rootId);
+        });
+    }
+
+    /** Deletes a prefab; its instances stay as ordinary objects. */
+    async deletePrefab(prefabId: string, ask = true) {
+        const prefab = this.prefab(prefabId);
+        if (!prefab) return;
+        const count = this.instancesOf(prefab.id).length;
+        if (ask && count && !(await confirmDialog('Delete prefab', `${prefab.name} has ${count} instance(s). They stay in the scene as ordinary objects. Delete the prefab?`, 'Delete', true))) return;
+        const roots = this.instancesOf(prefab.id).map((n) => n.id);
+        this.store.commit('Delete Prefab', (doc) => {
+            for (const rootId of roots) {
+                const root = doc.nodes.find((n) => n.id === rootId);
+                if (root) delete root.prefab;
+                const walk = (pid: string) => {
+                    for (const n of doc.nodes) {
+                        if (n.parent !== pid) continue;
+                        delete n.prefabChild;
+                        walk(n.id);
+                    }
+                };
+                walk(rootId);
+            }
+            doc.prefabs = doc.prefabs.filter((p) => p.id !== prefab.id);
+        });
+    }
+
+    /**
+     * Stores a model (.glb / .gltf) under the prefab's asset id: every
+     * instance shows it instead of the greybox template. Importing again
+     * replaces it (a new version from Blender).
+     */
+    async replacePrefabModel(prefabId: string, file?: File) {
+        const prefab = this.prefab(prefabId);
+        if (!prefab) return;
+        const picked = file ?? (await pickFiles('.glb,.gltf', false))[0];
+        if (!picked) return;
+        if (picked.name.toLowerCase().endsWith('.gltf') && /"uri"\s*:\s*"(?!data:)/.test(await picked.text())) {
+            toast('This .gltf references external files. Use a .glb or an embedded .gltf.', 'error');
+            return;
+        }
+        const existed = this.store.doc.assets.some((a) => a.id === prefab.asset);
+        const meta = await putAsset(picked, picked.name, 'model', prefab.asset);
+        this.store.commit('Prefab Model', (doc) => {
+            doc.assets = doc.assets.filter((a) => a.id !== meta.id);
+            doc.assets.push(meta);
+            const p = doc.prefabs.find((x) => x.id === prefab.id);
+            if (!p) return;
+            p.useModel = true;
+            delete p.modelOffset;
+            regenerate(doc, p.id);
+        });
+        if (existed) this.sync.reloadAsset(meta.id);
+        this.settlePrefabModel(prefab.id);
+        toast(`${prefab.name} now shows ${picked.name}.`, 'success');
+    }
+
+    /** Once the model of a prefab has loaded, moves it so its bottom center sits on the pivot. */
+    private settlePrefabModel(prefabId: string) {
+        const root = this.instancesOf(prefabId)[0];
+        const child = root && this.store.children(root.id)[0];
+        if (!root || !child) return;
+        const off = this.sync.on('model', (id) => {
+            if (id !== child.id) return;
+            off();
+            const box = this.picker.bounds(child.id);
+            const rootWorld = this.picker.worldMatrix(root.id);
+            if (!box || !rootWorld) return;
+            const bottom = transformPoint(invert(rootWorld) ?? mat4(), [(box.min[0] + box.max[0]) / 2, box.min[1], (box.min[2] + box.max[2]) / 2]);
+            const offset = tidy3([-bottom[0], -bottom[1], -bottom[2]], 4);
+            this.store.patch((doc) => {
+                const p = doc.prefabs.find((x) => x.id === prefabId);
+                if (!p) return;
+                p.modelOffset = offset;
+                regenerate(doc, prefabId);
+            });
+        });
+    }
+
+    /** Switches a prefab between its model and its greybox template. */
+    usePrefabModel(prefabId: string, on: boolean) {
+        const prefab = this.prefab(prefabId);
+        if (!prefab) return;
+        if (on && !this.store.doc.assets.some((a) => a.id === prefab.asset)) {
+            void this.replacePrefabModel(prefabId);
+            return;
+        }
+        this.store.commit(on ? 'Show Prefab Model' : 'Show Prefab Template', (doc) => {
+            const p = doc.prefabs.find((x) => x.id === prefabId);
+            if (!p) return;
+            p.useModel = on || undefined;
+            regenerate(doc, prefabId);
+        });
+        if (on && !prefab.modelOffset) this.settlePrefabModel(prefabId);
+    }
+
+    /** A capsule the size of the player (from the brief's specs), for scale. */
+    createPlayerCapsule() {
+        if (!this.canAddObjects()) return;
+        const specs = this.store.doc.design.specs;
+        const node = makeMeshNode('capsule');
+        node.mesh!.geometry = { type: 'capsule', radius: specs.playerRadius, height: specs.playerHeight, segments: 24 };
+        node.mesh!.material.color = '#e0a040';
+        const p = this.viewport.spawnPoint();
+        node.position = [round(p[0]), round(p[1] + specs.playerHeight / 2), round(p[2])];
+        node.name = this.uniqueName('Player Capsule', null);
+        this.insert([node], 'Create Player Capsule');
     }
 
     // ------------------------------------------------------------- cameras
@@ -898,20 +1238,43 @@ export class Editor extends Emitter<EditorEvents> {
             download(blob, fileNameFor(this.store.doc));
             this.autosave.flush();
             toast(`Saved ${fileNameFor(this.store.doc)}`, 'success');
+            this.emit('saved', 'scene');
         } catch (e: any) {
             console.error(e);
             toast(`Save failed: ${e?.message || e}`, 'error');
         }
     }
 
+    /**
+     * Downloads the whole project as one .zip: the scene with its design
+     * section and every file, planning images and snapshots included.
+     */
+    async saveProjectFile(): Promise<boolean> {
+        const name = projectFileNameFor(this.store.doc);
+        try {
+            const { blob, missing } = await exportProject(this.store);
+            download(blob, name);
+            this.autosave.flush();
+            if (missing.length) {
+                toast(`Saved ${name}. ${missing.length} file(s) are not stored in this browser and were left out: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', ...' : ''}`, 'info', 8000);
+            } else toast(`Saved ${name}`, 'success');
+            this.emit('saved', 'project');
+            return true;
+        } catch (e: any) {
+            console.error(e);
+            toast(`Saving the project failed: ${e?.message || e}`, 'error');
+            return false;
+        }
+    }
+
     async openSceneFile() {
-        const [file] = await pickFiles('.json,application/json');
+        const [file] = await pickFiles('.json,.zip,application/json,application/zip');
         if (file) await this.openSceneFromFile(file);
     }
 
     private async openSceneFromFile(file: File) {
         try {
-            const { doc, camera } = await importSceneFile(await file.text());
+            const { doc, camera } = file.name.toLowerCase().endsWith('.zip') ? await importProject(file) : await importSceneFile(await file.text());
             this.loadDoc(doc, camera ?? defaultCamera(), false);
             const scripts = this.store.doc.scripts.length;
             if (scripts) toast(`Opened ${file.name}. Its ${scripts} script${scripts === 1 ? ' is' : 's are'} paused until you enable ${scripts === 1 ? 'it' : 'them'}.`, 'info', 6000);

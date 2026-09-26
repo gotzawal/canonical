@@ -1,3 +1,4 @@
+import { PARTICLE_PRESETS } from './core/particles';
 import { version as engineVersion } from '../../package.json';
 import type { Editor } from './editor';
 import { createAssetMenu } from './ui/assetsPanel';
@@ -15,11 +16,31 @@ export function createMenu(editor: Editor): MenuItem[] {
         { label: 'Sphere', icon: 'sphere', action: () => editor.createPrimitive('sphere') },
         { label: 'Plane', icon: 'plane', action: () => editor.createPrimitive('plane') },
         { label: 'Cylinder', icon: 'cylinder', action: () => editor.createPrimitive('cylinder') },
+        { label: 'Cone', icon: 'cone', action: () => editor.createPrimitive('cone') },
         { label: 'Torus', icon: 'torus', action: () => editor.createPrimitive('torus') },
+        { label: 'Ramp', icon: 'ramp', action: () => editor.createPrimitive('ramp') },
+        { label: 'Stairs', icon: 'stairs', action: () => editor.createPrimitive('stairs') },
+        { label: 'Capsule', icon: 'capsule', action: () => editor.createPrimitive('capsule') },
+        { label: 'Player Capsule', icon: 'capsule', action: () => editor.createPlayerCapsule() },
+        { separator: true },
+        {
+            label: 'Prefab',
+            icon: 'prefab',
+            submenu: [
+                { label: 'Make Prefab from Selection', enabled: () => editor.store.selection.length > 0, action: () => editor.createPrefab() },
+                ...(editor.store.doc.prefabs.length ? [{ separator: true } as MenuItem] : []),
+                ...editor.store.doc.prefabs.map((p) => ({ label: `Place ${p.name}`, icon: 'prefab', action: () => editor.placePrefab(p.id) })),
+            ],
+        },
         { separator: true },
         { label: 'Directional Light', icon: 'sun', action: () => editor.createLight('directional') },
         { label: 'Point Light', icon: 'bulb', action: () => editor.createLight('point') },
         { label: 'Spot Light', icon: 'spot', action: () => editor.createLight('spot') },
+        {
+            label: 'Particles',
+            icon: 'sparkle',
+            submenu: PARTICLE_PRESETS.map((pr) => ({ label: pr.label, icon: 'sparkle', action: () => void editor.createParticles(pr.id) })),
+        },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },
@@ -44,8 +65,9 @@ export function menuDefinitions(
                 { label: 'New Empty Scene', action: () => void editor.newScene('empty') },
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
                 { separator: true },
-                { label: 'Open Scene...', icon: 'open', shortcut: 'Mod+O', action: () => void editor.openSceneFile() },
+                { label: 'Open Scene or Project...', icon: 'open', shortcut: 'Mod+O', action: () => void editor.openSceneFile() },
                 { label: 'Save Scene File', icon: 'save', shortcut: 'Mod+S', action: () => void editor.saveSceneFile() },
+                { label: 'Save Project (.zip)', icon: 'save', shortcut: 'Mod+Shift+S', action: () => void editor.saveProjectFile() },
                 { separator: true },
                 { label: 'Build & Deploy...', icon: 'rocket', shortcut: 'Mod+B', action: () => showBuildDialog(editor) },
                 { separator: true },
@@ -140,6 +162,7 @@ const SHORTCUTS: [string, string][] = [
     ['Double click', 'Frame object'],
     ['Q W E R', 'Select, move, rotate, scale tool'],
     ['X', 'Toggle world / local gizmo space'],
+    ['V', 'Walk at eye height (WASD, mouse, Shift run, Esc stop)'],
     ['Ctrl while dragging', 'Toggle snapping'],
     ['F / Home', 'Frame selection / frame all'],
     ['1 3 7 (Shift for opposite)', 'Front, right, top view'],
@@ -150,6 +173,7 @@ const SHORTCUTS: [string, string][] = [
     ['G', 'Toggle grid'],
     ['F2', 'Rename'],
     ['Mod+S / Mod+O', 'Save / open scene file'],
+    ['Mod+Shift+S', 'Save the project with its planning images and snapshots (.zip)'],
     ['Mod+B', 'Build & Deploy (run, download or publish the game)'],
     ['Esc', 'Cancel drag or clear selection'],
     ['Mod+P / Mod+Shift+P', 'Play or stop / pause'],

@@ -115,3 +115,57 @@ export async function createZip(entries: ZipEntry[]): Promise<Blob> {
     ev.setUint32(16, offset, true);
     return new Blob([...parts, ...central, end] as BlobPart[], { type: 'application/zip' });
 }
+
+async function inflate(data: Blob): Promise<Blob> {
+    if (typeof DecompressionStream === 'undefined') throw new Error('This browser cannot unpack compressed zip files.');
+    const stream = data.stream().pipeThrough(new DecompressionStream('deflate-raw'));
+    return new Response(stream).blob();
+}
+
+/**
+ * Reads a .zip archive into its files by path. Stored and deflated entries
+ * are supported (what createZip and common zip tools write); folders are
+ * skipped.
+ */
+export async function readZip(zip: Blob): Promise<Map<string, Blob>> {
+    const size = zip.size;
+    // The end of central directory record sits in the last 22 + 65535 bytes.
+    const tailStart = Math.max(0, size - 22 - 0xffff);
+    const tail = new DataView(await zip.slice(tailStart).arrayBuffer());
+    let eocd = -1;
+    for (let i = tail.byteLength - 22; i >= 0; i--) {
+        if (tail.getUint32(i, true) === 0x06054b50) {
+            eocd = i;
+            break;
+        }
+    }
+    if (eocd < 0) throw new Error('Not a zip file.');
+    const count = tail.getUint16(eocd + 10, true);
+    const cdSize = tail.getUint32(eocd + 12, true);
+    const cdOffset = tail.getUint32(eocd + 16, true);
+    if (cdOffset + cdSize > size) throw new Error('The zip file is damaged or uses ZIP64, which is not supported.');
+    const cd = new DataView(await zip.slice(cdOffset, cdOffset + cdSize).arrayBuffer());
+    const decoder = new TextDecoder();
+    const files = new Map<string, Blob>();
+    let p = 0;
+    for (let n = 0; n < count; n++) {
+        if (p + 46 > cd.byteLength || cd.getUint32(p, true) !== 0x02014b50) throw new Error('The zip file is damaged.');
+        const method = cd.getUint16(p + 10, true);
+        const compressed = cd.getUint32(p + 20, true);
+        const nameLen = cd.getUint16(p + 28, true);
+        const extraLen = cd.getUint16(p + 30, true);
+        const commentLen = cd.getUint16(p + 32, true);
+        const localOffset = cd.getUint32(p + 42, true);
+        const name = decoder.decode(new Uint8Array(cd.buffer, cd.byteOffset + p + 46, nameLen));
+        p += 46 + nameLen + extraLen + commentLen;
+        if (name.endsWith('/')) continue;
+        const local = new DataView(await zip.slice(localOffset, localOffset + 30).arrayBuffer());
+        if (local.getUint32(0, true) !== 0x04034b50) throw new Error(`The zip entry ${name} is damaged.`);
+        const start = localOffset + 30 + local.getUint16(26, true) + local.getUint16(28, true);
+        const body = zip.slice(start, start + compressed);
+        if (method === 0) files.set(name, body);
+        else if (method === 8) files.set(name, await inflate(body));
+        else throw new Error(`The zip entry ${name} uses an unsupported compression method.`);
+    }
+    return files;
+}

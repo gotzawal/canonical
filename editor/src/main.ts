@@ -8,11 +8,17 @@ import { RenderGraphController } from './engine/renderGraph';
 import { Runtime } from './engine/runtime';
 import { ShaderManager } from './engine/shaders';
 import { SceneSync } from './engine/sync';
+import { Checkpoints } from './design/checkpoints';
+import { designSummary, memoLines, pipelineSummary } from './design/context';
 import { createMenu, menuDefinitions, showShortcuts } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
 import { AIPanel } from './ui/aiPanel';
 import { AssetsPanel } from './ui/assetsPanel';
+import { BriefScreen } from './ui/briefScreen';
+import { DesignPanel } from './ui/designPanel';
+import { PipelineBar } from './ui/pipelineBar';
+import { ShotView } from './ui/shotView';
 import { showBuildDialog } from './ui/buildDialog';
 import { Dock } from './ui/dock';
 import { h, isTyping } from './ui/dom';
@@ -22,16 +28,20 @@ import { InspectorPanel } from './ui/inspector';
 import { logo } from './ui/logo';
 import { closeMenus, menubar, showMenu, toast } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
+import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
+import { WalkController } from './viewport/walk';
+import { ReferenceRoom } from './viewport/referenceRoom';
+import { pipelineOverlay } from './ui/pipelineOverlay';
 import { Gizmo } from './viewport/gizmo';
 import { Viewport } from './viewport/viewport';
 
 const LAYOUT_KEY = 'canonical-editor/layout';
 
-type RightTab = 'inspector' | 'scene' | 'ai';
+type RightTab = 'inspector' | 'scene' | 'design' | 'ai';
 
 async function main() {
     captureConsole();
@@ -55,8 +65,10 @@ async function main() {
     const left = h('aside', { class: 'side left' });
     const right = h('aside', { class: 'side right' });
     const menuSlot = h('div', { class: 'menu-slot' });
+    const pipelineSlot = h('div', { class: 'pipeline-slot' });
     const sceneName = h('span', { class: 'scene-name' });
     const statusSlot = h('div', { class: 'status-slot' });
+    const bell = h('button', { class: 'icon-btn', title: 'Notifications', attrs: { type: 'button', 'aria-label': 'Notification settings' } }, icon('bell', 16));
     const leftToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Hierarchy', attrs: { type: 'button', 'aria-label': 'Toggle hierarchy' } }, icon('layers', 16));
     const rightToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Inspector', attrs: { type: 'button', 'aria-label': 'Toggle inspector' } }, icon('sliders', 16));
 
@@ -69,9 +81,11 @@ async function main() {
             h('div', { class: 'spacer' }),
             sceneName,
             h('div', { class: 'spacer' }),
+            bell,
             leftToggle,
             rightToggle,
         ),
+        pipelineSlot,
         h(
             'main',
             { class: 'workspace' },
@@ -115,6 +129,8 @@ async function main() {
     const player = new Player(runtime, store, sync, picker, compiler);
     const graph = new RenderGraphController(runtime, store, shaders, sync);
     const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
+    const overlayDrawers: ((ctx: CanvasRenderingContext2D) => void)[] = [];
+    gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
         onContextMenu: (_x, _y, cx, cy, id) => {
             showMenu(
@@ -153,6 +169,10 @@ async function main() {
                 else editor.assignShader(target, s.id);
                 return;
             }
+            if (ref.startsWith('prefab:')) {
+                editor.placePrefab(ref.slice(7), point);
+                return;
+            }
             const asset = store.doc.assets.find((a) => a.id === ref);
             if (asset?.kind === 'model') editor.addModel(ref, point);
             else if (asset) editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
@@ -167,6 +187,9 @@ async function main() {
             const part = sync.modelInfo(f.node)?.part(f.path);
             return part ? { node: f.node, renderer: part.renderer } : null;
         },
+        selectable: (id) => editor.selectable(id),
+        captured: () => !!editor.walk?.active,
+        drawExtra: (ctx) => overlayDrawers.forEach((fn) => fn(ctx)),
         play: {
             active: () => player.state !== 'stopped',
             gameCamera: () => player.usesGameCamera,
@@ -175,6 +198,9 @@ async function main() {
         },
     });
     editor.viewport = viewport;
+    editor.walk = new WalkController(editor, viewport.overlay, viewportEl);
+    editor.room = new ReferenceRoom(editor, viewportEl);
+    overlayDrawers.push(pipelineOverlay(editor));
 
     store.on('change', (hint) => sync.sync(hint));
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
@@ -232,33 +258,93 @@ async function main() {
     const tabs = h('div', { class: 'tabs', attrs: { role: 'tablist' } });
     const inspectorTab = h('button', { class: 'tab active', text: 'Inspector', attrs: { type: 'button', role: 'tab' } });
     const sceneTab = h('button', { class: 'tab', text: 'Scene', attrs: { type: 'button', role: 'tab' } });
+    const designTab = h('button', { class: 'tab', attrs: { type: 'button', role: 'tab' } }, icon('flag', 13), h('span', { text: 'Design' }));
     const aiTab = h('button', { class: 'tab', attrs: { type: 'button', role: 'tab' } }, icon('sparkle', 13), h('span', { text: 'AI' }));
-    tabs.append(inspectorTab, sceneTab, aiTab);
+    tabs.append(inspectorTab, sceneTab, designTab, aiTab);
     const scenePanel = new ScenePanel(editor);
     const inspector = new InspectorPanel(editor, () => showTab('scene'));
     const aiPanel = new AIPanel(editor, () => aiContext(editor, dock));
+    const brief = new BriefScreen(editor, () => designPanel.structure());
+    viewportEl.append(brief.el);
+    const designPanel = new DesignPanel(editor, {
+        showBrief: () => brief.open(),
+        ask: (text, images) => {
+            showTab('ai');
+            aiPanel.send(text, images);
+        },
+    });
+    new ShotView(editor, viewportEl);
     const showTab = (tab: RightTab) => {
         inspectorTab.classList.toggle('active', tab === 'inspector');
         sceneTab.classList.toggle('active', tab === 'scene');
+        designTab.classList.toggle('active', tab === 'design');
         aiTab.classList.toggle('active', tab === 'ai');
         inspector.el.hidden = tab !== 'inspector';
         scenePanel.el.hidden = tab !== 'scene';
+        designPanel.el.hidden = tab !== 'design';
         aiPanel.el.hidden = tab !== 'ai';
-        if (tab === 'ai') {
+        if (tab === 'ai' || tab === 'design') {
             app.classList.remove('hide-right');
             if (isNarrow()) app.classList.add('show-right');
-            aiPanel.focus();
         }
+        if (tab === 'ai') aiPanel.focus();
+        if (tab === 'design') designPanel.shown();
     };
     inspectorTab.addEventListener('click', () => showTab('inspector'));
     sceneTab.addEventListener('click', () => showTab('scene'));
+    designTab.addEventListener('click', () => showTab('design'));
     aiTab.addEventListener('click', () => showTab('ai'));
     store.on('selection', (sel) => {
-        if (sel.length && aiPanel.el.hidden) showTab('inspector');
+        if (sel.length && aiPanel.el.hidden && designPanel.el.hidden) showTab('inspector');
     });
     editor.on('ai-prompt', () => showTab('ai'));
+    editor.on('show-design', () => showTab('design'));
+    editor.on('show-scene', () => {
+        showTab('scene');
+        app.classList.remove('hide-right');
+        if (isNarrow()) app.classList.add('show-right');
+    });
+    editor.on('show-brief', () => brief.open());
     showTab('inspector');
-    right.append(tabs, inspector.el, scenePanel.el, aiPanel.el);
+    pipelineSlot.append(new PipelineBar(editor, { design: () => showTab('design'), brief: () => brief.open() }).el);
+
+    // Page notifications: the assistant finished, save checkpoints.
+    const checkpoints = new Checkpoints(editor, aiPanel.agent);
+    editor.checkpoints = checkpoints;
+    aiPanel.agent.on('done', (d) => {
+        const first = d.answer.replace(/[#*`>]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+        notices.show({
+            kind: 'ai-done',
+            key: 'ai-done',
+            icon: d.error ? 'alert' : 'sparkle',
+            title: d.error ? 'The assistant ran into an error' : d.stopped ? 'The assistant stopped' : 'The assistant finished',
+            body: d.error ? d.error.slice(0, 200) : first.length > 180 ? first.slice(0, 177) + '...' : first,
+            timeout: d.error ? 0 : 9000,
+            actions: [{ label: 'Show', run: () => showTab('ai') }],
+        });
+    });
+    bell.addEventListener('click', () => {
+        const r = bell.getBoundingClientRect();
+        showMenu(
+            [
+                ...NOTICE_KINDS.map((k) => ({
+                    label: k.label,
+                    checked: () => notices.enabled(k.kind),
+                    action: () => notices.setEnabled(k.kind, !notices.enabled(k.kind)),
+                })),
+                { separator: true },
+                {
+                    label: 'Also as system notifications in the background',
+                    checked: () => notices.prefs.system,
+                    enabled: () => notices.systemSupported,
+                    action: () => void notices.setSystem(!notices.prefs.system),
+                },
+            ],
+            Math.max(8, r.right - 300),
+            r.bottom + 4,
+        );
+    });
+    right.append(tabs, inspector.el, scenePanel.el, designPanel.el, aiPanel.el);
 
     onLogLocation((file, line) => {
         const script = store.doc.scripts.find((s) => s.name === file);
@@ -288,6 +374,7 @@ async function main() {
             toggleDock: () => dock.toggle(),
             showAI: () => showTab('ai'),
             build: () => showBuildDialog(editor),
+            walk: () => editor.walk?.toggle(),
         }),
     );
     statusSlot.append(statusbar(editor));
@@ -329,8 +416,9 @@ function aiContext(editor: Editor, dock: Dock): string {
     if (doc) lines.push(`Open in the code editor: ${doc.name} (${doc.kind} id ${doc.id})`);
     const f = editor.focusedPart;
     if (f) lines.push(`Picked model mesh: ${f.path} of ${store.node(f.node)?.name ?? f.node}`);
-    lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
+    lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.prefabs.length} prefabs, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
     if (!editor.compiler.trusted && store.doc.scripts.length) lines.push('Scripts are paused: the scene was opened from a file and the user has not enabled its scripts yet.');
+    lines.push(...pipelineSummary(store.doc, editor.runtime.fps), ...designSummary(store.doc), ...memoLines(store.doc));
     return lines.join('\n');
 }
 
@@ -365,7 +453,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
             if (mod && (key === 's' || key === 'o')) {
                 e.preventDefault();
                 (e.target as HTMLElement).blur();
-                if (key === 's') void editor.saveSceneFile();
+                if (key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
                 else void editor.openSceneFile();
             }
             return;
@@ -373,7 +461,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
         let handled = true;
         if (mod && key === 'z') e.shiftKey ? store.redo() : store.undo();
         else if (mod && key === 'y') store.redo();
-        else if (mod && key === 's') void editor.saveSceneFile();
+        else if (mod && key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
         else if (mod && key === 'o') void editor.openSceneFile();
         else if (mod && key === 'b') showBuildDialog(editor);
         else if (mod && key === 'd') editor.duplicateSelection();
@@ -385,6 +473,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
         else if (key === 'e') editor.setTool('rotate');
         else if (key === 'r') editor.setTool('scale');
         else if (key === 'x') editor.toggleSpace();
+        else if (key === 'v') editor.walk?.toggle();
         else if (key === 'f') editor.frameSelection();
         else if (key === 'home') editor.viewport.frameAll();
         else if (key === 'g') store.setPrefs({ grid: !store.prefs.grid });

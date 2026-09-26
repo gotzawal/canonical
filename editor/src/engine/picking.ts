@@ -189,6 +189,32 @@ export class Picker {
         return best;
     }
 
+    /**
+     * Casts a world space ray against the visible meshes of the document
+     * (models included) and returns the nearest hit within `maxDist`.
+     * `skip` leaves out nodes (e.g. the one being looked at).
+     */
+    raycast(origin: Vec3, dir: Vec3, maxDist = Infinity, skip?: (id: string) => boolean): Hit | null {
+        const ray: Ray = { origin, dir: normalize(dir) };
+        let best: Hit | null = null;
+        for (const node of this.store.doc.nodes) {
+            const entry = this.sync.entries.get(node.id);
+            if (!entry || !entry.visible || (skip && skip(node.id))) continue;
+            for (const r of this.sync.renderersOf(node.id)) {
+                if (!r.enable) continue;
+                const box = rendererWorldBox(r);
+                if (!box) continue;
+                const near = rayBox(ray, box.min, box.max);
+                if (near === null || near > maxDist || (best && near > best.distance)) continue;
+                const t = this.intersectRenderer(r, ray);
+                if (t !== null && t <= maxDist && (!best || t < best.distance)) {
+                    best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: r };
+                }
+            }
+        }
+        return best;
+    }
+
     // -------------------------------------------------------------- bounds
 
     /** World AABB of a node's renderers, optionally including child nodes. */
@@ -244,4 +270,23 @@ export class Picker {
         const e = this.sync.entries.get(id);
         return e ? e.obj.transform.worldMatrix.rawData : null;
     }
+}
+
+/** World axis aligned box of one renderer, or null when it has no usable bounds. */
+function rendererWorldBox(r: RenderNode): Box | null {
+    const b = r.geometry?.bounds;
+    if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) return null;
+    const m = r.object3D.transform.worldMatrix.rawData;
+    let box: Box | null = null;
+    for (let i = 0; i < 8; i++) {
+        const p = transformPoint(m, [i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]);
+        if (!box) box = { min: [...p] as Vec3, max: [...p] as Vec3 };
+        else {
+            for (let k = 0; k < 3; k++) {
+                if (p[k] < box.min[k]) box.min[k] = p[k];
+                if (p[k] > box.max[k]) box.max[k] = p[k];
+            }
+        }
+    }
+    return box;
 }

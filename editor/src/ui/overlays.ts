@@ -192,6 +192,78 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
     });
 }
 
+export interface Modal {
+    readonly box: HTMLElement;
+    readonly footer: HTMLElement;
+    close(): void;
+    readonly closed: boolean;
+}
+
+/**
+ * A dialog that stays open while the user works in it: its buttons do not
+ * close it. The X, Escape or `close()` do, unless `canClose` says no.
+ */
+export function modal(title: string, content: Node, opts: { cls?: string; canClose?: () => boolean; onClose?: () => void } = {}): Modal {
+    closeMenus();
+    const footer = h('footer', { class: 'dialog-footer' });
+    const backdrop = h('div', { class: 'dialog-backdrop' });
+    let closed = false;
+    const tryClose = () => {
+        if (opts.canClose && !opts.canClose()) return;
+        close();
+    };
+    const box = h(
+        'div',
+        { class: 'dialog ' + (opts.cls ?? ''), attrs: { role: 'dialog', 'aria-modal': 'true', 'aria-label': title } },
+        h('header', { class: 'dialog-header' }, h('h2', { text: title }), h('button', { class: 'icon-btn', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: tryClose } }, icon('close', 16))),
+        h('div', { class: 'dialog-body' }, content),
+        footer,
+    );
+    backdrop.appendChild(box);
+    const onKey = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape') return;
+        const open = document.querySelectorAll('.dialog-backdrop');
+        if (open[open.length - 1] !== backdrop) return;
+        e.stopPropagation();
+        tryClose();
+    };
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        document.removeEventListener('keydown', onKey, true);
+        backdrop.remove();
+        opts.onClose?.();
+    };
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(backdrop);
+    return {
+        box,
+        footer,
+        close,
+        get closed() {
+            return closed;
+        },
+    };
+}
+
+/** Shows an image large over everything; a click or Escape closes it. */
+export function lightbox(src: string, caption = '') {
+    const img = h('img', { attrs: { src, alt: caption } });
+    const el = h('div', { class: 'lightbox', attrs: { role: 'dialog', 'aria-label': caption || 'Image' } }, img, caption ? h('div', { class: 'lightbox-caption', text: caption }) : null);
+    const close = () => {
+        el.remove();
+        document.removeEventListener('keydown', onKey, true);
+    };
+    const onKey = (e: KeyboardEvent) => {
+        if (e.key !== 'Escape') return;
+        e.stopPropagation();
+        close();
+    };
+    el.addEventListener('click', close);
+    document.addEventListener('keydown', onKey, true);
+    document.body.appendChild(el);
+}
+
 export function confirmDialog(title: string, message: string, ok = 'OK', danger = false): Promise<boolean> {
     return dialog(title, message, [{ label: 'Cancel', value: 'cancel' }, { label: ok, value: 'ok', primary: !danger, danger }]).then((v) => v === 'ok');
 }
@@ -199,4 +271,42 @@ export function confirmDialog(title: string, message: string, ok = 'OK', danger 
 export function replaceChildren(el: HTMLElement, ...nodes: Node[]) {
     clear(el);
     el.append(...nodes);
+}
+
+// --------------------------------------------------------------- popovers
+
+let openPopover: { el: HTMLElement; close: () => void } | null = null;
+
+/** A floating panel under `anchor`; closes on outside clicks and Escape. */
+export function popover(anchor: HTMLElement, content: HTMLElement, cls = '', onClose?: () => void): () => void {
+    openPopover?.close();
+    closeMenus();
+    const el = h('div', { class: 'popover ' + cls }, content);
+    document.body.appendChild(el);
+    const r = anchor.getBoundingClientRect();
+    const pr = el.getBoundingClientRect();
+    el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pr.width - 6)) + 'px';
+    el.style.top = Math.min(r.bottom + 4, window.innerHeight - pr.height - 6) + 'px';
+    const onDown = (e: PointerEvent) => {
+        if (!el.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') close();
+    };
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        el.remove();
+        document.removeEventListener('pointerdown', onDown, true);
+        document.removeEventListener('keydown', onKey, true);
+        if (openPopover?.el === el) openPopover = null;
+        onClose?.();
+    };
+    setTimeout(() => {
+        document.addEventListener('pointerdown', onDown, true);
+        document.addEventListener('keydown', onKey, true);
+    });
+    openPopover = { el, close };
+    return close;
 }

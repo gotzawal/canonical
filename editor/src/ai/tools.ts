@@ -4,12 +4,18 @@ import {
 } from '../core/defaults';
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
-import { tidy } from '../core/math';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
 } from '../core/types';
-import { normalizeHex } from '../engine/color';
+import { assetImageDataUrl } from '../core/images';
 import { recentLogs } from '../ui/statusbar';
+import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
+import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
+import { designToolDefs, runDesignTool } from './designTools';
+import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
+import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
+import { materialToolDefs, PAID_MATERIAL_TOOLS, runMaterialTool } from './materialTools';
+import { effectToolDefs, runEffectTool } from './effectTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -17,6 +23,8 @@ export interface ToolResult {
     data: unknown;
     /** A data: URL image to show the model (vision models only). */
     image?: string;
+    /** More images to show the model. */
+    images?: string[];
     /** Short line for the chat log. */
     summary?: string;
 }
@@ -25,9 +33,14 @@ export interface ToolEnv {
     editor: Editor;
     allowPlay(): boolean;
     screenshots(): boolean;
+    /** The pipeline stage limits the tools. */
+    stageTools(): boolean;
+    /** Tools may spend credits on images. */
+    allowImages(): boolean;
+    /** Aborts long tools (image generation) when the request is stopped. */
+    signal?: AbortSignal;
 }
 
-type Json = Record<string, any>;
 
 // ------------------------------------------------------------------ schemas
 
@@ -92,24 +105,99 @@ const objectFields = {
     rotation: { ...vec3, description: 'Euler degrees.' },
     scale: vec3,
     visible: { type: 'boolean' },
-    size: { type: 'array', items: { type: 'number' }, description: 'box: [width, height, depth]; plane: [width, length].' },
-    radius: { type: 'number', description: 'sphere / torus radius, cylinder radius (both ends).' },
-    height: { type: 'number', description: 'cylinder height' },
+    size: { type: 'array', items: { type: 'number' }, description: 'box, ramp, stairs: [width, height, depth]; plane: [width, length].' },
+    radius: { type: 'number', description: 'sphere / torus / capsule radius, cone base radius, cylinder radius (both ends).' },
+    radius_top: { type: 'number', description: 'cylinder: top radius, to taper it (0 closes it to a point).' },
+    radius_bottom: { type: 'number', description: 'cylinder: bottom radius.' },
+    height: { type: 'number', description: 'cylinder / cone height, capsule height (caps included)' },
+    steps: { type: 'number', description: 'stairs: number of steps' },
     tube: { type: 'number', description: 'torus tube radius' },
-    segments: { type: 'number' },
+    segments: { type: 'number', description: 'Round shapes: segments around. A cone with 8 or fewer has flat sides (4: a square pyramid).' },
     material: materialSchema,
     light: lightSchema,
     camera: cameraSchema,
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
-const TYPES = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
+const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
+const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
     return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
 }
 
+/**
+ * Tool groups: a tool is offered when the current pipeline stage allows one
+ * of its groups (see design/stages.ts). Tools missing here are always there.
+ */
+const TOOL_GROUPS: Record<string, ToolGroup[]> = {
+    create_objects: ['objects', 'lights', 'effects'],
+    update_objects: ['objects', 'lights', 'materials', 'effects'],
+    delete_objects: ['objects', 'lights', 'effects'],
+    set_environment: ['environment'],
+    set_model_material: ['materials'],
+    set_model_part: ['objects'],
+    add_model: ['objects'],
+    write_script: ['code'],
+    attach_script: ['code'],
+    detach_script: ['code'],
+    set_script_props: ['code'],
+    delete_script: ['code'],
+    write_shader: ['code', 'materials', 'effects'],
+    assign_shader: ['code', 'materials'],
+    delete_shader: ['code'],
+    set_render_pass: ['code', 'effects'],
+    add_post_effect: ['effects', 'code'],
+    update_post_effect: ['effects', 'code'],
+    remove_post_effect: ['effects', 'code'],
+    run_play_test: ['play', 'code'],
+    play: ['play', 'code'],
+    stop: ['play', 'code'],
+    create_shot: ['shots'],
+    update_shot: ['shots'],
+    delete_shot: ['shots'],
+    capture_shot: ['shots', 'capture', 'compare'],
+    compare_shot: ['compare'],
+    apply_key_light: ['lights'],
+    capture_player_view: ['capture'],
+    check_sightline: ['capture'],
+    create_prefab: ['prefabs'],
+    place_prefab: ['prefabs'],
+    generate_paintover: ['images'],
+    choose_paintover: ['images', 'shots'],
+    image_model_info: ['images'],
+    set_material_slot: ['materials', 'design'],
+    assign_material_slot: ['materials', 'objects'],
+    search_swatches: ['materials'],
+    use_swatch: ['materials'],
+    generate_swatch: ['images'],
+    add_particles: ['effects'],
+    update_particles: ['effects'],
+    add_vignette: ['effects'],
+    add_color_grade: ['effects'],
+    update_design: ['design'],
+    ask_user: ['design'],
+    update_checklist: ['design'],
+    propose_stage_complete: ['design'],
+};
+
+/** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
+export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
+    if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
+    return new Set(stageDef(env.editor.pipeline.design.stage).tools);
+}
+
+function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
+    const groups = TOOL_GROUPS[name];
+    return !groups || groups.some((g) => allowed.has(g));
+}
+
 export function toolDefs(env: ToolEnv): ToolDef[] {
+    const allowed = allowedGroups(env);
+    return allToolDefs(env).filter((d) => toolAllowed(d.function.name, allowed));
+}
+
+function allToolDefs(env: ToolEnv): ToolDef[] {
     const defs: ToolDef[] = [
         def('get_scene', 'Summary of the project: objects (ids, types, transforms, materials, scripts), assets, scripts, shaders, render graph settings, selection and play state.'),
         def('get_object', 'Full details of one object, including its world position and bounding box.', { id: { type: 'string', description: 'Object id or name.' } }, ['id']),
@@ -119,7 +207,7 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
         def('update_objects', 'Change objects: name, parent, transform, visibility, material, primitive size, light or camera settings.', {
             updates: {
                 type: 'array',
-                items: { type: 'object', properties: { id: { type: 'string' }, shape: { type: 'string', enum: ['box', 'sphere', 'plane', 'cylinder', 'torus'] }, ...objectFields }, required: ['id'] },
+                items: { type: 'object', properties: { id: { type: 'string' }, shape: { type: 'string', enum: SHAPES }, ...objectFields }, required: ['id'] },
             },
         }, ['updates']),
         def('delete_objects', 'Delete objects and their children.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
@@ -229,6 +317,9 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
         def('remove_post_effect', 'Remove a custom post effect from the chain.', { id: { type: 'string' } }, ['id']),
         def('get_console', 'Recent editor console messages (errors, warnings, script logs).', { limit: { type: 'number' }, errors_only: { type: 'boolean' } }),
         def('select_objects', 'Select objects in the editor and frame them in the view.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
+        def('view_images', 'Look at images of the project again: concept images, paintovers, captures, swatches or images the user attached, by asset id. They are shown in the next message (vision models only).', {
+            assets: { type: 'array', items: { type: 'string' }, description: 'Asset ids (at most 6).' },
+        }, ['assets']),
     ];
     if (env.allowPlay()) {
         defs.push(
@@ -242,83 +333,23 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
     if (env.screenshots()) {
         defs.push(def('capture_viewport', 'Take a picture of the viewport as it is now (the editor view, or the game camera while playing).'));
     }
+    defs.push(...designToolDefs());
+    if (env.screenshots()) defs.push(...greyboxToolDefs());
+    else defs.push(...greyboxToolDefs().filter((d) => !/^capture|^check_sightline/.test(d.function.name)));
+    defs.push(...imageToolDefs().filter((d) => env.allowImages() || !PAID_IMAGE_TOOLS.has(d.function.name)));
+    defs.push(...materialToolDefs().filter((d) => env.allowImages() || !PAID_MATERIAL_TOOLS.has(d.function.name)));
+    defs.push(...effectToolDefs());
     return defs;
 }
 
 // ---------------------------------------------------------------- helpers
-
-class ToolError extends Error {}
-
-const r3 = (v: number) => tidy(v, 3);
-const rv = (v: number[]) => v.map(r3);
-
-let colorCtx: CanvasRenderingContext2D | null = null;
-function hex(v: unknown, what = 'color'): string {
-    if (typeof v !== 'string' || !v.trim()) throw new ToolError(`${what} must be a color string like "#ff8800".`);
-    const s = v.trim();
-    if (/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) return normalizeHex(s.startsWith('#') ? s : '#' + s);
-    colorCtx ??= document.createElement('canvas').getContext('2d');
-    if (colorCtx) {
-        colorCtx.fillStyle = '#010203';
-        colorCtx.fillStyle = s;
-        const out = String(colorCtx.fillStyle);
-        if (out !== '#010203' && /^#[0-9a-f]{6}$/i.test(out)) return out;
-    }
-    throw new ToolError(`"${s}" is not a color.`);
-}
-
-function num(v: unknown, what: string): number {
-    const n = typeof v === 'string' ? Number(v) : v;
-    if (typeof n !== 'number' || !Number.isFinite(n)) throw new ToolError(`${what} must be a number.`);
-    return n;
-}
-
-function v3(v: unknown, what: string): Vec3 {
-    if (!Array.isArray(v) || v.length !== 3) throw new ToolError(`${what} must be an array of 3 numbers.`);
-    return [num(v[0], what), num(v[1], what), num(v[2], what)];
-}
-
-function params(v: unknown): Record<string, ParamValue> {
-    if (v === undefined || v === null) return {};
-    if (typeof v !== 'object' || Array.isArray(v)) throw new ToolError('params must be an object.');
-    const out: Record<string, ParamValue> = {};
-    for (const [k, x] of Object.entries(v as Json)) {
-        if (typeof x === 'number' || typeof x === 'boolean') out[k] = x;
-        else if (typeof x === 'string') out[k] = /^#?[0-9a-f]{6}$/i.test(x) ? hex(x) : x;
-        else if (Array.isArray(x) && x.every((n) => typeof n === 'number')) out[k] = x;
-        else throw new ToolError(`params.${k} has an unsupported value.`);
-    }
-    return out;
-}
-
-function node(doc: SceneDoc, ref: unknown): NodeDoc {
-    if (typeof ref !== 'string' || !ref) throw new ToolError('Missing object id.');
-    const n = doc.nodes.find((x) => x.id === ref) ?? doc.nodes.find((x) => x.name === ref);
-    if (!n) throw new ToolError(`No object "${ref}". Call get_scene for the ids.`);
-    return n;
-}
-
-function script(doc: SceneDoc, ref: unknown) {
-    if (typeof ref !== 'string') throw new ToolError('Missing script id or name.');
-    const want = ref.toLowerCase().replace(/\.js$/, '');
-    const s = doc.scripts.find((x) => x.id === ref) ?? doc.scripts.find((x) => x.name.toLowerCase().replace(/\.js$/, '') === want);
-    if (!s) throw new ToolError(`No script "${ref}".`);
-    return s;
-}
-
-function shader(doc: SceneDoc, ref: unknown) {
-    if (typeof ref !== 'string') throw new ToolError('Missing shader id or name.');
-    const want = ref.toLowerCase().replace(/\.wgsl$/, '');
-    const s = doc.shaders.find((x) => x.id === ref) ?? doc.shaders.find((x) => x.name.toLowerCase().replace(/\.wgsl$/, '') === want);
-    if (!s) throw new ToolError(`No shader "${ref}".`);
-    return s;
-}
 
 function nodeType(n: NodeDoc): string {
     if (n.light) return `${n.light.type}_light`;
     if (n.camera) return 'camera';
     if (n.model) return 'model';
     if (n.mesh) return n.mesh.geometry.type;
+    if (n.particles) return 'particles';
     return 'empty';
 }
 
@@ -352,7 +383,9 @@ function materialSummary(m: MaterialDoc): Json {
 }
 
 function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
-    const out: Json = { id: n.id, name: n.name, type: nodeType(n) };
+    const out: Json = { id: n.id, name: n.name, type: n.prefab ? 'prefab_instance' : nodeType(n) };
+    if (n.prefab) out.prefab = doc.prefabs.find((p) => p.id === n.prefab)?.name ?? n.prefab;
+    if (n.prefabChild) out.prefab_part = true;
     if (n.parent) out.parent = n.parent;
     out.position = rv(n.position);
     if (n.rotation.some((v) => v !== 0)) out.rotation = rv(n.rotation);
@@ -366,6 +399,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     }
     if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
     if (n.camera) out.camera = { ...n.camera };
+    if (n.particles) {
+        const p = n.particles;
+        out.particles = { preset: p.preset, rate: p.rate, life: p.life, size: p.size, shape: p.shape, blend: p.blend, colors: [p.colorStart, p.colorEnd], alive_at_most: Math.min(p.max, Math.ceil(p.rate * p.life[1])) };
+    }
     if (n.model) {
         out.model = { asset: n.model.asset, asset_name: doc.assets.find((a) => a.id === n.model!.asset)?.name };
         const o = Object.keys(n.model.materials ?? {}).length + Object.keys(n.model.parts ?? {}).length;
@@ -403,13 +440,13 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     if (spec.visible !== undefined) n.visible = !!spec.visible;
     if (n.mesh) {
         if (spec.shape !== undefined && spec.shape !== n.mesh.geometry.type) {
-            if (!['box', 'sphere', 'plane', 'cylinder', 'torus'].includes(spec.shape)) throw new ToolError(`Unknown shape "${spec.shape}".`);
+            if (!SHAPES.includes(spec.shape)) throw new ToolError(`Unknown shape "${spec.shape}".`);
             n.mesh.geometry = defaultGeometry(spec.shape as GeometryType);
         }
         const g = n.mesh.geometry as any;
         if (spec.size !== undefined) {
             const s = Array.isArray(spec.size) ? spec.size.map((x: unknown) => num(x, 'size')) : [num(spec.size, 'size')];
-            if (g.type === 'box') [g.width, g.height, g.depth] = [s[0], s[1] ?? s[0], s[2] ?? s[0]];
+            if (g.type === 'box' || g.type === 'ramp' || g.type === 'stairs') [g.width, g.height, g.depth] = [s[0], s[1] ?? s[0], s[2] ?? s[0]];
             else if (g.type === 'plane') [g.width, g.height] = [s[0], s[1] ?? s[0]];
             else if (g.type === 'sphere') g.radius = s[0] / 2;
         }
@@ -418,8 +455,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
             if (g.type === 'cylinder') g.radiusTop = g.radiusBottom = r;
             else if ('radius' in g) g.radius = r;
         }
+        if (spec.radius_top !== undefined && g.type === 'cylinder') g.radiusTop = Math.max(0, num(spec.radius_top, 'radius_top'));
+        if (spec.radius_bottom !== undefined && g.type === 'cylinder') g.radiusBottom = Math.max(0, num(spec.radius_bottom, 'radius_bottom'));
         if (spec.height !== undefined && 'height' in g) g.height = num(spec.height, 'height');
         if (spec.tube !== undefined && g.type === 'torus') g.tube = num(spec.tube, 'tube');
+        if (spec.steps !== undefined && g.type === 'stairs') g.steps = Math.max(1, Math.round(num(spec.steps, 'steps')));
         if (spec.segments !== undefined && 'segments' in g) g.segments = Math.round(num(spec.segments, 'segments'));
         if (spec.cast_shadow !== undefined) n.mesh.castShadow = !!spec.cast_shadow;
         if (spec.receive_shadow !== undefined) n.mesh.receiveShadow = !!spec.receive_shadow;
@@ -524,7 +564,11 @@ function makeTyped(type: string): NodeDoc {
         case 'sphere':
         case 'plane':
         case 'cylinder':
+        case 'cone':
         case 'torus':
+        case 'ramp':
+        case 'stairs':
+        case 'capsule':
             return makeMeshNode(type);
         case 'empty':
             return makeNode('Empty');
@@ -572,6 +616,73 @@ async function shaderInfo(env: ToolEnv, id: string): Promise<Json> {
     };
 }
 
+// ------------------------------------------------------------------ policy
+
+const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 'size', 'radius', 'radius_top', 'radius_bottom', 'height', 'tube', 'segments', 'steps', 'visible'];
+
+/**
+ * What the current stage lets the assistant change: lights in the lighting
+ * stage, materials in the materials stage, placement only while it is not
+ * locked. Returns an error message, or '' when allowed.
+ */
+class StagePolicy {
+    readonly allowed: Set<ToolGroup>;
+    readonly locked: boolean;
+    readonly stage: string;
+    warnings = new Set<string>();
+
+    constructor(env: ToolEnv) {
+        this.allowed = allowedGroups(env);
+        this.locked = env.editor.pipeline.placementLocked;
+        this.stage = stageDef(env.editor.pipeline.design.stage).title;
+    }
+
+    private any(...groups: ToolGroup[]): boolean {
+        return groups.some((g) => this.allowed.has(g));
+    }
+
+    private placement(): string {
+        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
+        if (this.locked) return `Placement is locked in the ${this.stage} stage; only lights, cameras and effects move. The user can unlock it in the pipeline bar.`;
+        return '';
+    }
+
+    create(type: string): string {
+        if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added in the ${this.stage} stage.`;
+        if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added in the ${this.stage} stage.`;
+        return this.placement();
+    }
+
+    update(n: NodeDoc, spec: Json): string {
+        if (n.prefabChild) return `"${n.name}" is part of a prefab instance and follows its prefab; change the instance (its root) instead.`;
+        const mover = !!n.light || !!n.camera;
+        if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
+            if (mover) {
+                if (!this.any('lights', 'objects', 'shots')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
+            } else {
+                const err = this.placement();
+                if (err) return `"${n.name}": ${err}`;
+            }
+        }
+        if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
+        if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
+        if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
+        if (this.stage === 'Level' && spec.material) {
+            const m = spec.material as Json;
+            if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
+                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with material.slot; colors and textures come in the Materials stage.');
+            }
+        }
+        return '';
+    }
+
+    remove(n: NodeDoc): string {
+        if (n.light || n.camera) return this.any('lights', 'objects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
+        const err = this.placement();
+        return err ? `"${n.name}": ${err}` : '';
+    }
+}
+
 // ------------------------------------------------------------------ runner
 
 /** Runs one tool call against the editor. */
@@ -580,10 +691,19 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
     const store = ed.store;
     const doc = () => store.doc;
     try {
+        const allowed = allowedGroups(env);
+        if (!toolAllowed(name, allowed)) {
+            const stage = stageDef(ed.pipeline.design.stage);
+            throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
+        }
+        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args)) ?? (await runImageTool(env, name, args)) ?? (await runMaterialTool(env, name, args)) ?? (await runEffectTool(env, name, args));
+        if (design) return design;
         switch (name) {
             case 'get_scene': {
                 const d = doc();
-                const nodes = d.nodes.slice(0, 400).map((n) => nodeSummary(d, n));
+                // Parts of prefab instances follow their prefab: only the instances are listed.
+                const listed = d.nodes.filter((n) => !n.prefabChild);
+                const nodes = listed.slice(0, 400).map((n) => nodeSummary(d, n));
                 return {
                     summary: `${d.nodes.length} objects`,
                     data: {
@@ -601,7 +721,8 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                             gi: d.environment.gi,
                         },
                         objects: nodes,
-                        ...(d.nodes.length > nodes.length ? { truncated: d.nodes.length - nodes.length } : {}),
+                        ...(listed.length > nodes.length ? { truncated: listed.length - nodes.length } : {}),
+                        prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
                         assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
                         scripts: d.scripts.map((s) => {
                             const c = ed.compiler.get(s.id);
@@ -627,6 +748,11 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             case 'create_objects': {
                 const specs: Json[] = Array.isArray(args.objects) ? args.objects : [];
                 if (!specs.length) throw new ToolError('objects is empty.');
+                const policy = new StagePolicy(env);
+                for (const spec of specs) {
+                    const err = policy.create(String(spec.type)) || (spec.material ? policy.update({ name: spec.name ?? spec.type } as NodeDoc, { material: spec.material }) : '');
+                    if (err) throw new ToolError(err);
+                }
                 const created: NodeDoc[] = [];
                 const d = JSON.parse(JSON.stringify(doc())) as SceneDoc;
                 for (const spec of specs) {
@@ -648,21 +774,31 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                         if (c.camera!.main) for (const o of others) o.camera!.main = false;
                     }
                 });
-                return { data: { created: created.map((n) => ({ id: n.id, name: n.name })) }, summary: created.map((n) => n.name).join(', ') };
+                return { data: { created: created.map((n) => ({ id: n.id, name: n.name })), ...(policy.warnings.size ? { note: [...policy.warnings].join(' ') } : {}) }, summary: created.map((n) => n.name).join(', ') };
             }
             case 'update_objects': {
                 const updates: Json[] = Array.isArray(args.updates) ? args.updates : [];
                 if (!updates.length) throw new ToolError('updates is empty.');
+                const policy = new StagePolicy(env);
+                for (const u of updates) {
+                    const err = policy.update(node(doc(), u.id), u);
+                    if (err) throw new ToolError(err);
+                }
                 // Validate against a copy first so a bad entry changes nothing.
                 const draft = JSON.parse(JSON.stringify(doc())) as SceneDoc;
                 for (const u of updates) applyFields(env, draft, node(draft, u.id), u, []);
                 store.commit('AI: Edit Objects', (d) => {
                     d.nodes = draft.nodes;
                 });
-                return { data: { updated: updates.length }, summary: `${updates.length} object(s)` };
+                return { data: { updated: updates.length, ...(policy.warnings.size ? { note: [...policy.warnings].join(' ') } : {}) }, summary: `${updates.length} object(s)` };
             }
             case 'delete_objects': {
                 const ids: string[] = (Array.isArray(args.ids) ? args.ids : []).map((r: unknown) => node(doc(), r).id);
+                const policy = new StagePolicy(env);
+                for (const id of ids) {
+                    const err = policy.remove(store.node(id)!);
+                    if (err) throw new ToolError(err);
+                }
                 const all = new Set<string>();
                 for (const id of ids) {
                     all.add(id);
@@ -996,6 +1132,27 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 ed.stopPlay();
                 return { data: { state: ed.player.state } };
             }
+            case 'view_images': {
+                const refs: unknown[] = Array.isArray(args.assets) ? args.assets.slice(0, 6) : [];
+                if (!refs.length) throw new ToolError('assets is empty.');
+                const images: string[] = [];
+                const shown: string[] = [];
+                const missing: string[] = [];
+                for (const ref of refs) {
+                    const meta = doc().assets.find((a) => a.id === ref && (a.kind === 'image' || a.kind === 'texture'));
+                    const url = meta ? await assetImageDataUrl(meta.id, 1024).catch(() => null) : null;
+                    if (url && meta) {
+                        images.push(url);
+                        shown.push(`${meta.name} (${meta.id})`);
+                    } else missing.push(String(ref));
+                }
+                if (!images.length) throw new ToolError(`No images found for ${missing.join(', ')}.`);
+                return {
+                    data: { shown, ...(missing.length ? { missing } : {}), note: 'The images are attached in the next message, in this order.' },
+                    images,
+                    summary: `${images.length} image${images.length === 1 ? '' : 's'}`,
+                };
+            }
             case 'capture_viewport': {
                 const image = await ed.runtime.capture(768);
                 return { data: { ok: true, note: 'The screenshot is attached in the next message.' }, image, summary: 'screenshot' };
@@ -1003,6 +1160,8 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
         }
         throw new ToolError(`Unknown tool "${name}".`);
     } catch (e: any) {
+        // A stopped request stops here; the agent reports it.
+        if (e?.name === 'AbortError') throw e;
         const message = e instanceof ToolError ? e.message : `${e?.name || 'Error'}: ${e?.message || e}`;
         if (!(e instanceof ToolError)) console.error('[ai] tool failed', name, e);
         return { data: { error: message }, summary: 'error' };

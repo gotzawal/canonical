@@ -1,9 +1,13 @@
 import type { Editor } from '../editor';
-import { Agent, type AgentTurn } from '../ai/agent';
+import { Agent, type AgentTurn, type Attachment } from '../ai/agent';
+import { getAssetUrl, putDesignImage } from '../core/assets';
+import { pickFiles } from '../core/persistence';
 import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../ai/openrouter';
 import { aiSettings } from '../ai/settings';
+import { describeCache } from '../ai/caching';
+import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
 import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -31,6 +35,10 @@ export class AIPanel {
     private views = new Map<number, HTMLElement>();
     private models: OpenRouterModel[] = [];
     private modelsLoad: Promise<void> | null = null;
+    /** Images waiting to be sent with the next message. */
+    private attachments: Attachment[] = [];
+    private attachStrip: HTMLElement;
+    private compactBtn: HTMLButtonElement;
 
     constructor(private editor: Editor, context: () => string) {
         this.agent = new Agent(editor, context);
@@ -43,6 +51,12 @@ export class AIPanel {
         this.modelLabel = h('button', { class: 'ai-model', attrs: { type: 'button' }, title: 'Model (click to change)' });
         this.usageLabel = h('span', { class: 'ai-usage' });
         this.modelLabel.addEventListener('click', () => void this.openSettings());
+        this.attachStrip = h('div', { class: 'ai-attachments', attrs: { hidden: true } });
+        this.compactBtn = iconButton('history', 'Compact the conversation: summarize the earlier messages', () => void this.agent.compact().then(() => this.render()));
+        const attachBtn = iconButton('attach', 'Attach images (or paste / drop them here)', async () => {
+            const files = await pickFiles('image/*,.md,.txt,text/plain,text/markdown', true);
+            await this.addFiles(files);
+        });
 
         this.el = h(
             'div',
@@ -54,15 +68,43 @@ export class AIPanel {
                 this.modelLabel,
                 h('div', { class: 'spacer' }),
                 this.usageLabel,
-                iconButton('plus', 'New conversation', () => {
+                this.compactBtn,
+                iconButton('plus', 'New conversation (the scene memo stays)', () => {
                     this.agent.reset();
                     this.render();
                 }),
                 iconButton('gear', 'AI settings', () => void this.openSettings()),
             ),
             this.list,
-            h('div', { class: 'ai-composer' }, this.input, h('div', { class: 'ai-composer-row' }, h('span', { class: 'ai-hint', text: 'Edits of one request undo together.' }), h('div', { class: 'spacer' }), this.sendBtn)),
+            h(
+                'div',
+                { class: 'ai-composer' },
+                this.attachStrip,
+                this.input,
+                h('div', { class: 'ai-composer-row' }, attachBtn, h('span', { class: 'ai-hint', text: 'Edits of one request undo together.' }), h('div', { class: 'spacer' }), this.sendBtn),
+            ),
         );
+        this.input.addEventListener('paste', (e) => {
+            const files = Array.from(e.clipboardData?.files ?? []).filter((f) => f.type.startsWith('image/'));
+            if (!files.length) return;
+            e.preventDefault();
+            void this.addFiles(files);
+        });
+        this.el.addEventListener('dragover', (e) => {
+            if (!e.dataTransfer?.types.includes('Files')) return;
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+            this.el.classList.add('drop-target');
+        });
+        this.el.addEventListener('dragleave', (e) => {
+            if (!this.el.contains(e.relatedTarget as Node)) this.el.classList.remove('drop-target');
+        });
+        this.el.addEventListener('drop', (e) => {
+            if (!e.dataTransfer?.files.length) return;
+            e.preventDefault();
+            this.el.classList.remove('drop-target');
+            void this.addFiles(Array.from(e.dataTransfer.files));
+        });
 
         this.input.addEventListener('keydown', (e) => {
             e.stopPropagation();
@@ -103,13 +145,76 @@ export class AIPanel {
 
     private submit() {
         const text = this.input.value.trim();
-        if (!text || this.agent.busy) return;
+        if ((!text && !this.attachments.length) || this.agent.busy || this.agent.working) return;
         if (!aiSettings.apiKey) {
             void this.openSettings();
             return;
         }
         this.input.value = '';
-        void this.agent.send(text);
+        const attachments = this.attachments;
+        this.attachments = [];
+        this.renderAttachments();
+        void this.agent.send(text, attachments);
+    }
+
+    /** Sends a prompt as if typed (used by the pipeline's buttons). */
+    send(text: string, attachments: Attachment[] = []) {
+        if (this.agent.busy || this.agent.working) {
+            toast('The assistant is still working on the last request.', 'info');
+            return;
+        }
+        if (!aiSettings.apiKey) {
+            void this.openSettings();
+            return;
+        }
+        void this.agent.send(text, attachments);
+    }
+
+    /**
+     * Images become planning assets of the project and wait under the input;
+     * text files (.md / .txt) are pasted into the message.
+     */
+    async addFiles(files: File[]) {
+        for (const file of files) {
+            if (/\.(md|markdown|txt)$/i.test(file.name) || file.type.startsWith('text/')) {
+                const text = await file.text();
+                const sep = this.input.value.trim() ? '\n\n' : '';
+                this.input.value += `${sep}${file.name}:\n${text}`;
+                continue;
+            }
+            if (!file.type.startsWith('image/')) {
+                toast(`${file.name} is not an image or a text file.`, 'error');
+                continue;
+            }
+            try {
+                const name = file.name && file.name !== 'image.png' ? file.name : `attachment-${new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-')}.png`;
+                const meta = await putDesignImage(file, name);
+                this.editor.store.patch((d) => {
+                    d.assets.push(meta);
+                }, { design: true });
+                this.attachments.push({ asset: meta.id, name: meta.name });
+            } catch (e: any) {
+                toast(`Could not attach ${file.name}: ${e?.message || e}`, 'error');
+            }
+        }
+        this.renderAttachments();
+        this.input.focus();
+    }
+
+    private renderAttachments() {
+        clear(this.attachStrip);
+        this.attachStrip.hidden = !this.attachments.length;
+        for (const a of this.attachments) {
+            const img = h('img', { attrs: { alt: a.name } });
+            const meta = this.editor.store.doc.assets.find((x) => x.id === a.asset);
+            if (meta) void getAssetUrl(meta).then((url) => url && (img.src = url));
+            const remove = h('button', { class: 'ai-attachment-remove', title: 'Remove', attrs: { type: 'button', 'aria-label': 'Remove image' } }, icon('close', 11));
+            remove.addEventListener('click', () => {
+                this.attachments = this.attachments.filter((x) => x !== a);
+                this.renderAttachments();
+            });
+            this.attachStrip.appendChild(h('div', { class: 'ai-attachment', title: a.name }, img, remove));
+        }
     }
 
     private async loadModels(force = false) {
@@ -141,9 +246,14 @@ export class AIPanel {
         this.modelLabel.textContent = s.model ? model?.name ?? s.model : 'Choose a model';
         this.modelLabel.title = s.model ? `${s.model}${model && !supportsTools(model) ? ' (does not support tools)' : ''}` : 'Choose a model';
         const u = this.agent.usage;
-        this.usageLabel.textContent = u.requests ? `${((u.prompt + u.completion) / 1000).toFixed(1)}k tok${u.cost ? ` · $${u.cost.toFixed(4)}` : ''}` : '';
-        this.usageLabel.title = u.requests ? `${u.requests} requests, ${u.prompt} prompt + ${u.completion} completion tokens` : '';
-        this.sendBtn.replaceChildren(icon(this.agent.busy ? 'stop' : 'send', 14), h('span', { text: this.agent.busy ? 'Stop' : 'Send' }));
+        const hit = u.prompt ? Math.round((u.cached / u.prompt) * 100) : 0;
+        this.usageLabel.textContent = u.requests ? `${((u.prompt + u.completion) / 1000).toFixed(1)}k tok${u.cached ? ` · ${hit}% cached` : ''}${u.cost ? ` · $${u.cost.toFixed(4)}` : ''}` : '';
+        this.usageLabel.title = u.requests
+            ? `${u.requests} requests, ${u.prompt} prompt + ${u.completion} completion tokens${u.cached ? `, ${u.cached} prompt tokens read from the cache (${hit}%)` : ', no prompt tokens read from a cache yet'}${u.written ? `, ${u.written} written to it` : ''}`
+            : '';
+        this.sendBtn.replaceChildren(icon(this.agent.busy ? 'stop' : 'send', 14), h('span', { text: this.agent.busy ? 'Stop' : this.agent.working ? 'Wait' : 'Send' }));
+        this.sendBtn.disabled = !this.agent.busy && this.agent.working;
+        this.compactBtn.disabled = this.agent.busy || this.agent.working || !this.agent.hasHistory;
         this.input.disabled = false;
     }
 
@@ -181,7 +291,18 @@ export class AIPanel {
     private turnView(t: AgentTurn): HTMLElement {
         let el: HTMLElement;
         if (t.role === 'user') {
-            el = h('div', { class: 'ai-msg user' }, h('div', { class: 'ai-bubble', text: t.text }));
+            el = h('div', { class: 'ai-msg user' });
+            if (t.images?.length) {
+                const strip = h('div', { class: 'ai-msg-images' });
+                for (const a of t.images) {
+                    const img = h('img', { class: 'ai-msg-image', title: a.name, attrs: { alt: a.name } });
+                    const meta = this.editor.store.doc.assets.find((x) => x.id === a.asset);
+                    if (meta) void getAssetUrl(meta).then((url) => url && (img.src = url));
+                    strip.appendChild(img);
+                }
+                el.appendChild(strip);
+            }
+            if (t.text) el.appendChild(h('div', { class: 'ai-bubble', text: t.text }));
         } else if (t.role === 'assistant') {
             const body = h('div', { class: 'ai-bubble md' });
             body.innerHTML = t.text ? markdown(t.text) : '<span class="ai-typing"><i></i><i></i><i></i></span>';
@@ -204,6 +325,9 @@ export class AIPanel {
                 details.appendChild(h('pre', { class: 'ai-tool-pre', text: prettyJson(tool.result).slice(0, 6000) }));
             }
             el = h('div', { class: 'ai-msg tool' }, details, tool.image ? h('img', { class: 'ai-shot', attrs: { src: tool.image, alt: 'Viewport screenshot' } }) : null);
+        } else if (t.detail) {
+            const details = h('details', { class: 'ai-note-details' }, h('summary', null, icon('history', 13), h('span', { text: t.text })), h('div', { class: 'ai-note-detail', text: t.detail }));
+            el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, details);
         } else {
             el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, icon(t.error ? 'alert' : 'info', 13), h('span', { text: t.text }));
         }
@@ -279,7 +403,7 @@ export class AIPanel {
             modelInfo.textContent = !this.models.length
                 ? 'Model list unavailable (offline?). Type a model id.'
                 : cur
-                  ? `${cur.name}${cur.context_length ? ` · ${Math.round(cur.context_length / 1000)}k context` : ''}${supportsImages(cur) ? ' · sees images' : ''}${supportsTools(cur) ? '' : ' · no tool support, pick another'}${cur.pricing?.prompt ? ` · $${(Number(cur.pricing.prompt) * 1e6).toFixed(2)} / $${(Number(cur.pricing.completion) * 1e6).toFixed(2)} per M tokens` : ''}`
+                  ? `${cur.name}${cur.context_length ? ` · ${Math.round(cur.context_length / 1000)}k context` : ''}${supportsImages(cur) ? ' · sees images' : ''}${supportsTools(cur) ? '' : ' · no tool support, pick another'}${cur.pricing?.prompt ? ` · $${(Number(cur.pricing.prompt) * 1e6).toFixed(2)} / $${(Number(cur.pricing.completion) * 1e6).toFixed(2)} per M tokens` : ''} · ${describeCache(cur.id, cur.pricing)}${Number(cur.pricing?.input_cache_read) > 0 ? ` ($${(Number(cur.pricing!.input_cache_read) * 1e6).toFixed(2)} per M cached)` : ''}`
                   : `${usable.length} models with tool support. Type to search.`;
         };
         modelInput.addEventListener('input', fillModels);
@@ -293,6 +417,32 @@ export class AIPanel {
         const steps = new NumberField({ value: s.maxSteps, min: 1, max: 60, step: 0.25, precision: 0 });
         const allowPlay = new CheckboxField(s.allowPlay, () => {}, 'Let the assistant run Play tests');
         const shots = new CheckboxField(s.screenshots, () => {}, 'Send viewport screenshots to vision models');
+        const memo = new CheckboxField(s.memo, () => {}, 'Keep a scene memo up to date at checkpoints');
+        const stageTools = new CheckboxField(s.stageTools, () => {}, 'The pipeline stage decides which tools the assistant gets');
+        const cacheLong = new CheckboxField(s.cacheLong, () => {}, 'Keep the prompt cache for an hour (Claude)');
+        const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (paintovers, swatches)');
+        const imageModel = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-image-models', spellcheck: 'false', placeholder: DEFAULT_IMAGE_MODEL } });
+        imageModel.value = s.imageModel;
+        imageModel.addEventListener('keydown', (e) => e.stopPropagation());
+        const imageList = h('datalist', { attrs: { id: 'ai-image-models' } });
+        const imageInfo = h('div', { class: 'muted small', text: 'Used for paintovers and swatches, by you and the assistant.' });
+        let imageModels: ImageModel[] = [];
+        const describeImageModel = () => {
+            const id = imageModel.value.trim() || DEFAULT_IMAGE_MODEL;
+            const m = imageModels.find((x) => x.id === id);
+            if (!imageModels.length) return;
+            imageInfo.textContent = m
+                ? `${m.name}${takesImages(m) ? ' · takes reference images' : ' · no reference images (cannot paint over)'}${m.supports_streaming ? ' · streams' : ''} · options: ${Object.keys(modelParams(m)).filter((k) => !OWN_PARAMS.has(k)).join(', ') || 'none'}`
+                : `"${id}" is not in the list of ${imageModels.length} image models.`;
+        };
+        imageModel.addEventListener('input', describeImageModel);
+        void listImageModels()
+            .then((list) => {
+                imageModels = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
+                for (const m of imageModels) imageList.appendChild(h('option', { attrs: { value: m.id }, text: m.name }));
+                describeImageModel();
+            })
+            .catch(() => (imageInfo.textContent = 'Image model list unavailable (offline?). Type a model id.'));
         const body = h(
             'div',
             { class: 'ai-settings' },
@@ -302,11 +452,18 @@ export class AIPanel {
             row('Model', h('div', { class: 'inline' }, modelInput, refresh)),
             row('', modelInfo),
             datalist,
+            row('', cacheLong.el, 'Claude keeps cached prompts for five minutes; an hour keeps the conversation cached while you look at the result between requests. Writing the cache costs 2x the input price instead of 1.25x, reading it 0.1x either way.'),
             row('Temperature', temperature.el),
             row('Max steps', steps.el, 'Model calls per request'),
             row('', allowPlay.el),
             row('', shots.el),
-            h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code) and screenshots are sent to OpenRouter and the model provider you choose. The key is stored in this browser only.' }),
+            row('', images.el),
+            row('Image model', imageModel),
+            row('', imageInfo),
+            imageList,
+            row('', stageTools.el),
+            row('', memo.el, 'The memo is a few lines about the scene stored in the project, so a new conversation (or another session) knows where the work stands.'),
+            h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code), images and screenshots are sent to OpenRouter and the model provider you choose. Each project keeps its conversation in this browser; long conversations are compacted into a summary. Requests carry a session id (random, per conversation) so OpenRouter keeps a conversation with one provider and its prompt cache. The key is stored in this browser only.' }),
         );
         const result = await dialog('AI Assistant Settings', body, [
             { label: 'Remove key', value: 'remove', danger: true },
@@ -326,6 +483,11 @@ export class AIPanel {
             remember: box(remember),
             allowPlay: box(allowPlay),
             screenshots: box(shots),
+            allowImages: box(images),
+            cacheLong: box(cacheLong),
+            imageModel: imageModel.value.trim(),
+            stageTools: box(stageTools),
+            memo: box(memo),
         });
         aiSettings.setKey(key.value);
     }

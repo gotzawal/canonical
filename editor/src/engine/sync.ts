@@ -6,9 +6,12 @@ import {
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
+import type { EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
+import { ParticleSystem } from '@orillusion/particle';
+import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { castGI } from './gi';
+import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
     applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
 } from './materials';
@@ -52,6 +55,10 @@ export interface Entry {
     lightType: LightType | null;
     lightKey: string;
     model: ModelState | null;
+    particles: ParticleSystem | null;
+    particlesKey: string;
+    /** Increases with every rebuild, so a late texture load does not build an outdated emitter. */
+    particlesToken: number;
 }
 
 interface SyncEvents {
@@ -76,6 +83,12 @@ export class SceneSync extends Emitter<SyncEvents> {
     readonly entries = new Map<string, Entry>();
     /** Nodes whose objects a script destroyed in Play mode; they stay out of the scene until Stop. */
     readonly detached = new Set<string>();
+    /** While a prefab instance is edited on its own, only these nodes (and lights) are shown. */
+    private isolation: Set<string> | null = null;
+    /** Isolation hides lights too (the reference room brings its own). */
+    private isolateLights = false;
+    /** Environment shown instead of the document's (the reference room). */
+    private envOverride: EnvironmentDoc | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     private textures = new Map<string, Promise<Texture | null>>();
@@ -90,9 +103,9 @@ export class SceneSync extends Emitter<SyncEvents> {
     // ---------------------------------------------------------------- sync
 
     sync(hint?: ChangeHint) {
-        if (hint?.meta) return;
+        if (hint?.meta || hint?.design) return;
         const doc = this.store.doc;
-        this.runtime.applyEnvironment(doc.environment);
+        this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
         this.runtime.gi.invalidate();
         if (hint?.env) return;
@@ -125,6 +138,26 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     rebuild() {
         for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        this.sync();
+    }
+
+    /**
+     * Loads an asset again after its data was replaced under the same id (a
+     * new version of a model from Blender, a reworked texture): models using
+     * it are rebuilt and materials showing it are recreated.
+     */
+    reloadAsset(id: string) {
+        this.prefabs.delete(id);
+        for (const key of Array.from(this.textures.keys())) if (key.startsWith(id + '|')) this.textures.delete(key);
+        for (const entry of Array.from(this.entries.values())) {
+            const node = this.store.node(entry.id);
+            if (!node) continue;
+            if (entry.model && (entry.model.asset === id || JSON.stringify(node.model?.materials ?? {}).includes(id))) {
+                this.dropModel(entry);
+                entry.model = null;
+            }
+            if (node.mesh && JSON.stringify(node.mesh.material).includes(id)) entry.materialKind = '';
+        }
         this.sync();
     }
 
@@ -186,6 +219,9 @@ export class SceneSync extends Emitter<SyncEvents> {
             lightType: null,
             lightKey: '',
             model: null,
+            particles: null,
+            particlesKey: '',
+            particlesToken: 0,
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -220,6 +256,40 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyMesh(entry, node.mesh);
         this.applyLight(entry, node.light);
         this.applyModel(entry, node.model);
+        this.applyParticles(entry, node.particles);
+    }
+
+    /** Emitters are built again when their settings change (the simulator bakes its particles). */
+    private applyParticles(entry: Entry, p: ParticlesDoc | undefined) {
+        const key = p ? JSON.stringify(p) : '';
+        if (key === entry.particlesKey) return;
+        entry.particlesKey = key;
+        const token = ++entry.particlesToken;
+        if (entry.particles) {
+            entry.obj.removeComponent(ParticleSystem);
+            entry.particles = null;
+        }
+        if (!p) return;
+        const texture = p.texture ? this.loadTexture(p.texture) : this.dotTexture();
+        void texture.then((tex) => {
+            if (entry.particlesToken !== token || this.entries.get(entry.id) !== entry) return;
+            try {
+                entry.particles = buildParticles(entry.obj, p, tex ?? this.runtime.engine.res.whiteTexture);
+                if (!entry.visible) entry.particles.enable = false;
+            } catch (e) {
+                console.error('[editor] particle emitter failed', e);
+            }
+        });
+    }
+
+    private dotTexturePromise: Promise<Texture | null> | null = null;
+
+    private dotTexture(): Promise<Texture | null> {
+        this.dotTexturePromise ??= (this.runtime.engine.res.loadTexture(dotTextureUrl(), undefined, false, 'srgb') as Promise<Texture>).catch((e) => {
+            console.warn('[editor] particle sprite failed', e);
+            return null;
+        });
+        return this.dotTexturePromise;
     }
 
     private applyTransform(entry: Entry, node: NodeDoc) {
@@ -486,6 +556,20 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     // ------------------------------------------------------------ visibility
 
+    setIsolation(ids: Set<string> | null, hideLights = false) {
+        this.isolation = ids;
+        this.isolateLights = !!ids && hideLights;
+        this.updateVisibility();
+        this.runtime.gi.invalidate();
+    }
+
+    /** Shows another environment than the document's until called with null. */
+    setEnvironmentOverride(env: EnvironmentDoc | null) {
+        this.envOverride = env;
+        this.runtime.invalidateEnvironment();
+        this.runtime.applyEnvironment(env ?? this.store.doc.environment);
+    }
+
     private updateVisibility() {
         const effective = new Map<string, boolean>();
         const resolve = (node: NodeDoc | undefined): boolean => {
@@ -496,9 +580,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             effective.set(node.id, v);
             return v;
         };
+        const iso = this.isolation;
         for (const node of this.store.doc.nodes) {
             const entry = this.entries.get(node.id);
-            if (entry) this.setEnabled(entry, resolve(node));
+            if (entry) this.setEnabled(entry, resolve(node) && (!iso || iso.has(node.id) || (!!node.light && !this.isolateLights)));
         }
     }
 
@@ -507,6 +592,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.visible = visible;
         if (entry.mesh) entry.mesh.enable = visible;
         if (entry.light) entry.light.enable = visible;
+        if (entry.particles) entry.particles.enable = visible;
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);
@@ -624,7 +710,17 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
             return new PlaneGeometry(pos(g.width), pos(g.height));
         case 'cylinder':
             return new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1);
+        case 'cone':
+            return new ConeGeometry(pos(g.radius), pos(g.height), seg(g.segments));
         case 'torus':
             return new TorusGeometry(pos(g.radius), pos(g.tube), seg(g.segments), seg(g.segments / 2));
+        case 'ramp':
+            return new RampGeometry(pos(g.width), pos(g.height), pos(g.depth));
+        case 'stairs':
+            return new StairsGeometry(pos(g.width), pos(g.height), pos(g.depth), seg(g.steps, 1));
+        case 'capsule':
+            return new CapsuleGeometry(pos(g.radius), pos(g.height), seg(g.segments, 6));
+        default:
+            return new BoxGeometry(1, 1, 1);
     }
 }

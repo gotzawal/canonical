@@ -1,7 +1,7 @@
 import type { RenderNode } from '@orillusion/core';
 import { add, normalize, scale, sub, transformDir, transformPoint } from '../core/math';
 import type { Store } from '../core/store';
-import type { NodeDoc, Vec3 } from '../core/types';
+import type { NodeDoc, ParticlesDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
 import type { Runtime } from '../engine/runtime';
 import type { SceneSync } from '../engine/sync';
@@ -27,6 +27,12 @@ export interface ViewportHooks {
     focusedPart?(): { node: string; renderer: RenderNode } | null;
     /** Play mode input. */
     play?: PlayHooks;
+    /** What a click on a node selects (parts of a prefab instance select the instance). */
+    selectable?(id: string): string;
+    /** Extra drawing on the overlay (pipeline helpers: area bounds, route points). */
+    drawExtra?(ctx: CanvasRenderingContext2D): void;
+    /** True while another controller (the walk camera) owns the pointer. */
+    captured?(): boolean;
 }
 
 export interface PlayHooks {
@@ -112,6 +118,7 @@ export class Viewport {
     }
 
     private onDown(e: PointerEvent) {
+        if (this.hooks.captured?.()) return;
         this.overlay.focus({ preventScroll: true });
         const [x, y] = this.local(e);
         this.pointers.set(e.pointerId, { x, y });
@@ -229,7 +236,8 @@ export class Viewport {
             this.picker.update();
             if (this.downButton === 0) this.clickSelect(x, y, e.shiftKey || e.ctrlKey || e.metaKey);
             else if (this.downButton === 2) {
-                const id = this.hitId(x, y);
+                const raw = this.hitId(x, y);
+                const id = raw && this.hooks.selectable ? this.hooks.selectable(raw) : raw;
                 if (id && !this.store.selection.includes(id)) this.store.select([id]);
                 this.hooks.onContextMenu(x, y, e.clientX, e.clientY, id);
             }
@@ -248,6 +256,7 @@ export class Viewport {
 
     private onWheel(e: WheelEvent) {
         e.preventDefault();
+        if (this.hooks.captured?.()) return;
         const [x, y] = this.local(e);
         let dy = e.deltaY;
         if (e.deltaMode === 1) dy *= 16;
@@ -263,8 +272,9 @@ export class Viewport {
         if (this.playing) return;
         const [x, y] = this.local(e);
         this.picker.update();
-        const id = this.hitId(x, y);
-        if (!id) return;
+        const raw = this.hitId(x, y);
+        if (!raw) return;
+        const id = this.hooks.selectable ? this.hooks.selectable(raw) : raw;
         this.store.select([id]);
         this.frameNodes([id]);
     }
@@ -283,10 +293,11 @@ export class Viewport {
         }
         const icon = this.iconAt(x, y);
         const hit = icon ? null : this.picker.pick(x, y);
-        const id = icon ? icon.id : hit?.id ?? null;
+        const raw = icon ? icon.id : hit?.id ?? null;
+        const id = raw && this.hooks.selectable ? this.hooks.selectable(raw) : raw;
         if (id) this.store.select([id], additive ? 'toggle' : 'replace');
         else if (!additive) this.store.select([]);
-        if (id && this.store.node(id)?.model) this.hooks.onPickPart?.(id, hit?.renderer ?? null);
+        if (id && id === raw && this.store.node(id)?.model) this.hooks.onPickPart?.(id, hit?.renderer ?? null);
     }
 
     private iconAt(x: number, y: number): IconHit | null {
@@ -396,6 +407,7 @@ export class Viewport {
             if (this.store.prefs.helpers || isSel) this.drawHelper(node, isSel, entry.visible);
             if (isSel) this.drawSelection(node);
         }
+        this.hooks.drawExtra?.(ctx);
         this.gizmo.draw(ctx);
 
         const info = this.gizmo.dragInfo;
@@ -448,6 +460,45 @@ export class Viewport {
         ctx.restore();
     }
 
+    /** Outline of where a particle emitter starts its particles. */
+    private drawEmitter(m: ArrayLike<number>, p: ParticlesDoc) {
+        const ctx = this.ctx;
+        const at = (v: Vec3): Vec3 => transformPoint(m, v);
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        if (p.shape === 'box') {
+            const [x, y, z] = [p.box[0] / 2, p.box[1] / 2, p.box[2] / 2];
+            const corners: Vec3[] = [];
+            for (let i = 0; i < 8; i++) corners.push(at([i & 1 ? x : -x, i & 2 ? y : -y, i & 4 ? z : -z]));
+            this.strokeBox(corners);
+        } else {
+            const r = p.radius;
+            // Arcs from 0 to `end` radians; a hemisphere only shows its upper half.
+            const ring = (f: (a: number) => Vec3, end = Math.PI * 2) => {
+                ctx.beginPath();
+                let started = false;
+                for (let i = 0; i <= 48; i++) {
+                    const s = this.picker.project(at(f((i / 48) * end)));
+                    if (!s.visible) {
+                        started = false;
+                        continue;
+                    }
+                    if (started) ctx.lineTo(s.x, s.y);
+                    else ctx.moveTo(s.x, s.y);
+                    started = true;
+                }
+                ctx.stroke();
+            };
+            ring((a) => [Math.cos(a) * r, 0, Math.sin(a) * r]);
+            if (p.shape !== 'circle') {
+                const end = p.shape === 'hemisphere' ? Math.PI : Math.PI * 2;
+                ring((a) => [Math.cos(a) * r, Math.sin(a) * r, 0], end);
+                ring((a) => [0, Math.sin(a) * r, Math.cos(a) * r], end);
+            }
+        }
+        ctx.restore();
+    }
+
     private strokeBox(corners: Vec3[]) {
         const ctx = this.ctx;
         const p = corners.map((c) => this.picker.project(c));
@@ -493,6 +544,10 @@ export class Viewport {
                 }
             }
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 13 });
+        } else if (node.particles) {
+            drawSparkle(ctx, sp.x, sp.y);
+            if (selected) this.drawEmitter(m, node.particles);
+            this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 12 });
         } else if (node.camera) {
             drawCameraIcon(ctx, sp.x, sp.y);
             this.drawFrustum(m, node.camera.fov, selected ? 2.2 : 0.8);
@@ -707,6 +762,22 @@ function rendererBox(r: RenderNode): Vec3[] | null {
         out.push(transformPoint(m, [i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]));
     }
     return out;
+}
+
+/** Four pointed star for particle emitters. */
+function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number) {
+    ctx.beginPath();
+    const r = 8, k = 2.2;
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + k, y - k);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x + k, y + k);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - k, y + k);
+    ctx.lineTo(x - r, y);
+    ctx.lineTo(x - k, y - k);
+    ctx.closePath();
+    ctx.stroke();
 }
 
 function drawSun(ctx: CanvasRenderingContext2D, x: number, y: number) {

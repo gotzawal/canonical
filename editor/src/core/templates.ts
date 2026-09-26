@@ -191,6 +191,68 @@ export interface ShaderTemplate {
     code: string;
 }
 
+/** Marks the triplanar shader material slots use (see design/materialSlots.ts). */
+export const TRIPLANAR_MARKER = '@canonical triplanar';
+
+export const TRIPLANAR_CODE = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo texture is
+// projected along x, y and z and blended by the surface normal, so it keeps
+// its real size on every mesh. tile is the size of one texture tile in
+// meters. Roughness and metallic come from the material.
+// @property albedo texture white
+// @property tile float 2 0.05 50
+// @property sharpness float 4 1 16
+
+fn triplanarSample(p: vec3f, n: vec3f) -> vec4f {
+    let s = 1.0 / max(materialUniform.tile, 0.001);
+    var w = pow(abs(n), vec3f(materialUniform.sharpness));
+    w = w / max(w.x + w.y + w.z, 0.0001);
+    let cx = textureSample(albedo, albedoSampler, vec2f(p.z, -p.y) * s);
+    let cy = textureSample(albedo, albedoSampler, vec2f(p.x, p.z) * s);
+    let cz = textureSample(albedo, albedoSampler, vec2f(p.x, -p.y) * s);
+    return cx * w.x + cy * w.y + cz * w.z;
+}
+
+fn frag() {
+    let n = normalize(ORI_VertexVarying.vWorldNormal);
+    let p = ORI_VertexVarying.vWorldPos.xyz;
+    let c = triplanarSample(p, n) * materialUniform.baseColor;
+    ORI_ShadingInput.BaseColor = vec4f(c.rgb, materialUniform.baseColor.a);
+    ORI_ShadingInput.Roughness = materialUniform.roughness;
+    ORI_ShadingInput.Metallic = materialUniform.metallic;
+    ORI_ShadingInput.Specular = 1.0;
+    ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.EmissiveColor = vec4f(materialUniform.emissiveColor.rgb, 1.0);
+    ORI_ShadingInput.Normal = n;
+    useShadow();
+    BxDFShading();
+}
+`;
+
+/** Lift / gamma / gain grade, used by the Finish stage (see ai/effectTools.ts). */
+export const LGG_CODE = `// Post shader: lift, gamma and gain, then saturation. It works on the HDR
+// image before tone mapping: lift raises the darks, gamma bends the mid
+// tones, gain scales everything. x, y, z are red, green and blue; w applies
+// to all three (lift and gain add / multiply it, gamma multiplies it).
+// @property lift vec4 0 0 0 0
+// @property gamma vec4 1 1 1 1
+// @property gain vec4 1 1 1 1
+// @property saturation float 1 0 2
+
+fn post(uv: vec2f) -> vec4f {
+    let c = sceneColor(uv);
+    let lift = materialUniform.lift.xyz + vec3f(materialUniform.lift.w);
+    let gamma = max(materialUniform.gamma.xyz * materialUniform.gamma.w, vec3f(0.01));
+    let gain = materialUniform.gain.xyz * materialUniform.gain.w;
+    var x = max(c.rgb, vec3f(0.0));
+    x = x + lift * max(vec3f(1.0) - x, vec3f(0.0));
+    x = max(x * gain, vec3f(0.0));
+    x = pow(x, vec3f(1.0) / gamma);
+    let luma = dot(x, vec3f(0.2126, 0.7152, 0.0722));
+    x = mix(vec3f(luma), x, materialUniform.saturation);
+    return vec4f(max(x, vec3f(0.0)), c.a);
+}
+`;
+
 export const SHADER_TEMPLATES: ShaderTemplate[] = [
     {
         id: 'lit',
@@ -222,6 +284,14 @@ fn frag() {
     BxDFShading();
 }
 `,
+    },
+    {
+        id: 'triplanar',
+        label: 'Triplanar',
+        description: 'World space triplanar texture with its tile size in meters (material slots use it).',
+        kind: 'material',
+        lighting: 'lit',
+        code: TRIPLANAR_CODE,
     },
     {
         id: 'unlit',
@@ -318,6 +388,14 @@ fn post(uv: vec2f) -> vec4f {
     return vec4f(max(rgb, vec3f(0.0)) * materialUniform.tint.rgb, c.a);
 }
 `,
+    },
+    {
+        id: 'lgg',
+        label: 'Lift Gamma Gain',
+        description: 'Lift, gamma, gain and saturation: the usual first color grade (post effect).',
+        kind: 'post',
+        lighting: 'unlit',
+        code: LGG_CODE,
     },
     {
         id: 'chromatic',

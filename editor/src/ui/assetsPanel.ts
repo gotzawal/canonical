@@ -47,7 +47,10 @@ export class AssetsPanel {
 
     render(force = false) {
         const doc = this.editor.store.doc;
+        const assets = doc.assets.filter((a) => a.purpose !== 'design');
+        const planning = doc.assets.length - assets.length;
         const key = [
+            doc.prefabs.map((p) => p.id + p.name + (p.useModel ? 'm' : '') + doc.nodes.filter((n) => n.prefab === p.id).length).join('|'),
             doc.assets.map((a) => a.id + a.name).join('|'),
             doc.scripts.map((s) => s.id + s.name).join('|'),
             doc.shaders.map((s) => s.id + s.name + s.kind).join('|'),
@@ -55,13 +58,24 @@ export class AssetsPanel {
         if (!force && key === this.key) return;
         this.key = key;
         clear(this.list);
-        if (!doc.assets.length && !doc.scripts.length && !doc.shaders.length) {
+        for (const p of doc.prefabs) {
+            const count = doc.nodes.filter((n) => n.prefab === p.id).length;
+            this.list.appendChild(
+                this.item(`prefab:${p.id}`, 'prefab', p.name, `${count} placed`, '', 'Prefab: drag into the viewport or double-click to place an instance', () => this.editor.placePrefab(p.id), [
+                    { label: 'Place Instance', icon: 'plus', action: () => this.editor.placePrefab(p.id) },
+                    { label: 'Select Instances', enabled: () => count > 0, action: () => this.editor.store.select(this.editor.instancesOf(p.id).map((n) => n.id)) },
+                    { label: 'Replace with Model...', icon: 'model', action: () => void this.editor.replacePrefabModel(p.id) },
+                    { separator: true },
+                    { label: 'Delete Prefab', icon: 'trash', action: () => void this.editor.deletePrefab(p.id) },
+                ]),
+            );
+        }
+        if (!assets.length && !doc.scripts.length && !doc.shaders.length && !doc.prefabs.length) {
             this.list.appendChild(
                 h('div', { class: 'empty-hint', text: 'Drop .glb / .gltf models or images onto the viewport, or use + to write a script or shader.' }),
             );
-            return;
         }
-        for (const a of doc.assets) {
+        for (const a of assets) {
             this.list.appendChild(
                 this.item(a.id, a.kind === 'model' ? 'model' : 'image', a.name, formatBytes(a.size), '', a.kind === 'model' ? 'Drag into the viewport or double-click to add' : 'Drag onto an object or double-click to apply to the selection', () => this.use(a.id), [
                     { label: a.kind === 'model' ? 'Add to Scene' : 'Apply to Selection', icon: 'plus', action: () => this.use(a.id) },
@@ -90,6 +104,11 @@ export class AssetsPanel {
             menu.push({ separator: true }, { label: 'Delete', icon: 'trash', action: () => void this.editor.deleteShader(s.id) });
             this.list.appendChild(
                 this.item(`shader:${s.id}`, 'shader', s.name, kind, st.state === 'error' ? 'error' : '', s.kind === 'post' ? 'Double-click to edit, drag onto the viewport to add to the post chain' : 'Double-click to edit, drag onto a mesh to use it', () => this.editor.emit('open-code', { kind: 'shader', id: s.id }), menu),
+            );
+        }
+        if (planning) {
+            this.list.appendChild(
+                h('div', { class: 'asset-note muted small', text: `${planning} planning file${planning === 1 ? ' (concept, paintover, capture or snapshot) is' : 's (concepts, paintovers, captures, snapshots) are'} in the Design tab.` }),
             );
         }
     }

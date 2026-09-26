@@ -544,3 +544,34 @@ export function iconButton(name: string, title: string, onClick: (e: MouseEvent)
 export function button(label: string, onClick: (e: MouseEvent) => void, cls = '', iconName?: string): HTMLButtonElement {
     return h('button', { class: 'btn ' + cls, attrs: { type: 'button' }, on: { click: onClick } }, iconName ? icon(iconName, 15) : null, h('span', { text: label }));
 }
+
+/** Multi-line text; commits on blur (Ctrl+Enter commits too). */
+export class TextAreaField {
+    readonly el: HTMLTextAreaElement;
+
+    constructor(value: string, onCommit: (v: string) => void, placeholder = '', rows = 3) {
+        this.el = h('textarea', { class: 'textarea', attrs: { rows, spellcheck: 'true', placeholder } });
+        this.el.value = value;
+        let original = value;
+        this.el.addEventListener('focus', () => (original = this.el.value));
+        const commit = () => {
+            if (this.el.value !== original) {
+                original = this.el.value;
+                onCommit(this.el.value);
+            }
+        };
+        this.el.addEventListener('keydown', (e) => {
+            e.stopPropagation();
+            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) this.el.blur();
+            if (e.key === 'Escape') {
+                this.el.value = original;
+                this.el.blur();
+            }
+        });
+        this.el.addEventListener('blur', commit);
+    }
+
+    set(v: string) {
+        if (document.activeElement !== this.el) this.el.value = v;
+    }
+}

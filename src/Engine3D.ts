@@ -278,6 +278,8 @@ export class Engine3D {
 
     private static _rafId: number = 0;
     private static _time: number = 0;
+    /** The frame the shared loop is drawing, if any. */
+    private static _drawing: Promise<void> | null = null;
 
     // -------- instance fields --------
     public readonly context3D: Context3D;
@@ -525,7 +527,7 @@ export class Engine3D {
 
     /** Pause every engine instance. The shared render loop keeps ticking
      *  until the current frame finishes, then stops on its own once every
-     *  instance is paused (see `_tick`). Resume any instance to restart it. */
+     *  instance is paused (see `_frame`). Resume any instance to restart it. */
     public static pause() {
         for (const inst of Engine3D._instances) inst._paused = true;
     }
@@ -556,7 +558,28 @@ export class Engine3D {
         }
     }
 
-    private static async _tick(time: number) {
+    /**
+     * Draws one frame now instead of waiting for the browser's next frame
+     * callback, which never comes while the page is hidden (a background
+     * tab). A frame in progress finishes first; the regular loop carries
+     * on afterwards.
+     */
+    public static async renderNow(): Promise<void> {
+        while (this._drawing) await this._drawing;
+        if (this._rafId) cancelAnimationFrame(this._rafId);
+        this._rafId = 0;
+        await this._tick(performance.now());
+    }
+
+    private static _tick(time: number): Promise<void> {
+        const run = this._frame(time).finally(() => {
+            if (this._drawing === run) this._drawing = null;
+        });
+        this._drawing = run;
+        return run;
+    }
+
+    private static async _frame(time: number) {
         // Gate on the smallest desired frame interval across active instances.
         let minGate = 0;
         for (let inst of this._instances) {
