@@ -165,10 +165,12 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
             resolve(v);
         };
         const onKey = (e: KeyboardEvent) => {
-            if (e.key === 'Escape') {
-                e.stopPropagation();
-                done(null);
-            }
+            if (e.key !== 'Escape') return;
+            // Only the topmost dialog closes (a question asked over another dialog).
+            const open = document.querySelectorAll('.dialog-backdrop');
+            if (open[open.length - 1] !== backdrop) return;
+            e.stopPropagation();
+            done(null);
         };
         document.addEventListener('keydown', onKey, true);
         backdrop.addEventListener('pointerdown', (e) => {

@@ -52,15 +52,17 @@ export class PassGenerate {
             let giPassList = shader.getSubShaders(PassType.GI);
             if (!giPassList || giPassList.length == 0 || giPassList.length < jj) {
                 let pass = new GBufferPass();
-                pass.setTexture('baseMap', colorPass.getTexture("baseMap"));
-                pass.setTexture('normalMap', colorPass.getTexture("normalMap"));
-                pass.setTexture('emissiveMap', colorPass.getTexture("emissiveMap"));
-
-                pass.setUniform('baseColor', colorPass.getUniform("baseColor"));
-                pass.setUniform('envIntensity', colorPass.getUniform("envIntensity"));
-                pass.setUniform('emissiveColor', colorPass.getUniform("emissiveColor"));
-                pass.setUniform('emissiveIntensity', colorPass.getUniform("emissiveIntensity"));
-                pass.setUniform('alphaCutoff', colorPass.getUniform("alphaCutoff"));
+                // Share the color pass's textures and uniforms where it has
+                // them. Unlit, Lambert and custom materials lack some of the
+                // PBR ones; the GBufferPass defaults stand in for those
+                // (getUniform throws on a missing uniform).
+                for (const name of ['baseMap', 'normalMap', 'emissiveMap']) {
+                    const texture = colorPass.getTexture(name);
+                    if (texture) pass.setTexture(name, texture);
+                }
+                for (const name of ['baseColor', 'envIntensity', 'emissiveColor', 'emissiveIntensity', 'alphaCutoff']) {
+                    if (colorPass.uniforms[name]) pass.setUniform(name, colorPass.getUniform(name));
+                }
 
                 pass.cullMode = colorPass.cullMode;
                 pass.frontFace = colorPass.frontFace;

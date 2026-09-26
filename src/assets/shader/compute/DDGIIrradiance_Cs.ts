@@ -265,7 +265,10 @@ fn radianceProbeOnce(rayID:f32, tdr:vec3<f32>){
    var rayHitLocation = rayProbeBuffer.WPosition + normalize(rayProbeBuffer.WNormal) * 0.01;
 
    var rayProbeDistance = length(probeLocation - rayHitLocation) ;
-   // rayProbeDistance = min(uniformData.ProbeSpace * 4.0, rayProbeDistance) ;
+   // Rays that reach the sky report its far-away position. Clamp to the
+   // volume's max distance: the depth atlas is rgba16float and stores the
+   // squared distance, which overflows to Inf (and NaN once blended).
+   rayProbeDistance = min(uniformData.maxDistance, rayProbeDistance) ;
 
    // if (dot(rayProbeBuffer.WNormal, rayProbeBuffer.WNormal) < epsilon) {
    //   rayProbeDistance = epsilon ;

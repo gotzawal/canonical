@@ -1,7 +1,8 @@
 import { Emitter } from './events';
-import { defaultCamera, defaultCameraDoc, defaultEnvironment, defaultRenderGraph, uid } from './defaults';
+import { defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGI, defaultRenderGraph, uid } from './defaults';
+import { clampGIGrid } from './giLimits';
 import type {
-    CameraState, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
+    BuildDoc, CameraState, GIDoc, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
 } from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
@@ -10,6 +11,8 @@ export interface ChangeHint {
     nodes?: string[];
     /** Only the environment changed. */
     env?: boolean;
+    /** Only settings that do not change the scene changed (such as build settings). */
+    meta?: boolean;
 }
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';
@@ -24,6 +27,8 @@ export interface Prefs {
     snapScale: number;
     grid: boolean;
     helpers: boolean;
+    /** Show a sphere per GI probe with the light it captured. */
+    giProbes: boolean;
 }
 
 interface Snapshot {
@@ -67,6 +72,7 @@ function defaultPrefs(): Prefs {
         snapScale: 0.1,
         grid: true,
         helpers: true,
+        giProbes: false,
     };
 }
 
@@ -449,9 +455,15 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
     }
     if (node.mesh && isObj(node.mesh.material)) {
         const m = node.mesh.material as any;
-        if (m.type !== 'lit' && m.type !== 'unlit' && m.type !== 'shader') m.type = 'lit';
+        if (!MATERIAL_TYPES.includes(m.type)) m.type = 'lit';
         if (m.params !== undefined) m.params = params(m.params);
         if (m.shader !== undefined && m.shader !== null && typeof m.shader !== 'string') m.shader = null;
+        if (m.alphaMode !== undefined && !ALPHA_MODES.includes(m.alphaMode)) delete m.alphaMode;
+        for (const k of ['tiling', 'offset'] as const) {
+            if (m[k] === undefined) continue;
+            const d = k === 'tiling' ? 1 : 0;
+            m[k] = Array.isArray(m[k]) ? [finite(m[k][0], d), finite(m[k][1], d)] : [d, d];
+        }
     }
     if (node.model) {
         const model = node.model as any;
@@ -459,8 +471,14 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
             if (!isObj(model.materials)) delete model.materials;
             else {
                 for (const [k, o] of Object.entries(model.materials)) {
-                    if (!isObj(o)) delete model.materials[k];
-                    else if ((o as any).params !== undefined) (o as any).params = params((o as any).params);
+                    if (!isObj(o)) {
+                        delete model.materials[k];
+                        continue;
+                    }
+                    const mo = o as any;
+                    if (mo.params !== undefined) mo.params = params(mo.params);
+                    if (mo.shading !== undefined && !['model', 'unlit', 'lambert'].includes(mo.shading)) delete mo.shading;
+                    if (mo.alphaMode !== undefined && !ALPHA_MODES.includes(mo.alphaMode)) delete mo.alphaMode;
                 }
             }
         }
@@ -482,12 +500,30 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
     }
 }
 
+const MATERIAL_TYPES = ['lit', 'unlit', 'lambert', 'shader'];
+const ALPHA_MODES = ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'];
+
+function sanitizeGI(raw: any): GIDoc {
+    const d = defaultGI();
+    if (!isObj(raw)) return d;
+    return {
+        enable: raw.enable === true,
+        center: vec(raw.center, d.center),
+        counts: clampGIGrid(vec(raw.counts, d.counts)),
+        spacing: Math.min(100, Math.max(0.1, finite(raw.spacing, d.spacing))),
+        intensity: Math.max(0, finite(raw.intensity, d.intensity)),
+        bounce: Math.min(1, Math.max(0, finite(raw.bounce, d.bounce))),
+        realtime: raw.realtime === true,
+    };
+}
+
 /** Repairs documents from files or older builds: ids, parents, cycles, defaults. */
 export function sanitize(input: any): SceneDoc {
     const env = { ...defaultEnvironment(), ...(input?.environment || {}) };
     for (const k of ['bloom', 'ao', 'fog'] as const) {
         env[k] = { ...defaultEnvironment()[k], ...(input?.environment?.[k] || {}) } as any;
     }
+    env.gi = sanitizeGI(input?.environment?.gi);
     const scripts = sanitizeScripts(input?.scripts);
     const shaders = sanitizeShaders(input?.shaders);
     const scriptIds = new Set(scripts.map((s) => s.id));
@@ -537,5 +573,16 @@ export function sanitize(input: any): SceneDoc {
         shaders,
         renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
         nodes,
+        build: sanitizeBuild(input?.build),
     };
+}
+
+function sanitizeBuild(input: any): BuildDoc | undefined {
+    if (!input || typeof input !== 'object') return undefined;
+    const out: BuildDoc = {};
+    for (const k of ['title', 'repo', 'branch'] as const) {
+        const v = input[k];
+        if (typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 200);
+    }
+    return Object.keys(out).length ? out : undefined;
 }

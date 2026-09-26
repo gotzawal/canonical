@@ -32,7 +32,10 @@ fn main(@location(auto) fragUV: vec2<f32>,@location(auto) vClipPos: vec4<f32>, @
     // Linear HDR sky out; swapchain handles the linear-to-sRGB encode.
     let o_Color = 0.618 * vec4<f32>(textureColor * globalUniform.skyExposure , 1.0);
     let o_Normal = vec4(vWorldNormal,1.0) ;
-    let o_Position = vec4<f32>(vWorldPos.xyz,100000.0) ;
+    // w marks sky texels for the DDGI lighting pass (it tests w > 10000).
+    // The target is rgba16float, so stay below the f16 maximum (65504):
+    // 100000 overflowed, which some GPUs store as NaN and the test fails.
+    let o_Position = vec4<f32>(vWorldPos.xyz,60000.0) ;
     return FragmentOutput(o_Position,o_Normal,o_Color);
 }
 `

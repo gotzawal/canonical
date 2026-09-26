@@ -215,7 +215,7 @@ export class Engine3D {
             sky: { type: 'HDRSKY', sky: null, skyExposure: 1.0, defaultFar: 65536, defaultNear: 1 },
             light: { maxLight: 4096 },
             material: { materialChannelDebug: false, materialDebug: false },
-            loader: { numConcurrent: 20 },
+            loader: { numConcurrent: 20, gltfNodeMatrix: false },
             reflectionSetting: { reflectionProbeMaxCount: 8, reflectionProbeSize: 256, width: 256 * 6, height: 8 * 256, enable: true }
         };
     }

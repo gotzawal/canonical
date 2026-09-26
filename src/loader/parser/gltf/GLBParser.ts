@@ -99,7 +99,7 @@ export class GLBParser extends ParserBase {
             }
         }
 
-        let subParser = new GLTFSubParser();
+        let subParser = new GLTFSubParser(this.ctx);
         let nodes = await subParser.parse(this.initUrl, this._gltf, this._gltf.scene);
         if (nodes) {
             this.data = nodes.rootNode;
@@ -131,7 +131,7 @@ export class GLBParser extends ParserBase {
             }
         }
 
-        let subParser = new GLTFSubParser();
+        let subParser = new GLTFSubParser(this.ctx);
         let nodes = await subParser.parse(this.initUrl, this._gltf, this._gltf.scene);
         if (nodes) {
             this.data = nodes.rootNode;

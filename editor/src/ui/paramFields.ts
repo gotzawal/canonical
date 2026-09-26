@@ -1,18 +1,23 @@
 import type { AssetMeta, ParamValue } from '../core/types';
-import type { ShaderProperty } from '../engine/shaders';
+import { MODEL_MAPS, type ShaderProperty } from '../engine/shaders';
 import { h } from './dom';
 import {
     CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec3Field, row,
 } from './widgets';
 import type { FieldType, ScriptField } from '../play/compiler';
 
-/** Widget rows for a custom shader's declared properties. */
+/**
+ * Widget rows for a custom shader's declared properties. With `modelMaps`
+ * (the shader replaces a material of an imported model), texture properties
+ * named after the model's maps offer "From model", stored as no value.
+ */
 export function shaderParamRows(
     props: ShaderProperty[],
     values: Record<string, ParamValue>,
     hooks: (name: string, label: string) => EditHooks<ParamValue>,
     textures: AssetMeta[],
     watch?: (fn: (values: Record<string, ParamValue>) => void) => void,
+    modelMaps = false,
 ): HTMLElement[] {
     const rows: HTMLElement[] = [];
     for (const p of props) {
@@ -65,15 +70,22 @@ export function shaderParamRows(
             });
             rows.push(row(label, h('div', { class: 'vec4' }, fields.map((f) => f.el)), p.name));
         } else if (p.type === 'texture') {
+            const fromModel = modelMaps && MODEL_MAPS.includes(p.name);
             const options = [
+                ...(fromModel ? [{ value: '', label: 'From model' }] : []),
                 { value: 'white', label: 'White' },
                 { value: 'black', label: 'Black' },
                 { value: 'gray', label: 'Gray' },
                 { value: 'normal', label: 'Flat Normal' },
                 ...textures.map((t) => ({ value: t.id, label: t.name })),
             ];
-            const f = new SelectField<string>(options, typeof value === 'string' ? value : String(p.default), (v) => hk.commit?.(v));
-            watch?.((vals) => f.set(typeof vals[p.name] === 'string' ? (vals[p.name] as string) : String(p.default)));
+            const shown = (vals: Record<string, ParamValue>) => {
+                const v = vals[p.name];
+                if (typeof v === 'string' && v) return v;
+                return fromModel ? '' : String(p.default);
+            };
+            const f = new SelectField<string>(options, shown(values), (v) => hk.commit?.(v));
+            watch?.((vals) => f.set(shown(vals)));
             rows.push(row(label, f.el, p.name));
         }
     }

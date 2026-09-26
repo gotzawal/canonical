@@ -1055,6 +1055,10 @@ input.text:focus,
     gap: 4px;
 }
 
+.vec3.vec2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .vec3-item {
     position: relative;
     display: flex;
@@ -2485,6 +2489,20 @@ kbd {
     flex: none;
 }
 
+/* Shading of a model material slot when it is not the file's own. */
+.slot-tag {
+    flex: none;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
+}
+
 .part-row .tree-eye {
     opacity: 0.7;
 }
@@ -2920,6 +2938,138 @@ kbd {
     align-items: center;
     gap: 6px;
     width: 100%;
+}
+
+/* ------------------------------------------------------- build & deploy */
+
+.dialog:has(.build-dialog) {
+    width: min(580px, 100%);
+}
+
+.build-dialog {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.build-dialog .row-control input.text {
+    min-width: 0;
+    flex: 1;
+}
+
+.build-dialog .inline {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+}
+
+.build-dialog h3 {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 12px 0 2px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+    font-size: 12.5px;
+    color: var(--text-strong);
+}
+
+.build-dialog p {
+    margin: 0;
+}
+
+.build-summary {
+    color: var(--muted);
+    font-size: 11.5px;
+}
+
+.build-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.build-note {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 8px;
+    border-radius: var(--radius);
+    background: var(--panel-2);
+    font-size: 11.5px;
+    line-height: 1.45;
+}
+
+.build-note > span {
+    flex: 1;
+}
+
+.build-note > .icon {
+    flex-shrink: 0;
+    color: var(--muted);
+}
+
+.build-note.warn {
+    background: rgba(231, 180, 60, 0.1);
+}
+
+.build-note.warn > .icon {
+    color: var(--warn);
+}
+
+.build-action {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.build-action > .btn {
+    flex-shrink: 0;
+    min-width: 132px;
+    justify-content: center;
+}
+
+.build-log {
+    margin-top: 8px;
+    max-height: 150px;
+    overflow: auto;
+    padding: 8px 10px;
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    font: 11px/1.5 var(--mono);
+}
+
+.build-log-line {
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: var(--muted);
+}
+
+.build-log-line.error {
+    color: #ff9c9c;
+}
+
+.build-log-line.success {
+    color: var(--success);
+}
+
+.build-result {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+    border-radius: var(--radius);
+    background: rgba(63, 191, 127, 0.1);
+    color: var(--success);
+    word-break: break-all;
+}
+
+.build-result a.muted {
+    margin-left: auto;
+    color: var(--muted);
+    white-space: nowrap;
 }
 
 @media (max-width: 900px) {

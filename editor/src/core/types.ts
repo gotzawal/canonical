@@ -16,7 +16,21 @@ export type GeometryType = GeometryDoc['type'];
 /** Value of a script property or a shader property. Colors are #rrggbb strings, vectors number arrays. */
 export type ParamValue = number | string | boolean | number[];
 
-export type MaterialType = 'lit' | 'unlit' | 'shader';
+/**
+ * Surface materials. 'lit' is the engine's PBR material (LitMaterial),
+ * 'unlit' ignores lights (UnLitMaterial), 'lambert' is a cheap matte
+ * material lit by directional lights (LambertMaterial) and 'shader' renders
+ * with a custom WGSL material shader.
+ */
+export type MaterialType = 'lit' | 'unlit' | 'lambert' | 'shader';
+
+/**
+ * Alpha handling. 'auto' blends when opacity is below 1 (on a model slot it
+ * keeps the file's mode), 'mask' cuts out pixels whose alpha is below the
+ * cutoff (foliage, fences), 'additive' and 'multiply' are transparent
+ * blending modes (glow and fire, stains and tinted glass).
+ */
+export type AlphaMode = 'auto' | 'opaque' | 'blend' | 'mask' | 'additive' | 'multiply';
 
 export interface MaterialDoc {
     /** 'shader' renders with the custom shader asset in `shader`. */
@@ -35,6 +49,39 @@ export interface MaterialDoc {
     shader?: string | null;
     /** Values of the custom shader's declared properties, by property name. */
     params?: Record<string, ParamValue>;
+    // The fields below are optional; a missing field means its default.
+    /** Default 'auto'. */
+    alphaMode?: AlphaMode;
+    /** 'mask' mode: alpha below this is cut out. Default 0.5. */
+    alphaCutoff?: number;
+    /** Texture repeat [u, v] for every map. Default [1, 1]. */
+    tiling?: [number, number];
+    /** Texture offset [u, v] for every map. Default [0, 0]. */
+    offset?: [number, number];
+    /** Lit only: tangent space normal map (texture asset id). */
+    normalMap?: string | null;
+    /** Lit only: strength of the normal map. Default 1. */
+    normalScale?: number;
+    /** Lit only: glTF style metallic-roughness map, roughness in G and metallic in B. */
+    metalRoughMap?: string | null;
+    /** Lit only: ambient occlusion map (grayscale; the engine reads G like Unity). */
+    aoMap?: string | null;
+    /** Lit only: emission map, multiplied by the emissive color. */
+    emissiveMap?: string | null;
+    /** Lit only: clear coat layer, 0..1. Default 0. */
+    clearcoat?: number;
+    /** Lit only: roughness of the clear coat, 0..1. Default 0. */
+    clearcoatRoughness?: number;
+    /** Lit only: light passing through the surface (glass, water), 0..1. Default 0. */
+    transmission?: number;
+    /** Lit only: index of refraction. Default 1.5. */
+    ior?: number;
+    /** Lit only: thickness of the volume behind a transmissive surface. Default 0. */
+    thickness?: number;
+    /** Lit only: color light turns into while it travels through the volume. Default white. */
+    attenuationColor?: string;
+    /** Lit only: distance at which light inside the volume reaches the attenuation color; 0 means no absorption. */
+    attenuationDistance?: number;
 }
 
 export interface MeshDoc {
@@ -62,6 +109,13 @@ export interface LightDoc {
 }
 
 /**
+ * Shading model for a material slot of an imported model: 'model' keeps the
+ * file's own PBR material, 'unlit' and 'lambert' replace it with the engine
+ * material of that name (keeping the file's color texture).
+ */
+export type SlotShading = 'model' | 'unlit' | 'lambert';
+
+/**
  * Per-instance change to one material slot of an imported model. Every field
  * is optional: a missing field keeps the value from the model file.
  */
@@ -75,9 +129,21 @@ export interface MaterialOverride {
     doubleSide?: boolean;
     /** Texture asset replacing the base color map; null removes the map. */
     map?: string | null;
-    /** Custom shader asset replacing the material. */
+    /** Built-in shading model replacing the file's material; missing means 'model'. */
+    shading?: SlotShading;
+    /** Custom shader asset replacing the material (takes precedence over `shading`). */
     shader?: string | null;
     params?: Record<string, ParamValue>;
+    alphaMode?: AlphaMode;
+    alphaCutoff?: number;
+    /** PBR only: normal map strength. */
+    normalScale?: number;
+    /** PBR only: clear coat layer, 0..1. */
+    clearcoat?: number;
+    clearcoatRoughness?: number;
+    /** PBR only: transmission (glass), 0..1. */
+    transmission?: number;
+    ior?: number;
 }
 
 /** Per-instance change to one mesh part of an imported model. */
@@ -139,6 +205,26 @@ export interface NodeDoc {
 
 export type SkyType = 'atmospheric' | 'color';
 
+/**
+ * Dynamic diffuse global illumination (DDGI): a grid of light probes
+ * captures the scene and lit surfaces receive the light it bounces.
+ */
+export interface GIDoc {
+    enable: boolean;
+    /** World position of the center of the probe grid. */
+    center: Vec3;
+    /** Probes along x, y and z. */
+    counts: Vec3;
+    /** Distance between neighboring probes. */
+    spacing: number;
+    /** Strength of the indirect light. */
+    intensity: number;
+    /** How much light keeps bouncing between surfaces, 0..1. */
+    bounce: number;
+    /** Re-capture the probes continuously (moving objects and lights); otherwise only after changes. */
+    realtime: boolean;
+}
+
 export interface EnvironmentDoc {
     sky: SkyType;
     skyColor: string;
@@ -153,6 +239,7 @@ export interface EnvironmentDoc {
     ao: { enable: boolean; strength: number; distance: number };
     fxaa: boolean;
     fog: { enable: boolean; color: string; near: number; far: number; intensity: number };
+    gi: GIDoc;
 }
 
 export type AssetKind = 'model' | 'texture';
@@ -217,6 +304,17 @@ export interface SceneDoc {
     shaders: ShaderDoc[];
     renderGraph: RenderGraphDoc;
     nodes: NodeDoc[];
+    build?: BuildDoc;
+}
+
+/** Build & Deploy settings of a project (File > Build & Deploy). */
+export interface BuildDoc {
+    /** Page title of the game; the scene name when empty. */
+    title?: string;
+    /** GitHub repository: "name" or "owner/name". */
+    repo?: string;
+    /** Branch GitHub Pages publishes. */
+    branch?: string;
 }
 
 /** Editor camera state. Saved with the scene but kept out of undo history. */

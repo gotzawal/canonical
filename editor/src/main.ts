@@ -13,6 +13,7 @@ import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
 import { AIPanel } from './ui/aiPanel';
 import { AssetsPanel } from './ui/assetsPanel';
+import { showBuildDialog } from './ui/buildDialog';
 import { Dock } from './ui/dock';
 import { h, isTyping } from './ui/dom';
 import { HierarchyPanel } from './ui/hierarchy';
@@ -191,10 +192,14 @@ async function main() {
 
     const dock = new Dock(editor, app);
     dockSlot.append(dock.el);
-    editor.beforePlay = () => {
+    editor.applyCodeEdits = () => {
         const dirty = dock.dirtyPanels();
         for (const p of dirty) p.apply();
-        if (dirty.length) toast(`Applied ${dirty.length} edited file(s) before playing.`, 'info');
+        return dirty.length;
+    };
+    editor.beforePlay = () => {
+        const applied = editor.applyCodeEdits();
+        if (applied) toast(`Applied ${applied} edited file(s) before playing.`, 'info');
     };
 
     // Scripts of an opened file stay paused until the user enables them.
@@ -278,7 +283,13 @@ async function main() {
             }),
         ),
     );
-    toolbarSlot.append(toolbar(editor, () => createMenu(editor), { toggleDock: () => dock.toggle(), showAI: () => showTab('ai') }));
+    toolbarSlot.append(
+        toolbar(editor, () => createMenu(editor), {
+            toggleDock: () => dock.toggle(),
+            showAI: () => showTab('ai'),
+            build: () => showBuildDialog(editor),
+        }),
+    );
     statusSlot.append(statusbar(editor));
 
     const updateTitle = () => {
@@ -294,6 +305,11 @@ async function main() {
         // The game view has no editor grid.
         runtime.setGridVisible(!playing && store.prefs.grid);
     });
+    // GI probe spheres are an editor view aid: hidden while playing.
+    const updateProbeHelpers = () => runtime.gi.setHelpersVisible(store.prefs.giProbes && !store.playing);
+    store.on('prefs', updateProbeHelpers);
+    store.on('playing', updateProbeHelpers);
+    updateProbeHelpers();
     player.on('state', (st) => app.classList.toggle('paused', st === 'paused'));
 
     installShortcuts(editor, rename, dock);
@@ -359,6 +375,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
         else if (mod && key === 'y') store.redo();
         else if (mod && key === 's') void editor.saveSceneFile();
         else if (mod && key === 'o') void editor.openSceneFile();
+        else if (mod && key === 'b') showBuildDialog(editor);
         else if (mod && key === 'd') editor.duplicateSelection();
         else if (mod && key === 'a') editor.selectAll();
         else if (mod && key === 'g') editor.groupSelection();

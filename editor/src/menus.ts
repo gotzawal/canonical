@@ -3,6 +3,7 @@ import type { Editor } from './editor';
 import { createAssetMenu } from './ui/assetsPanel';
 import { buildInfo } from './ui/statusbar';
 import { h, shortcutLabel } from './ui/dom';
+import { showBuildDialog } from './ui/buildDialog';
 import { dialog, MenuItem } from './ui/overlays';
 import { showReference } from './ui/reference';
 
@@ -45,6 +46,8 @@ export function menuDefinitions(
                 { separator: true },
                 { label: 'Open Scene...', icon: 'open', shortcut: 'Mod+O', action: () => void editor.openSceneFile() },
                 { label: 'Save Scene File', icon: 'save', shortcut: 'Mod+S', action: () => void editor.saveSceneFile() },
+                { separator: true },
+                { label: 'Build & Deploy...', icon: 'rocket', shortcut: 'Mod+B', action: () => showBuildDialog(editor) },
                 { separator: true },
                 { label: 'Import Model...', icon: 'model', action: () => void editor.importModelDialog() },
                 { label: 'Import Texture...', icon: 'image', action: () => void editor.importTextureDialog() },
@@ -147,6 +150,7 @@ const SHORTCUTS: [string, string][] = [
     ['G', 'Toggle grid'],
     ['F2', 'Rename'],
     ['Mod+S / Mod+O', 'Save / open scene file'],
+    ['Mod+B', 'Build & Deploy (run, download or publish the game)'],
     ['Esc', 'Cancel drag or clear selection'],
     ['Mod+P / Mod+Shift+P', 'Play or stop / pause'],
     ['Mod+J', 'Show or hide the code and render graph panel'],

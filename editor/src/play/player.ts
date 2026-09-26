@@ -386,7 +386,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
         if (type === 'move') return;
         this.input.pointerButton(button, type === 'down');
         this.picker.update();
-        const skip = (o: Object3D) => o === this.runtime.grid || o === this.runtime.camera.object3D;
+        const skip = (o: Object3D) => o === this.runtime.grid || o === this.runtime.camera.object3D || this.runtime.gi.isHelper(o);
         const hit = this.picker.pickObject(x, y, this.runtime.scene, skip);
         const info = { x, y, button, point: hit ? hit.point : ([0, 0, 0] as [number, number, number]) };
         const targets = hit ? this.instancesOn(hit.object) : [];
@@ -484,6 +484,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
         mr.material = mat;
         mr.castShadow = true;
         mr.receiveShadow = true;
+        mr.castGI = true;
         const [px, py, pz] = opts.position ?? [0, 0, 0];
         const [rx, ry, rz] = opts.rotation ?? [0, 0, 0];
         const [sx, sy, sz] = opts.scale ?? [1, 1, 1];
@@ -558,7 +559,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
                 let mat = src;
                 if (!this.recolored.has(r)) {
                     // Materials can be shared (model files, other nodes): recolor a copy.
-                    mat = cloneMaterial(src);
+                    mat = cloneMaterial(src, this.runtime.engine.context3D);
                     r.materials = [mat];
                     this.recolored.add(r);
                 }

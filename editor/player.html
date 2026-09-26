@@ -1,0 +1,25 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="color-scheme" content="dark" />
+    <meta name="generator" content="Canonical Editor" />
+    <title>Canonical Game</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+</head>
+<body>
+    <div id="player"></div>
+    <noscript>This game needs JavaScript and WebGPU.</noscript>
+    <script>
+        // Browsers do not run module scripts from files on disk.
+        if (location.protocol === 'file:') {
+            document.getElementById('player').innerHTML =
+                '<p style="max-width:520px;margin:18vh auto;padding:0 24px;font:15px/1.6 system-ui,sans-serif;color:#d9dee6">' +
+                'This game cannot run from a file on disk. Serve this folder over HTTP, for example with <code>npx serve</code>, ' +
+                'and open that address, or upload it to a static host such as GitHub Pages or itch.io.</p>';
+        }
+    </script>
+    <script type="module" src="./src/player/main.ts"></script>
+</body>
+</html>

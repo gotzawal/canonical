@@ -258,6 +258,54 @@ export class Vec3Field {
     }
 }
 
+export interface Vec2Opts extends EditHooks<[number, number]> {
+    value: [number, number];
+    step?: number;
+    precision?: number;
+    labels?: [string, string];
+}
+
+/** Two numbers side by side, e.g. texture tiling. */
+export class Vec2Field {
+    readonly el: HTMLElement;
+    private fields: NumberField[];
+    private value: [number, number];
+
+    constructor(opts: Vec2Opts) {
+        this.value = [...opts.value] as [number, number];
+        const labels = opts.labels ?? ['U', 'V'];
+        this.fields = [0, 1].map(
+            (i) =>
+                new NumberField({
+                    value: opts.value[i],
+                    step: opts.step,
+                    precision: opts.precision,
+                    className: 'axis-' + 'xy'[i],
+                    begin: () => opts.begin?.(),
+                    input: (v) => {
+                        this.value[i] = v;
+                        opts.input?.([...this.value] as [number, number]);
+                    },
+                    end: () => opts.end?.(),
+                    commit: (v) => {
+                        this.value[i] = v;
+                        opts.commit?.([...this.value] as [number, number]);
+                    },
+                }),
+        );
+        this.el = h(
+            'div',
+            { class: 'vec3 vec2' },
+            this.fields.map((f, i) => h('label', { class: 'vec3-item' }, h('span', { class: 'axis-tag axis-' + 'xy'[i], text: labels[i] }), f.el)),
+        );
+    }
+
+    set(v: [number, number]) {
+        this.value = [...v] as [number, number];
+        this.fields.forEach((f, i) => f.set(v[i]));
+    }
+}
+
 export interface ColorOpts extends EditHooks<string> {
     value: string;
 }

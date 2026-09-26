@@ -1,11 +1,13 @@
 import { kindOf, putAsset } from './core/assets';
+import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
+import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
     defaultCamera, defaultMaterial, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
 import {
-    AutoSaver, collectGarbage, download, exportSceneFile, fileNameFor, importSceneFile, pickFiles,
+    AutoSaver, collectGarbage, download, exportSceneFile, fileNameFor, importSceneFile, pickFiles, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
@@ -371,12 +373,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     removeAsset(assetId: string) {
-        const used = this.store.doc.nodes.some(
-            (n) =>
-                n.model?.asset === assetId ||
-                n.mesh?.material.map === assetId ||
-                Object.values(n.model?.materials ?? {}).some((o) => o.map === assetId),
-        );
+        const used = usedAssetIds(this.store.doc).has(assetId);
         if (used) {
             toast('This asset is used in the scene. Remove those objects first.', 'error');
             return;
@@ -597,6 +594,19 @@ export class Editor extends Emitter<EditorEvents> {
         });
     }
 
+    /** Applies a material preset (see core/materialPresets.ts) to the mesh nodes in `ids`. */
+    applyMaterialPreset(ids: string[], presetId: string) {
+        const preset = MATERIAL_PRESETS.find((p) => p.id === presetId);
+        const targets = ids.filter((id) => this.store.node(id)?.mesh);
+        if (!preset || !targets.length) {
+            if (!targets.length) toast('Select a mesh object first.', 'info');
+            return;
+        }
+        this.store.commit(`Material Preset: ${preset.label}`, (d) => {
+            for (const n of d.nodes) if (targets.includes(n.id) && n.mesh) preset.apply(n.mesh.material);
+        }, { nodes: targets });
+    }
+
     /** Renders the mesh nodes in `ids` with a material shader (null goes back to Lit). */
     assignShader(ids: string[], shaderId: string | null) {
         const targets = ids.filter((id) => this.store.node(id)?.mesh);
@@ -682,6 +692,42 @@ export class Editor extends Emitter<EditorEvents> {
         this.graph.apply();
     }
 
+    // ---------------------------------------------------------- lighting
+
+    /**
+     * Sizes the GI probe grid to the scene's meshes and models: probes at
+     * least two per axis, about 200 in all, within the engine's limits.
+     */
+    fitGIToScene() {
+        let min: Vec3 | null = null;
+        let max: Vec3 | null = null;
+        for (const n of this.store.doc.nodes) {
+            if (!n.mesh && !n.model) continue;
+            const box = this.picker.bounds(n.id, false);
+            if (!box) continue;
+            min = min ? [Math.min(min[0], box.min[0]), Math.min(min[1], box.min[1]), Math.min(min[2], box.min[2])] : [...box.min];
+            max = max ? [Math.max(max[0], box.max[0]), Math.max(max[1], box.max[1]), Math.max(max[2], box.max[2])] : [...box.max];
+        }
+        if (!min || !max) {
+            toast('There are no meshes or models to fit the probes to.', 'info');
+            return;
+        }
+        const size = [0, 1, 2].map((i) => Math.max(0.5, max![i] - min![i]));
+        const center = tidy3([0, 1, 2].map((i) => (min![i] + max![i]) / 2) as Vec3, 2);
+        let spacing = Math.max(0.1, Math.cbrt((size[0] * size[1] * size[2]) / 200));
+        let counts: Vec3 = [2, 2, 2];
+        for (let i = 0; i < 60; i++) {
+            counts = size.map((s) => Math.max(2, Math.ceil(s / spacing) + 1)) as Vec3;
+            if (giGridFits(counts[0], counts[1], counts[2]) && counts.every((c) => c <= GI_MAX_PER_AXIS)) break;
+            spacing *= 1.1;
+        }
+        spacing = Math.round(spacing * 100) / 100;
+        this.store.commit('Fit GI to Scene', (d) => {
+            d.environment.gi = { ...d.environment.gi, enable: true, center, counts: clampGIGrid(counts), spacing };
+        }, { env: true });
+        toast(`GI probes: ${counts.join(' x ')}, ${spacing} apart.`, 'success');
+    }
+
     // -------------------------------------------------------- model editing
 
     /**
@@ -757,6 +803,9 @@ export class Editor extends Emitter<EditorEvents> {
 
     /** Called before Play starts, e.g. to apply unsaved code. */
     beforePlay: () => void = () => {};
+
+    /** Applies code edited in the code panels but not applied yet; returns how many files. */
+    applyCodeEdits: () => number = () => 0;
 
     /** Starts Play; `asked` skips the question about paused scripts (already answered). */
     play(asked = false) {

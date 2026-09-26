@@ -1,5 +1,6 @@
 import { AnimatorComponent, BlendShapeData, BlendShapePropertyData, GLTFMaterial, LitMaterial, Material, Matrix4, PropertyAnimationClip, SkinnedMeshRenderer2 } from "../../..";
 import { Engine3D } from "../../../Engine3D";
+import { resolveDefaultCtx } from "../../../gfx/graphics/webGpu/Context3D";
 import { DirectLight } from "../../../components/lights/DirectLight";
 import { PointLight } from "../../../components/lights/PointLight";
 import { SpotLight } from "../../../components/lights/SpotLight";
@@ -48,10 +49,15 @@ export class GLTFSubParserConverter {
         nodeInfo['nodeObj'] = node;
 
         if (nodeInfo.matrix) {
-            nodeInfo.translation = [0, 0, 0]; // eslint-disable-line
-            nodeInfo.rotation = [0, 0, 0, 1]; // eslint-disable-line
-            nodeInfo.scale = [1, 1, 1]; // eslint-disable-line
-            ///Matrix4.decompose( nodeInfo.matrix, nodeInfo.translation, nodeInfo.rotation, nodeInfo.scale );
+            // Exporters often put unit conversion or Z-up to Y-up on a node as
+            // a matrix. Applying it is opt-in (setting.loader.gltfNodeMatrix)
+            // because existing content compensates for it being ignored.
+            const ctx = this.subParser.ctx ?? resolveDefaultCtx();
+            const apply = ctx?.engine?.setting?.loader?.gltfNodeMatrix === true;
+            const trs = apply ? decomposeMatrix(nodeInfo.matrix) : { translation: [0, 0, 0], rotation: [0, 0, 0, 1], scale: [1, 1, 1] };
+            nodeInfo.translation = trs.translation; // eslint-disable-line
+            nodeInfo.rotation = trs.rotation; // eslint-disable-line
+            nodeInfo.scale = trs.scale; // eslint-disable-line
         }
 
         if (nodeInfo.translation) {
@@ -736,4 +742,52 @@ export class GLTFSubParserConverter {
         }
         return skinJointsName;
     }
+}
+
+/**
+ * Splits a glTF node matrix (column-major, no shear per the spec) into the
+ * translation, rotation quaternion [x, y, z, w] and scale the node uses.
+ * A mirroring matrix gets a negative X scale.
+ */
+function decomposeMatrix(m: number[]): { translation: number[]; rotation: number[]; scale: number[] } {
+    let sx = Math.hypot(m[0], m[1], m[2]);
+    const sy = Math.hypot(m[4], m[5], m[6]);
+    const sz = Math.hypot(m[8], m[9], m[10]);
+    const det = m[0] * (m[5] * m[10] - m[6] * m[9]) - m[4] * (m[1] * m[10] - m[2] * m[9]) + m[8] * (m[1] * m[6] - m[2] * m[5]);
+    if (det < 0) sx = -sx;
+    const translation = [m[12], m[13], m[14]];
+    if (sx === 0 || sy === 0 || sz === 0) return { translation, rotation: [0, 0, 0, 1], scale: [sx, sy, sz] };
+    // Rotation part, rRC = row R, column C.
+    const r00 = m[0] / sx, r10 = m[1] / sx, r20 = m[2] / sx;
+    const r01 = m[4] / sy, r11 = m[5] / sy, r21 = m[6] / sy;
+    const r02 = m[8] / sz, r12 = m[9] / sz, r22 = m[10] / sz;
+    let x: number, y: number, z: number, w: number;
+    const trace = r00 + r11 + r22;
+    if (trace > 0) {
+        const s = 0.5 / Math.sqrt(trace + 1);
+        w = 0.25 / s;
+        x = (r21 - r12) * s;
+        y = (r02 - r20) * s;
+        z = (r10 - r01) * s;
+    } else if (r00 > r11 && r00 > r22) {
+        const s = 2 * Math.sqrt(1 + r00 - r11 - r22);
+        w = (r21 - r12) / s;
+        x = 0.25 * s;
+        y = (r01 + r10) / s;
+        z = (r02 + r20) / s;
+    } else if (r11 > r22) {
+        const s = 2 * Math.sqrt(1 + r11 - r00 - r22);
+        w = (r02 - r20) / s;
+        x = (r01 + r10) / s;
+        y = 0.25 * s;
+        z = (r12 + r21) / s;
+    } else {
+        const s = 2 * Math.sqrt(1 + r22 - r00 - r11);
+        w = (r10 - r01) / s;
+        x = (r02 + r20) / s;
+        y = (r12 + r21) / s;
+        z = 0.25 * s;
+    }
+    const len = Math.hypot(x, y, z, w) || 1;
+    return { translation, rotation: [x / len, y / len, z / len, w / len], scale: [sx, sy, sz] };
 }
