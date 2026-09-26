@@ -71,7 +71,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
 
     /** Nodes that keep their place while placement is locked: all but lights, cameras and effects. */
     isPinned(node: NodeDoc | undefined): boolean {
-        return !!node && !node.light && !node.camera;
+        return !!node && !node.light && !node.camera && !node.particles;
     }
 
     /**

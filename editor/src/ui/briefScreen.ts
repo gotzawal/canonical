@@ -1,5 +1,6 @@
 import type { Editor } from '../editor';
 import { getAssetUrl } from '../core/assets';
+import { pickFiles } from '../core/persistence';
 import { addConcepts } from './designPanel';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -97,7 +98,6 @@ export class BriefScreen {
     private pickButton(): HTMLElement {
         const b = h('button', { class: 'link-btn', text: 'choose files', attrs: { type: 'button' } });
         b.addEventListener('click', async () => {
-            const { pickFiles } = await import('../core/persistence');
             await this.addFiles(await pickFiles('image/*,.md,.markdown,.txt,text/plain,text/markdown', true));
         });
         return b;

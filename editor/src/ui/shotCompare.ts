@@ -145,7 +145,16 @@ export class ShotCompare {
         clear(foot);
         const stage = this.editor.pipeline.design.stage;
         const def = stageDef(stage);
-        if (def.matchLabel && shot.target) {
+        if (stage === 'finish' && shot.target) {
+            // The final comparison: the user approves the shot.
+            const box = h('input', { attrs: { type: 'checkbox' } });
+            box.checked = !!shot.approved;
+            box.addEventListener('change', () => {
+                this.editor.pipeline.updateShot(shot.id, { approved: box.checked }, box.checked ? 'Approve Shot' : 'Withdraw Shot Approval');
+                if (box.checked) toast(`${shot.name} approved.`, 'success');
+            });
+            foot.append(h('label', { class: 'checkbox' }, box, h('span', { text: 'Approved (final)' })));
+        } else if (def.matchLabel && shot.target) {
             const box = h('input', { attrs: { type: 'checkbox' } });
             box.checked = !!shot.matched?.includes(stage);
             box.addEventListener('change', async () => {

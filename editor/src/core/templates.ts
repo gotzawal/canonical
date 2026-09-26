@@ -228,6 +228,31 @@ fn frag() {
 }
 `;
 
+/** Lift / gamma / gain grade, used by the Finish stage (see ai/effectTools.ts). */
+export const LGG_CODE = `// Post shader: lift, gamma and gain, then saturation. It works on the HDR
+// image before tone mapping: lift raises the darks, gamma bends the mid
+// tones, gain scales everything. x, y, z are red, green and blue; w applies
+// to all three (lift and gain add / multiply it, gamma multiplies it).
+// @property lift vec4 0 0 0 0
+// @property gamma vec4 1 1 1 1
+// @property gain vec4 1 1 1 1
+// @property saturation float 1 0 2
+
+fn post(uv: vec2f) -> vec4f {
+    let c = sceneColor(uv);
+    let lift = materialUniform.lift.xyz + vec3f(materialUniform.lift.w);
+    let gamma = max(materialUniform.gamma.xyz * materialUniform.gamma.w, vec3f(0.01));
+    let gain = materialUniform.gain.xyz * materialUniform.gain.w;
+    var x = max(c.rgb, vec3f(0.0));
+    x = x + lift * max(vec3f(1.0) - x, vec3f(0.0));
+    x = max(x * gain, vec3f(0.0));
+    x = pow(x, vec3f(1.0) / gamma);
+    let luma = dot(x, vec3f(0.2126, 0.7152, 0.0722));
+    x = mix(vec3f(luma), x, materialUniform.saturation);
+    return vec4f(max(x, vec3f(0.0)), c.a);
+}
+`;
+
 export const SHADER_TEMPLATES: ShaderTemplate[] = [
     {
         id: 'lit',
@@ -363,6 +388,14 @@ fn post(uv: vec2f) -> vec4f {
     return vec4f(max(rgb, vec3f(0.0)) * materialUniform.tint.rgb, c.a);
 }
 `,
+    },
+    {
+        id: 'lgg',
+        label: 'Lift Gamma Gain',
+        description: 'Lift, gamma, gain and saturation: the usual first color grade (post effect).',
+        kind: 'post',
+        lighting: 'unlit',
+        code: LGG_CODE,
     },
     {
         id: 'chromatic',

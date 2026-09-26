@@ -1,3 +1,4 @@
+import { PARTICLE_PRESETS, PARTICLE_SHAPES, particleCount, presetParticles } from '../core/particles';
 import type { Editor } from '../editor';
 import { unassignSlot } from '../design/materialSlots';
 import { formatBytes } from '../core/assets';
@@ -5,7 +6,7 @@ import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
     AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue,
-    PartOverride, ScriptRef, SlotShading, Vec3,
+    ParticlesDoc, PartOverride, ScriptRef, SlotShading, Vec3,
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
@@ -122,6 +123,7 @@ export class InspectorPanel {
             this.store.selection.length,
             n.mesh ? n.mesh.geometry.type + ':' + mat!.type + ':' + (mat!.alphaMode ?? '') + ':' + shaderId + ':' + this.propsKey(shaderId) : '-',
             n.light ? n.light.type : '-',
+            n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -179,6 +181,7 @@ export class InspectorPanel {
             this.body.append(this.materialSection());
         }
         if (node.light) this.body.append(this.lightSection());
+        if (node.particles) this.body.append(this.particlesSection());
         if (node.camera) this.body.append(this.cameraSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
@@ -712,6 +715,116 @@ export class InspectorPanel {
         return section('light', 'Light', l.type === 'directional' ? 'sun' : l.type === 'point' ? 'bulb' : 'spot', rows, [remove]);
     }
 
+    // ------------------------------------------------------------ particles
+
+    private particlesSection(): HTMLElement {
+        const has: Filter = (n) => !!n.particles;
+        const p = this.node.particles!;
+        type P = ParticlesDoc;
+        const set = <K extends keyof P>(key: K, label: string) => this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v));
+        const pair = (key: 'life' | 'size' | 'spin', i: 0 | 1, label: string) =>
+            this.hooks<number>(label, has, (n, v) => {
+                const r = [...n.particles![key]] as [number, number];
+                r[i] = v;
+                if (r[0] > r[1]) r[1 - i] = v;
+                n.particles![key] = r;
+            });
+        const rows: HTMLElement[] = [];
+        const preset = h('button', { class: 'btn small', attrs: { type: 'button' } }, icon('sparkle', 14), h('span', { text: 'Preset...' }));
+        preset.addEventListener('click', () => {
+            const r = preset.getBoundingClientRect();
+            showMenu(
+                PARTICLE_PRESETS.map((pr) => ({
+                    label: pr.label,
+                    icon: 'sparkle',
+                    action: () => this.hooks<null>('Particle Preset', has, (n) => (n.particles = { ...presetParticles(pr.id), texture: n.particles!.texture })).commit!(null),
+                })),
+                r.left,
+                r.bottom + 4,
+            );
+        });
+        rows.push(row('', h('div', { class: 'inline' }, preset, h('span', { class: 'muted small', text: `up to ${particleCount(p)} alive` }))));
+        const rate = new NumberField({ value: p.rate, min: 0, max: 5000, step: 0.5, precision: 1, ...set('rate', 'Emission Rate') });
+        const max = new NumberField({ value: p.max, min: 1, max: 50000, step: 1, precision: 0, ...set('max', 'Max Particles') });
+        const life0 = new NumberField({ value: p.life[0], min: 0.01, max: 60, step: 0.05, precision: 2, ...pair('life', 0, 'Lifetime') });
+        const life1 = new NumberField({ value: p.life[1], min: 0.01, max: 60, step: 0.05, precision: 2, ...pair('life', 1, 'Lifetime') });
+        const size0 = new NumberField({ value: p.size[0], min: 0.001, max: 50, step: 0.01, precision: 3, ...pair('size', 0, 'Size') });
+        const size1 = new NumberField({ value: p.size[1], min: 0.001, max: 50, step: 0.01, precision: 3, ...pair('size', 1, 'Size') });
+        const sizeEnd = new NumberField({ value: p.sizeEnd, min: 0, max: 20, step: 0.05, precision: 2, ...set('sizeEnd', 'Size at End') });
+        rows.push(
+            row('Rate', rate.el, 'Particles per second'),
+            row('Max', max.el, 'Most particles alive at once'),
+            row('Lifetime', h('div', { class: 'inline' }, life0.el, life1.el), 'Seconds, lowest and highest'),
+            row('Size', h('div', { class: 'inline' }, size0.el, size1.el), 'Meters at birth, lowest and highest'),
+            row('Size at End', sizeEnd.el, 'Factor of the birth size at the end of life'),
+        );
+        const shape = new SelectField<P['shape']>(PARTICLE_SHAPES.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) })), p.shape, (v) => set('shape', 'Emitter Shape').commit!(v));
+        rows.push(row('Shape', shape.el, 'Where particles start, around the object'));
+        let radius: NumberField | null = null, box: Vec3Field | null = null;
+        if (p.shape === 'box') {
+            box = new Vec3Field({ value: p.box, step: 0.05, precision: 2, ...set('box', 'Emitter Box') });
+            rows.push(row('Box', box.el, 'Size in meters'));
+        } else {
+            radius = new NumberField({ value: p.radius, min: 0, max: 100, step: 0.01, precision: 2, ...set('radius', 'Emitter Radius') });
+            rows.push(row('Radius', radius.el, 'Meters'));
+        }
+        const vmin = new Vec3Field({ value: p.velocityMin, step: 0.05, precision: 2, ...set('velocityMin', 'Start Velocity') });
+        const vmax = new Vec3Field({ value: p.velocityMax, step: 0.05, precision: 2, ...set('velocityMax', 'Start Velocity') });
+        const gravity = new Vec3Field({ value: p.gravity, step: 0.05, precision: 2, ...set('gravity', 'Gravity') });
+        rows.push(
+            row('Velocity Min', vmin.el, 'm/s per axis, in the object\'s space'),
+            row('Velocity Max', vmax.el, 'm/s per axis, in the object\'s space'),
+            row('Gravity', gravity.el, 'Constant acceleration, m/s\u00b2 (up is +y)'),
+        );
+        const c0 = new ColorField({ value: p.colorStart, ...set('colorStart', 'Start Color') });
+        const c1 = new ColorField({ value: p.colorEnd, ...set('colorEnd', 'End Color') });
+        const a0 = new SliderField({ value: p.alphaStart, min: 0, max: 1, step: 0.01, precision: 2, ...set('alphaStart', 'Start Opacity') });
+        const a1 = new SliderField({ value: p.alphaEnd, min: 0, max: 1, step: 0.01, precision: 2, ...set('alphaEnd', 'End Opacity') });
+        const spin0 = new NumberField({ value: p.spin[0], step: 1, precision: 0, ...pair('spin', 0, 'Rotation') });
+        const spin1 = new NumberField({ value: p.spin[1], step: 1, precision: 0, ...pair('spin', 1, 'Rotation') });
+        rows.push(
+            row('Color', h('div', { class: 'inline' }, c0.el, c1.el), 'At birth and at the end of life'),
+            row('Opacity Start', a0.el),
+            row('Opacity End', a1.el),
+            row('Rotation', h('div', { class: 'inline' }, spin0.el, spin1.el), 'Start rotation of each sprite, degrees'),
+        );
+        const blend = new SelectField<P['blend']>([{ value: 'add', label: 'Add (glow)' }, { value: 'alpha', label: 'Alpha (cover)' }], p.blend, (v) => set('blend', 'Particle Blend').commit!(v));
+        const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
+        const tex = new SelectField<string>([{ value: '', label: 'Soft dot' }, ...textures.map((a) => ({ value: a.id, label: a.name }))], p.texture ?? '', (v) => set('texture', 'Particle Texture').commit!(v || null));
+        const local = new CheckboxField(p.local, (v) => set('local', 'Particle Space').commit!(v), 'Move with the object');
+        const prewarm = new NumberField({ value: p.prewarm, min: 0, max: 30, step: 0.5, precision: 1, ...set('prewarm', 'Prewarm') });
+        rows.push(row('Blend', blend.el), row('Sprite', tex.el, 'Texture of each particle'), row('', local.el), row('Prewarm', prewarm.el, 'Seconds simulated before the first frame'));
+        this.watch(() => {
+            const cur = this.node.particles;
+            if (!cur) return;
+            rate.set(cur.rate);
+            max.set(cur.max);
+            life0.set(cur.life[0]);
+            life1.set(cur.life[1]);
+            size0.set(cur.size[0]);
+            size1.set(cur.size[1]);
+            sizeEnd.set(cur.sizeEnd);
+            shape.set(cur.shape);
+            radius?.set(cur.radius);
+            box?.set(cur.box);
+            vmin.set(cur.velocityMin);
+            vmax.set(cur.velocityMax);
+            gravity.set(cur.gravity);
+            c0.set(cur.colorStart);
+            c1.set(cur.colorEnd);
+            a0.set(cur.alphaStart);
+            a1.set(cur.alphaEnd);
+            spin0.set(cur.spin[0]);
+            spin1.set(cur.spin[1]);
+            blend.set(cur.blend);
+            tex.set(cur.texture ?? '');
+            local.set(cur.local);
+            prewarm.set(cur.prewarm);
+        });
+        const remove = iconButton('trash', 'Remove particles', () => this.hooks<null>('Remove Particles', has, (n) => delete n.particles).commit!(null));
+        return section('particles', 'Particles', 'sparkle', rows, [remove]);
+    }
+
     // --------------------------------------------------------------- camera
 
     private cameraSection(): HTMLElement {
@@ -1167,6 +1280,17 @@ export class InspectorPanel {
                     action: () => this.hooks<null>('Add Light', (n) => !n.light, (n) => (n.light = defaultLight(t.value))).commit!(null),
                 });
             }
+        }
+        if (!node.particles && !node.camera) {
+            items.push({
+                label: 'Particles',
+                icon: 'sparkle',
+                submenu: PARTICLE_PRESETS.map((pr) => ({
+                    label: pr.label,
+                    icon: 'sparkle',
+                    action: () => this.hooks<null>('Add Particles', (n) => !n.particles, (n) => (n.particles = presetParticles(pr.id))).commit!(null),
+                })),
+            });
         }
         if (!node.camera && !node.mesh && !node.light && !node.model) {
             items.push({

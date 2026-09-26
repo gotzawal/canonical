@@ -9,6 +9,8 @@ import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
 import { generating, openPaintoverDialog, paintoverJobs } from './paintoverDialog';
 import { openSwatchDialog } from './swatchDialog';
+import { PARTICLE_PRESETS, sceneParticles } from '../core/particles';
+import { addColorGrade, addVignette } from '../design/effects';
 import { assignSlot, deleteSlot, roomSample, slotUsers, upsertSlot, type SlotPatch } from '../design/materialSlots';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -169,6 +171,33 @@ export class DesignPanel {
         } else actions.append(h('span', { class: 'muted small', text: 'Every stage is complete. Reopen a stage from the pipeline bar to change it.' }));
         if (id === 'brief') actions.append(button('Open brief', () => this.hooks.showBrief(), 'small', 'open'));
         rows.push(actions);
+        if ((id === 'effects' || id === 'finish') && st.status !== 'done') {
+            const particles = sceneParticles(this.store.doc.nodes);
+            rows.push(
+                h(
+                    'div',
+                    { class: 'design-actions' },
+                    id === 'effects'
+                        ? button('Particles', (e) => {
+                              const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                              showMenu(PARTICLE_PRESETS.map((p) => ({ label: p.label, icon: 'sparkle', action: () => void this.editor.createParticles(p.id) })), r.left, r.bottom + 4);
+                          }, 'small', 'sparkle')
+                        : null,
+                    id === 'effects' ? button('Fog and bloom', () => this.editor.emit('show-scene', undefined), 'small', 'sliders') : null,
+                    id === 'effects' ? button('Vignette', () => {
+                        addVignette(this.editor);
+                        this.editor.emit('show-graph', undefined);
+                    }, 'small', 'graph') : null,
+                    id === 'finish' ? button('Color grade', () => {
+                        addColorGrade(this.editor);
+                        this.editor.emit('show-graph', undefined);
+                        toast('Lift, gamma, gain and saturation are in the Render Graph panel.', 'info', 4000);
+                    }, 'small', 'sliders') : null,
+                    d.shots.some((s) => s.target) ? button('Compare shots', () => pipeline.openCompare((d.shots.find((s) => s.target && (id === 'finish' ? !s.approved : !s.matched?.includes(id))) ?? d.shots.find((s) => s.target))!.id), 'small', 'graph') : null,
+                ),
+                h('div', { class: 'muted small', text: `Now ${Math.round(this.editor.runtime.fps)} fps (budget ${d.budget.fps}), up to ${particles} particles alive.` }),
+            );
+        }
         if ((id === 'light' || id === 'material' || id === 'finish') && st.status !== 'done') {
             rows.push(
                 h(

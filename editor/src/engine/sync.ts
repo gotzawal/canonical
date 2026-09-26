@@ -6,7 +6,9 @@ import {
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
+import type { EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
+import { ParticleSystem } from '@orillusion/particle';
+import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { castGI } from './gi';
 import { CapsuleGeometry, RampGeometry, StairsGeometry } from './shapes';
@@ -53,6 +55,10 @@ export interface Entry {
     lightType: LightType | null;
     lightKey: string;
     model: ModelState | null;
+    particles: ParticleSystem | null;
+    particlesKey: string;
+    /** Increases with every rebuild, so a late texture load does not build an outdated emitter. */
+    particlesToken: number;
 }
 
 interface SyncEvents {
@@ -213,6 +219,9 @@ export class SceneSync extends Emitter<SyncEvents> {
             lightType: null,
             lightKey: '',
             model: null,
+            particles: null,
+            particlesKey: '',
+            particlesToken: 0,
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -247,6 +256,40 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyMesh(entry, node.mesh);
         this.applyLight(entry, node.light);
         this.applyModel(entry, node.model);
+        this.applyParticles(entry, node.particles);
+    }
+
+    /** Emitters are built again when their settings change (the simulator bakes its particles). */
+    private applyParticles(entry: Entry, p: ParticlesDoc | undefined) {
+        const key = p ? JSON.stringify(p) : '';
+        if (key === entry.particlesKey) return;
+        entry.particlesKey = key;
+        const token = ++entry.particlesToken;
+        if (entry.particles) {
+            entry.obj.removeComponent(ParticleSystem);
+            entry.particles = null;
+        }
+        if (!p) return;
+        const texture = p.texture ? this.loadTexture(p.texture) : this.dotTexture();
+        void texture.then((tex) => {
+            if (entry.particlesToken !== token || this.entries.get(entry.id) !== entry) return;
+            try {
+                entry.particles = buildParticles(entry.obj, p, tex ?? this.runtime.engine.res.whiteTexture);
+                if (!entry.visible) entry.particles.enable = false;
+            } catch (e) {
+                console.error('[editor] particle emitter failed', e);
+            }
+        });
+    }
+
+    private dotTexturePromise: Promise<Texture | null> | null = null;
+
+    private dotTexture(): Promise<Texture | null> {
+        this.dotTexturePromise ??= (this.runtime.engine.res.loadTexture(dotTextureUrl(), undefined, false, 'srgb') as Promise<Texture>).catch((e) => {
+            console.warn('[editor] particle sprite failed', e);
+            return null;
+        });
+        return this.dotTexturePromise;
     }
 
     private applyTransform(entry: Entry, node: NodeDoc) {
@@ -549,6 +592,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.visible = visible;
         if (entry.mesh) entry.mesh.enable = visible;
         if (entry.light) entry.light.enable = visible;
+        if (entry.particles) entry.particles.enable = visible;
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);

@@ -1,3 +1,4 @@
+import { PARTICLE_PRESETS } from './core/particles';
 import { version as engineVersion } from '../../package.json';
 import type { Editor } from './editor';
 import { createAssetMenu } from './ui/assetsPanel';
@@ -34,6 +35,11 @@ export function createMenu(editor: Editor): MenuItem[] {
         { label: 'Directional Light', icon: 'sun', action: () => editor.createLight('directional') },
         { label: 'Point Light', icon: 'bulb', action: () => editor.createLight('point') },
         { label: 'Spot Light', icon: 'spot', action: () => editor.createLight('spot') },
+        {
+            label: 'Particles',
+            icon: 'sparkle',
+            submenu: PARTICLE_PRESETS.map((pr) => ({ label: pr.label, icon: 'sparkle', action: () => void editor.createParticles(pr.id) })),
+        },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },

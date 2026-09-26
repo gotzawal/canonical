@@ -15,6 +15,7 @@ import { designToolDefs, runDesignTool } from './designTools';
 import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
 import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
 import { materialToolDefs, PAID_MATERIAL_TOOLS, runMaterialTool } from './materialTools';
+import { effectToolDefs, runEffectTool } from './effectTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -168,6 +169,10 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     search_swatches: ['materials'],
     use_swatch: ['materials'],
     generate_swatch: ['images'],
+    add_particles: ['effects'],
+    update_particles: ['effects'],
+    add_vignette: ['effects'],
+    add_color_grade: ['effects'],
     update_design: ['design'],
     ask_user: ['design'],
     update_checklist: ['design'],
@@ -331,6 +336,7 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
     else defs.push(...greyboxToolDefs().filter((d) => !/^capture|^check_sightline/.test(d.function.name)));
     defs.push(...imageToolDefs().filter((d) => env.allowImages() || !PAID_IMAGE_TOOLS.has(d.function.name)));
     defs.push(...materialToolDefs().filter((d) => env.allowImages() || !PAID_MATERIAL_TOOLS.has(d.function.name)));
+    defs.push(...effectToolDefs());
     return defs;
 }
 
@@ -341,6 +347,7 @@ function nodeType(n: NodeDoc): string {
     if (n.camera) return 'camera';
     if (n.model) return 'model';
     if (n.mesh) return n.mesh.geometry.type;
+    if (n.particles) return 'particles';
     return 'empty';
 }
 
@@ -390,6 +397,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     }
     if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
     if (n.camera) out.camera = { ...n.camera };
+    if (n.particles) {
+        const p = n.particles;
+        out.particles = { preset: p.preset, rate: p.rate, life: p.life, size: p.size, shape: p.shape, blend: p.blend, colors: [p.colorStart, p.colorEnd], alive_at_most: Math.min(p.max, Math.ceil(p.rate * p.life[1])) };
+    }
     if (n.model) {
         out.model = { asset: n.model.asset, asset_name: doc.assets.find((a) => a.id === n.model!.asset)?.name };
         const o = Object.keys(n.model.materials ?? {}).length + Object.keys(n.model.parts ?? {}).length;
@@ -680,7 +691,7 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             const stage = stageDef(ed.pipeline.design.stage);
             throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
         }
-        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args)) ?? (await runImageTool(env, name, args)) ?? (await runMaterialTool(env, name, args));
+        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args)) ?? (await runImageTool(env, name, args)) ?? (await runMaterialTool(env, name, args)) ?? (await runEffectTool(env, name, args));
         if (design) return design;
         switch (name) {
             case 'get_scene': {

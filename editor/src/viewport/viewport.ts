@@ -1,7 +1,7 @@
 import type { RenderNode } from '@orillusion/core';
 import { add, normalize, scale, sub, transformDir, transformPoint } from '../core/math';
 import type { Store } from '../core/store';
-import type { NodeDoc, Vec3 } from '../core/types';
+import type { NodeDoc, ParticlesDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
 import type { Runtime } from '../engine/runtime';
 import type { SceneSync } from '../engine/sync';
@@ -460,6 +460,45 @@ export class Viewport {
         ctx.restore();
     }
 
+    /** Outline of where a particle emitter starts its particles. */
+    private drawEmitter(m: ArrayLike<number>, p: ParticlesDoc) {
+        const ctx = this.ctx;
+        const at = (v: Vec3): Vec3 => transformPoint(m, v);
+        ctx.save();
+        ctx.setLineDash([4, 3]);
+        if (p.shape === 'box') {
+            const [x, y, z] = [p.box[0] / 2, p.box[1] / 2, p.box[2] / 2];
+            const corners: Vec3[] = [];
+            for (let i = 0; i < 8; i++) corners.push(at([i & 1 ? x : -x, i & 2 ? y : -y, i & 4 ? z : -z]));
+            this.strokeBox(corners);
+        } else {
+            const r = p.radius;
+            // Arcs from 0 to `end` radians; a hemisphere only shows its upper half.
+            const ring = (f: (a: number) => Vec3, end = Math.PI * 2) => {
+                ctx.beginPath();
+                let started = false;
+                for (let i = 0; i <= 48; i++) {
+                    const s = this.picker.project(at(f((i / 48) * end)));
+                    if (!s.visible) {
+                        started = false;
+                        continue;
+                    }
+                    if (started) ctx.lineTo(s.x, s.y);
+                    else ctx.moveTo(s.x, s.y);
+                    started = true;
+                }
+                ctx.stroke();
+            };
+            ring((a) => [Math.cos(a) * r, 0, Math.sin(a) * r]);
+            if (p.shape !== 'circle') {
+                const end = p.shape === 'hemisphere' ? Math.PI : Math.PI * 2;
+                ring((a) => [Math.cos(a) * r, Math.sin(a) * r, 0], end);
+                ring((a) => [0, Math.sin(a) * r, Math.cos(a) * r], end);
+            }
+        }
+        ctx.restore();
+    }
+
     private strokeBox(corners: Vec3[]) {
         const ctx = this.ctx;
         const p = corners.map((c) => this.picker.project(c));
@@ -505,6 +544,10 @@ export class Viewport {
                 }
             }
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 13 });
+        } else if (node.particles) {
+            drawSparkle(ctx, sp.x, sp.y);
+            if (selected) this.drawEmitter(m, node.particles);
+            this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 12 });
         } else if (node.camera) {
             drawCameraIcon(ctx, sp.x, sp.y);
             this.drawFrustum(m, node.camera.fov, selected ? 2.2 : 0.8);
@@ -719,6 +762,22 @@ function rendererBox(r: RenderNode): Vec3[] | null {
         out.push(transformPoint(m, [i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]));
     }
     return out;
+}
+
+/** Four pointed star for particle emitters. */
+function drawSparkle(ctx: CanvasRenderingContext2D, x: number, y: number) {
+    ctx.beginPath();
+    const r = 8, k = 2.2;
+    ctx.moveTo(x, y - r);
+    ctx.lineTo(x + k, y - k);
+    ctx.lineTo(x + r, y);
+    ctx.lineTo(x + k, y + k);
+    ctx.lineTo(x, y + r);
+    ctx.lineTo(x - k, y + k);
+    ctx.lineTo(x - r, y);
+    ctx.lineTo(x - k, y - k);
+    ctx.closePath();
+    ctx.stroke();
 }
 
 function drawSun(ctx: CanvasRenderingContext2D, x: number, y: number) {

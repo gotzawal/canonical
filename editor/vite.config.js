@@ -1,6 +1,7 @@
 // Vite config for the browser-only scene editor (editor/).
-// The editor imports the engine straight from ../src, so every build
-// ships whatever engine code is on the branch being built.
+// The editor imports the engine straight from ../src (and the particle
+// package from ../packages/particle), so every build ships whatever engine
+// code is on the branch being built.
 //
 // Two pages are built: the editor (index.html) and the game player
 // (player.html). File > Build & Deploy copies the player's files into every
@@ -44,6 +45,7 @@ function shared() {
         resolve: {
             alias: {
                 '@orillusion/core': here('../src/index.ts'),
+                '@orillusion/particle': here('../packages/particle/index.ts'),
             },
         },
         // Parts of the engine dispatch on `constructor.name` (Struct sizes,

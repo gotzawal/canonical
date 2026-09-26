@@ -42,7 +42,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
         'Answer in the language of the brief.',
     ].join(' '),
     effects: [
-        'Work on the Effects stage. Add the effects the plan lists (read_design, section effects): particles and post effects such as fog, bloom and vignette.',
+        'Work on the Effects stage. Add the effects the plan lists (read_design, section effects): particles (add_particles from a preset, then tune it) and post effects such as fog and bloom (set_environment) and a vignette (add_vignette).',
         'Mark each effect done with update_design as you finish it, compare the shots again (also in grayscale, so the value structure holds) and keep the frame rate within the budget.',
         'Answer in the language of the brief.',
     ].join(' '),

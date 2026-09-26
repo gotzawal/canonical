@@ -199,6 +199,53 @@ export interface ScriptRef {
     props: Record<string, ParamValue>;
 }
 
+export type ParticleShape = 'box' | 'circle' | 'sphere' | 'hemisphere';
+
+/**
+ * A particle emitter (fire, smoke, sparks, dust, rain), simulated on the
+ * GPU by packages/particle. Ranges are [min, max]; each particle takes a
+ * random value in between.
+ */
+export interface ParticlesDoc {
+    /** Preset it started from (for reference). */
+    preset?: string;
+    /** Particles emitted per second. */
+    rate: number;
+    /** Most particles alive at once. */
+    max: number;
+    /** Seconds a particle lives. */
+    life: [number, number];
+    /** Size in meters at birth. */
+    size: [number, number];
+    /** Size at the end of life, as a factor of the birth size. */
+    sizeEnd: number;
+    /** Where particles start: on or in this shape around the object. */
+    shape: ParticleShape;
+    /** Circle, sphere and hemisphere radius in meters. */
+    radius: number;
+    /** Box size in meters. */
+    box: Vec3;
+    /** Start velocity per axis in m/s, in the object's space: lowest and highest. */
+    velocityMin: Vec3;
+    velocityMax: Vec3;
+    /** Constant acceleration in m/s^2 (e.g. [0, -9.8, 0] falls, [0, 1, 0] rises). */
+    gravity: Vec3;
+    /** Start rotation of each sprite in degrees. */
+    spin: [number, number];
+    colorStart: string;
+    colorEnd: string;
+    alphaStart: number;
+    alphaEnd: number;
+    /** Sprite texture asset id; null draws a soft round dot. */
+    texture: string | null;
+    /** 'add' glows (fire, sparks, magic), 'alpha' covers (smoke, dust, rain). */
+    blend: 'add' | 'alpha';
+    /** Particles move with the object (local) or stay where they were born (world). */
+    local: boolean;
+    /** Seconds simulated before the first frame, so the effect is already running. */
+    prewarm: number;
+}
+
 export interface NodeDoc {
     id: string;
     name: string;
@@ -213,6 +260,7 @@ export interface NodeDoc {
     light?: LightDoc;
     model?: ModelDoc;
     camera?: CameraDoc;
+    particles?: ParticlesDoc;
     scripts?: ScriptRef[];
     /**
      * Prefab instance: the id of the prefab (SceneDoc.prefabs). The node's

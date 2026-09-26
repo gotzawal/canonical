@@ -14,7 +14,8 @@
         "experimentalDecorators": true,
         "baseUrl": "./",
         "paths": {
-            "@orillusion/core": ["../src/index.ts"]
+            "@orillusion/core": ["../src/index.ts"],
+            "@orillusion/particle": ["../packages/particle/index.ts"]
         },
         "types": ["vite/client", "@webgpu/types"]
     },

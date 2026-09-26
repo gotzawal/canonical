@@ -1,3 +1,4 @@
+import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
@@ -155,6 +156,16 @@ export class Editor extends Emitter<EditorEvents> {
         }
         node.name = this.uniqueName(node.name, null);
         this.insert([node], 'Create ' + node.name);
+    }
+
+    /** A particle emitter from a preset (fire, smoke, sparks...), in front of the view. Effects may be added while placement is locked. */
+    createParticles(preset = 'fire'): string {
+        const node = makeNode(this.uniqueName(PARTICLE_PRESETS.find((p) => p.id === preset)?.label ?? 'Particles', null), null);
+        node.particles = presetParticles(preset);
+        const p = this.viewport.spawnPoint();
+        node.position = [round(p[0]), round(p[1]), round(p[2])];
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
     }
 
     createEmpty(parent: string | null = null) {
