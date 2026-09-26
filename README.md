@@ -23,6 +23,11 @@
   <a href="#development">Development</a>
 </p>
 
+
+<img width="1200" height="679" alt="image" src="https://github.com/user-attachments/assets/813ddf3c-0550-4a57-90ab-7d66e75ef87e" />
+
+
+
 Canonical is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant builds the scene, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
 The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/canonical/** every time `main` is updated.
