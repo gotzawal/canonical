@@ -50,8 +50,9 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 - Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
 - Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
-- Edit materials, lights, sky, exposure, bloom, ambient occlusion and fog
-- Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (color, PBR values, texture, or a custom shader). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
+- Materials: physically based Lit (normal, metallic-roughness, occlusion and emission maps, clear coat, transmission for glass and water), Unlit, Lambert or a custom shader, with presets and alpha blending or cutout
+- Lights, sky, exposure, bloom, ambient occlusion, fog and global illumination (DDGI: light bounces between surfaces)
+- Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (the file's material, Unlit, Lambert or a custom shader; color, PBR values, alpha, texture). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
 
 **Code**
 
@@ -63,6 +64,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 - Scenes autosave to the browser (imported files live in IndexedDB)
 - `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one
+- **File > Build & Deploy** (`Ctrl+B`) turns the scene into a standalone web game: run it in a new tab, download it as a `.zip` for any static host, or publish it to GitHub Pages
 
 **File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions.
 
@@ -96,6 +98,22 @@ Shaders are WGSL. Properties are declared with comments, such as `// @property s
 
 The Render Graph tab of the bottom dock lists the forward renderer's passes in execution order, with the resources each one reads and writes. Switching off a pass that an enabled pass still depends on is refused, with the reason.
 
+## Materials and global illumination
+A mesh's material is one of four types. **Lit** is the engine's physically based material: color, metallic, roughness and emission, normal / metallic-roughness / occlusion / emission maps with tiling and offset, clear coat, and transmission with index of refraction, thickness and tint for glass and water. **Unlit** shows its color and texture as they are, **Lambert** is a cheap matte material for directional lights, and **Custom Shader** uses a WGSL material shader. Every type can blend (opacity below 1) or cut out pixels below an alpha threshold (leaves, fences). The menu next to the Material title applies presets such as plastic, metal, car paint, glass, water and glow.
+
+Each material slot of an imported model keeps the file's material or switches to Unlit, Lambert or a custom shader of its own; a custom shader can use the model's own normal, metallic-roughness, emission and occlusion maps. Models keep the transforms of their files, including node matrices (unit scale, Z-up to Y-up).
+
+**Scene > Global Illumination** turns on DDGI: a grid of light probes captures the scene, and lit materials receive the light it bounces, so a red wall tints the floor next to it and shadows get indirect light. **Fit to Scene** sizes the grid to the meshes. The probes are captured again after every change, or every frame with Realtime; GI also works in Play mode and in built games.
+
+## Build & Deploy
+**File > Build & Deploy** (`Ctrl+B`, or the rocket button in the toolbar) makes a standalone web game of the scene. A game is a static folder: `index.html` with the player (the engine and Play mode without the editor), `game.json` with the scene, its scripts and shaders, and a `media/` folder with the models and textures it uses. It plays like Play mode: through the scene's main camera, or, when the scene has none, from the editor view at build time, where the right mouse button orbits, the middle button pans and the wheel zooms.
+
+- **Run in New Tab** plays the scene the way the built game runs, with script errors shown on screen
+- **Download .zip** gives the folder for any static host: itch.io (as an HTML game), Netlify, Cloudflare Pages or your own server. It has to be served over HTTP; opening `index.html` from disk does not work
+- **GitHub Pages** pushes the game to a branch (`gh-pages` by default, which then holds only the game) of a repository, which it can create, and publishes it at `https://<owner>.github.io/<repository>/`. It needs a [personal access token](https://github.com/settings/tokens/new?scopes=public_repo&description=Canonical%20Editor) with the `public_repo` scope (`repo` for private repositories, where Pages needs a paid plan), or a fine-grained token with Contents, Pages and Administration (to create repositories) set to Read and write. Deploying again uploads only the files that changed. Before it replaces a branch that holds anything else than a game, or changes an existing Pages setup, it asks
+
+The title, repository and branch are saved with the scene. The token is sent only to `api.github.com`; it is kept for the current tab, or in this browser's storage when "Remember on this device" is on, where scripts you run in the editor could read it. Builds leave out the scripts of an opened scene file until you enable them.
+
 ## The engine: Orillusion
 [Orillusion](https://www.orillusion.com/) is an open-source 3D rendering engine for the web, written in TypeScript and built on WebGPU from the start rather than ported from WebGL. It aims for desktop-class rendering in the browser, which makes it a strong base for Canonical:
 
@@ -116,11 +134,14 @@ pnpm run editor:typecheck   # type check the editor
 pnpm run editor:build       # static site in editor/dist
 ```
 
+The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.
+
 `.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
 
 | Path | Contents |
 |---|---|
 | `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
+| `editor/player.html`, `editor/src/player/` | The game player that Build & Deploy puts into every game |
 | `editor/public/` | Favicons and the logo |
 | `src/` | Orillusion engine core |
 | `packages/` | Orillusion plugins (physics, particles, atmosphere, post effects and more) |
