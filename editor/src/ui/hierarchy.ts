@@ -75,14 +75,16 @@ export class HierarchyPanel {
 
         store.on('change', () => this.render());
         store.on('selection', () => this.render(true));
+        editor.on('isolate', () => this.render(true));
         editor.sync.on('model', () => this.render(true));
         this.render(true);
     }
 
     private treeKey(): string {
-        return this.editor.store.doc.nodes
-            .map((n) => `${n.id}:${n.parent}:${n.name}:${n.visible ? 1 : 0}:${nodeIcon(n)}`)
-            .join('|');
+        return (
+            (this.editor.isolated ?? '') +
+            this.editor.store.doc.nodes.map((n) => `${n.id}:${n.parent}:${n.name}:${n.visible ? 1 : 0}:${nodeIcon(n)}:${n.prefabChild ? 1 : 0}`).join('|')
+        );
     }
 
     render(force = false) {
@@ -96,20 +98,45 @@ export class HierarchyPanel {
         const selected = new Set(store.selection);
         const matches = this.filter ? this.filterMatches() : null;
 
+        const isolated = this.editor.isolated;
         const walk = (parent: string | null, depth: number) => {
             for (const node of store.children(parent)) {
                 if (matches && !matches.has(node.id)) continue;
+                if (isolated && depth === 0 && node.id !== isolated) continue;
                 const kids = store.children(node.id);
                 const open = !this.collapsed.has(node.id) || !!matches;
                 this.tree.appendChild(this.row(node, depth, kids.length > 0, open, selected.has(node.id)));
                 if (kids.length && open) walk(node.id, depth + 1);
             }
         };
-        walk(null, 0);
+        if (isolated && store.node(isolated)) {
+            const root = store.node(isolated)!;
+            this.tree.appendChild(this.isolationBanner(root));
+            this.tree.appendChild(this.row(root, 0, store.children(root.id).length > 0, true, selected.has(root.id)));
+            walk(root.id, 1);
+        } else walk(null, 0);
         if (!store.doc.nodes.length) {
             this.tree.appendChild(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
         }
         this.tree.scrollTop = scroll;
+    }
+
+    private isolationBanner(root: NodeDoc): HTMLElement {
+        const editor = this.editor;
+        const prefab = editor.prefab(root.prefab);
+        const count = prefab ? editor.instancesOf(prefab.id).length : 0;
+        return h(
+            'div',
+            { class: 'isolation-banner' },
+            h('div', { class: 'isolation-title' }, icon('prefab', 14), h('span', { text: `Editing prefab ${prefab?.name ?? ''}` })),
+            h('div', { class: 'muted small', text: `Everything else is hidden. Apply updates all ${count} instance${count === 1 ? '' : 's'}.` }),
+            h(
+                'div',
+                { class: 'inline' },
+                h('button', { class: 'btn small primary', text: 'Apply to All', attrs: { type: 'button' }, on: { click: () => editor.finishPrefabEdit(true) } }),
+                h('button', { class: 'btn small', text: 'Discard', attrs: { type: 'button' }, on: { click: () => editor.finishPrefabEdit(false) } }),
+            ),
+        );
     }
 
     /** Ids of nodes matching the filter plus their ancestors. */
@@ -160,10 +187,11 @@ export class HierarchyPanel {
             editor.toggleVisibility(ids);
         });
         const name = h('span', { class: 'tree-name', text: node.name || '(unnamed)' });
+        const locked = !!node.prefabChild && !editor.isolated;
         const row = h(
             'div',
             {
-                class: 'tree-row' + (selected ? ' selected' : '') + (node.visible ? '' : ' hidden-node') + (store.primary?.id === node.id ? ' primary' : ''),
+                class: 'tree-row' + (selected ? ' selected' : '') + (node.visible ? '' : ' hidden-node') + (store.primary?.id === node.id ? ' primary' : '') + (locked ? ' prefab-part' : ''),
                 attrs: { draggable: 'true', role: 'treeitem', 'aria-selected': selected ? 'true' : 'false' },
                 dataset: { id: node.id },
                 style: { paddingLeft: 6 + depth * 14 + 'px' },
@@ -189,12 +217,13 @@ export class HierarchyPanel {
                     return;
                 }
             }
+            const id = editor.selectable(node.id);
             if (e.ctrlKey || e.metaKey) {
-                store.select([node.id], 'toggle');
-            } else if (!store.selection.includes(node.id)) {
-                store.select([node.id]);
+                store.select([id], 'toggle');
+            } else if (!store.selection.includes(id)) {
+                store.select([id]);
             }
-            this.anchor = node.id;
+            this.anchor = id;
         });
         row.addEventListener('click', (e) => {
             // Plain click on an already selected row narrows a multi-selection.
@@ -211,6 +240,10 @@ export class HierarchyPanel {
         });
 
         row.addEventListener('dragstart', (e) => {
+            if (locked) {
+                e.preventDefault();
+                return;
+            }
             this.dragIds = store.selection.includes(node.id) ? store.selectionRoots() : [node.id];
             e.dataTransfer!.effectAllowed = 'move';
             e.dataTransfer!.setData('text/plain', node.name);
@@ -296,6 +329,18 @@ export class HierarchyPanel {
 
     private nodeMenu(node: NodeDoc): MenuItem[] {
         const editor = this.editor;
+        const prefab = node.prefab ? editor.prefab(node.prefab) : undefined;
+        const prefabItems: MenuItem[] = prefab
+            ? [
+                  { separator: true },
+                  { label: 'Edit Prefab', icon: 'prefab', enabled: () => !editor.isolated && !prefab.useModel, action: () => editor.editPrefab(node.id) },
+                  { label: 'Select All Instances', action: () => editor.store.select(editor.instancesOf(prefab.id).map((n) => n.id)) },
+                  { label: 'Unpack Instance', action: () => editor.unpackInstance(node.id) },
+              ]
+            : [
+                  { separator: true },
+                  { label: 'Make Prefab', icon: 'prefab', enabled: () => !node.prefabChild, action: () => editor.createPrefab() },
+              ];
         return [
             { label: 'Rename', icon: 'dots', shortcut: 'F2', action: () => this.startRename(node.id) },
             { label: 'Duplicate', icon: 'copy', shortcut: 'Mod+D', action: () => editor.duplicateSelection() },
@@ -307,6 +352,7 @@ export class HierarchyPanel {
             { label: 'Create Child Empty', icon: 'empty', action: () => editor.createEmpty(node.id) },
             { separator: true },
             { label: 'Move to Root', icon: 'home', enabled: () => !!node.parent, action: () => editor.moveNodes(editor.store.selectionRoots(), null, null) },
+            ...prefabItems,
         ];
     }
 

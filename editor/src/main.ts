@@ -33,6 +33,8 @@ import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
+import { WalkController } from './viewport/walk';
+import { pipelineOverlay } from './ui/pipelineOverlay';
 import { Gizmo } from './viewport/gizmo';
 import { Viewport } from './viewport/viewport';
 
@@ -126,6 +128,7 @@ async function main() {
     const player = new Player(runtime, store, sync, picker, compiler);
     const graph = new RenderGraphController(runtime, store, shaders, sync);
     const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
+    const overlayDrawers: ((ctx: CanvasRenderingContext2D) => void)[] = [];
     gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
         onContextMenu: (_x, _y, cx, cy, id) => {
@@ -165,6 +168,10 @@ async function main() {
                 else editor.assignShader(target, s.id);
                 return;
             }
+            if (ref.startsWith('prefab:')) {
+                editor.placePrefab(ref.slice(7), point);
+                return;
+            }
             const asset = store.doc.assets.find((a) => a.id === ref);
             if (asset?.kind === 'model') editor.addModel(ref, point);
             else if (asset) editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
@@ -179,6 +186,9 @@ async function main() {
             const part = sync.modelInfo(f.node)?.part(f.path);
             return part ? { node: f.node, renderer: part.renderer } : null;
         },
+        selectable: (id) => editor.selectable(id),
+        captured: () => !!editor.walk?.active,
+        drawExtra: (ctx) => overlayDrawers.forEach((fn) => fn(ctx)),
         play: {
             active: () => player.state !== 'stopped',
             gameCamera: () => player.usesGameCamera,
@@ -187,6 +197,8 @@ async function main() {
         },
     });
     editor.viewport = viewport;
+    editor.walk = new WalkController(editor, viewport.overlay, viewportEl);
+    overlayDrawers.push(pipelineOverlay(editor));
 
     store.on('change', (hint) => sync.sync(hint));
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
@@ -355,6 +367,7 @@ async function main() {
             toggleDock: () => dock.toggle(),
             showAI: () => showTab('ai'),
             build: () => showBuildDialog(editor),
+            walk: () => editor.walk?.toggle(),
         }),
     );
     statusSlot.append(statusbar(editor));
@@ -453,6 +466,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
         else if (key === 'e') editor.setTool('rotate');
         else if (key === 'r') editor.setTool('scale');
         else if (key === 'x') editor.toggleSpace();
+        else if (key === 'v') editor.walk?.toggle();
         else if (key === 'f') editor.frameSelection();
         else if (key === 'home') editor.viewport.frameAll();
         else if (key === 'g') store.setPrefs({ grid: !store.prefs.grid });

@@ -89,7 +89,7 @@ export class BriefScreen {
             if (this.el.hidden) return;
             this.renderConcepts();
             // The brief was filled in or skipped elsewhere (the Design tab, undo, a loaded file).
-            if (this.auto && !this.wanted() && document.activeElement !== this.text) this.hide();
+            if (this.auto && !this.wanted() && !this.text.value.trim()) this.hide();
         });
         this.update();
     }

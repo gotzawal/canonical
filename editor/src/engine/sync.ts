@@ -77,6 +77,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     readonly entries = new Map<string, Entry>();
     /** Nodes whose objects a script destroyed in Play mode; they stay out of the scene until Stop. */
     readonly detached = new Set<string>();
+    /** While a prefab instance is edited on its own, only these nodes (and lights) are shown. */
+    private isolation: Set<string> | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     private textures = new Map<string, Promise<Texture | null>>();
@@ -507,6 +509,12 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     // ------------------------------------------------------------ visibility
 
+    setIsolation(ids: Set<string> | null) {
+        this.isolation = ids;
+        this.updateVisibility();
+        this.runtime.gi.invalidate();
+    }
+
     private updateVisibility() {
         const effective = new Map<string, boolean>();
         const resolve = (node: NodeDoc | undefined): boolean => {
@@ -517,9 +525,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             effective.set(node.id, v);
             return v;
         };
+        const iso = this.isolation;
         for (const node of this.store.doc.nodes) {
             const entry = this.entries.get(node.id);
-            if (entry) this.setEnabled(entry, resolve(node));
+            if (entry) this.setEnabled(entry, resolve(node) && (!iso || iso.has(node.id) || !!node.light));
         }
     }
 

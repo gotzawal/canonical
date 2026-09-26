@@ -4077,3 +4077,78 @@ kbd {
 .viewport.grayscale .shot-ref {
     filter: grayscale(1);
 }
+
+/* --------------------------------------------------------- greybox tools */
+
+.walk-hud {
+    position: absolute;
+    left: 50%;
+    top: 10px;
+    transform: translateX(-50%);
+    z-index: 3;
+    max-width: calc(100% - 20px);
+    padding: 6px 12px;
+    border-radius: 8px;
+    background: rgba(15, 17, 21, 0.8);
+    color: var(--text);
+    font-size: 11.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    pointer-events: none;
+}
+
+.walk-hud::after {
+    content: '';
+    position: fixed;
+}
+
+.viewport:has(.walk-hud:not([hidden]))::after {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 6px;
+    height: 6px;
+    margin: -3px 0 0 -3px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.8);
+    pointer-events: none;
+}
+
+.isolation-banner {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+    margin: 4px 6px 8px;
+    padding: 8px 10px;
+    border: 1px solid rgba(61, 139, 253, 0.5);
+    border-radius: 7px;
+    background: rgba(61, 139, 253, 0.08);
+}
+
+.isolation-title {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: #9cc3ff;
+    font-weight: 600;
+}
+
+.isolation-banner .inline {
+    display: flex;
+    gap: 6px;
+}
+
+.tree-row.prefab-part .tree-name {
+    color: var(--muted);
+    font-style: italic;
+}
+
+.tree-icon.prefab {
+    color: #b58cff;
+}
+
+.inline.wrap {
+    flex-wrap: wrap;
+}

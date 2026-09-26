@@ -12,6 +12,7 @@ import { recentLogs } from '../ui/statusbar';
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
 import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
 import { designToolDefs, runDesignTool } from './designTools';
+import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -143,6 +144,14 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     run_play_test: ['play', 'code'],
     play: ['play', 'code'],
     stop: ['play', 'code'],
+    create_shot: ['shots'],
+    update_shot: ['shots'],
+    delete_shot: ['shots'],
+    capture_shot: ['shots', 'capture', 'compare'],
+    capture_player_view: ['capture'],
+    check_sightline: ['capture'],
+    create_prefab: ['prefabs'],
+    place_prefab: ['prefabs'],
     update_design: ['design'],
     ask_user: ['design'],
     update_checklist: ['design'],
@@ -302,6 +311,8 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
         defs.push(def('capture_viewport', 'Take a picture of the viewport as it is now (the editor view, or the game camera while playing).'));
     }
     defs.push(...designToolDefs());
+    if (env.screenshots()) defs.push(...greyboxToolDefs());
+    else defs.push(...greyboxToolDefs().filter((d) => !/^capture|^check_sightline/.test(d.function.name)));
     return defs;
 }
 
@@ -345,7 +356,9 @@ function materialSummary(m: MaterialDoc): Json {
 }
 
 function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
-    const out: Json = { id: n.id, name: n.name, type: nodeType(n) };
+    const out: Json = { id: n.id, name: n.name, type: n.prefab ? 'prefab_instance' : nodeType(n) };
+    if (n.prefab) out.prefab = doc.prefabs.find((p) => p.id === n.prefab)?.name ?? n.prefab;
+    if (n.prefabChild) out.prefab_part = true;
     if (n.parent) out.parent = n.parent;
     out.position = rv(n.position);
     if (n.rotation.some((v) => v !== 0)) out.rotation = rv(n.rotation);
@@ -607,6 +620,7 @@ class StagePolicy {
     }
 
     update(n: NodeDoc, spec: Json): string {
+        if (n.prefabChild) return `"${n.name}" is part of a prefab instance and follows its prefab; change the instance (its root) instead.`;
         const mover = !!n.light || !!n.camera;
         if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
             if (mover) {
@@ -648,12 +662,14 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             const stage = stageDef(ed.pipeline.design.stage);
             throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
         }
-        const design = await runDesignTool(env, name, args);
+        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args));
         if (design) return design;
         switch (name) {
             case 'get_scene': {
                 const d = doc();
-                const nodes = d.nodes.slice(0, 400).map((n) => nodeSummary(d, n));
+                // Parts of prefab instances follow their prefab: only the instances are listed.
+                const listed = d.nodes.filter((n) => !n.prefabChild);
+                const nodes = listed.slice(0, 400).map((n) => nodeSummary(d, n));
                 return {
                     summary: `${d.nodes.length} objects`,
                     data: {
@@ -671,7 +687,8 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                             gi: d.environment.gi,
                         },
                         objects: nodes,
-                        ...(d.nodes.length > nodes.length ? { truncated: d.nodes.length - nodes.length } : {}),
+                        ...(listed.length > nodes.length ? { truncated: listed.length - nodes.length } : {}),
+                        prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
                         assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
                         scripts: d.scripts.map((s) => {
                             const c = ed.compiler.get(s.id);

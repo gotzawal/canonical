@@ -172,6 +172,7 @@ export class InspectorPanel {
         }
         this.body.append(this.header(node));
         this.body.append(this.transformSection());
+        if (node.prefab) this.body.append(this.prefabSection(node));
         if (node.mesh) {
             this.body.append(this.meshSection());
             this.body.append(this.materialSection());
@@ -296,6 +297,43 @@ export class InspectorPanel {
             ], r.left - 120, r.bottom + 4);
         });
         return section('transform', 'Transform', 'move', [row('Position', pos.el), row('Rotation', rot.el), row('Scale', scl.el)], [reset]);
+    }
+
+    // --------------------------------------------------------------- prefab
+
+    private prefabSection(node: NodeDoc): HTMLElement {
+        const editor = this.editor;
+        const prefab = editor.prefab(node.prefab);
+        if (!prefab) return section('prefab', 'Prefab', 'prefab', [h('div', { class: 'readonly error-text', text: 'The prefab of this instance is missing.' })]);
+        const count = editor.instancesOf(prefab.id).length;
+        const model = this.store.doc.assets.find((a) => a.id === prefab.asset);
+        const name = new TextField(prefab.name, (v) => editor.renamePrefab(prefab.id, v));
+        const rows: HTMLElement[] = [
+            row('Prefab', name.el),
+            row('Instances', h('div', { class: 'readonly', text: `${count} in the scene` })),
+            row('Shows', h('div', { class: 'readonly', text: prefab.useModel ? `Model: ${model?.name ?? 'missing'}` : `Greybox template, ${prefab.nodes.length} part${prefab.nodes.length === 1 ? '' : 's'}` })),
+        ];
+        const actions = h('div', { class: 'inline wrap' });
+        if (!prefab.useModel) actions.appendChild(button('Edit Prefab', () => editor.editPrefab(node.id), 'small', 'prefab'));
+        actions.appendChild(button(model ? 'New Model Version' : 'Replace with Model', () => void editor.replacePrefabModel(prefab.id), 'small', 'model'));
+        if (model) actions.appendChild(button(prefab.useModel ? 'Show Template' : 'Show Model', () => editor.usePrefabModel(prefab.id, !prefab.useModel), 'small'));
+        rows.push(row('', actions));
+        rows.push(h('div', { class: 'muted small pad', text: 'Every instance follows the prefab. A .glb imported with Replace with Model takes the place of the greybox template in all of them.' }));
+        const menu = iconButton('dots', 'Prefab options', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                [
+                    { label: 'Select All Instances', action: () => this.store.select(editor.instancesOf(prefab.id).map((n) => n.id)) },
+                    { label: 'Place Another', icon: 'plus', action: () => editor.placePrefab(prefab.id) },
+                    { separator: true },
+                    { label: 'Unpack This Instance', action: () => editor.unpackInstance(node.id) },
+                    { label: 'Delete Prefab', icon: 'trash', action: () => void editor.deletePrefab(prefab.id) },
+                ],
+                r.left - 170,
+                r.bottom + 4,
+            );
+        });
+        return section('prefab', 'Prefab', 'prefab', rows, [menu]);
     }
 
     // ----------------------------------------------------------------- mesh

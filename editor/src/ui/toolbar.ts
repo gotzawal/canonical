@@ -19,6 +19,7 @@ export interface ToolbarActions {
     toggleDock(): void;
     showAI(): void;
     build(): void;
+    walk(): void;
 }
 
 /** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls. */
@@ -33,6 +34,8 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: T
     const snap = toolButton('magnet', 'Snapping (hold Ctrl to toggle while dragging)', () => store.setPrefs({ snap: !store.prefs.snap }));
     const grid = toolButton('grid', 'Grid (G)', () => store.setPrefs({ grid: !store.prefs.grid }));
     const frame = toolButton('focus', 'Frame selection (F)', () => editor.frameSelection());
+    const walk = toolButton('walk', 'Walk at eye height: WASD and mouse, Esc to stop (V)', () => actions.walk());
+    editor.on('walk', (on) => walk.classList.toggle('active', on));
     const undo = toolButton('undo', `Undo (${shortcutLabel('Mod+Z')})`, () => store.undo());
     const redo = toolButton('redo', `Redo (${shortcutLabel('Mod+Shift+Z')})`, () => store.redo());
     const add = h('button', { class: 'tool-btn wide accent', attrs: { type: 'button' } }, icon('plus', 16), h('span', { text: 'Add' }));
@@ -85,7 +88,7 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: T
         h('div', { class: 'tool-group' }, toolButtons),
         h('div', { class: 'tool-group space-group' }, space, snap),
         h('div', { class: 'tool-group history-group' }, undo, redo),
-        h('div', { class: 'tool-group view-group' }, frame, grid),
+        h('div', { class: 'tool-group view-group' }, frame, grid, walk),
         h('div', { class: 'spacer' }),
         h('div', { class: 'tool-group play-group' }, play, pause, step),
         h('div', { class: 'spacer' }),

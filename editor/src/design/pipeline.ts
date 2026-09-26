@@ -425,13 +425,21 @@ export class Pipeline extends Emitter<PipelineEvents> {
     async captureShot(id: string, maxWidth = 1600): Promise<Blob> {
         const shot = this.shot(id);
         if (!shot) throw new Error('No such shot.');
+        return this.captureCamera(shot.camera, shot.aspect, maxWidth);
+    }
+
+    /**
+     * Renders a view: `camera` holds the frame's field of view, `aspect` the
+     * frame's shape. The editor view comes back afterwards.
+     */
+    async captureCamera(camera: CameraState, aspect: number, maxWidth = 1600): Promise<Blob> {
         const runtime = this.editor.runtime;
         const prev = { ...this.store.camera, target: [...this.store.camera.target] as CameraState['target'] };
-        const { rect } = this.frameFor(shot.aspect, 1);
+        const { rect, viewH } = this.frameFor(aspect, 1);
         runtime.setGridVisible(false);
         runtime.gi.setHelpersVisible(false);
         try {
-            this.editor.camera.jump(this.shotCamera(shot, 1));
+            this.editor.camera.jump({ ...camera, target: [...camera.target] as CameraState['target'], fov: cameraFov(camera.fov, rect.h, viewH) });
             return await runtime.captureFrame({ crop: rect, maxWidth, frames: 3, type: 'image/jpeg', quality: 0.9 });
         } finally {
             this.editor.camera.jump(prev);

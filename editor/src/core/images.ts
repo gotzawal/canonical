@@ -57,3 +57,12 @@ export async function dataUrlToBlob(url: string): Promise<Blob> {
 export function luma(r: number, g: number, b: number): number {
     return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
 }
+
+export function blobToDataUrl(blob: Blob): Promise<string> {
+    return new Promise((resolve, reject) => {
+        const r = new FileReader();
+        r.onload = () => resolve(String(r.result));
+        r.onerror = () => reject(r.error);
+        r.readAsDataURL(blob);
+    });
+}
