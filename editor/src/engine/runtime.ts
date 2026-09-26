@@ -342,6 +342,44 @@ export class Runtime {
         });
     }
 
+    /**
+     * Image of the next rendered frame, cropped to `crop` (CSS pixels of the
+     * canvas) and at most `maxWidth` wide. `frames` waits that many frames
+     * first, so a camera set just before shows up.
+     */
+    captureFrame(opts: { crop?: { x: number; y: number; w: number; h: number }; maxWidth?: number; type?: string; quality?: number; frames?: number } = {}): Promise<Blob> {
+        return new Promise((resolve, reject) => {
+            let left = Math.max(1, opts.frames ?? 1);
+            const timer = window.setTimeout(() => {
+                off();
+                reject(new Error('No frame was rendered (is the tab in the background?).'));
+            }, 8000);
+            const off = this.onFrame(() => {
+                if (--left > 0) return;
+                off();
+                clearTimeout(timer);
+                try {
+                    const src = this.canvas;
+                    const sx = src.width / Math.max(1, src.clientWidth);
+                    const sy = src.height / Math.max(1, src.clientHeight);
+                    const crop = opts.crop ?? { x: 0, y: 0, w: src.clientWidth, h: src.clientHeight };
+                    const cx = Math.max(0, Math.round(crop.x * sx)), cy = Math.max(0, Math.round(crop.y * sy));
+                    const cw = Math.max(1, Math.min(src.width - cx, Math.round(crop.w * sx))), ch = Math.max(1, Math.min(src.height - cy, Math.round(crop.h * sy)));
+                    const k = Math.min(1, (opts.maxWidth ?? 1600) / cw);
+                    const c = document.createElement('canvas');
+                    c.width = Math.max(1, Math.round(cw * k));
+                    c.height = Math.max(1, Math.round(ch * k));
+                    const g = c.getContext('2d')!;
+                    g.imageSmoothingQuality = 'high';
+                    g.drawImage(src, cx, cy, cw, ch, 0, 0, c.width, c.height);
+                    c.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode the capture.'))), opts.type ?? 'image/jpeg', opts.quality ?? 0.9);
+                } catch (e) {
+                    reject(e);
+                }
+            });
+        });
+    }
+
     /** Current canvas size in CSS pixels. */
     get cssSize(): [number, number] {
         return [this.canvas.clientWidth, this.canvas.clientHeight];

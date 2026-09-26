@@ -26,6 +26,7 @@ import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
 import type { Checkpoints } from './design/checkpoints';
+import { Pipeline } from './design/pipeline';
 import type { Viewport } from './viewport/viewport';
 import { exampleShowcase } from './examples';
 
@@ -47,6 +48,10 @@ interface EditorEvents {
     'show-graph': void;
     /** The scene (Ctrl+S) or the whole project was written to a file. */
     saved: 'scene' | 'project';
+    /** Show the Design tab (pipeline, brief, shots). */
+    'show-design': void;
+    /** Open the planning brief screen. */
+    'show-brief': void;
 }
 
 /** Editor commands shared by menus, shortcuts, panels and the AI tools. */
@@ -60,6 +65,8 @@ export class Editor extends Emitter<EditorEvents> {
     focusedPart: { node: string; path: string } | null = null;
     /** Save checkpoints (set up by main.ts once the assistant exists). */
     checkpoints: Checkpoints | null = null;
+    /** Stage gates, checklists, shots and snapshots of the planning pipeline. */
+    readonly pipeline: Pipeline;
 
     constructor(
         readonly store: Store,
@@ -75,6 +82,7 @@ export class Editor extends Emitter<EditorEvents> {
         this.compiler = services.compiler;
         this.player = services.player;
         this.graph = services.graph;
+        this.pipeline = new Pipeline(this);
     }
 
     // ------------------------------------------------------------ creation
@@ -87,6 +95,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     createPrimitive(type: GeometryType) {
+        if (!this.canAddObjects()) return;
         const node = makeMeshNode(type);
         if (type !== 'plane') {
             const p = this.viewport.spawnPoint();
@@ -118,7 +127,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Groups the selection under a new empty at the selection's center. */
     groupSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length) return;
+        if (!roots.length || !this.pipeline.canPlace(roots)) return;
         const parent = this.store.node(roots[0])?.parent ?? null;
         const group = makeNode(this.uniqueName('Group', parent), parent);
         // Put the group's origin at the center of what it contains.
@@ -145,7 +154,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ------------------------------------------------------------- editing
 
+    /** False (with a message) while the pipeline stage locks placement. */
+    canAddObjects(): boolean {
+        if (!this.pipeline.placementLocked) return true;
+        toast('Placement is locked in this stage: new objects would change the level. Unlock it in the pipeline bar first.', 'info', 4500);
+        return false;
+    }
+
     deleteSelection() {
+        if (!this.pipeline.canPlace(this.store.selection)) return;
         const ids = new Set<string>();
         for (const id of this.store.selection) {
             ids.add(id);
@@ -161,7 +178,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     duplicateSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length) return;
+        if (!roots.length || !this.pipeline.canPlace(roots)) return;
         const newRoots: string[] = [];
         this.store.commit('Duplicate', (doc) => {
             for (const rootId of roots) {
@@ -204,7 +221,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     resetTransform(part: 'position' | 'rotation' | 'scale' | 'all' = 'all') {
         const ids = this.store.selection;
-        if (!ids.length) return;
+        if (!ids.length || !this.pipeline.canPlace(ids)) return;
         this.store.commit('Reset Transform', (doc) => {
             for (const n of doc.nodes) {
                 if (!ids.includes(n.id)) continue;
@@ -218,6 +235,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Drops objects onto the ground (y of their lowest point = 0). */
     dropToGround() {
         const ids = this.store.selectionRoots();
+        if (!this.pipeline.canPlace(ids)) return;
         const moves: { id: string; dy: number }[] = [];
         for (const id of ids) {
             const box = this.picker.bounds(id);
@@ -324,7 +342,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     addModel(assetId: string, at?: Vec3, frame = false) {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
-        if (!meta) return;
+        if (!meta || !this.canAddObjects()) return;
         const spot = at ?? this.viewport.spawnPoint();
         const node = makeNode(this.uniqueName(meta.name.replace(/\.(glb|gltf)$/i, ''), null), null, spot);
         node.position = tidy3(node.position, 3);

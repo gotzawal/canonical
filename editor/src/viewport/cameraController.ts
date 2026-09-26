@@ -26,6 +26,11 @@ export class CameraController {
         this.apply();
     }
 
+    /** An animated move is running. */
+    get animating(): boolean {
+        return !!this.tween;
+    }
+
     get state(): CameraState {
         return this.store.camera;
     }
@@ -99,6 +104,13 @@ export class CameraController {
         const ray = this.picker.ray(x, y);
         const t = rayPlane(ray, point, normal) ?? rayPlane({ origin: ray.origin, dir: ray.dir }, point, scale(normal, -1));
         return t === null ? null : rayAt(ray, t);
+    }
+
+    /** Moves the camera at once (no animation). */
+    jump(state: CameraState) {
+        this.tween = null;
+        this.store.setCamera(state);
+        this.apply();
     }
 
     setView(yaw: number, pitch: number) {

@@ -151,7 +151,6 @@ export const STAGES: StageDef[] = [
                     return { done: open === 0, detail: open ? `${open} open` : undefined };
                 },
             },
-            { id: 'brief.confirm', text: 'You checked the structure', userOnly: true },
         ],
     },
     {
@@ -321,6 +320,19 @@ export function evaluateStage(ctx: CheckContext, id: StageId): CheckState[] {
             if (c.id === 'effects.perf' && ctx.fps) detail = `${Math.round(ctx.fps)} fps now, budget ${ctx.design.budget.fps}`;
             out.push({ id: c.id, text: c.text, done: !!s?.done, auto: false, custom: false, userOnly: !!c.userOnly, detail, note: s?.note, by: s?.by, hint: c.hint });
         }
+    }
+    // Areas the brief changed after they were built have to be redone first.
+    const rework = ctx.design.areas.filter((a) => a.rework && stageIndex(a.rework) <= stageIndex(id));
+    if (rework.length && ctx.design.stage === id) {
+        out.push({
+            id: 'rework',
+            text: 'Areas changed in the brief are reworked',
+            done: false,
+            auto: true,
+            custom: false,
+            userOnly: false,
+            detail: rework.map((a) => `${a.name} from ${stageDef(a.rework!).title}`).join(', '),
+        });
     }
     // Items the user or the assistant added.
     const known = new Set(def.checks.map((c) => c.id));

@@ -200,3 +200,41 @@ export function replaceChildren(el: HTMLElement, ...nodes: Node[]) {
     clear(el);
     el.append(...nodes);
 }
+
+// --------------------------------------------------------------- popovers
+
+let openPopover: { el: HTMLElement; close: () => void } | null = null;
+
+/** A floating panel under `anchor`; closes on outside clicks and Escape. */
+export function popover(anchor: HTMLElement, content: HTMLElement, cls = '', onClose?: () => void): () => void {
+    openPopover?.close();
+    closeMenus();
+    const el = h('div', { class: 'popover ' + cls }, content);
+    document.body.appendChild(el);
+    const r = anchor.getBoundingClientRect();
+    const pr = el.getBoundingClientRect();
+    el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pr.width - 6)) + 'px';
+    el.style.top = Math.min(r.bottom + 4, window.innerHeight - pr.height - 6) + 'px';
+    const onDown = (e: PointerEvent) => {
+        if (!el.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
+    };
+    const onKey = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') close();
+    };
+    let closed = false;
+    const close = () => {
+        if (closed) return;
+        closed = true;
+        el.remove();
+        document.removeEventListener('pointerdown', onDown, true);
+        document.removeEventListener('keydown', onKey, true);
+        if (openPopover?.el === el) openPopover = null;
+        onClose?.();
+    };
+    setTimeout(() => {
+        document.addEventListener('pointerdown', onDown, true);
+        document.addEventListener('keydown', onKey, true);
+    });
+    openPopover = { el, close };
+    return close;
+}

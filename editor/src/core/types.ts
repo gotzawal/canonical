@@ -513,6 +513,8 @@ export interface ShotCaptureDoc {
     at: string;
     /** Match with the target image (0..100) when it was captured. */
     score?: number | null;
+    /** Captured by hand during the stage (not at its completion). */
+    manual?: boolean;
 }
 
 /** A camera bookmark framed like a concept image. */

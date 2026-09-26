@@ -309,6 +309,7 @@ export function sanitizeDesign(input: any): DesignDoc {
                         asset: hc.asset,
                         at: str(hc.at, '', 64),
                         ...(typeof hc.score === 'number' && Number.isFinite(hc.score) ? { score: hc.score } : {}),
+                        ...(hc.manual === true ? { manual: true } : {}),
                     })),
             };
             if (sh.stale === true) shot.stale = true;

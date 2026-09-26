@@ -4,13 +4,14 @@ import {
 } from '../core/defaults';
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
-import { tidy } from '../core/math';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
 } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
-import { normalizeHex } from '../engine/color';
 import { recentLogs } from '../ui/statusbar';
+import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
+import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
+import { designToolDefs, runDesignTool } from './designTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -28,9 +29,10 @@ export interface ToolEnv {
     editor: Editor;
     allowPlay(): boolean;
     screenshots(): boolean;
+    /** The pipeline stage limits the tools. */
+    stageTools(): boolean;
 }
 
-type Json = Record<string, any>;
 
 // ------------------------------------------------------------------ schemas
 
@@ -114,7 +116,56 @@ function def(name: string, description: string, properties: Json = {}, required:
     return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
 }
 
+/**
+ * Tool groups: a tool is offered when the current pipeline stage allows one
+ * of its groups (see design/stages.ts). Tools missing here are always there.
+ */
+const TOOL_GROUPS: Record<string, ToolGroup[]> = {
+    create_objects: ['objects', 'lights', 'effects'],
+    update_objects: ['objects', 'lights', 'materials', 'effects'],
+    delete_objects: ['objects', 'lights', 'effects'],
+    set_environment: ['environment'],
+    set_model_material: ['materials'],
+    set_model_part: ['objects'],
+    add_model: ['objects'],
+    write_script: ['code'],
+    attach_script: ['code'],
+    detach_script: ['code'],
+    set_script_props: ['code'],
+    delete_script: ['code'],
+    write_shader: ['code', 'materials', 'effects'],
+    assign_shader: ['code', 'materials'],
+    delete_shader: ['code'],
+    set_render_pass: ['code', 'effects'],
+    add_post_effect: ['effects', 'code'],
+    update_post_effect: ['effects', 'code'],
+    remove_post_effect: ['effects', 'code'],
+    run_play_test: ['play', 'code'],
+    play: ['play', 'code'],
+    stop: ['play', 'code'],
+    update_design: ['design'],
+    ask_user: ['design'],
+    update_checklist: ['design'],
+    propose_stage_complete: ['design'],
+};
+
+/** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
+export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
+    if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
+    return new Set(stageDef(env.editor.pipeline.design.stage).tools);
+}
+
+function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
+    const groups = TOOL_GROUPS[name];
+    return !groups || groups.some((g) => allowed.has(g));
+}
+
 export function toolDefs(env: ToolEnv): ToolDef[] {
+    const allowed = allowedGroups(env);
+    return allToolDefs(env).filter((d) => toolAllowed(d.function.name, allowed));
+}
+
+function allToolDefs(env: ToolEnv): ToolDef[] {
     const defs: ToolDef[] = [
         def('get_scene', 'Summary of the project: objects (ids, types, transforms, materials, scripts), assets, scripts, shaders, render graph settings, selection and play state.'),
         def('get_object', 'Full details of one object, including its world position and bounding box.', { id: { type: 'string', description: 'Object id or name.' } }, ['id']),
@@ -250,77 +301,11 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
     if (env.screenshots()) {
         defs.push(def('capture_viewport', 'Take a picture of the viewport as it is now (the editor view, or the game camera while playing).'));
     }
+    defs.push(...designToolDefs());
     return defs;
 }
 
 // ---------------------------------------------------------------- helpers
-
-class ToolError extends Error {}
-
-const r3 = (v: number) => tidy(v, 3);
-const rv = (v: number[]) => v.map(r3);
-
-let colorCtx: CanvasRenderingContext2D | null = null;
-function hex(v: unknown, what = 'color'): string {
-    if (typeof v !== 'string' || !v.trim()) throw new ToolError(`${what} must be a color string like "#ff8800".`);
-    const s = v.trim();
-    if (/^#?([0-9a-f]{3}|[0-9a-f]{6})$/i.test(s)) return normalizeHex(s.startsWith('#') ? s : '#' + s);
-    colorCtx ??= document.createElement('canvas').getContext('2d');
-    if (colorCtx) {
-        colorCtx.fillStyle = '#010203';
-        colorCtx.fillStyle = s;
-        const out = String(colorCtx.fillStyle);
-        if (out !== '#010203' && /^#[0-9a-f]{6}$/i.test(out)) return out;
-    }
-    throw new ToolError(`"${s}" is not a color.`);
-}
-
-function num(v: unknown, what: string): number {
-    const n = typeof v === 'string' ? Number(v) : v;
-    if (typeof n !== 'number' || !Number.isFinite(n)) throw new ToolError(`${what} must be a number.`);
-    return n;
-}
-
-function v3(v: unknown, what: string): Vec3 {
-    if (!Array.isArray(v) || v.length !== 3) throw new ToolError(`${what} must be an array of 3 numbers.`);
-    return [num(v[0], what), num(v[1], what), num(v[2], what)];
-}
-
-function params(v: unknown): Record<string, ParamValue> {
-    if (v === undefined || v === null) return {};
-    if (typeof v !== 'object' || Array.isArray(v)) throw new ToolError('params must be an object.');
-    const out: Record<string, ParamValue> = {};
-    for (const [k, x] of Object.entries(v as Json)) {
-        if (typeof x === 'number' || typeof x === 'boolean') out[k] = x;
-        else if (typeof x === 'string') out[k] = /^#?[0-9a-f]{6}$/i.test(x) ? hex(x) : x;
-        else if (Array.isArray(x) && x.every((n) => typeof n === 'number')) out[k] = x;
-        else throw new ToolError(`params.${k} has an unsupported value.`);
-    }
-    return out;
-}
-
-function node(doc: SceneDoc, ref: unknown): NodeDoc {
-    if (typeof ref !== 'string' || !ref) throw new ToolError('Missing object id.');
-    const n = doc.nodes.find((x) => x.id === ref) ?? doc.nodes.find((x) => x.name === ref);
-    if (!n) throw new ToolError(`No object "${ref}". Call get_scene for the ids.`);
-    return n;
-}
-
-function script(doc: SceneDoc, ref: unknown) {
-    if (typeof ref !== 'string') throw new ToolError('Missing script id or name.');
-    const want = ref.toLowerCase().replace(/\.js$/, '');
-    const s = doc.scripts.find((x) => x.id === ref) ?? doc.scripts.find((x) => x.name.toLowerCase().replace(/\.js$/, '') === want);
-    if (!s) throw new ToolError(`No script "${ref}".`);
-    return s;
-}
-
-function shader(doc: SceneDoc, ref: unknown) {
-    if (typeof ref !== 'string') throw new ToolError('Missing shader id or name.');
-    const want = ref.toLowerCase().replace(/\.wgsl$/, '');
-    const s = doc.shaders.find((x) => x.id === ref) ?? doc.shaders.find((x) => x.name.toLowerCase().replace(/\.wgsl$/, '') === want);
-    if (!s) throw new ToolError(`No shader "${ref}".`);
-    return s;
-}
 
 function nodeType(n: NodeDoc): string {
     if (n.light) return `${n.light.type}_light`;
@@ -584,6 +569,72 @@ async function shaderInfo(env: ToolEnv, id: string): Promise<Json> {
     };
 }
 
+// ------------------------------------------------------------------ policy
+
+const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 'size', 'radius', 'height', 'tube', 'segments', 'steps', 'visible'];
+
+/**
+ * What the current stage lets the assistant change: lights in the lighting
+ * stage, materials in the materials stage, placement only while it is not
+ * locked. Returns an error message, or '' when allowed.
+ */
+class StagePolicy {
+    readonly allowed: Set<ToolGroup>;
+    readonly locked: boolean;
+    readonly stage: string;
+    warnings = new Set<string>();
+
+    constructor(env: ToolEnv) {
+        this.allowed = allowedGroups(env);
+        this.locked = env.editor.pipeline.placementLocked;
+        this.stage = stageDef(env.editor.pipeline.design.stage).title;
+    }
+
+    private any(...groups: ToolGroup[]): boolean {
+        return groups.some((g) => this.allowed.has(g));
+    }
+
+    private placement(): string {
+        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
+        if (this.locked) return `Placement is locked in the ${this.stage} stage; only lights, cameras and effects move. The user can unlock it in the pipeline bar.`;
+        return '';
+    }
+
+    create(type: string): string {
+        if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added in the ${this.stage} stage.`;
+        if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added in the ${this.stage} stage.`;
+        return this.placement();
+    }
+
+    update(n: NodeDoc, spec: Json): string {
+        const mover = !!n.light || !!n.camera;
+        if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
+            if (mover) {
+                if (!this.any('lights', 'objects', 'shots')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
+            } else {
+                const err = this.placement();
+                if (err) return `"${n.name}": ${err}`;
+            }
+        }
+        if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
+        if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
+        if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
+        if (this.stage === 'Level' && spec.material) {
+            const m = spec.material as Json;
+            if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
+                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with material.slot; colors and textures come in the Materials stage.');
+            }
+        }
+        return '';
+    }
+
+    remove(n: NodeDoc): string {
+        if (n.light || n.camera) return this.any('lights', 'objects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
+        const err = this.placement();
+        return err ? `"${n.name}": ${err}` : '';
+    }
+}
+
 // ------------------------------------------------------------------ runner
 
 /** Runs one tool call against the editor. */
@@ -592,6 +643,13 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
     const store = ed.store;
     const doc = () => store.doc;
     try {
+        const allowed = allowedGroups(env);
+        if (!toolAllowed(name, allowed)) {
+            const stage = stageDef(ed.pipeline.design.stage);
+            throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
+        }
+        const design = await runDesignTool(env, name, args);
+        if (design) return design;
         switch (name) {
             case 'get_scene': {
                 const d = doc();
@@ -639,6 +697,11 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             case 'create_objects': {
                 const specs: Json[] = Array.isArray(args.objects) ? args.objects : [];
                 if (!specs.length) throw new ToolError('objects is empty.');
+                const policy = new StagePolicy(env);
+                for (const spec of specs) {
+                    const err = policy.create(String(spec.type)) || (spec.material ? policy.update({ name: spec.name ?? spec.type } as NodeDoc, { material: spec.material }) : '');
+                    if (err) throw new ToolError(err);
+                }
                 const created: NodeDoc[] = [];
                 const d = JSON.parse(JSON.stringify(doc())) as SceneDoc;
                 for (const spec of specs) {
@@ -660,21 +723,31 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                         if (c.camera!.main) for (const o of others) o.camera!.main = false;
                     }
                 });
-                return { data: { created: created.map((n) => ({ id: n.id, name: n.name })) }, summary: created.map((n) => n.name).join(', ') };
+                return { data: { created: created.map((n) => ({ id: n.id, name: n.name })), ...(policy.warnings.size ? { note: [...policy.warnings].join(' ') } : {}) }, summary: created.map((n) => n.name).join(', ') };
             }
             case 'update_objects': {
                 const updates: Json[] = Array.isArray(args.updates) ? args.updates : [];
                 if (!updates.length) throw new ToolError('updates is empty.');
+                const policy = new StagePolicy(env);
+                for (const u of updates) {
+                    const err = policy.update(node(doc(), u.id), u);
+                    if (err) throw new ToolError(err);
+                }
                 // Validate against a copy first so a bad entry changes nothing.
                 const draft = JSON.parse(JSON.stringify(doc())) as SceneDoc;
                 for (const u of updates) applyFields(env, draft, node(draft, u.id), u, []);
                 store.commit('AI: Edit Objects', (d) => {
                     d.nodes = draft.nodes;
                 });
-                return { data: { updated: updates.length }, summary: `${updates.length} object(s)` };
+                return { data: { updated: updates.length, ...(policy.warnings.size ? { note: [...policy.warnings].join(' ') } : {}) }, summary: `${updates.length} object(s)` };
             }
             case 'delete_objects': {
                 const ids: string[] = (Array.isArray(args.ids) ? args.ids : []).map((r: unknown) => node(doc(), r).id);
+                const policy = new StagePolicy(env);
+                for (const id of ids) {
+                    const err = policy.remove(store.node(id)!);
+                    if (err) throw new ToolError(err);
+                }
                 const all = new Set<string>();
                 for (const id of ids) {
                     all.add(id);
