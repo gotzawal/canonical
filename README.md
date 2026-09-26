@@ -1,164 +1,74 @@
-![Cover Art](https://github.com/Orillusion/orillusion-webgpu-samples/blob/main/logo_new.png)     
-## Orillusion
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="editor/public/logo-white.svg">
+    <img src="editor/public/logo.svg" alt="Canonical logo" width="112">
+  </picture>
+</p>
 
-[![Test](https://github.com/Orillusion/orillusion/actions/workflows/ci.yml/badge.svg)](https://github.com/Orillusion/orillusion/actions/workflows/ci.yml)
-[![npm](https://img.shields.io/npm/v/@orillusion/core)](https://www.npmjs.com/package/@orillusion/core)
+<h1 align="center">Canonical</h1>
 
-`Orillusion`  is a pure Web3D rendering engine which is fully developed based on the `WebGPU` standard. It aims to achieve desktop-level rendering effects and supports 3D rendering of complex scenes in the browser.
+<p align="center">
+  An open-source, AI-automated development editor based on the Orillusion WebGPU engine.
+</p>
 
-## Need to know
-Beta version,  **NOT**  recommended for any commercial application.
+<p align="center">
+  <a href="https://gotzawal.github.io/canonical/"><strong>Open the editor</strong></a>
+  &nbsp;·&nbsp;
+  <a href="#features">Features</a>
+  &nbsp;·&nbsp;
+  <a href="#the-ai-assistant">AI assistant</a>
+  &nbsp;·&nbsp;
+  <a href="#the-engine-orillusion">Engine</a>
+  &nbsp;·&nbsp;
+  <a href="#development">Development</a>
+</p>
 
-## Contributing (ongoing)
+Canonical is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant builds the scene, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
-`WebGPU` is the latest technology in the web domain and will play a crucial role in terms of 3D rendering as well as `AI/LLM` scenarios. 
+The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/canonical/** every time `main` is updated.
 
-We aim to create a dedicated technical community for the `WebGPU` field, bringing together outstanding developers. 
+| Name | What it is |
+|---|---|
+| **Canonical** | This project: the editor, its AI assistant and the tooling around them |
+| **Orillusion** | The WebGPU engine Canonical is built on. Its source is included in this repository |
 
-Hope more and more `front-end` developers could stay updated with the latest Web technologies `NOT ONLY` image slicing for web design.
+## Features
 
-Specifically, we will continuously update the excellent samples provided by open-source contributors, allowing everyone to see better works. 
+**AI assistant**
 
-Hope it could help highlight the very talented individual developers within the community!
+- Works on the open project through tools: it reads and edits the scene and imported models, writes and fixes scripts and shaders, changes the render graph, runs Play tests and reads the console
+- With vision models it can also look at the viewport to check the result
+- Everything one request changes is a single undo step
+- Works with any OpenRouter model that supports tool calls
 
-<a href="https://www.youtube.com/@orillusion7225"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/light_city.gif" height="140"></a>
-<a href="https://github.com/ID-Emmett"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/physical_car.gif" height="140"></a>
-<a href="https://github.com/ID-Emmett"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/movie_camera.gif" height="140"></a>
-<a href="https://github.com/ID-Emmett"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/helicopter.gif" height="140"></a>
-<a href="https://www.youtube.com/@orillusion7225"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/shooting.gif" height="140"></a>
-<a href="https://github.com/OriIIusion"><img src="https://github.com/Orillusion/assets/blob/main/sample_src/beijing_subway.gif" height="140"></a>
-<a href="https://github.com/mate-h"><img src="https://github.com/Orillusion/assets/blob/main/sample_src/volumetric_clouds.gif" height="140"></a>
-<a href="https://github.com/ID-Emmett"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/track_camera.gif" height="140"></a>
-<a href="https://github.com/ID-Emmett"><img src="https://github.com/Orillusion/assets/blob/main/sample_src/pentagram.webp" height="140"></a>
-<a href="https://github.com/OriIIusion"><img src="https://raw.githubusercontent.com/Orillusion/assets/main/sample_src/light_box.gif" height="140"></a>
-<a href="https://github.com/seven1031"><img src="https://github.com/Orillusion/assets/blob/main/sample_src/rabbit_box.webp" height="140"></a>
-<a href="https://github.com/seven1031"><img src="https://github.com/Orillusion/assets/blob/main/sample_src/fluid_mouse.webp" height="140"></a>
-## Install
-
-### NPM
-We recommend using front-end build tools for developing Web3D applications, such  [Vite](https://vitejs.dev/) or [Webpack](https://webpack.js.org/).
-
-- Install dependencies:
-```text
-npm install @orillusion/core --save
-```
-- Import on-demand:
-```javascript
-import { Engine3D, Camera3D } from '@orillusion/core'
-```
-- Import globally:
-```javascript
-import * as Orillusion from '@orillusion/core'
-```
-
-### CDN
-In order to use the engine more conveniently, we support to use native `<script>` tag to import `Orillusion`. Three different ways to import using the official `CDN` link:
-
-- **Global Build:** You can use `Orillusion` directly from a CDN via a script tag:
-```html
-<script src="https://unpkg.com/@orillusion/core/dist/orillusion.umd.js"></script>
-<script>  
-    const { Engine3D, Camera3D } = Orillusion  
-</script>
-```
-The above link loads the global build of `Orillusion`, where all top-level APIs are exposed as properties on the global `Orillusion` object.
-
--  **ESModule Build:** We recommend using the [ESModule](https://developer.mozilla.org/docs/Web/JavaScript/Guide/Modules) way for development. As most browsers have supported `ES` module, we just need to import the `ES` build version of `orillusion.es.js`
-```html
-<script type="module">  
-    import { Engine3D, Camera3D } from "https://unpkg.com/@orillusion/core/dist/orillusion.es.js" 
-</script>
-```
-
-- **Import Maps:** In order to manage the name of dependencies, we recommend using [Import Maps](https://caniuse.com/import-maps)
-
-```html
-<!-- Define the name or address of ES Module -->  
-<script  type="importmap">  
-{  
-    "imports": { "@orillusion/core": "https://unpkg.com/@orillusion/core/dist/orillusion.es.js" }  
-}  
-</script>  
-<!-- Customerized names could be imported -->  
-<script  type="module">  
-    import { Engine3D, Camera3D } from "@orillusion/core"
-</script>
-```
-
-## Usage
-### Create Engine3D instance
-
-Use `Engine3D.init()` to create a new engine instance. Each call returns an independent instance — you can run multiple engines side-by-side in the same page.
-
-```javascript
-import { Engine3D } from '@orillusion/core' 
-Engine3D.init().then((engine) => {
-    // Next
-})
-```
-As `Engine3D.init()` is asynchronous, we recommend using `async/await` in the code
-```javascript
-import { Engine3D } from '@orillusion/core'  
-async function demo(){  
-    const engine = await Engine3D.init();
-    // Next 
-}  
-demo()
-```
-### Create canvas
-By default, `Engine3D.init()` creates a `canvas` the same size as the window. You can also create a `canvas` manually using `<canvas>` with an `id`
-
-```html
-<canvas id="canvas" width="800" height="500" />
-```
-Then get the `<canvas>` by `id` and pass it to `Engine3D.init()` via `canvasConfig`
-
-```javascript
-import { Engine3D } from '@orillusion/core';  
-let canvas = document.getElementById('canvas')  
-
-const engine = await Engine3D.init({
-    canvasConfig: { canvas }
-})
-```
-Please read the [Docs](https://www.orillusion.com/guide/) to Learn More.
-
-## Platform
-**Windows/Mac/Linux:**
-- Chrome 113+
-- Edge: 113+
-
-**Android (Behind the `enable-unsafe-webgpu` flag):** 
-- Chrome Canary 113+ 
-- Edge Canary 113+
-
-## Useful links
-- [Official Web Site](https://www.orillusion.com/)
-- [Documentation](https://www.orillusion.com/guide/)
-- [Forum](https://forum.orillusion.com/)
-
-## Editor
-`editor/` is a scene editor that runs entirely in the browser: no install, no server. It is built from the engine source in this repository and published to GitHub Pages every time `main` is updated:
-
-**https://gotzawal.github.io/canonical/**
+**Scene editing**
 
 - Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
 - Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
 - Edit materials, lights, sky, exposure, bloom, ambient occlusion and fog
 - Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (color, PBR values, texture, or a custom shader). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
-- Write WGSL material shaders and full screen post effects in the built-in code editor; properties declared in the code become Inspector controls
-- Inspect the engine's render graph (passes and the resources they read and write), switch passes off and order the post chain
-- Write JavaScript behaviours and run the scene in Play mode (`Ctrl+P`); Stop puts the scene back exactly as it was
-- An AI assistant (via OpenRouter) that edits the scene, writes and fixes scripts and shaders, runs Play tests and reads the console
-- Scenes autosave to the browser (imported files live in IndexedDB); `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one
+
+**Code**
+
+- JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was
+- WGSL material shaders and full screen post effects in the built-in code editor; properties declared in the code become Inspector controls
+- The engine's render graph (passes and the resources they read and write): switch passes off and order the post chain
+
+**Files**
+
+- Scenes autosave to the browser (imported files live in IndexedDB)
+- `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one
 
 **File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions.
 
-Run it locally with `pnpm run editor` (http://localhost:8100). `pnpm run editor:build` writes the static site to `editor/dist`.
+## The AI assistant
+Open the AI tab and use **Connect with OpenRouter**, or paste an API key in its settings. Any OpenRouter model that supports tool calls works.
 
-The Pages deployment is done by `.github/workflows/editor-pages.yml`. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+The assistant has tools for the whole editor: reading the scene, creating and updating objects, model overrides, scripts, shaders, render passes and post effects, running Play tests, reading the console and, with vision models, capturing the viewport. It uses them in a loop: after writing a script or shader it reads the compile result and fixes the errors, and when behaviour matters it runs the scene and reads the logs before it reports back.
 
-### Scripts and Play mode
+The key is kept in this browser's local storage, or only for the current tab when "Remember on this device" is off, and it is sent only to openrouter.ai. The editor contacts OpenRouter only when you open the AI tab (to list the models) and when you send a request. A request carries your message, a short description of the editor state and the results of the tools the model calls.
+
+## Scripts and Play mode
 A script is a class that extends `Script`. Its public fields show up in the Inspector, where each object can set its own values:
 
 ```js
@@ -173,22 +83,50 @@ export default class Spinner extends Script {
 
 The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)` and `onPointerDown` / `onPointerUp` / `onClick(e)`. Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes, mouse) and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the scene's main camera, or the editor view when the scene has none. Script errors in the console link to their line.
 
-### Shaders and the render graph
+### Scripts from scene files
+Scripts run JavaScript in the editor page, which also holds your OpenRouter key. When you open a scene file, its scripts stay paused (they are not even compiled) until you choose **Enable Scripts**, so you can read them first. Scenes you make yourself and the built-in example are not affected.
+
+## Shaders and the render graph
 Shaders are WGSL. Properties are declared with comments, such as `// @property speed float 1 0 10` (types `float`, `color`, `vec4` and `texture`), and read as `materialUniform.speed`. A material shader implements `fn frag()`, and optionally `fn vert(...)`. It is either lit (it fills `ORI_ShadingInput` and uses the engine's PBR lighting and shadows) or unlit. A post shader implements `fn post(uv: vec2f) -> vec4f`, reads the image with `sceneColor(uv)` and runs before anti-aliasing and tone mapping. Compile errors show on their line, and the last version that compiled keeps rendering.
 
 The Render Graph tab of the bottom dock lists the forward renderer's passes in execution order, with the resources each one reads and writes. Switching off a pass that an enabled pass still depends on is refused, with the reason.
 
-### AI assistant
-The AI tab works with any OpenRouter model that supports tool calls: use **Connect with OpenRouter** or paste an API key in its settings. The assistant reads the scene and edits it: objects, model overrides, scripts, shaders and render passes. It can also run Play tests, read the console and, with vision models, look at the viewport. Everything one request changes is a single undo step.
+## The engine: Orillusion
+[Orillusion](https://www.orillusion.com/) is an open-source 3D rendering engine for the web, written in TypeScript and built on WebGPU from the start rather than ported from WebGL. It aims for desktop-class rendering in the browser, which makes it a strong base for Canonical:
 
-The key is kept in this browser's local storage, or only for the current tab when "Remember on this device" is off, and it is sent only to openrouter.ai. The editor contacts OpenRouter only when you open the AI tab (to list the models) and when you send a request. A request carries your message, a short description of the editor state and the results of the tools the model calls.
+- **Built for modern GPUs.** WebGPU gives it compute shaders and lower CPU overhead than WebGL, and Orillusion uses compute for clustered lighting, global illumination and GPU particles.
+- **High-end rendering.** Physically based materials, real-time shadows, image-based lighting and DDGI global illumination, plus post effects such as bloom, GTAO, screen space reflections, TAA, depth of field and volumetric fog.
+- **A complete toolkit.** glTF / GLB, OBJ and 3D Tiles loading, skeletal and morph target animation, and optional packages for physics (Ammo.js or Rapier), particles and a physically based sky.
+- **Easy to drive from an editor.** A scene is a tree of `Object3D` nodes with components attached, the same model the editor shows, and it is MIT licensed.
 
-### Scripts from scene files
-Scripts run JavaScript in the editor page, which also holds your OpenRouter key. When you open a scene file, its scripts stay paused (they are not even compiled) until you choose **Enable Scripts**, so you can read them first. Scenes you make yourself and the built-in example are not affected.
+The engine source is in `src/` (the core, `@orillusion/core`) and `packages/` (plugins). The editor imports the core straight from `src/`, so every build runs the engine code of the branch being built. For the engine's own API and guides, see the [Orillusion documentation](https://www.orillusion.com/guide/) and the [Orillusion repository](https://github.com/Orillusion/orillusion).
 
-## Dev and Contribution
-Please make sure to read the [Contributing Guide](.github/contributing.md) before developing or making a pull request.
+## Development
+You need Node.js (CI uses 22) and pnpm.
 
-## License 
+```bash
+pnpm install
+pnpm run editor             # dev server at http://localhost:8100
+pnpm run editor:typecheck   # type check the editor
+pnpm run editor:build       # static site in editor/dist
+```
 
-Orillusion engine is released under the [MIT](https://opensource.org/licenses/MIT) license. 
+`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+
+| Path | Contents |
+|---|---|
+| `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
+| `editor/public/` | Favicons and the logo |
+| `src/` | Orillusion engine core |
+| `packages/` | Orillusion plugins (physics, particles, atmosphere, post effects and more) |
+| `samples/` | Engine samples, served by `pnpm run dev` (they load assets from the `public` submodule: `git submodule update --init`) |
+| `test/` | Engine tests |
+
+### Browser support
+The editor needs WebGPU: Chrome or Edge 113+ on Windows, macOS and ChromeOS, Chrome 121+ on Android, Safari 26+, and Firefox 141+ on Windows. On Linux, Chrome may need `chrome://flags/#enable-unsafe-webgpu` and Vulkan.
+
+## Contributing
+Issues and pull requests are welcome. Commit messages follow the [commit convention](.github/commit-convention.md), for example `feat(editor): ...`. For the engine's internals, scripts and samples, see the [Orillusion contributing guide](.github/contributing.md).
+
+## License
+Released under the [MIT](LICENSE) license. The Orillusion engine is copyright Orillusion and MIT licensed.

@@ -168,7 +168,7 @@ export function showAbout(editor: Editor) {
     const body = h(
         'div',
         { class: 'about' },
-        h('p', { text: 'A scene editor for the Canonical WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere. The optional AI assistant sends your messages and a description of the scene to OpenRouter, only when you use it.' }),
+        h('p', { text: 'An open-source, AI-automated development editor based on the Orillusion WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere. The optional AI assistant sends your messages and a description of the scene to OpenRouter, only when you use it.' }),
         h(
             'dl',
             null,
