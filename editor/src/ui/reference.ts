@@ -1,4 +1,4 @@
-import { h } from './dom';
+import { h, shortcutLabel } from './dom';
 import { dialog } from './overlays';
 
 // Help > Scripting & Shader Reference. Keep it in step with play/script.ts,
@@ -96,6 +96,10 @@ export function showReference() {
         h('h3', { text: 'Global illumination' }),
         h('p', {
             text: 'Scene > Global Illumination turns on DDGI: a grid of light probes captures the scene and lit materials receive the light it bounces, so a red wall tints the floor next to it and shadows get indirect light. Fit to Scene sizes the grid to your meshes; surfaces more than one probe spacing outside the grid get no indirect light. Probes are captured again after every change, or every frame with Realtime. It works in Play mode and in builds.',
+        }),
+        h('h3', { text: 'Build & Deploy' }),
+        h('p', {
+            text: `File > Build & Deploy (${shortcutLabel('Mod+B')}) makes a standalone web game of the scene: Run in New Tab plays it without the editor, Download .zip gives a folder for any static host (it must be served over HTTP), and GitHub Pages publishes it with a personal access token. Games play like Play mode, through the main camera or, without one, from the editor view at build time.`,
         }),
         h('h3', { text: 'Shaders (WGSL)' }),
         h('p', {

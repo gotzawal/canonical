@@ -302,6 +302,17 @@ export interface SceneDoc {
     shaders: ShaderDoc[];
     renderGraph: RenderGraphDoc;
     nodes: NodeDoc[];
+    build?: BuildDoc;
+}
+
+/** Build & Deploy settings of a project (File > Build & Deploy). */
+export interface BuildDoc {
+    /** Page title of the game; the scene name when empty. */
+    title?: string;
+    /** GitHub repository: "name" or "owner/name". */
+    repo?: string;
+    /** Branch GitHub Pages publishes. */
+    branch?: string;
 }
 
 /** Editor camera state. Saved with the scene but kept out of undo history. */

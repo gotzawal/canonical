@@ -63,6 +63,9 @@ const PATHS: Record<string, string> = {
     user: '<circle cx="12" cy="8" r="3.5"/><path d="M5 20a7 7 0 0 1 14 0"/>',
     home: '<path d="M4 11 12 4l8 7M6 9.5V20h12V9.5"/>',
     dots: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
+    rocket: '<path d="M9.5 14.5c1-5.5 4.5-9.5 10.5-10.5-1 6-5 9.5-10.5 10.5Z"/><path d="M9.5 14.5 7 12l1.5-3.5h4M9.5 14.5 12 17l3.5-1.5v-4"/><path d="M6.5 16.5c-1.3.5-2 2-2 3.5 1.5 0 3-.7 3.5-2"/>',
+    maximize: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+    minimize: '<path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
 };
 
 export type IconName = keyof typeof PATHS;

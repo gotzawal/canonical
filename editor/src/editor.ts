@@ -804,6 +804,9 @@ export class Editor extends Emitter<EditorEvents> {
     /** Called before Play starts, e.g. to apply unsaved code. */
     beforePlay: () => void = () => {};
 
+    /** Applies code edited in the code panels but not applied yet; returns how many files. */
+    applyCodeEdits: () => number = () => 0;
+
     /** Starts Play; `asked` skips the question about paused scripts (already answered). */
     play(asked = false) {
         if (!asked && this.player.state === 'stopped' && !this.compiler.trusted && this.usesScripts()) {

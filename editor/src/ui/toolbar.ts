@@ -18,6 +18,7 @@ function toolButton(iconName: string, title: string, onClick: (e: MouseEvent) =>
 export interface ToolbarActions {
     toggleDock(): void;
     showAI(): void;
+    build(): void;
 }
 
 /** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls. */
@@ -55,6 +56,7 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: T
     };
     editor.player.on('state', updatePlay);
     updatePlay();
+    const build = toolButton('rocket', `Build & Deploy: run, download or publish the game (${shortcutLabel('Mod+B')})`, () => actions.build());
     const dock = toolButton('panelBottom', `Code and render graph panel (${shortcutLabel('Mod+J')})`, () => actions.toggleDock());
     const ai = h('button', { class: 'tool-btn wide', title: 'AI assistant (OpenRouter)', attrs: { type: 'button' } }, icon('sparkle', 16), h('span', { text: 'AI' }));
     ai.addEventListener('click', () => actions.showAI());
@@ -87,7 +89,7 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: T
         h('div', { class: 'spacer' }),
         h('div', { class: 'tool-group play-group' }, play, pause, step),
         h('div', { class: 'spacer' }),
-        h('div', { class: 'tool-group' }, dock, ai),
+        h('div', { class: 'tool-group' }, build, dock, ai),
         add,
     );
 }

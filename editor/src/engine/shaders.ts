@@ -310,7 +310,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         super();
         const check = () => this.syncAll();
         store.on('change', (hint) => {
-            if (!hint?.nodes && !hint?.env) check();
+            if (!hint?.nodes && !hint?.env && !hint?.meta) check();
         });
         store.on('load', check);
         check();

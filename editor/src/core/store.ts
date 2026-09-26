@@ -2,7 +2,7 @@ import { Emitter } from './events';
 import { defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGI, defaultRenderGraph, uid } from './defaults';
 import { clampGIGrid } from './giLimits';
 import type {
-    CameraState, GIDoc, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
+    BuildDoc, CameraState, GIDoc, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
 } from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
@@ -11,6 +11,8 @@ export interface ChangeHint {
     nodes?: string[];
     /** Only the environment changed. */
     env?: boolean;
+    /** Only settings that do not change the scene changed (such as build settings). */
+    meta?: boolean;
 }
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';
@@ -571,6 +573,16 @@ export function sanitize(input: any): SceneDoc {
         shaders,
         renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
         nodes,
+        build: sanitizeBuild(input?.build),
     };
 }
 
+function sanitizeBuild(input: any): BuildDoc | undefined {
+    if (!input || typeof input !== 'object') return undefined;
+    const out: BuildDoc = {};
+    for (const k of ['title', 'repo', 'branch'] as const) {
+        const v = input[k];
+        if (typeof v === 'string' && v.trim()) out[k] = v.trim().slice(0, 200);
+    }
+    return Object.keys(out).length ? out : undefined;
+}

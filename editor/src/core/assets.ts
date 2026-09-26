@@ -47,6 +47,16 @@ function tx<T>(mode: IDBTransactionMode, run: (store: IDBObjectStore) => IDBRequ
 const memory = new Map<string, AssetRecord>();
 const urls = new Map<string, string>();
 
+/**
+ * Where asset files come from when not from this browser's IndexedDB: a
+ * built game (see player/main.ts) serves them as files next to the page.
+ */
+let resolver: ((meta: AssetMeta) => string | null) | null = null;
+
+export function setAssetResolver(fn: ((meta: AssetMeta) => string | null) | null) {
+    resolver = fn;
+}
+
 export function kindOf(file: { name: string; type: string }): AssetKind | null {
     const name = file.name.toLowerCase();
     if (name.endsWith('.glb') || name.endsWith('.gltf')) return 'model';
@@ -86,6 +96,7 @@ export async function getAssetBlob(id: string): Promise<Blob | null> {
  * extension, so the file name is kept in the fragment.
  */
 export async function getAssetUrl(meta: AssetMeta): Promise<string | null> {
+    if (resolver) return resolver(meta);
     const existing = urls.get(meta.id);
     if (existing) return existing;
     const blob = await getAssetBlob(meta.id);

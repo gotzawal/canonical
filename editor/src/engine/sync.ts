@@ -90,6 +90,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     // ---------------------------------------------------------------- sync
 
     sync(hint?: ChangeHint) {
+        if (hint?.meta) return;
         const doc = this.store.doc;
         this.runtime.applyEnvironment(doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
@@ -519,6 +520,17 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 
     // --------------------------------------------------------------- assets
+
+    /** Resolves once every model and texture requested so far has loaded or failed. */
+    async whenLoaded(): Promise<void> {
+        for (;;) {
+            const pending = [...this.prefabs.values(), ...this.textures.values()];
+            await Promise.allSettled(pending);
+            // Loaded models can ask for more textures (their overrides).
+            const now = [...this.prefabs.values(), ...this.textures.values()];
+            if (now.every((p) => pending.includes(p))) return;
+        }
+    }
 
     private loadPrefab(assetId: string): Promise<Object3D> {
         let p = this.prefabs.get(assetId);
