@@ -25,10 +25,12 @@ export type ParamValue = number | string | boolean | number[];
 export type MaterialType = 'lit' | 'unlit' | 'lambert' | 'shader';
 
 /**
- * Alpha handling. 'auto' blends when opacity is below 1, 'mask' cuts out
- * pixels whose alpha is below the cutoff (foliage, fences).
+ * Alpha handling. 'auto' blends when opacity is below 1 (on a model slot it
+ * keeps the file's mode), 'mask' cuts out pixels whose alpha is below the
+ * cutoff (foliage, fences), 'additive' and 'multiply' are transparent
+ * blending modes (glow and fire, stains and tinted glass).
  */
-export type AlphaMode = 'auto' | 'opaque' | 'blend' | 'mask';
+export type AlphaMode = 'auto' | 'opaque' | 'blend' | 'mask' | 'additive' | 'multiply';
 
 export interface MaterialDoc {
     /** 'shader' renders with the custom shader asset in `shader`. */
@@ -62,7 +64,7 @@ export interface MaterialDoc {
     normalScale?: number;
     /** Lit only: glTF style metallic-roughness map, roughness in G and metallic in B. */
     metalRoughMap?: string | null;
-    /** Lit only: ambient occlusion map (R channel). */
+    /** Lit only: ambient occlusion map (grayscale; the engine reads G like Unity). */
     aoMap?: string | null;
     /** Lit only: emission map, multiplied by the emissive color. */
     emissiveMap?: string | null;

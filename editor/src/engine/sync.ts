@@ -10,7 +10,7 @@ import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, 
 import { hexToColor } from './color';
 import { castGI } from './gi';
 import {
-    applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, PBR_MAPS,
+    applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
 } from './materials';
 import { inspectModel, ModelInfo, ModelOverrides } from './modelParts';
 import type { Runtime } from './runtime';
@@ -540,7 +540,9 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (!meta) throw new Error('Model asset is missing from this project.');
                 const url = await getAssetUrl(meta);
                 if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
-                return this.runtime.engine.res.loadGltf(url);
+                const prefab = await this.runtime.engine.res.loadGltf(url);
+                normalizeModelMaterials(prefab, this.runtime.engine.context3D);
+                return prefab;
             })();
             p.catch(() => this.prefabs.delete(assetId));
             this.prefabs.set(assetId, p);

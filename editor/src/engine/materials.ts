@@ -1,4 +1,4 @@
-import { Engine3D, LambertMaterial, LitMaterial, Material, Texture, UnLitMaterial, Vector4 } from '@orillusion/core';
+import { BlendMode, Engine3D, LambertMaterial, LitMaterial, Material, Object3D, RenderNode, Texture, UnLitMaterial, Vector4 } from '@orillusion/core';
 import type { AlphaMode, MaterialDoc } from '../core/types';
 import { hexToColor } from './color';
 import { setBlended } from './shaders';
@@ -13,17 +13,27 @@ export type BuiltinKind = 'lit' | 'unlit' | 'lambert';
 export function createBuiltinMaterial(kind: BuiltinKind, ctx: any): Material {
     if (kind === 'unlit') return new UnLitMaterial(ctx);
     if (kind === 'lambert') return new LambertMaterial(ctx);
-    return new LitMaterial(ctx);
+    const lit = new LitMaterial(ctx);
+    // Without a metallic-roughness map the sliders apply as they are.
+    lit.shader.setTexture('maskMap', Engine3D.resFor(ctx).whiteTexture);
+    return lit;
 }
 
-export type EngineAlpha = 'OPAQUE' | 'BLEND' | 'MASK';
+/** Engine alpha states: OPAQUE, MASK (cut-out) and the transparent BLEND, ADD and MUL. */
+export type EngineAlpha = 'OPAQUE' | 'BLEND' | 'MASK' | 'ADD' | 'MUL';
 
 /** 'auto' blends when the material is not fully opaque. */
 export function engineAlpha(mode: AlphaMode | undefined, opacity: number): EngineAlpha {
     if (mode === 'opaque') return 'OPAQUE';
     if (mode === 'blend') return 'BLEND';
     if (mode === 'mask') return 'MASK';
+    if (mode === 'additive') return 'ADD';
+    if (mode === 'multiply') return 'MUL';
     return opacity < 0.999 ? 'BLEND' : 'OPAQUE';
+}
+
+export function isTransparent(alpha: EngineAlpha): boolean {
+    return alpha === 'BLEND' || alpha === 'ADD' || alpha === 'MUL';
 }
 
 function hasUniform(mat: Material, name: string): boolean {
@@ -36,11 +46,16 @@ function hasUniform(mat: Material, name: string): boolean {
  * (a shader that wants cut-outs discards against materialUniform.alphaCutoff).
  */
 export function applyAlpha(mat: Material, alpha: EngineAlpha, cutoff: number) {
+    const transparent = isTransparent(alpha);
     if (mat instanceof LitMaterial || mat instanceof UnLitMaterial || mat instanceof LambertMaterial) {
-        mat.alphaMode = alpha;
+        // The setter skips the mode it has cached, which is stale on a copy
+        // of another material (a model's): always apply the state.
+        (mat as any)._alphaMode = undefined;
+        mat.alphaMode = transparent ? 'BLEND' : (alpha as 'OPAQUE' | 'MASK');
     } else {
-        setBlended(mat, alpha === 'BLEND');
+        setBlended(mat, transparent);
     }
+    if (transparent) mat.blendMode = alpha === 'ADD' ? BlendMode.ADD : alpha === 'MUL' ? BlendMode.MUL : BlendMode.NORMAL;
     // The lit shader only cuts in MASK mode; unlit and lambert always
     // compare against the cutoff, so it must be 0 unless masking.
     if (hasUniform(mat, 'alphaCutoff')) {
@@ -116,15 +131,54 @@ export const PBR_MAPS: MapSlot[] = [
     { key: 'emissiveMap', slot: 'emissiveMap', linear: false, define: 'USE_EMISSIVEMAP' },
 ];
 
-/** The engine's placeholder for a map slot when no texture is assigned. */
+/**
+ * What a map slot shows when no texture is assigned: the material's own
+ * texture, or a neutral placeholder that leaves the material's values as
+ * they are (white for metallic-roughness, flat for normals).
+ */
 export function defaultMapTexture(mat: Material, slot: string, ctx: any): Texture {
-    const own = mat.shader.getTexture(slot) as Texture | undefined;
-    if (own) return own;
     const res = Engine3D.resFor(ctx);
+    const own = mat.shader.getTexture(slot) as Texture | undefined;
+    // The engine's own metallic-roughness placeholder has 0.5 in G, which halves the roughness.
+    if (own && !(slot === 'maskMap' && own === res.maskTexture)) return own;
     if (slot === 'normalMap') return res.normalTexture;
-    if (slot === 'maskMap') return res.maskTexture;
     if (slot === 'emissiveMap') return res.blackTexture;
     return res.whiteTexture;
+}
+
+/**
+ * Brings the materials of a loaded glTF model in line with glTF, which is
+ * what the editor's settings assume:
+ * - without a metallic-roughness texture the roughness and metallic factors
+ *   apply as they are (the engine binds a placeholder with 0.5 in G, which
+ *   halved the roughness);
+ * - MASK materials cut out pixels below their cutoff in the opaque queue
+ *   (the engine drew them blended, still writing depth), and BLEND
+ *   materials blend without writing depth.
+ * Materials are shared by every instance of the model, so this runs once
+ * per load.
+ */
+export function normalizeModelMaterials(root: Object3D, ctx: any) {
+    const res = Engine3D.resFor(ctx);
+    const seen = new Set<Material>();
+    root.traverse((o: Object3D) => {
+        o.components.forEach((c) => {
+            if (!(c instanceof RenderNode)) return;
+            for (const mat of c.materials ?? []) {
+                if (!mat || seen.has(mat) || !(mat instanceof LitMaterial)) continue;
+                seen.add(mat);
+                if (mat.shader.getTexture('maskMap') === res.maskTexture) mat.shader.setTexture('maskMap', res.whiteTexture);
+                const pass = mat.shader.getDefaultColorShader();
+                // The glTF loader gives BLEND materials a blend mode (without
+                // the transparent flag) and MASK materials the transparent
+                // flag plus their cutoff.
+                if (!pass.shaderState.transparent && pass.shaderState.blendMode === BlendMode.NONE) continue;
+                const cutoff = pass.uniforms['alphaCutoff'] ? mat.shader.getUniformFloat('alphaCutoff') : 0;
+                (mat as any)._alphaMode = undefined;
+                mat.alphaMode = cutoff > 0 ? 'MASK' : 'BLEND';
+            }
+        });
+    });
 }
 
 /**

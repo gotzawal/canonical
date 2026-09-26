@@ -41,9 +41,13 @@ const MATERIAL_TYPES: { value: MaterialType; label: string; hint: string }[] = [
 const ALPHA_MODES: { value: AlphaMode; label: string }[] = [
     { value: 'auto', label: 'Auto' },
     { value: 'opaque', label: 'Opaque' },
-    { value: 'blend', label: 'Blend' },
     { value: 'mask', label: 'Mask (cut-out)' },
+    { value: 'blend', label: 'Blend (transparent)' },
+    { value: 'additive', label: 'Additive' },
+    { value: 'multiply', label: 'Multiply' },
 ];
+
+const FILE_ALPHA: Record<string, string> = { OPAQUE: 'opaque', MASK: 'cut-out', BLEND: 'blend' };
 
 const SLOT_SHADING: { value: string; label: string }[] = [
     { value: 'model', label: 'Model (PBR)' },
@@ -394,7 +398,7 @@ export class InspectorPanel {
         const opacity = new SliderField({ value: m.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Opacity') });
         rows.push(row('Opacity', opacity.el));
         const alpha = new SelectField<AlphaMode>(ALPHA_MODES, m.alphaMode ?? 'auto', (v) => set('alphaMode', 'Alpha Mode').commit!(v === 'auto' ? undefined : v));
-        rows.push(row('Alpha', alpha.el, 'Auto blends when opacity is below 1; Mask cuts out pixels below the cutoff'));
+        rows.push(row('Alpha', alpha.el, 'Auto blends when opacity is below 1; Mask cuts out pixels below the cutoff; Additive and Multiply are transparent blending modes'));
         let cutoff: SliderField | null = null;
         if (m.alphaMode === 'mask') {
             cutoff = new SliderField({ value: m.alphaCutoff ?? 0.5, min: 0, max: 1, step: 0.01, ...set('alphaCutoff', 'Alpha Cutoff') });
@@ -768,10 +772,11 @@ export class InspectorPanel {
 
         const color = new ColorField({ value: o.color ?? b.color, ...set('color', 'Material Color') });
         const opacity = new SliderField({ value: o.opacity ?? b.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Material Opacity') });
-        const alpha = new SelectField<AlphaMode>(ALPHA_MODES, o.alphaMode ?? 'auto', (v) => set('alphaMode', 'Material Alpha').commit!(v === 'auto' ? undefined : v));
-        rows.push(row('Color', color.el), row('Opacity', opacity.el), row('Alpha', alpha.el, 'Auto keeps the file\'s blending, and blends when opacity is below 1'));
+        const slotModes = ALPHA_MODES.map((m) => (m.value === 'auto' ? { value: m.value, label: `From file (${FILE_ALPHA[b.alpha] ?? 'opaque'})` } : m));
+        const alpha = new SelectField<AlphaMode>(slotModes, o.alphaMode ?? 'auto', (v) => set('alphaMode', 'Material Alpha').commit!(v === 'auto' ? undefined : v));
+        rows.push(row('Color', color.el), row('Opacity', opacity.el), row('Alpha', alpha.el, 'From file keeps the model\'s own mode; lowering Opacity makes it blend'));
         let cutoff: SliderField | null = null;
-        if (o.alphaMode === 'mask') {
+        if (o.alphaMode === 'mask' || (!o.alphaMode && b.alpha === 'MASK')) {
             cutoff = new SliderField({ value: o.alphaCutoff ?? b.alphaCutoff, min: 0, max: 1, step: 0.01, ...set('alphaCutoff', 'Material Alpha Cutoff') });
             rows.push(row('Cutoff', cutoff.el));
         }

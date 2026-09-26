@@ -42,7 +42,7 @@ const materialSchema = {
         preset: { type: 'string', enum: MATERIAL_PRESETS.map((p) => p.id), description: 'Start from a preset (keeps color and textures), then apply the other fields.' },
         color,
         opacity: { type: 'number' },
-        alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask'], description: 'auto blends when opacity < 1; mask cuts out pixels below alpha_cutoff.' },
+        alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'], description: 'auto blends when opacity < 1; mask cuts out pixels below alpha_cutoff; additive (glow, fire) and multiply (stains, tinted glass) are transparent blending modes.' },
         alpha_cutoff: { type: 'number' },
         metallic: { type: 'number' },
         roughness: { type: 'number' },
@@ -55,7 +55,7 @@ const materialSchema = {
         normal_map: { ...textureRef, description: 'Lit only.' },
         normal_scale: { type: 'number', description: 'Lit only.' },
         metal_rough_map: { ...textureRef, description: 'Lit only: glTF metallic-roughness texture (roughness in G, metallic in B).' },
-        ao_map: { ...textureRef, description: 'Lit only: ambient occlusion (R).' },
+        ao_map: { ...textureRef, description: 'Lit only: ambient occlusion (grayscale).' },
         emissive_map: { ...textureRef, description: 'Lit only.' },
         clearcoat: { type: 'number', description: 'Lit only, 0..1: glossy coat layer (car paint).' },
         clearcoat_roughness: { type: 'number' },
@@ -158,7 +158,7 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
             shading: { type: 'string', enum: ['model', 'unlit', 'lambert'], description: 'Built-in shading; "model" is the file\'s material. Ignored while a shader is set.' },
             color,
             opacity: { type: 'number' },
-            alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask'] },
+            alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'] },
             alpha_cutoff: { type: 'number' },
             normal_scale: { type: 'number', description: 'Model shading only.' },
             clearcoat: { type: 'number', description: 'Model shading only, 0..1.' },
@@ -473,7 +473,7 @@ function applyMaterial(_env: ToolEnv, doc: SceneDoc, m: MaterialDoc, p: Json) {
     if (p.color !== undefined) m.color = hex(p.color);
     if (p.opacity !== undefined) m.opacity = unit(p.opacity, 'opacity');
     if (p.alpha_mode !== undefined) {
-        if (!['auto', 'opaque', 'blend', 'mask'].includes(p.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${p.alpha_mode}".`);
+        if (!['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'].includes(p.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${p.alpha_mode}".`);
         if (p.alpha_mode === 'auto') delete m.alphaMode;
         else m.alphaMode = p.alpha_mode;
     }
@@ -752,7 +752,7 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 if (args.color !== undefined) patch.color = hex(args.color);
                 if (args.opacity !== undefined) patch.opacity = Math.min(1, Math.max(0, num(args.opacity, 'opacity')));
                 if (args.alpha_mode !== undefined) {
-                    if (!['auto', 'opaque', 'blend', 'mask'].includes(args.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${args.alpha_mode}".`);
+                    if (!['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'].includes(args.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${args.alpha_mode}".`);
                     patch.alphaMode = args.alpha_mode === 'auto' ? undefined : args.alpha_mode;
                 }
                 if (args.alpha_cutoff !== undefined) patch.alphaCutoff = unit(args.alpha_cutoff, 'alpha_cutoff');

@@ -501,7 +501,7 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
 }
 
 const MATERIAL_TYPES = ['lit', 'unlit', 'lambert', 'shader'];
-const ALPHA_MODES = ['auto', 'opaque', 'blend', 'mask'];
+const ALPHA_MODES = ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'];
 
 function sanitizeGI(raw: any): GIDoc {
     const d = defaultGI();

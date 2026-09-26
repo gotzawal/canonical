@@ -61,8 +61,9 @@ const MATERIAL_TYPES: [string, string][] = [
     ['Unlit', 'Color and texture as they are, ignoring lights.'],
     ['Lambert (Matte)', 'Cheap diffuse shading from directional lights; no specular and no shadows on it.'],
     ['Custom Shader', 'A WGSL material shader (see below).'],
-    ['Alpha', 'Auto blends when opacity is below 1, Mask cuts out pixels whose alpha is below the cutoff (leaves, fences).'],
-    ['Imported models', 'Each material slot can keep the file\'s material (Model), switch to Unlit or Lambert, or use a custom shader.'],
+    ['Alpha', 'Auto blends when opacity is below 1, Mask cuts out pixels whose alpha is below the cutoff (leaves, fences), Additive and Multiply are transparent blending modes (glow and fire, stains and tinted glass).'],
+    ['Maps left empty', 'A map that is not set leaves the material\'s values as they are: roughness and metallic apply as set, the normals stay flat, and there is no occlusion or emission map.'],
+    ['Imported models', 'Each material slot can keep the file\'s material (Model), switch to Unlit or Lambert, or use a custom shader. What a slot does not set keeps the file\'s value, alpha mode and texture tiling included.'],
 ];
 
 const POST: [string, string][] = [

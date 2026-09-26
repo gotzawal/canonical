@@ -1,5 +1,5 @@
 import {
-    Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
+    BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
 import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, Vec3 } from '../core/types';
@@ -83,8 +83,9 @@ const UNNAMED = /^[0-9A-F]{16}$/;
 /** Current alpha handling of a material, read from its color pass. */
 export function alphaOf(mat: Material): EngineAlpha {
     const pass = mat.shader.getDefaultColorShader();
-    if (pass.shaderState.transparent) return 'BLEND';
-    if (pass.shaderState.alphaToCoverageEnabled || pass.defineValue?.['USE_ALPHACUT']) return 'MASK';
+    const state = pass.shaderState;
+    if (state.transparent || state.blendMode !== BlendMode.NONE) return 'BLEND';
+    if (state.alphaToCoverageEnabled || pass.defineValue?.['USE_ALPHACUT']) return 'MASK';
     return 'OPAQUE';
 }
 
@@ -446,12 +447,13 @@ export class ModelOverrides {
         }
         mat.doubleSide = o.doubleSide ?? base.doubleSide;
 
-        // Alpha: an explicit mode wins; otherwise keep the file's blending
-        // and blend when the opacity override makes the material see-through.
+        // Alpha: an explicit mode wins. Otherwise the slot keeps the file's
+        // mode (opaque, cut-out or blend), also when only other values were
+        // changed; an opacity override below 1 makes it blend.
         const cutoff = clamp01(o.alphaCutoff ?? base.alphaCutoff);
         if (o.alphaMode && o.alphaMode !== 'auto') applyAlpha(mat, engineAlpha(o.alphaMode, opacity), cutoff);
-        else if (base.alpha === 'BLEND') applyAlpha(mat, 'BLEND', cutoff);
-        else applyAlpha(mat, opacity < 0.999 ? 'BLEND' : base.alpha, cutoff);
+        else if (o.opacity !== undefined && o.opacity < 0.999 && base.alpha !== 'BLEND') applyAlpha(mat, 'BLEND', cutoff);
+        else applyAlpha(mat, base.alpha, cutoff);
 
         if (shaderId) {
             // Texture properties named after the model's maps get the file's maps.
