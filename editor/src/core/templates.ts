@@ -191,6 +191,43 @@ export interface ShaderTemplate {
     code: string;
 }
 
+/** Marks the triplanar shader material slots use (see design/materialSlots.ts). */
+export const TRIPLANAR_MARKER = '@canonical triplanar';
+
+export const TRIPLANAR_CODE = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo texture is
+// projected along x, y and z and blended by the surface normal, so it keeps
+// its real size on every mesh. tile is the size of one texture tile in
+// meters. Roughness and metallic come from the material.
+// @property albedo texture white
+// @property tile float 2 0.05 50
+// @property sharpness float 4 1 16
+
+fn triplanarSample(p: vec3f, n: vec3f) -> vec4f {
+    let s = 1.0 / max(materialUniform.tile, 0.001);
+    var w = pow(abs(n), vec3f(materialUniform.sharpness));
+    w = w / max(w.x + w.y + w.z, 0.0001);
+    let cx = textureSample(albedo, albedoSampler, vec2f(p.z, -p.y) * s);
+    let cy = textureSample(albedo, albedoSampler, vec2f(p.x, p.z) * s);
+    let cz = textureSample(albedo, albedoSampler, vec2f(p.x, -p.y) * s);
+    return cx * w.x + cy * w.y + cz * w.z;
+}
+
+fn frag() {
+    let n = normalize(ORI_VertexVarying.vWorldNormal);
+    let p = ORI_VertexVarying.vWorldPos.xyz;
+    let c = triplanarSample(p, n) * materialUniform.baseColor;
+    ORI_ShadingInput.BaseColor = vec4f(c.rgb, materialUniform.baseColor.a);
+    ORI_ShadingInput.Roughness = materialUniform.roughness;
+    ORI_ShadingInput.Metallic = materialUniform.metallic;
+    ORI_ShadingInput.Specular = 1.0;
+    ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.EmissiveColor = vec4f(materialUniform.emissiveColor.rgb, 1.0);
+    ORI_ShadingInput.Normal = n;
+    useShadow();
+    BxDFShading();
+}
+`;
+
 export const SHADER_TEMPLATES: ShaderTemplate[] = [
     {
         id: 'lit',
@@ -222,6 +259,14 @@ fn frag() {
     BxDFShading();
 }
 `,
+    },
+    {
+        id: 'triplanar',
+        label: 'Triplanar',
+        description: 'World space triplanar texture with its tile size in meters (material slots use it).',
+        kind: 'material',
+        lighting: 'lit',
+        code: TRIPLANAR_CODE,
     },
     {
         id: 'unlit',

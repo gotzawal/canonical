@@ -3,7 +3,7 @@ import { getAssetUrl, putDesignImage } from '../core/assets';
 import { Emitter } from '../core/events';
 import { pickFiles } from '../core/persistence';
 import type { PaintoverDoc, ParamValue, ShotDoc } from '../core/types';
-import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel, type ParamSpec } from '../ai/images';
+import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
 import { aiSettings } from '../ai/settings';
 import {
     defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot, paintoverSpend, rememberOptions, uploadPaintover,
@@ -11,6 +11,7 @@ import {
 } from '../design/paintover';
 import { clear, h } from './dom';
 import { icon } from './icons';
+import { optionField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, showMenu, toast, type MenuItem, type Modal } from './overlays';
 import { button, iconButton } from './widgets';
@@ -45,8 +46,6 @@ export function openPaintoverDialog(editor: Editor, shotId: string) {
 export function generating(shotId: string): boolean {
     return jobs.has(shotId);
 }
-
-const humanize = (k: string) => k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
 
 /**
  * The paintover dialog of a shot: the references (a fresh greybox capture,
@@ -197,7 +196,7 @@ class PaintoverDialog {
         clear(this.optionsEl);
         for (const [k, spec] of Object.entries(specs)) {
             if (OWN_PARAMS.has(k)) continue;
-            this.optionsEl.appendChild(this.optionField(k, spec));
+            this.optionsEl.appendChild(optionField(k, spec, this.params));
         }
         if (!model) {
             this.modelInfo.textContent = this.models.length ? `"${id}" is not in the image model list.` : 'Loading the image models...';
@@ -215,39 +214,6 @@ class PaintoverDialog {
         this.seedRow.hidden = !!model && !specs.seed;
         this.streamRow.hidden = !model?.supports_streaming;
         this.updateButtons();
-    }
-
-    private optionField(key: string, spec: ParamSpec): HTMLElement {
-        const label = h('span', { text: humanize(key), title: `${key}: ${describeSpec(spec)}` });
-        const set = (v: ParamValue | null) => {
-            if (v === null || v === '') delete this.params[key];
-            else this.params[key] = v;
-        };
-        let control: HTMLElement;
-        if (spec.type === 'enum' || spec.type === 'boolean') {
-            const values = spec.type === 'enum' ? spec.values.map(String) : ['true', 'false'];
-            const sel = h('select', { class: 'select' });
-            sel.appendChild(h('option', { text: 'Model default', attrs: { value: '' } }));
-            for (const v of values) sel.appendChild(h('option', { text: spec.type === 'boolean' ? (v === 'true' ? 'On' : 'Off') : v, attrs: { value: v } }));
-            const cur = this.params[key];
-            sel.value = cur === undefined ? '' : String(cur);
-            if (sel.value !== String(cur ?? '')) sel.value = '';
-            sel.addEventListener('change', () => {
-                if (!sel.value) return set(null);
-                if (spec.type === 'boolean') return set(sel.value === 'true');
-                set(spec.values.find((x) => String(x) === sel.value) ?? sel.value);
-            });
-            sel.addEventListener('keydown', (e) => e.stopPropagation());
-            control = sel;
-        } else {
-            const input = h('input', { class: 'text po-num', attrs: { type: 'number', min: spec.min, max: spec.max, step: Number.isInteger(spec.min) && Number.isInteger(spec.max) ? 1 : 'any', placeholder: `default (${describeSpec(spec)})` } });
-            const cur = this.params[key];
-            if (typeof cur === 'number') input.value = String(cur);
-            input.addEventListener('change', () => set(input.value.trim() === '' ? null : Math.min(spec.max, Math.max(spec.min, Number(input.value)))));
-            input.addEventListener('keydown', (e) => e.stopPropagation());
-            control = input;
-        }
-        return h('label', { class: 'po-field' }, label, control);
     }
 
     // -------------------------------------------------------- references

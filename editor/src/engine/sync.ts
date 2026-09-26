@@ -6,7 +6,7 @@ import {
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
+import type { EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
 import { hexToColor } from './color';
 import { castGI } from './gi';
 import { CapsuleGeometry, RampGeometry, StairsGeometry } from './shapes';
@@ -79,6 +79,10 @@ export class SceneSync extends Emitter<SyncEvents> {
     readonly detached = new Set<string>();
     /** While a prefab instance is edited on its own, only these nodes (and lights) are shown. */
     private isolation: Set<string> | null = null;
+    /** Isolation hides lights too (the reference room brings its own). */
+    private isolateLights = false;
+    /** Environment shown instead of the document's (the reference room). */
+    private envOverride: EnvironmentDoc | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     private textures = new Map<string, Promise<Texture | null>>();
@@ -95,7 +99,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     sync(hint?: ChangeHint) {
         if (hint?.meta || hint?.design) return;
         const doc = this.store.doc;
-        this.runtime.applyEnvironment(doc.environment);
+        this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
         this.runtime.gi.invalidate();
         if (hint?.env) return;
@@ -509,10 +513,18 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     // ------------------------------------------------------------ visibility
 
-    setIsolation(ids: Set<string> | null) {
+    setIsolation(ids: Set<string> | null, hideLights = false) {
         this.isolation = ids;
+        this.isolateLights = !!ids && hideLights;
         this.updateVisibility();
         this.runtime.gi.invalidate();
+    }
+
+    /** Shows another environment than the document's until called with null. */
+    setEnvironmentOverride(env: EnvironmentDoc | null) {
+        this.envOverride = env;
+        this.runtime.invalidateEnvironment();
+        this.runtime.applyEnvironment(env ?? this.store.doc.environment);
     }
 
     private updateVisibility() {
@@ -528,7 +540,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         const iso = this.isolation;
         for (const node of this.store.doc.nodes) {
             const entry = this.entries.get(node.id);
-            if (entry) this.setEnabled(entry, resolve(node) && (!iso || iso.has(node.id) || !!node.light));
+            if (entry) this.setEnabled(entry, resolve(node) && (!iso || iso.has(node.id) || (!!node.light && !this.isolateLights)));
         }
     }
 

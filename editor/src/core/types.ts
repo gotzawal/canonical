@@ -553,6 +553,8 @@ export interface MaterialSlotDoc {
     metallic: number;
     /** Meters per texture tile. */
     tile: number;
+    /** Meant as a plain color without a swatch (painted metal, glass). */
+    flat?: boolean;
 }
 
 export interface SnapshotDoc {

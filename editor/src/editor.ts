@@ -30,6 +30,7 @@ import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
 import type { WalkController } from './viewport/walk';
+import type { ReferenceRoom } from './viewport/referenceRoom';
 import { exampleShowcase } from './examples';
 
 export interface EditorServices {
@@ -79,6 +80,8 @@ export class Editor extends Emitter<EditorEvents> {
     isolated: string | null = null;
     /** First person walk camera (set up by main.ts). */
     walk: WalkController | null = null;
+    /** Neutral room to check swatches in (set up by main.ts). */
+    room: ReferenceRoom | null = null;
 
     constructor(
         readonly store: Store,

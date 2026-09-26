@@ -68,7 +68,7 @@ export function defaultDesign(): DesignDoc {
 
 /** A new material slot (greybox gray until it gets a swatch). */
 export function makeMaterialSlot(name: string): MaterialSlotDoc {
-    return { id: uid('m'), name, description: '', swatch: null, color: '#ffffff', roughness: 0.8, metallic: 0, tile: 2 };
+    return { id: uid('m'), name, description: '', swatch: null, color: '#808080', roughness: 0.8, metallic: 0, tile: 2 };
 }
 
 // ------------------------------------------------------------------ repair
@@ -261,6 +261,7 @@ export function sanitizeDesign(input: any): DesignDoc {
             roughness: clampNum(ms.roughness, 0.8, 0, 1),
             metallic: clampNum(ms.metallic, 0, 0, 1),
             tile: clampNum(ms.tile, 2, 0.01, 1000),
+            ...(ms.flat === true ? { flat: true } : {}),
         })),
         'm',
     );

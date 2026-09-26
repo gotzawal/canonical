@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { unassignSlot } from '../design/materialSlots';
 import { formatBytes } from '../core/assets';
 import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
@@ -448,6 +449,19 @@ export class InspectorPanel {
                 (n.mesh!.material as any)[key] = v;
             });
         const rows: HTMLElement[] = [];
+        const slot = m.slot ? this.store.doc.design.materials.find((x) => x.id === m.slot) : undefined;
+        if (slot) {
+            // The slot rewrites this material whenever it changes: edit it there.
+            rows.push(
+                h(
+                    'div',
+                    { class: 'design-note' },
+                    icon('sliders', 14),
+                    h('span', { text: `Follows the material slot ${slot.name}. Change the slot in the Design tab; edits here are replaced when the slot changes.` }),
+                    button('Unlink', () => unassignSlot(this.editor, this.store.selection), 'small'),
+                ),
+            );
+        }
         const type = new SelectField<MaterialType>(MATERIAL_TYPES, m.type, (v) => {
             if (v === 'shader') {
                 const first = this.store.doc.shaders.find((s) => s.kind === 'material');

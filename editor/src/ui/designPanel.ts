@@ -3,16 +3,18 @@ import { getAssetUrl, putDesignImage } from '../core/assets';
 import { areaName, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
 import { download, pickFiles } from '../core/persistence';
-import type { AreaDoc, AssetMeta, DesignDoc, ShotDoc, StageId, Vec3 } from '../core/types';
+import type { AreaDoc, AssetMeta, DesignDoc, MaterialSlotDoc, ShotDoc, StageId, Vec3 } from '../core/types';
 import { STAGE_PROMPTS, structurePrompt } from '../design/prompts';
 import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
 import { generating, openPaintoverDialog, paintoverJobs } from './paintoverDialog';
+import { openSwatchDialog } from './swatchDialog';
+import { assignSlot, deleteSlot, roomSample, slotUsers, upsertSlot, type SlotPatch } from '../design/materialSlots';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { confirmDialog, popover, showMenu, toast } from './overlays';
 import {
-    CheckboxField, ColorField, NumberField, SelectField, TextAreaField, TextField, Vec3Field, button, iconButton, row, section,
+    CheckboxField, ColorField, NumberField, SelectField, SliderField, TextAreaField, TextField, Vec3Field, button, iconButton, row, section,
 } from './widgets';
 
 export interface DesignPanelHooks {
@@ -33,6 +35,7 @@ export class DesignPanel {
     private key = '';
     private pending = false;
     private openAreas = new Set<string>();
+    private openSlots = new Set<string>();
 
     constructor(private editor: Editor, private hooks: DesignPanelHooks) {
         this.body = h('div', { class: 'panel-body design-body' });
@@ -43,6 +46,9 @@ export class DesignPanel {
         editor.pipeline.on('busy', () => this.schedule(true));
         editor.pipeline.on('shot', () => this.schedule(true));
         paintoverJobs.on('change', () => this.schedule(true));
+        store.on('selection', () => {
+            if (this.openSlots.size) this.schedule();
+        });
         // Values typed into a field are committed on blur; render after that.
         this.body.addEventListener('focusout', () => {
             if (this.pending) this.schedule();
@@ -76,7 +82,10 @@ export class DesignPanel {
         this.pending = false;
         const d = this.design;
         const prog = this.editor.pipeline.progress();
-        const key = JSON.stringify([{ ...d, brief: { ...d.brief, text: d.brief.text.length } }, prog.items.map((i) => i.done + (i.detail ?? '')), this.store.doc.assets.length, this.editor.pipeline.activeShot, this.editor.pipeline.busy]);
+        // Slot users and, while a slot is open, the selection (for "Assign to selection").
+        const slotUse = this.store.doc.nodes.filter((n) => n.mesh?.material.slot).map((n) => n.mesh!.material.slot).join();
+        const sel = this.openSlots.size ? this.store.selection.join() : '';
+        const key = JSON.stringify([{ ...d, brief: { ...d.brief, text: d.brief.text.length } }, prog.items.map((i) => i.done + (i.detail ?? '')), this.store.doc.assets.length, this.editor.pipeline.activeShot, this.editor.pipeline.busy, slotUse, sel]);
         if (key === this.key) return;
         this.key = key;
         this.render();
@@ -90,7 +99,7 @@ export class DesignPanel {
     private render() {
         const scroll = this.body.scrollTop;
         clear(this.body);
-        this.body.append(this.stageSection(), this.briefSection(), this.planSection(), this.shotsSection(), this.snapshotSection(), this.memoSection());
+        this.body.append(this.stageSection(), this.briefSection(), this.planSection(), this.shotsSection(), this.materialsSection(), this.snapshotSection(), this.memoSection());
         this.body.scrollTop = scroll;
     }
 
@@ -609,6 +618,92 @@ export class DesignPanel {
         add(shot.target, 'Target');
         for (const c of shot.history) add(c.asset, `${stageDef(c.stage).title}${c.manual ? '' : ' done'} ${c.at.slice(5, 16).replace('T', ' ')}${c.score != null ? ` · ${Math.round(c.score)}` : ''}`);
         popover(anchor, h('div', { class: 'design-preview' }, h('div', { class: 'pipeline-popover-title', text: shot.name }), strip), 'wide');
+    }
+
+    // ------------------------------------------------------------ materials
+
+    private materialsSection(): HTMLElement {
+        const d = this.design;
+        const rows: Node[] = [];
+        for (const slot of d.materials) rows.push(this.slotItem(slot));
+        if (!d.materials.length) {
+            rows.push(h('div', { class: 'muted small pad', text: 'Material slots are the named surfaces of the level (plaster, cobblestone, wood). Each gets a swatch from the library, shown with the world space triplanar shader at its real size.' }));
+        }
+        rows.push(
+            h(
+                'div',
+                { class: 'design-actions' },
+                button('Add slot', () => {
+                    const slot = upsertSlot(this.editor, { name: `Material ${d.materials.length + 1}` });
+                    this.openSlots.add(slot.id);
+                    this.schedule(true);
+                }, 'small', 'plus'),
+                button('Swatch library', () => openSwatchDialog(this.editor, null), 'small', 'image'),
+                d.materials.length
+                    ? button('Reference room', () => void this.editor.room?.open(d.materials.map((m) => roomSample(this.store.doc, m))), 'small', 'sun')
+                    : null,
+            ),
+        );
+        return section('design-materials', `Material Slots (${d.materials.length})`, 'sliders', rows);
+    }
+
+    private slotItem(slot: MaterialSlotDoc): HTMLElement {
+        const open = this.openSlots.has(slot.id);
+        const users = slotUsers(this.store.doc, slot.id);
+        const thumb = slot.swatch ? this.thumb(slot.swatch, 'slot-swatch') : h('span', { class: 'slot-swatch plain', style: { background: slot.color } });
+        const head = h(
+            'button',
+            { class: 'slot-head' + (open ? ' open' : ''), attrs: { type: 'button' } },
+            icon('chevron', 12, 'slot-caret'),
+            thumb,
+            h('span', { class: 'slot-name', text: slot.name }),
+            !slot.swatch && !slot.flat ? h('span', { class: 'slot-tag warn', text: 'no swatch' }) : null,
+            h('span', { class: 'slot-count', text: `${users.length} obj`, title: `${users.length} objects use this slot` }),
+        );
+        head.addEventListener('click', () => {
+            if (open) this.openSlots.delete(slot.id);
+            else this.openSlots.add(slot.id);
+            this.schedule(true);
+        });
+        const item = h('div', { class: 'slot-item' }, head);
+        if (!open) return item;
+        const set = (patch: SlotPatch, label = 'Edit Material Slot') => upsertSlot(this.editor, { id: slot.id, ...patch }, label);
+        const name = new TextField(slot.name, (v) => v.trim() && set({ name: v.trim() }, 'Rename Material Slot'));
+        const desc = new TextAreaField(slot.description, (v) => set({ description: v.trim() }), 'What the surface is: material, color, wear', 2);
+        const color = new ColorField({ value: slot.color, commit: (v) => set({ color: v }) });
+        const tile = new NumberField({ value: slot.tile, min: 0.05, max: 100, step: 0.05, precision: 2, commit: (v) => set({ tile: v }) });
+        const rough = new SliderField({ value: slot.roughness, min: 0, max: 1, step: 0.01, precision: 2, commit: (v) => set({ roughness: v }) });
+        const metal = new SliderField({ value: slot.metallic, min: 0, max: 1, step: 0.01, precision: 2, commit: (v) => set({ metallic: v }) });
+        const flat = new CheckboxField(!!slot.flat, (v) => set({ flat: v }, v ? 'Plain Color Slot' : 'Swatch Slot'), 'Plain color, no swatch needed');
+        const sel = this.store.selection.filter((id) => this.store.node(id)?.mesh || this.store.node(id)?.prefab);
+        item.append(
+            h(
+                'div',
+                { class: 'slot-body' },
+                row('Name', name.el),
+                desc.el,
+                row('Tile', tile.el, 'Size of one texture tile in meters'),
+                row('Color', color.el, 'Multiplies the swatch; white shows it as it is'),
+                row('Roughness', rough.el),
+                row('Metallic', metal.el),
+                row('', flat.el),
+                h(
+                    'div',
+                    { class: 'design-actions' },
+                    button(slot.swatch ? 'Change swatch' : 'Find a swatch', () => openSwatchDialog(this.editor, slot.id), 'small primary', 'image'),
+                    button(`Assign to selection${sel.length ? ` (${sel.length})` : ''}`, () => {
+                        if (!sel.length) return toast('Select objects in the viewport or the hierarchy first.', 'info');
+                        const n = assignSlot(this.editor, slot.id, sel);
+                        toast(`${n} surface${n === 1 ? '' : 's'} use ${slot.name} now.`, 'success');
+                    }, 'small', 'check'),
+                    users.length ? button('Select users', () => this.store.select(users.map((u) => u.id)), 'small', 'cursor') : null,
+                    iconButton('trash', 'Delete slot (the objects keep their look)', async () => {
+                        if (await confirmDialog('Delete material slot', `Delete ${slot.name}? ${users.length} objects keep their current look.`, 'Delete', true)) deleteSlot(this.editor, slot.id);
+                    }),
+                ),
+            ),
+        );
+        return item;
     }
 
     // ------------------------------------------------------------ snapshots

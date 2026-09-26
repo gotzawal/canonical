@@ -88,3 +88,31 @@ export async function compactImage(blob: Blob, quality = 0.92): Promise<Blob> {
 export function imageExt(type: string): string {
     return type === 'image/jpeg' ? 'jpg' : type === 'image/svg+xml' ? 'svg' : type.startsWith('image/') ? type.slice(6) : 'png';
 }
+
+/** Images in a grid with a number in each corner, as one JPEG data URL (to show a model several at once). */
+export async function contactSheet(images: Blob[], cell = 192, columns = 4): Promise<string> {
+    const cols = Math.max(1, Math.min(columns, images.length));
+    const rows = Math.ceil(images.length / cols);
+    const gap = 6;
+    const c = canvas(cols * cell + (cols - 1) * gap, rows * cell + (rows - 1) * gap);
+    const g = c.getContext('2d')!;
+    g.fillStyle = '#0c0d10';
+    g.fillRect(0, 0, c.width, c.height);
+    g.imageSmoothingQuality = 'high';
+    for (let i = 0; i < images.length; i++) {
+        const x = (i % cols) * (cell + gap);
+        const y = Math.floor(i / cols) * (cell + gap);
+        const bmp = await createImageBitmap(images[i]).catch(() => null);
+        if (bmp) {
+            const side = Math.min(bmp.width, bmp.height);
+            g.drawImage(bmp, (bmp.width - side) / 2, (bmp.height - side) / 2, side, side, x, y, cell, cell);
+            bmp.close();
+        }
+        g.fillStyle = 'rgba(0, 0, 0, 0.7)';
+        g.fillRect(x, y, 26, 22);
+        g.fillStyle = '#ffffff';
+        g.font = 'bold 14px sans-serif';
+        g.fillText(String(i + 1), x + 6, y + 16);
+    }
+    return c.toDataURL('image/jpeg', 0.85);
+}

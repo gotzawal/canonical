@@ -37,7 +37,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     ].join(' '),
     material: [
         'Work on the Materials stage. Define the material slots of the level (set_material_slot) and assign them to the objects (assign_material_slot).',
-        'For every slot search the swatch library first (search_swatches) and generate a swatch only when nothing fits. One roughness and one metallic value per material.',
+        'For every slot search the swatch library first (search_swatches) and put a fitting one on it (use_swatch); generate swatches (generate_swatch) only when nothing fits. One roughness and one metallic value per material.',
         'Then do lighting pass 2: correct light intensities and exposure for the new albedo, compare the shots in color (compare_shot with mode color) and tick the checklist.',
         'Answer in the language of the brief.',
     ].join(' '),

@@ -34,6 +34,7 @@ import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
 import { WalkController } from './viewport/walk';
+import { ReferenceRoom } from './viewport/referenceRoom';
 import { pipelineOverlay } from './ui/pipelineOverlay';
 import { Gizmo } from './viewport/gizmo';
 import { Viewport } from './viewport/viewport';
@@ -198,6 +199,7 @@ async function main() {
     });
     editor.viewport = viewport;
     editor.walk = new WalkController(editor, viewport.overlay, viewportEl);
+    editor.room = new ReferenceRoom(editor, viewportEl);
     overlayDrawers.push(pipelineOverlay(editor));
 
     store.on('change', (hint) => sync.sync(hint));

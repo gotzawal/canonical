@@ -4587,3 +4587,126 @@ kbd {
     flex-wrap: wrap;
     gap: 6px 12px;
 }
+
+/* ------------------------------------------------------- material slots */
+
+.slot-swatch {
+    width: 18px;
+    height: 18px;
+    flex: none;
+    border-radius: 4px;
+    border: 1px solid var(--border-strong);
+    object-fit: cover;
+}
+
+.slot-swatch.plain {
+    display: inline-block;
+}
+
+.slot-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 4px 4px 8px 22px;
+}
+
+.sw-libhead {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.sw-search {
+    width: 220px !important;
+}
+
+.sw-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.sw-tile img {
+    aspect-ratio: 1 / 1;
+    object-fit: cover;
+}
+
+.sw-tile.fresh {
+    border-color: var(--accent);
+}
+
+.sw-ref {
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 3px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    opacity: 0.55;
+}
+
+.sw-ref.on {
+    opacity: 1;
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+.sw-ref img {
+    cursor: pointer;
+}
+
+/* ------------------------------------------------------ reference room */
+
+.room-hud {
+    position: absolute;
+    left: 12px;
+    right: 12px;
+    top: 10px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: rgba(27, 30, 35, 0.92);
+}
+
+.room-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+}
+
+.room-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 16px;
+}
+
+.room-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.room-index {
+    width: 18px;
+    height: 18px;
+    border-radius: 9px;
+    background: var(--panel-3);
+    color: var(--text-strong);
+    font-size: 10.5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.room-item .swatch {
+    width: 14px;
+    height: 14px;
+    border-radius: 3px;
+    border: 1px solid var(--border-strong);
+}

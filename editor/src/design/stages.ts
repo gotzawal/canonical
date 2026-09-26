@@ -264,10 +264,10 @@ export const STAGES: StageDef[] = [
         checks: [
             {
                 id: 'material.slots',
-                text: 'Every material slot has a swatch',
+                text: 'Every material slot is filled (a swatch, or meant as a plain color)',
                 auto: ({ design }) => {
                     const m = design.materials;
-                    const ok = m.filter((s) => !!s.swatch).length;
+                    const ok = m.filter((s) => !!s.swatch || s.flat).length;
                     return { done: m.length > 0 && ok === m.length, detail: m.length ? count(ok, m.length, 'slots') : 'no slots yet' };
                 },
             },
