@@ -1,5 +1,5 @@
 import type {
-    CameraDoc, CameraState, EnvironmentDoc, GeometryDoc, GeometryType, LightDoc, LightType,
+    CameraDoc, CameraState, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType,
     MaterialDoc, NodeDoc, RenderGraphDoc, SceneDoc, Vec3,
 } from './types';
 
@@ -57,6 +57,20 @@ export function defaultEnvironment(): EnvironmentDoc {
         ao: { enable: false, strength: 1, distance: 1 },
         fxaa: true,
         fog: { enable: false, color: '#aab4be', near: 5, far: 80, intensity: 1 },
+        gi: defaultGI(),
+    };
+}
+
+/** 8 x 3 x 8 probes, 2 units apart: covers the default 20 x 20 ground. */
+export function defaultGI(): GIDoc {
+    return {
+        enable: false,
+        center: [0, 2, 0],
+        counts: [8, 3, 8],
+        spacing: 2,
+        intensity: 1,
+        bounce: 0.5,
+        realtime: false,
     };
 }
 

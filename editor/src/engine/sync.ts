@@ -8,9 +8,13 @@ import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
 import { hexToColor } from './color';
+import { castGI } from './gi';
+import {
+    applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, PBR_MAPS,
+} from './materials';
 import { inspectModel, ModelInfo, ModelOverrides } from './modelParts';
 import type { Runtime } from './runtime';
-import { applyProps, setBlended, type ShaderManager } from './shaders';
+import { applyProps, type ShaderManager } from './shaders';
 
 interface ModelState {
     asset: string;
@@ -38,13 +42,12 @@ export interface Entry {
     geometry: GeometryBase | null;
     geometryKey: string;
     material: Material | null;
-    /** 'lit', 'unlit', 'shader:<id>:<version>' or 'shader-missing'. */
+    /** 'lit', 'unlit', 'lambert', 'shader:<id>:<version>' or 'shader-missing'. */
     materialKind: string;
     materialKey: string;
-    defaultBaseMap: Texture | null;
-    mapAsset: string | null;
+    /** Texture assets shown in the material's maps. */
+    maps: MaterialMaps | null;
     paramAssets: Record<string, string>;
-    alphaMode: string;
     light: LightBase | null;
     lightType: LightType | null;
     lightKey: string;
@@ -89,6 +92,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     sync(hint?: ChangeHint) {
         const doc = this.store.doc;
         this.runtime.applyEnvironment(doc.environment);
+        // Anything that changed (objects, materials, sky) changes what the GI probes see.
+        this.runtime.gi.invalidate();
         if (hint?.env) return;
 
         if (hint?.nodes) {
@@ -174,10 +179,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             material: null,
             materialKind: '',
             materialKey: '',
-            defaultBaseMap: null,
-            mapAsset: null,
+            maps: null,
             paramAssets: {},
-            alphaMode: 'OPAQUE',
             light: null,
             lightType: null,
             lightKey: '',
@@ -267,13 +270,15 @@ export class SceneSync extends Emitter<SyncEvents> {
                 entry.materialKind = '';
                 entry.geometryKey = '';
                 entry.materialKey = '';
-                entry.mapAsset = null;
+                entry.maps = null;
                 entry.paramAssets = {};
             }
             return;
         }
         if (!entry.mesh) {
             entry.mesh = entry.obj.addComponent(MeshRenderer);
+            // Seen by the GI probes (only matters while GI is on).
+            entry.mesh.castGI = true;
             if (!entry.visible) entry.mesh.enable = false;
         }
         const mr = entry.mesh;
@@ -298,17 +303,14 @@ export class SceneSync extends Emitter<SyncEvents> {
                 mat = this.shaders.createMaterial(shaderId);
             }
             if (!mat) {
-                if (kind === 'unlit') mat = new UnLitMaterial(ctx);
-                else if (kind === 'shader-missing') mat = errorMaterial(ctx);
-                else mat = new LitMaterial(ctx);
+                if (kind === 'shader-missing') mat = errorMaterial(ctx);
+                else mat = createBuiltinMaterial(kind === 'unlit' || kind === 'lambert' ? kind : 'lit', ctx);
             }
             entry.material = mat;
-            entry.defaultBaseMap = mat.shader.getTexture('baseMap') ?? null;
+            entry.maps = new MaterialMaps(mat, ctx, (id, linear) => this.loadTexture(id, linear));
             entry.materialKind = kind;
             entry.materialKey = '';
-            entry.mapAsset = null;
             entry.paramAssets = {};
-            entry.alphaMode = 'OPAQUE';
             // Vertex shaders that move vertices cannot use the depth prepass,
             // which draws the undisplaced mesh.
             if (shaderId && this.shaders.movesVertices(shaderId)) mr.addRendererMask(RendererMask.IgnoreDepthPass);
@@ -343,10 +345,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         const opacity = clamp01(md.opacity);
         mat.baseColor = hexToColor(md.color, opacity);
         if (mat instanceof LitMaterial) {
-            mat.metallic = clamp01(md.metallic);
-            mat.roughness = clamp01(md.roughness);
-            mat.emissiveColor = hexToColor(md.emissive);
-            mat.emissiveIntensity = Math.max(0, md.emissiveIntensity);
+            applyPBR(mat, md);
         } else if (kind.startsWith('shader:')) {
             const sh = mat.shader;
             sh.setUniformFloat('metallic', clamp01(md.metallic));
@@ -363,28 +362,11 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
         }
         mat.doubleSide = !!md.doubleSide;
+        applyAlpha(mat, engineAlpha(md.alphaMode, opacity), clamp01(md.alphaCutoff ?? 0.5));
+        applyUVTransform(mat, md.tiling, md.offset);
 
-        const alphaMode = opacity < 0.999 ? 'BLEND' : 'OPAQUE';
-        if (alphaMode !== entry.alphaMode) {
-            if (mat instanceof LitMaterial || mat instanceof UnLitMaterial) mat.alphaMode = alphaMode;
-            else setBlended(mat, alphaMode === 'BLEND');
-            entry.alphaMode = alphaMode;
-        }
-
-        if (md.map !== entry.mapAsset) {
-            entry.mapAsset = md.map;
-            if (!md.map) {
-                if (entry.defaultBaseMap) mat.shader.setTexture('baseMap', entry.defaultBaseMap);
-            } else {
-                const asset = md.map;
-                this.loadTexture(asset).then((tex) => {
-                    if (!tex || entry.material !== mat || entry.mapAsset !== asset) return;
-                    // The texture is decoded from sRGB by the GPU, so skip the shader's own decode.
-                    mat.setDefine('USE_SRGB_ALBEDO', (tex as any).format === 'rgba8unorm-srgb');
-                    mat.shader.setTexture('baseMap', tex);
-                });
-            }
-        }
+        const maps = entry.maps!;
+        for (const map of mat instanceof LitMaterial ? PBR_MAPS : [BASE_MAP]) maps.set(map, md[map.key] ?? null);
     }
 
     private applyLight(entry: Entry, light: LightDoc | undefined) {
@@ -403,6 +385,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.lightType = light.type;
             entry.lightKey = '';
             if (!entry.visible) entry.light.enable = false;
+            if (this.runtime.gi.enabled) entry.light.castGI = true;
         }
         const key = JSON.stringify(light);
         if (key === entry.lightKey) return;
@@ -443,6 +426,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                 const instance = prefab.clone();
                 instance.name = prefab.name || 'model';
                 entry.obj.addChild(instance);
+                castGI(instance);
                 state.obj = instance;
                 state.status = 'ready';
                 const ctx = this.runtime.engine.context3D;
@@ -450,7 +434,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     state.info = inspectModel(instance, ctx);
                     state.overrides = new ModelOverrides(state.info, {
                         shaders: this.shaders,
-                        loadTexture: (id) => this.loadTexture(id),
+                        loadTexture: (id, linear) => this.loadTexture(id, linear),
                         dispose: (m) => this.disposeLater(m, true),
                         ctx,
                     });
@@ -463,6 +447,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     state.overrides = null;
                 }
                 this.setEnabled(entry, entry.visible, true);
+                this.runtime.gi.invalidate();
                 this.emit('model', entry.id);
             })
             .catch((err) => {
@@ -551,21 +536,26 @@ export class SceneSync extends Emitter<SyncEvents> {
         return p;
     }
 
-    loadTexture(assetId: string): Promise<Texture | null> {
-        let p = this.textures.get(assetId);
+    /**
+     * Loads a texture asset. Color textures are decoded from sRGB, data
+     * textures (normal, metallic-roughness, occlusion maps) are `linear`.
+     */
+    loadTexture(assetId: string, linear = false): Promise<Texture | null> {
+        const key = `${assetId}|${linear ? 'linear' : 'srgb'}`;
+        let p = this.textures.get(key);
         if (!p) {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
                 if (!meta || meta.kind !== 'texture') return null;
                 const url = await getAssetUrl(meta);
                 if (!url) return null;
-                return (await this.runtime.engine.res.loadTexture(url, undefined, false, 'srgb')) as Texture;
+                return (await this.runtime.engine.res.loadTexture(url, undefined, false, linear ? 'linear' : 'srgb')) as Texture;
             })().catch((e) => {
                 console.error('[editor] texture load failed', e);
-                this.textures.delete(assetId);
+                this.textures.delete(key);
                 return null;
             });
-            this.textures.set(assetId, p);
+            this.textures.set(key, p);
         }
         return p;
     }

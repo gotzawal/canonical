@@ -1,7 +1,10 @@
 import type { Editor } from '../editor';
-import type { EnvironmentDoc, SkyType } from '../core/types';
+import { clampGIGrid } from '../core/giLimits';
+import type { EnvironmentDoc, SkyType, Vec3 } from '../core/types';
 import { clear, h } from './dom';
-import { CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, row, section } from './widgets';
+import {
+    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec3Field, button, row, section,
+} from './widgets';
 
 /** Scene-wide settings: sky, exposure, post effects, and editor preferences. */
 export class ScenePanel {
@@ -9,6 +12,7 @@ export class ScenePanel {
     private body: HTMLElement;
     private syncs: (() => void)[] = [];
     private sky: SkyType | null = null;
+    private giOn: boolean | null = null;
     private open = 0;
     private fov: SliderField | null = null;
 
@@ -16,7 +20,8 @@ export class ScenePanel {
         this.body = h('div', { class: 'panel-body' });
         this.el = h('div', { class: 'panel scene-panel' }, this.body);
         editor.store.on('change', () => {
-            if (editor.store.doc.environment.sky !== this.sky) this.render();
+            const env = editor.store.doc.environment;
+            if (env.sky !== this.sky || env.gi.enable !== this.giOn) this.render();
             else for (const s of this.syncs) s();
         });
         editor.store.on('load', () => this.render());
@@ -65,6 +70,7 @@ export class ScenePanel {
         this.syncs = [];
         const env = this.env;
         this.sky = env.sky;
+        this.giOn = env.gi.enable;
         const store = this.editor.store;
         const watch = (fn: () => void) => this.syncs.push(fn);
 
@@ -167,6 +173,8 @@ export class ScenePanel {
             ]),
         );
 
+        this.body.append(this.giSection(watch));
+
         // Editor preferences (not part of the scene)
         const prefs = store.prefs;
         const grid = new CheckboxField(prefs.grid, (v) => store.setPrefs({ grid: v }));
@@ -191,5 +199,66 @@ export class ScenePanel {
                 row('Snap Scale', snapScale.el),
             ]),
         );
+    }
+
+    /** Dynamic diffuse global illumination: a grid of probes that bounces light between surfaces. */
+    private giSection(watch: (fn: () => void) => void): HTMLElement {
+        const store = this.editor.store;
+        const gi = this.env.gi;
+        const enable = new CheckboxField(gi.enable, (v) => this.hooks<boolean>(v ? 'Enable GI' : 'Disable GI', (e, b) => (e.gi.enable = b)).commit!(v));
+        const rows: HTMLElement[] = [row('Enabled', enable.el, 'Dynamic diffuse global illumination (DDGI)')];
+        watch(() => enable.set(this.env.gi.enable));
+        if (!gi.enable) {
+            rows.push(h('div', { class: 'muted small pad', text: 'Light bounces between surfaces through a grid of light probes, so colored walls tint what is next to them and shaded areas get indirect light. Works in the viewport, in Play mode and in builds.' }));
+            return section('gi', 'Global Illumination', 'sun', rows);
+        }
+        const center = new Vec3Field({ value: gi.center, step: 0.05, precision: 2, ...this.hooks<Vec3>('GI Center', (e, v) => (e.gi.center = v)) });
+        const counts = new Vec3Field({
+            value: gi.counts,
+            step: 0.05,
+            precision: 0,
+            ...this.hooks<Vec3>('GI Probes', (e, v) => (e.gi.counts = clampGIGrid(v))),
+        });
+        const spacing = new NumberField({ value: gi.spacing, step: 0.01, min: 0.1, max: 100, precision: 2, ...this.hooks<number>('GI Spacing', (e, v) => (e.gi.spacing = v)) });
+        const intensity = new SliderField({ value: gi.intensity, min: 0, max: 4, step: 0.01, ...this.hooks<number>('GI Intensity', (e, v) => (e.gi.intensity = v)) });
+        const bounce = new SliderField({ value: gi.bounce, min: 0, max: 1, step: 0.01, ...this.hooks<number>('GI Bounce', (e, v) => (e.gi.bounce = v)) });
+        const realtime = new CheckboxField(gi.realtime, (v) => this.hooks<boolean>('GI Realtime', (e, b) => (e.gi.realtime = b)).commit!(v), 'Update continuously');
+        const probes = new CheckboxField(store.prefs.giProbes, (v) => store.setPrefs({ giProbes: v }), 'Editor only');
+        const info = h('div', { class: 'readonly' });
+        const error = h('div', { class: 'readonly error-text' });
+        const refresh = () => {
+            const g = this.env.gi;
+            const n = g.counts[0] * g.counts[1] * g.counts[2];
+            const size = g.counts.map((c) => ((c - 1) * g.spacing).toFixed(1)).join(' x ');
+            info.textContent = `${n} probes covering ${size}`;
+            error.textContent = this.editor.runtime.gi.error;
+            error.hidden = !error.textContent;
+        };
+        refresh();
+        watch(() => {
+            const g = this.env.gi;
+            center.set(g.center);
+            counts.set(g.counts);
+            spacing.set(g.spacing);
+            intensity.set(g.intensity);
+            bounce.set(g.bounce);
+            realtime.set(g.realtime);
+            probes.set(store.prefs.giProbes);
+            refresh();
+        });
+        rows.push(
+            row('Center', center.el, 'Center of the probe grid'),
+            row('Probes', counts.el, 'Probes along x, y and z (at most 16 per axis and 512 in all)'),
+            row('Spacing', spacing.el, 'Distance between probes'),
+            row('', info),
+            row('Intensity', intensity.el, 'Strength of the indirect light'),
+            row('Bounce', bounce.el, 'How much light keeps bouncing between surfaces'),
+            row('Realtime', realtime.el, 'Capture the probes every frame, for moving objects and lights. Otherwise they are captured again after every change.'),
+            row('Show Probes', probes.el, 'Draw a sphere per probe with the light it captured'),
+            row('', h('div', { class: 'inline' }, button('Fit to Scene', () => this.editor.fitGIToScene(), 'small', 'focus'), button('Recapture', () => this.editor.runtime.gi.invalidate(), 'small'))),
+            error,
+            h('div', { class: 'muted small pad', text: 'Surfaces more than one probe spacing outside the grid get no indirect light, so keep the grid around everything that should be lit.' }),
+        );
+        return section('gi', 'Global Illumination', 'sun', rows);
     }
 }

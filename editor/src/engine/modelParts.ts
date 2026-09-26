@@ -1,7 +1,11 @@
-import { Engine3D, Material, Object3D, PassType, RenderNode, Shader, Texture, VertexAttributeName } from '@orillusion/core';
-import type { MaterialOverride, ModelDoc, PartOverride, Vec3 } from '../core/types';
+import {
+    Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
+    VertexAttributeName,
+} from '@orillusion/core';
+import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, Vec3 } from '../core/types';
 import { colorToHex, hexToColor } from './color';
-import { applyProps, setBlended, type ShaderManager } from './shaders';
+import { applyAlpha, applyUVTransform, createBuiltinMaterial, EngineAlpha, engineAlpha, MaterialMaps, BASE_MAP } from './materials';
+import { applyProps, MODEL_MAPS, type ShaderManager } from './shaders';
 
 // An imported model is a single document node whose engine object is a
 // clone of the parsed glTF prefab. Its meshes ("parts") and materials
@@ -19,6 +23,16 @@ export interface SlotValues {
     doubleSide: boolean;
     /** The source material has its own base color texture. */
     hasMap: boolean;
+    /** How the file's material handles alpha. */
+    alpha: EngineAlpha;
+    alphaCutoff: number;
+    normalScale: number;
+    clearcoat: number;
+    clearcoatRoughness: number;
+    transmission: number;
+    ior: number;
+    /** The file's material is the engine's PBR material (the PBR fields apply). */
+    pbr: boolean;
 }
 
 export interface ModelPart {
@@ -34,6 +48,8 @@ export interface ModelPart {
     slot: string;
     /** Index of the part's own material in its slot's `materials`. */
     variant: number;
+    /** Skinned renderers need material instances of their own. */
+    skinned: boolean;
     vertices: number;
     triangles: number;
     base: { position: Vec3; rotation: Vec3; scale: Vec3; castShadow: boolean; receiveShadow: boolean };
@@ -64,6 +80,14 @@ export interface ModelInfo {
 
 const UNNAMED = /^[0-9A-F]{16}$/;
 
+/** Current alpha handling of a material, read from its color pass. */
+export function alphaOf(mat: Material): EngineAlpha {
+    const pass = mat.shader.getDefaultColorShader();
+    if (pass.shaderState.transparent) return 'BLEND';
+    if (pass.shaderState.alphaToCoverageEnabled || pass.defineValue?.['USE_ALPHACUT']) return 'MASK';
+    return 'OPAQUE';
+}
+
 function readSlot(mat: Material, white: Texture): SlotValues {
     const sh: any = mat.shader;
     const color = safe(() => sh.getUniformColor('baseColor'));
@@ -73,6 +97,7 @@ function readSlot(mat: Material, white: Texture): SlotValues {
         return typeof v === 'number' && Number.isFinite(v) ? v : d;
     };
     const map = safe(() => sh.getTexture('baseMap'));
+    const cutoff = num('alphaCutoff', 0);
     return {
         color: colorToHex(color),
         opacity: color && Number.isFinite(color.a) ? color.a : 1,
@@ -82,20 +107,47 @@ function readSlot(mat: Material, white: Texture): SlotValues {
         emissiveIntensity: num('emissiveIntensity', 0),
         doubleSide: !!safe(() => mat.doubleSide),
         hasMap: !!map && map !== white,
+        alpha: alphaOf(mat),
+        alphaCutoff: cutoff > 0 && cutoff < 1 ? cutoff : 0.5,
+        normalScale: num('normalScale', 1),
+        clearcoat: num('clearcoatFactor', 0),
+        clearcoatRoughness: num('clearcoatRoughnessFactor', 0),
+        transmission: num('transmissionFactor', 0),
+        ior: num('ior', 1.5),
+        pbr: mat instanceof LitMaterial,
     };
+}
+
+/** Destroys a shader that shares its textures with other materials, leaving the textures alone. */
+function destroyKeepTextures(shader: Shader) {
+    for (const list of shader.passShader.values()) {
+        for (const pass of list) pass.textures = {};
+    }
+    shader.destroy();
 }
 
 /**
  * Copies a material for per-instance changes. Only the color passes are
  * copied: derived passes (shadow, depth, GI) are rebuilt by the renderer
  * for the new material, and copying them through Shader.clone() fails for
- * pass classes whose constructors take other arguments.
+ * pass classes whose constructors take other arguments. A copy of a
+ * LitMaterial stays a LitMaterial: the renderer sends transmissive (glass)
+ * materials to their own pass by asking for `transmissionFactor`.
  */
-export function cloneMaterial(src: Material): Material {
+export function cloneMaterial(src: Material, ctx?: any): Material {
     const shader = new Shader();
     for (const pass of src.shader.getSubShaders(PassType.COLOR)) shader.addRenderPass(pass.clone());
-    const mat = new Material();
-    mat.shader = shader;
+    let mat: Material;
+    if (src instanceof LitMaterial) {
+        const lit = new LitMaterial(ctx);
+        const unused = lit.shader;
+        lit.shader = shader;
+        destroyKeepTextures(unused);
+        mat = lit;
+    } else {
+        mat = new Material();
+        mat.shader = shader;
+    }
     mat.name = src.name;
     mat.oitMode = src.oitMode;
     return mat;
@@ -168,6 +220,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
                     renderer: r,
                     slot: key,
                     variant: slots.find((s) => s.key === key)!.materials.indexOf(mat),
+                    skinned: r instanceof SkinnedMeshRenderer2,
                     vertices: pos ? Math.floor(pos.length / 3) : 0,
                     triangles: idx ? Math.floor(idx.length / 3) : 0,
                     base: {
@@ -205,18 +258,25 @@ function isEmpty(o: object | undefined): boolean {
 interface OverrideMaterial {
     material: Material;
     structure: string;
-    /** Texture asset currently requested for the base map. */
-    mapAsset: string | null | undefined;
+    maps: MaterialMaps;
     /** Asset textures of custom shader params, by property name. */
     paramAssets: Record<string, string>;
 }
 
 export interface OverrideDeps {
     shaders: ShaderManager;
-    loadTexture(assetId: string): Promise<Texture | null>;
+    loadTexture(assetId: string, linear?: boolean): Promise<Texture | null>;
     dispose(mat: Material): void;
     ctx: any;
 }
+
+/** How a slot is rendered: the file's material, a built-in material, or a custom shader. */
+export function slotShading(o: MaterialOverride | undefined, shaders: ShaderManager): SlotShading | 'shader' {
+    if (o?.shader && shaders.isValid(o.shader)) return 'shader';
+    return o?.shading ?? 'model';
+}
+
+const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
 /**
  * Applies a ModelDoc's overrides to one loaded model instance. Materials
@@ -225,8 +285,20 @@ export interface OverrideDeps {
  */
 export class ModelOverrides {
     private mats = new Map<string, OverrideMaterial>();
+    /** Per slot: index of a material that only static (not skinned) parts use. */
+    private staticVariant = new Map<string, number>();
 
-    constructor(readonly info: ModelInfo, private deps: OverrideDeps) {}
+    constructor(readonly info: ModelInfo, private deps: OverrideDeps) {
+        const skinnedUse = new Set<Material>();
+        for (const part of info.parts) {
+            const mat = info.slot(part.slot)?.materials[part.variant];
+            if (mat && part.skinned) skinnedUse.add(mat);
+        }
+        for (const slot of info.slots) {
+            const i = slot.materials.findIndex((m) => !skinnedUse.has(m));
+            if (i >= 0) this.staticVariant.set(slot.key, i);
+        }
+    }
 
     apply(model: ModelDoc, nodeVisible: boolean) {
         const materials = model.materials ?? {};
@@ -237,15 +309,34 @@ export class ModelOverrides {
             const po: PartOverride = parts[part.path] ?? {};
             const moved = !!po.material && po.material !== part.slot && !!this.info.slot(po.material);
             const slot = this.info.slot(moved ? po.material! : part.slot)!;
-            const variant = moved ? 0 : part.variant;
             const mo = materials[slot.key];
-            let mat = slot.materials[variant] ?? slot.material;
-            if (mo && !isEmpty(mo)) {
-                // Build or refresh this instance's copy of the slot material.
-                const key = `${slot.key}|${variant}`;
+
+            // Which file material the part renders with, and the key of this
+            // instance's copy of it. A part moved to another slot must not
+            // share a skinned material: a skinned renderer's passes are built
+            // for its own geometry and skeleton.
+            let source: Material;
+            let key: string;
+            let copy = !!mo && !isEmpty(mo);
+            if (!moved) {
+                source = slot.materials[part.variant] ?? slot.material;
+                key = `${slot.key}|${part.variant}`;
+            } else if (part.skinned) {
+                source = slot.material;
+                key = `${slot.key}|part|${part.path}`;
+                copy = true;
+            } else {
+                const v = this.staticVariant.get(slot.key);
+                source = v !== undefined ? slot.materials[v] : slot.material;
+                key = `${slot.key}|${v ?? 'static'}`;
+                if (v === undefined) copy = true;
+            }
+
+            let mat = source;
+            if (copy) {
                 if (!wanted.has(key)) {
                     wanted.add(key);
-                    this.refreshSlot(key, slot, variant, mo);
+                    this.refreshSlot(key, slot, source, mo ?? {});
                 }
                 mat = this.mats.get(key)!.material;
             }
@@ -297,68 +388,85 @@ export class ModelOverrides {
         this.mats.clear();
     }
 
-    private refreshSlot(key: string, slot: ModelSlot, variant: number, o: MaterialOverride) {
-        const source = slot.materials[variant] ?? slot.material;
-        const shaderId = o.shader || null;
-        const shaders = this.deps.shaders;
-        const useShader = !!shaderId && shaders.isValid(shaderId);
+    /** Builds (when its structure changed) and updates this instance's material for a slot. */
+    private refreshSlot(key: string, slot: ModelSlot, source: Material, o: MaterialOverride) {
+        const { shaders, ctx } = this.deps;
+        const shading = slotShading(o, shaders);
+        const shaderId = shading === 'shader' ? o.shader! : null;
         const base = slot.base;
         const opacity = o.opacity ?? base.opacity;
-        const structure = JSON.stringify({
-            shader: useShader ? shaderId : null,
-            version: useShader ? shaders.version(shaderId!) : 0,
-        });
+        const structure = JSON.stringify({ shading, shader: shaderId, version: shaderId ? shaders.version(shaderId) : 0 });
         let om = this.mats.get(key);
         if (!om || om.structure !== structure) {
             if (om) this.deps.dispose(om.material);
             let material: Material | null = null;
-            if (useShader) {
-                material = shaders.createMaterial(shaderId!);
-                // Keep the model's own base texture unless replaced.
-                const map = safe(() => source.shader.getTexture('baseMap'));
-                if (material && map) material.shader.setTexture('baseMap', map);
+            if (shaderId) {
+                material = shaders.createMaterial(shaderId);
+            } else if (shading === 'unlit' || shading === 'lambert') {
+                material = createBuiltinMaterial(shading, ctx);
+                // Texture repeat and offset as the file has them.
+                const uv = safe(() => source.shader.getUniformVector4('baseMapOffsetSize')) as Vector4 | undefined;
+                if (uv) applyUVTransform(material, [uv.z, uv.w], [uv.x, uv.y]);
             }
-            if (!material) material = cloneMaterial(source);
+            if (material) {
+                // A replacement keeps the file's color texture.
+                const map = safe(() => source.shader.getTexture('baseMap'));
+                if (map) material.shader.setTexture('baseMap', map);
+                material.setDefine('USE_SRGB_ALBEDO', !!source.shader.getDefaultColorShader().defineValue?.['USE_SRGB_ALBEDO']);
+            } else {
+                material = cloneMaterial(source, ctx);
+            }
             material.name = source.name;
-            om = { material, structure, mapAsset: undefined, paramAssets: {} };
+            om = { material, structure, maps: new MaterialMaps(material, ctx, (id, linear) => this.deps.loadTexture(id, linear)), paramAssets: {} };
             this.mats.set(key, om);
         }
         const mat = om.material;
         const sh = mat.shader;
         sh.setUniformColor('baseColor', hexToColor(o.color ?? base.color, opacity));
-        sh.setUniformFloat('metallic', clamp01(o.metallic ?? base.metallic));
-        sh.setUniformFloat('roughness', clamp01(o.roughness ?? base.roughness));
-        sh.setUniformColor('emissiveColor', hexToColor(o.emissive ?? base.emissive));
-        sh.setUniformFloat('emissiveIntensity', Math.max(0, o.emissiveIntensity ?? base.emissiveIntensity));
+        if (shading === 'model' || shading === 'shader') {
+            sh.setUniformFloat('metallic', clamp01(o.metallic ?? base.metallic));
+            sh.setUniformFloat('roughness', clamp01(o.roughness ?? base.roughness));
+            sh.setUniformColor('emissiveColor', hexToColor(o.emissive ?? base.emissive));
+            sh.setUniformFloat('emissiveIntensity', Math.max(0, o.emissiveIntensity ?? base.emissiveIntensity));
+        }
+        if (mat instanceof LitMaterial && shading === 'model') {
+            // Only touch what the override sets: the file's values stay as loaded.
+            if (o.normalScale !== undefined) sh.setUniformFloat('normalScale', Math.max(0, o.normalScale));
+            if (o.clearcoat !== undefined || o.clearcoatRoughness !== undefined) {
+                const coat = clamp01(o.clearcoat ?? base.clearcoat);
+                sh.setUniformFloat('clearcoatFactor', coat);
+                sh.setUniformFloat('clearcoatRoughnessFactor', clamp01(o.clearcoatRoughness ?? base.clearcoatRoughness));
+                mat.setDefine('USE_CLEARCOAT', coat > 0);
+            }
+            if (o.transmission !== undefined) {
+                const t = clamp01(o.transmission);
+                if (t !== mat.transmissionFactor) mat.transmissionFactor = t;
+            }
+            if (o.ior !== undefined) mat.ior = Math.min(3, Math.max(1, o.ior));
+        }
         mat.doubleSide = o.doubleSide ?? base.doubleSide;
-        const sourceBlended = !!source.shader.getDefaultColorShader().shaderState.transparent;
-        if (!sourceBlended || useShader) setBlended(mat, opacity < 0.999 || (useShader && sourceBlended));
 
-        if (useShader) {
-            const assets = applyProps(sh, shaders.props(shaderId!), o.params ?? {}, this.deps.ctx);
+        // Alpha: an explicit mode wins; otherwise keep the file's blending
+        // and blend when the opacity override makes the material see-through.
+        const cutoff = clamp01(o.alphaCutoff ?? base.alphaCutoff);
+        if (o.alphaMode && o.alphaMode !== 'auto') applyAlpha(mat, engineAlpha(o.alphaMode, opacity), cutoff);
+        else if (base.alpha === 'BLEND') applyAlpha(mat, 'BLEND', cutoff);
+        else applyAlpha(mat, opacity < 0.999 ? 'BLEND' : base.alpha, cutoff);
+
+        if (shaderId) {
+            // Texture properties named after the model's maps get the file's maps.
+            const fallback = (name: string) => (MODEL_MAPS.includes(name) ? (safe(() => source.shader.getTexture(name)) as Texture | undefined) : undefined);
+            const assets = applyProps(sh, shaders.props(shaderId), o.params ?? {}, ctx, fallback);
             this.loadParamTextures(om, assets);
         }
 
-        if (om.mapAsset !== o.map) {
-            om.mapAsset = o.map;
-            const white = Engine3D.resFor(this.deps.ctx).whiteTexture;
-            if (o.map === undefined) {
-                const src = source.shader.getDefaultColorShader();
-                const map = safe(() => source.shader.getTexture('baseMap'));
-                sh.setTexture('baseMap', map ?? white);
-                sh.setDefine('USE_SRGB_ALBEDO', !!src.defineValue?.['USE_SRGB_ALBEDO']);
-            } else if (o.map === null) {
-                sh.setTexture('baseMap', white);
-                sh.setDefine('USE_SRGB_ALBEDO', false);
-            } else {
-                const asset = o.map;
-                void this.deps.loadTexture(asset).then((tex) => {
-                    if (!tex || this.mats.get(key) !== om || om!.mapAsset !== asset) return;
-                    sh.setDefine('USE_SRGB_ALBEDO', (tex as any).format === 'rgba8unorm-srgb');
-                    sh.setTexture('baseMap', tex);
-                });
-            }
-        }
+        // The color map: the file's own (missing `map`), none (null) or a texture asset.
+        if (o.map === undefined) om.maps.set(BASE_MAP, null);
+        else if (o.map === null) {
+            om.maps.set(BASE_MAP, null);
+            sh.setTexture('baseMap', Engine3D.resFor(ctx).whiteTexture);
+            mat.setDefine('USE_SRGB_ALBEDO', false);
+        } else om.maps.set(BASE_MAP, o.map);
     }
 
     private loadParamTextures(om: OverrideMaterial, assets: { name: string; asset: string }[]) {
@@ -370,10 +478,6 @@ export class ModelOverrides {
             });
         }
     }
-}
-
-function clamp01(v: number): number {
-    return v < 0 ? 0 : v > 1 ? 1 : v;
 }
 
 function nz(v: number): number {

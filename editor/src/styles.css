@@ -1055,6 +1055,10 @@ input.text:focus,
     gap: 4px;
 }
 
+.vec3.vec2 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
 .vec3-item {
     position: relative;
     display: flex;
@@ -2483,6 +2487,20 @@ kbd {
     border-radius: 50%;
     background: var(--select);
     flex: none;
+}
+
+/* Shading of a model material slot when it is not the file's own. */
+.slot-tag {
+    flex: none;
+    max-width: 40%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    padding: 0 5px;
+    border-radius: 4px;
+    font-size: 10.5px;
+    color: var(--accent);
+    background: var(--accent-soft);
 }
 
 .part-row .tree-eye {

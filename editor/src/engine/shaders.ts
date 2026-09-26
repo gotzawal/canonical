@@ -1,6 +1,6 @@
 import {
     BlendMode, Color, Engine3D, GPUTextureFormat, Material, PassType, PostBase, Preprocessor, RenderShaderPass,
-    RenderTexture, Shader, ShaderLib, Vector4, View3D, ViewQuad,
+    RenderTexture, Shader, ShaderLib, Texture, Vector4, View3D, ViewQuad,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
@@ -110,10 +110,18 @@ const ENGINE_FIELDS = `
 
 const RESERVED = new Set([
     ...ENGINE_FIELDS.split(/[\s,]+/).filter((s) => s.endsWith(':')).map((s) => s.slice(0, -1)),
-    'baseMap', 'normalMap', 'maskMap', 'emissiveMap', 'aoMap', 'shadowBias', 'x', 'y', 'width', 'height',
+    'baseMap', 'shadowBias', 'x', 'y', 'width', 'height',
     'fn', 'let', 'var', 'const', 'struct', 'return', 'if', 'else', 'for', 'loop', 'while', 'true', 'false',
     'f32', 'i32', 'u32', 'bool', 'vec2', 'vec3', 'vec4', 'mat4x4', 'texture', 'sampler', 'discard',
 ]);
+
+/**
+ * Texture properties with these names are filled with the model's own map
+ * of the same name when the shader replaces a material of an imported model
+ * (normalMap: normal map, maskMap: metallic-roughness, emissiveMap,
+ * aoMap: occlusion), unless a value is set.
+ */
+export const MODEL_MAPS = ['normalMap', 'maskMap', 'emissiveMap', 'aoMap'];
 
 // ------------------------------------------------------------------- parse
 
@@ -144,6 +152,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
         if (!name || !type) return fail('Expected "// @property <name> <float|color|vec4|texture> [default]".');
         if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) return fail(`"${name}" is not a valid property name.`);
         if (RESERVED.has(name) || name.startsWith('__')) return fail(`"${name}" is a reserved name, pick another one.`);
+        if (MODEL_MAPS.includes(name) && type !== 'texture') return fail(`"${name}" is reserved for the model's ${name}; declare it as a texture.`);
         if (seen.has(name)) return fail(`Property "${name}" is declared twice.`);
         let prop: ShaderProperty | null = null;
         if (type === 'float' || type === 'int') {
@@ -503,13 +512,29 @@ export class ShaderManager extends Emitter<ShaderEvents> {
  * Writes property values (falling back to their defaults) into a shader.
  * Texture properties may name a built-in texture (white, black, gray,
  * normal) or a texture asset id; asset textures are returned so the caller
- * can load them, and get a white placeholder until then.
+ * can load them, and get a white placeholder until then. `fallback`
+ * supplies textures for texture properties without a value (the model's
+ * own maps, see MODEL_MAPS).
  */
-export function applyProps(shader: Shader, props: ShaderProperty[], values: Record<string, ParamValue>, ctx?: any): { name: string; asset: string }[] {
+export function applyProps(
+    shader: Shader,
+    props: ShaderProperty[],
+    values: Record<string, ParamValue>,
+    ctx?: any,
+    fallback?: (name: string) => Texture | null | undefined,
+): { name: string; asset: string }[] {
     const res = Engine3D.resFor(ctx);
     const assets: { name: string; asset: string }[] = [];
     for (const p of props) {
-        const v = values[p.name] ?? p.default;
+        const own = values[p.name];
+        if (p.type === 'texture' && (own === undefined || own === '') && fallback) {
+            const tex = fallback(p.name);
+            if (tex) {
+                shader.setTexture(p.name, tex);
+                continue;
+            }
+        }
+        const v = own === undefined || own === '' ? p.default : own;
         if (p.type === 'float') {
             const n = typeof v === 'number' ? v : Number(v);
             shader.setUniformFloat(p.name, Number.isFinite(n) ? n : 0);

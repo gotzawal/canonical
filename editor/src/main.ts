@@ -294,6 +294,11 @@ async function main() {
         // The game view has no editor grid.
         runtime.setGridVisible(!playing && store.prefs.grid);
     });
+    // GI probe spheres are an editor view aid: hidden while playing.
+    const updateProbeHelpers = () => runtime.gi.setHelpersVisible(store.prefs.giProbes && !store.playing);
+    store.on('prefs', updateProbeHelpers);
+    store.on('playing', updateProbeHelpers);
+    updateProbeHelpers();
     player.on('state', (st) => app.classList.toggle('paused', st === 'paused'));
 
     installShortcuts(editor, rename, dock);

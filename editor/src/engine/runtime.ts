@@ -4,6 +4,7 @@ import {
 } from '@orillusion/core';
 import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
+import { GIController, giEngineSetting } from './gi';
 
 type PostCtor = new () => PostBase;
 
@@ -18,10 +19,13 @@ export class Runtime {
     readonly camera: Camera3D;
     readonly grid: GridObject;
     readonly canvas: HTMLCanvasElement;
+    /** Dynamic diffuse global illumination (DDGI). */
+    readonly gi: GIController;
 
     fps = 0;
     private frameListeners = new Set<() => void>();
     private beforeListeners = new Set<() => void>();
+    private graphListeners = new Set<() => void>();
     /** Custom post effects, in chain order (see setCustomPosts). */
     private customPosts: PostBase[] = [];
     private frames = 0;
@@ -57,6 +61,7 @@ export class Runtime {
         this.view.camera = this.camera;
         engine.startRenderView(this.view);
         this.post = this.scene.addComponent(PostProcessingComponent);
+        this.gi = new GIController(this);
     }
 
     static async create(canvas: HTMLCanvasElement): Promise<Runtime> {
@@ -67,6 +72,7 @@ export class Runtime {
                 // The editor does its own ray picking against the document.
                 pick: { enable: false },
                 shadow: { type: 'PCF', shadowBound: 60, shadowSize: 2048 },
+                gi: giEngineSetting(),
             },
             beforeRender: () => runtime?.beforeTick(),
             lateRender: () => runtime?.tick(),
@@ -85,6 +91,22 @@ export class Runtime {
     onBeforeFrame(cb: () => void): () => void {
         this.beforeListeners.add(cb);
         return () => this.beforeListeners.delete(cb);
+    }
+
+    /** Called when passes were added to or replaced in the render graph. */
+    onGraphChanged(cb: () => void): () => void {
+        this.graphListeners.add(cb);
+        return () => this.graphListeners.delete(cb);
+    }
+
+    notifyGraphChanged() {
+        for (const cb of this.graphListeners) {
+            try {
+                cb();
+            } catch (e) {
+                console.error('[editor] graph listener failed', e);
+            }
+        }
     }
 
     private beforeTick() {
@@ -186,6 +208,8 @@ export class Runtime {
 
         const fxaa = this.postList()?.get('FXAAPost');
         if (fxaa) fxaa.enable = env.fxaa;
+
+        this.gi.apply(env.gi);
     }
 
     /**

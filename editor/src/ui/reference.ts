@@ -49,10 +49,20 @@ const PROPERTIES: [string, string][] = [
 ];
 
 const MATERIAL: [string, string][] = [
-    ['fn frag()', 'Required. Reads ORI_VertexVarying.fragUV0, .vWorldPos, .vWorldNormal, globalUniform.CameraPos, baseMap / baseMapSampler and materialUniform.baseColor, roughness, metallic, emissiveColor, emissiveIntensity.'],
+    ['fn frag()', 'Required. Reads ORI_VertexVarying.fragUV0, .vWorldPos, .vWorldNormal, globalUniform.CameraPos, baseMap / baseMapSampler and materialUniform.baseColor, roughness, metallic, emissiveColor, emissiveIntensity, alphaCutoff.'],
     ['Lit', 'Set ORI_ShadingInput.BaseColor, Roughness, Metallic, Specular, AmbientOcclusion, EmissiveColor and Normal, then call useShadow(); BxDFShading();'],
     ['Unlit', 'Set ORI_ShadingInput.BaseColor, then call UnLit();'],
     ['fn vert(inputData: VertexAttributes) -> VertexOutput', 'Optional. Change a copy of the input, then ORI_Vert(v); return ORI_VertexOut;'],
+    ['Imported models', 'On a material slot of an imported model, baseMap is the model\'s color texture, and texture properties named normalMap, maskMap (roughness in G, metallic in B), emissiveMap and aoMap receive the model\'s own maps: // @property normalMap texture normal'],
+];
+
+const MATERIAL_TYPES: [string, string][] = [
+    ['Lit (PBR)', 'The engine\'s physically based material: color, metallic, roughness, emission; normal, metallic-roughness, occlusion and emission maps; clear coat; transmission with IOR, thickness and tint for glass and water. The menu next to the Material title has presets.'],
+    ['Unlit', 'Color and texture as they are, ignoring lights.'],
+    ['Lambert (Matte)', 'Cheap diffuse shading from directional lights; no specular and no shadows on it.'],
+    ['Custom Shader', 'A WGSL material shader (see below).'],
+    ['Alpha', 'Auto blends when opacity is below 1, Mask cuts out pixels whose alpha is below the cutoff (leaves, fences).'],
+    ['Imported models', 'Each material slot can keep the file\'s material (Model), switch to Unlit or Lambert, or use a custom shader.'],
 ];
 
 const POST: [string, string][] = [
@@ -81,6 +91,12 @@ export function showReference() {
         table(LIFECYCLE),
         h('h4', { text: 'Members' }),
         table(MEMBERS),
+        h('h3', { text: 'Materials' }),
+        table(MATERIAL_TYPES),
+        h('h3', { text: 'Global illumination' }),
+        h('p', {
+            text: 'Scene > Global Illumination turns on DDGI: a grid of light probes captures the scene and lit materials receive the light it bounces, so a red wall tints the floor next to it and shadows get indirect light. Fit to Scene sizes the grid to your meshes; surfaces more than one probe spacing outside the grid get no indirect light. Probes are captured again after every change, or every frame with Realtime. It works in Play mode and in builds.',
+        }),
         h('h3', { text: 'Shaders (WGSL)' }),
         h('p', {
             text: 'Material shaders render meshes: set a material to Custom Shader in the Inspector, or drag the shader onto a mesh. Post shaders run on the whole screen: drag them onto the viewport or use Add Post Effect in the Render Graph panel. Read property values as materialUniform.<name>; getTime() returns seconds.',

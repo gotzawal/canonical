@@ -40,6 +40,7 @@ export interface PlayHooks {
 const SELECT_COLOR = '#ffa53d';
 const PART_COLOR = '#3dd8ff';
 const HELPER_COLOR = 'rgba(255, 228, 150, 0.9)';
+const GI_COLOR = 'rgba(120, 220, 160, 0.75)';
 
 /**
  * The 3D viewport: an overlay canvas on top of the engine canvas that draws
@@ -387,6 +388,7 @@ export class Viewport {
             return;
         }
         const selected = new Set(this.store.selection);
+        if (this.store.prefs.helpers) this.drawGIVolume();
         for (const node of this.store.doc.nodes) {
             const entry = this.sync.entries.get(node.id);
             if (!entry) continue;
@@ -427,6 +429,22 @@ export class Viewport {
             const corners = rendererBox(focus.renderer);
             if (corners) this.strokeBox(corners);
         }
+        ctx.restore();
+    }
+
+    /** Box spanned by the GI probes (surfaces far outside it get no indirect light). */
+    private drawGIVolume() {
+        const box = this.runtime.gi.bounds();
+        if (!box) return;
+        const ctx = this.ctx;
+        const { min, max } = box;
+        const corners: Vec3[] = [];
+        for (let i = 0; i < 8; i++) corners.push([i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]]);
+        ctx.save();
+        ctx.strokeStyle = GI_COLOR;
+        ctx.lineWidth = 1;
+        ctx.setLineDash([5, 4]);
+        this.strokeBox(corners);
         ctx.restore();
     }
 

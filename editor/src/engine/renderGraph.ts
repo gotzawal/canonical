@@ -63,6 +63,8 @@ export class RenderGraphController extends Emitter<GraphEvents> {
         store.on('change', () => this.apply());
         store.on('load', () => this.apply(true));
         shaders.on('compiled', () => this.apply(true));
+        // GI adds passes the first time it is switched on.
+        runtime.onGraphChanged(() => this.apply(true));
         // Pass reads and writes are only known once the graph compiled for the first frame.
         const off = runtime.onFrame(() => {
             off();

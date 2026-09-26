@@ -2,6 +2,8 @@ import type { Editor } from '../editor';
 import {
     defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode,
 } from '../core/defaults';
+import { clampGIGrid } from '../core/giLimits';
+import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { tidy } from '../core/math';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
@@ -31,19 +33,37 @@ type Json = Record<string, any>;
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const color = { type: 'string', description: '#rrggbb (CSS color names also work)' };
+const textureRef = { type: ['string', 'null'], description: 'Texture asset id, or null for none.' };
 const materialSchema = {
     type: 'object',
-    description: 'Material of a primitive.',
+    description: 'Material of a primitive. lit = PBR (LitMaterial), unlit = ignores lights, lambert = cheap matte (directional lights only), shader = custom WGSL shader.',
     properties: {
-        type: { type: 'string', enum: ['lit', 'unlit', 'shader'] },
+        type: { type: 'string', enum: ['lit', 'unlit', 'lambert', 'shader'] },
+        preset: { type: 'string', enum: MATERIAL_PRESETS.map((p) => p.id), description: 'Start from a preset (keeps color and textures), then apply the other fields.' },
         color,
         opacity: { type: 'number' },
+        alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask'], description: 'auto blends when opacity < 1; mask cuts out pixels below alpha_cutoff.' },
+        alpha_cutoff: { type: 'number' },
         metallic: { type: 'number' },
         roughness: { type: 'number' },
         emissive: color,
         emissive_intensity: { type: 'number' },
         double_side: { type: 'boolean' },
-        texture: { type: ['string', 'null'], description: 'Texture asset id, or null for none.' },
+        texture: textureRef,
+        tiling: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Texture repeat [u, v].' },
+        offset: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Texture offset [u, v].' },
+        normal_map: { ...textureRef, description: 'Lit only.' },
+        normal_scale: { type: 'number', description: 'Lit only.' },
+        metal_rough_map: { ...textureRef, description: 'Lit only: glTF metallic-roughness texture (roughness in G, metallic in B).' },
+        ao_map: { ...textureRef, description: 'Lit only: ambient occlusion (R).' },
+        emissive_map: { ...textureRef, description: 'Lit only.' },
+        clearcoat: { type: 'number', description: 'Lit only, 0..1: glossy coat layer (car paint).' },
+        clearcoat_roughness: { type: 'number' },
+        transmission: { type: 'number', description: 'Lit only, 0..1: light passes through (glass, water).' },
+        ior: { type: 'number', description: 'Index of refraction for transmission (1.5 glass, 1.33 water).' },
+        thickness: { type: 'number' },
+        attenuation_color: color,
+        attenuation_distance: { type: 'number', description: '0 = no absorption.' },
         shader: { type: ['string', 'null'], description: 'Material shader id or name; sets type to "shader". null goes back to lit.' },
         params: { type: 'object', description: 'Values of the shader\'s @property declarations.' },
     },
@@ -115,21 +135,43 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
             bloom: { type: 'object', properties: { enable: { type: 'boolean' }, intensity: { type: 'number' }, threshold: { type: 'number' } } },
             ao: { type: 'object', properties: { enable: { type: 'boolean' }, strength: { type: 'number' }, distance: { type: 'number' } } },
             fog: { type: 'object', properties: { enable: { type: 'boolean' }, color, near: { type: 'number' }, far: { type: 'number' }, intensity: { type: 'number' } } },
+            gi: {
+                type: 'object',
+                description: 'Dynamic diffuse global illumination (DDGI): a probe grid bounces light between surfaces. Surfaces more than one spacing outside the grid get no indirect light. fit_to_scene sizes the grid to the meshes.',
+                properties: {
+                    enable: { type: 'boolean' },
+                    fit_to_scene: { type: 'boolean' },
+                    center: vec3,
+                    counts: { ...vec3, description: 'Probes along x, y, z: at most 16 per axis and 512 in all.' },
+                    spacing: { type: 'number' },
+                    intensity: { type: 'number' },
+                    bounce: { type: 'number', description: '0..1' },
+                    realtime: { type: 'boolean', description: 'Capture continuously (moving objects / lights).' },
+                },
+            },
         }),
         def('list_model_parts', 'Material slots and mesh parts of an imported model object, with their current values and overrides.', { id: { type: 'string' } }, ['id']),
-        def('set_model_material', 'Override a material slot of imported model objects. Missing fields keep their value; reset clears the slot.', {
+        def('set_model_material', 'Override a material slot of imported model objects. Missing fields keep their value; reset clears the slot. Each slot can get its own shading: the file\'s PBR material, unlit, lambert, or a custom material shader.', {
             ids: { type: 'array', items: { type: 'string' } },
             slot: { type: 'string' },
             reset: { type: 'boolean' },
+            shading: { type: 'string', enum: ['model', 'unlit', 'lambert'], description: 'Built-in shading; "model" is the file\'s material. Ignored while a shader is set.' },
             color,
             opacity: { type: 'number' },
+            alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask'] },
+            alpha_cutoff: { type: 'number' },
+            normal_scale: { type: 'number', description: 'Model shading only.' },
+            clearcoat: { type: 'number', description: 'Model shading only, 0..1.' },
+            clearcoat_roughness: { type: 'number' },
+            transmission: { type: 'number', description: 'Model shading only, 0..1 (glass).' },
+            ior: { type: 'number' },
             metallic: { type: 'number' },
             roughness: { type: 'number' },
             emissive: color,
             emissive_intensity: { type: 'number' },
             double_side: { type: 'boolean' },
             texture: { type: ['string', 'null'], description: 'Texture asset id, null for none, "file" for the model\'s own.' },
-            shader: { type: ['string', 'null'], description: 'Material shader id or name to replace the material; null removes it.' },
+            shader: { type: ['string', 'null'], description: 'Material shader id or name to replace the material; null removes it. Texture properties named normalMap, maskMap, emissiveMap or aoMap get the model\'s own maps unless params sets them.' },
             params: { type: 'object' },
         }, ['ids', 'slot']),
         def('set_model_part', 'Override a mesh part of imported model objects (visibility, shadows, material slot, local transform). reset clears the part.', {
@@ -283,10 +325,20 @@ function nodeType(n: NodeDoc): string {
 function materialSummary(m: MaterialDoc): Json {
     const out: Json = { type: m.type, color: m.color };
     if (m.opacity < 1) out.opacity = r3(m.opacity);
-    if (m.type !== 'unlit') {
+    if (m.alphaMode && m.alphaMode !== 'auto') out.alpha_mode = m.alphaMode;
+    if (m.type === 'lit' || m.type === 'shader') {
         out.metallic = r3(m.metallic);
         out.roughness = r3(m.roughness);
     }
+    for (const [field, key] of [['normalMap', 'normal_map'], ['metalRoughMap', 'metal_rough_map'], ['aoMap', 'ao_map'], ['emissiveMap', 'emissive_map']] as const) {
+        if (m[field]) out[key] = m[field];
+    }
+    if (m.clearcoat) out.clearcoat = r3(m.clearcoat);
+    if (m.transmission) {
+        out.transmission = r3(m.transmission);
+        out.ior = r3(m.ior ?? 1.5);
+    }
+    if (m.tiling && (m.tiling[0] !== 1 || m.tiling[1] !== 1)) out.tiling = m.tiling;
     if (m.emissive !== '#000000' && m.emissiveIntensity > 0) {
         out.emissive = m.emissive;
         out.emissive_intensity = r3(m.emissiveIntensity);
@@ -400,22 +452,57 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     }
 }
 
+function textureId(doc: SceneDoc, v: unknown, what: string): string | null {
+    if (v === null || v === '') return null;
+    if (typeof v !== 'string' || !doc.assets.some((a) => a.id === v && a.kind === 'texture')) throw new ToolError(`${what}: no texture asset "${v}".`);
+    return v;
+}
+
+const unit = (v: unknown, what: string) => Math.min(1, Math.max(0, num(v, what)));
+
 function applyMaterial(_env: ToolEnv, doc: SceneDoc, m: MaterialDoc, p: Json) {
+    if (p.preset !== undefined) {
+        const preset = MATERIAL_PRESETS.find((x) => x.id === p.preset);
+        if (!preset) throw new ToolError(`Unknown preset "${p.preset}". Use one of ${MATERIAL_PRESETS.map((x) => x.id).join(', ')}.`);
+        preset.apply(m);
+    }
     if (p.type !== undefined) {
-        if (!['lit', 'unlit', 'shader'].includes(p.type)) throw new ToolError(`Unknown material type "${p.type}".`);
+        if (!['lit', 'unlit', 'lambert', 'shader'].includes(p.type)) throw new ToolError(`Unknown material type "${p.type}".`);
         m.type = p.type;
     }
     if (p.color !== undefined) m.color = hex(p.color);
-    if (p.opacity !== undefined) m.opacity = Math.min(1, Math.max(0, num(p.opacity, 'opacity')));
-    if (p.metallic !== undefined) m.metallic = Math.min(1, Math.max(0, num(p.metallic, 'metallic')));
-    if (p.roughness !== undefined) m.roughness = Math.min(1, Math.max(0, num(p.roughness, 'roughness')));
+    if (p.opacity !== undefined) m.opacity = unit(p.opacity, 'opacity');
+    if (p.alpha_mode !== undefined) {
+        if (!['auto', 'opaque', 'blend', 'mask'].includes(p.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${p.alpha_mode}".`);
+        if (p.alpha_mode === 'auto') delete m.alphaMode;
+        else m.alphaMode = p.alpha_mode;
+    }
+    if (p.alpha_cutoff !== undefined) m.alphaCutoff = unit(p.alpha_cutoff, 'alpha_cutoff');
+    if (p.metallic !== undefined) m.metallic = unit(p.metallic, 'metallic');
+    if (p.roughness !== undefined) m.roughness = unit(p.roughness, 'roughness');
     if (p.emissive !== undefined) m.emissive = hex(p.emissive, 'emissive');
     if (p.emissive_intensity !== undefined) m.emissiveIntensity = Math.max(0, num(p.emissive_intensity, 'emissive_intensity'));
     if (p.double_side !== undefined) m.doubleSide = !!p.double_side;
-    if (p.texture !== undefined) {
-        if (p.texture !== null && !doc.assets.some((a) => a.id === p.texture && a.kind === 'texture')) throw new ToolError(`No texture asset "${p.texture}".`);
-        m.map = p.texture;
+    if (p.texture !== undefined) m.map = textureId(doc, p.texture, 'texture');
+    for (const [key, field] of [['normal_map', 'normalMap'], ['metal_rough_map', 'metalRoughMap'], ['ao_map', 'aoMap'], ['emissive_map', 'emissiveMap']] as const) {
+        if (p[key] !== undefined) m[field] = textureId(doc, p[key], key);
     }
+    if (p.tiling !== undefined) {
+        if (!Array.isArray(p.tiling) || p.tiling.length !== 2) throw new ToolError('tiling must be [u, v].');
+        m.tiling = [num(p.tiling[0], 'tiling'), num(p.tiling[1], 'tiling')];
+    }
+    if (p.offset !== undefined) {
+        if (!Array.isArray(p.offset) || p.offset.length !== 2) throw new ToolError('offset must be [u, v].');
+        m.offset = [num(p.offset[0], 'offset'), num(p.offset[1], 'offset')];
+    }
+    if (p.normal_scale !== undefined) m.normalScale = Math.max(0, num(p.normal_scale, 'normal_scale'));
+    if (p.clearcoat !== undefined) m.clearcoat = unit(p.clearcoat, 'clearcoat');
+    if (p.clearcoat_roughness !== undefined) m.clearcoatRoughness = unit(p.clearcoat_roughness, 'clearcoat_roughness');
+    if (p.transmission !== undefined) m.transmission = unit(p.transmission, 'transmission');
+    if (p.ior !== undefined) m.ior = Math.min(3, Math.max(1, num(p.ior, 'ior')));
+    if (p.thickness !== undefined) m.thickness = Math.max(0, num(p.thickness, 'thickness'));
+    if (p.attenuation_color !== undefined) m.attenuationColor = hex(p.attenuation_color, 'attenuation_color');
+    if (p.attenuation_distance !== undefined) m.attenuationDistance = Math.max(0, num(p.attenuation_distance, 'attenuation_distance'));
     if (p.shader !== undefined) {
         if (p.shader === null) {
             m.type = 'lit';
@@ -511,6 +598,7 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                             ao: d.environment.ao,
                             fog: d.environment.fog,
                             fxaa: d.environment.fxaa,
+                            gi: d.environment.gi,
                         },
                         objects: nodes,
                         ...(d.nodes.length > nodes.length ? { truncated: d.nodes.length - nodes.length } : {}),
@@ -605,8 +693,20 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                             (e[k] as any)[key] = key === 'enable' ? !!val : key === 'color' ? hex(val) : num(val, `${k}.${key}`);
                         }
                     }
+                    const gi = args.gi;
+                    if (gi && typeof gi === 'object') {
+                        if (gi.enable !== undefined) e.gi.enable = !!gi.enable;
+                        if (gi.center !== undefined) e.gi.center = v3(gi.center, 'gi.center');
+                        if (gi.counts !== undefined) e.gi.counts = clampGIGrid(v3(gi.counts, 'gi.counts'));
+                        if (gi.spacing !== undefined) e.gi.spacing = Math.min(100, Math.max(0.1, num(gi.spacing, 'gi.spacing')));
+                        if (gi.intensity !== undefined) e.gi.intensity = Math.max(0, num(gi.intensity, 'gi.intensity'));
+                        if (gi.bounce !== undefined) e.gi.bounce = unit(gi.bounce, 'gi.bounce');
+                        if (gi.realtime !== undefined) e.gi.realtime = !!gi.realtime;
+                    }
                 }, { env: true });
-                return { data: { ok: true } };
+                if (args.gi?.fit_to_scene) ed.fitGIToScene();
+                const g = doc().environment.gi;
+                return { data: { ok: true, gi: g.enable ? { counts: g.counts, spacing: g.spacing, center: g.center, error: ed.runtime.gi.error || undefined } : undefined } };
             }
             case 'list_model_parts': {
                 const n = node(doc(), args.id);
@@ -621,7 +721,13 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                         slots: info.slots.map((s) => ({
                             key: s.key,
                             meshes: s.parts.length,
-                            file: { color: s.base.color, opacity: r3(s.base.opacity), metallic: r3(s.base.metallic), roughness: r3(s.base.roughness), emissive: s.base.emissive, emissive_intensity: r3(s.base.emissiveIntensity), double_side: s.base.doubleSide, has_texture: s.base.hasMap },
+                            file: {
+                                color: s.base.color, opacity: r3(s.base.opacity), metallic: r3(s.base.metallic), roughness: r3(s.base.roughness),
+                                emissive: s.base.emissive, emissive_intensity: r3(s.base.emissiveIntensity), double_side: s.base.doubleSide, has_texture: s.base.hasMap,
+                                alpha: s.base.alpha.toLowerCase(), pbr: s.base.pbr,
+                                ...(s.base.transmission ? { transmission: r3(s.base.transmission) } : {}),
+                                ...(s.base.clearcoat ? { clearcoat: r3(s.base.clearcoat) } : {}),
+                            },
                             ...(mats[s.key] ? { override: mats[s.key] } : {}),
                         })),
                         parts: info.parts.slice(0, 300).map((p) => ({ path: p.path, name: p.name, slot: p.slot, triangles: p.triangles, ...(parts[p.path] ? { override: parts[p.path] } : {}) })),
@@ -639,8 +745,22 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                     return { data: { ok: true } };
                 }
                 const patch: Partial<MaterialOverride> = {};
+                if (args.shading !== undefined) {
+                    if (!['model', 'unlit', 'lambert'].includes(args.shading)) throw new ToolError(`Unknown shading "${args.shading}".`);
+                    patch.shading = args.shading === 'model' ? undefined : args.shading;
+                }
                 if (args.color !== undefined) patch.color = hex(args.color);
                 if (args.opacity !== undefined) patch.opacity = Math.min(1, Math.max(0, num(args.opacity, 'opacity')));
+                if (args.alpha_mode !== undefined) {
+                    if (!['auto', 'opaque', 'blend', 'mask'].includes(args.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${args.alpha_mode}".`);
+                    patch.alphaMode = args.alpha_mode === 'auto' ? undefined : args.alpha_mode;
+                }
+                if (args.alpha_cutoff !== undefined) patch.alphaCutoff = unit(args.alpha_cutoff, 'alpha_cutoff');
+                if (args.normal_scale !== undefined) patch.normalScale = Math.max(0, num(args.normal_scale, 'normal_scale'));
+                if (args.clearcoat !== undefined) patch.clearcoat = unit(args.clearcoat, 'clearcoat');
+                if (args.clearcoat_roughness !== undefined) patch.clearcoatRoughness = unit(args.clearcoat_roughness, 'clearcoat_roughness');
+                if (args.transmission !== undefined) patch.transmission = unit(args.transmission, 'transmission');
+                if (args.ior !== undefined) patch.ior = Math.min(3, Math.max(1, num(args.ior, 'ior')));
                 if (args.metallic !== undefined) patch.metallic = Math.min(1, Math.max(0, num(args.metallic, 'metallic')));
                 if (args.roughness !== undefined) patch.roughness = Math.min(1, Math.max(0, num(args.roughness, 'roughness')));
                 if (args.emissive !== undefined) patch.emissive = hex(args.emissive, 'emissive');

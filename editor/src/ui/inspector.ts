@@ -3,15 +3,17 @@ import { formatBytes } from '../core/assets';
 import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
-    GeometryType, LightType, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScriptRef, Vec3,
+    AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue,
+    PartOverride, ScriptRef, SlotShading, Vec3,
 } from '../core/types';
-import type { ModelInfo, ModelPart, ModelSlot } from '../engine/modelParts';
+import { MATERIAL_PRESETS } from '../core/materialPresets';
+import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
-    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec3Field, button,
+    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
     iconButton, row, section,
 } from './widgets';
 
@@ -27,6 +29,27 @@ const LIGHT_OPTIONS: { value: LightType; label: string }[] = [
     { value: 'directional', label: 'Directional' },
     { value: 'point', label: 'Point' },
     { value: 'spot', label: 'Spot' },
+];
+
+const MATERIAL_TYPES: { value: MaterialType; label: string; hint: string }[] = [
+    { value: 'lit', label: 'Lit (PBR)', hint: 'Physically based: lights, shadows, reflections, clear coat, glass' },
+    { value: 'unlit', label: 'Unlit', hint: 'Shows its color and texture as they are, ignoring lights' },
+    { value: 'lambert', label: 'Lambert (Matte)', hint: 'Cheap matte shading from directional lights, no specular or shadows' },
+    { value: 'shader', label: 'Custom Shader', hint: 'Renders with a WGSL material shader' },
+];
+
+const ALPHA_MODES: { value: AlphaMode; label: string }[] = [
+    { value: 'auto', label: 'Auto' },
+    { value: 'opaque', label: 'Opaque' },
+    { value: 'blend', label: 'Blend' },
+    { value: 'mask', label: 'Mask (cut-out)' },
+];
+
+const SLOT_SHADING: { value: string; label: string }[] = [
+    { value: 'model', label: 'Model (PBR)' },
+    { value: 'unlit', label: 'Unlit' },
+    { value: 'lambert', label: 'Lambert (Matte)' },
+    { value: 'shader', label: 'Custom Shader' },
 ];
 
 const MAX_PARTS = 150;
@@ -89,12 +112,12 @@ export class InspectorPanel {
         return [
             n.id,
             this.store.selection.length,
-            n.mesh ? n.mesh.geometry.type + ':' + mat!.type + ':' + shaderId + ':' + this.propsKey(shaderId) : '-',
+            n.mesh ? n.mesh.geometry.type + ':' + mat!.type + ':' + (mat!.alphaMode ?? '') + ':' + shaderId + ':' + this.propsKey(shaderId) : '-',
             n.light ? n.light.type : '-',
             n.camera ? 'cam' : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
-            n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
+            n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shading ?? '') + (o.alphaMode ?? '') + (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
             (n.scripts ?? []).map((r) => r.script + ':' + this.scriptKey(r.script)).join(','),
             this.store.doc.assets.length,
             this.store.doc.scripts.map((s) => s.id + s.name).join(','),
@@ -342,56 +365,107 @@ export class InspectorPanel {
         const has: Filter = (n) => !!n.mesh;
         const m = this.node.mesh!.material;
         const shaderDoc = m.type === 'shader' ? this.store.doc.shaders.find((s) => s.id === m.shader) : null;
-        // Unlit shaders ignore metallic, roughness and emission.
+        // Unlit and Lambert materials, and unlit shaders, ignore metallic, roughness and emission.
         const lit = m.type === 'lit' || (m.type === 'shader' && shaderDoc?.lighting !== 'unlit');
+        const pbr = m.type === 'lit';
+        const set = <K extends keyof MaterialDoc>(key: K, label: string) =>
+            this.hooks<MaterialDoc[K]>(label, has, (n, v) => {
+                (n.mesh!.material as any)[key] = v;
+            });
         const rows: HTMLElement[] = [];
-        const type = new SelectField<MaterialType>(
-            [
-                { value: 'lit', label: 'Lit (PBR)' },
-                { value: 'unlit', label: 'Unlit' },
-                { value: 'shader', label: 'Custom Shader' },
-            ],
-            m.type,
-            (v) => {
-                if (v === 'shader') {
-                    const first = this.store.doc.shaders.find((s) => s.kind === 'material');
-                    const sel = this.store.selection;
-                    if (!first) {
-                        const created = this.editor.createShader({ template: 'lit' });
-                        this.editor.assignShader(sel, created.id);
-                    } else this.editor.assignShader(sel, m.shader && this.store.doc.shaders.some((s) => s.id === m.shader) ? m.shader : first.id);
-                    return;
-                }
-                this.hooks<MaterialType>('Material Type', has, (n, t) => (n.mesh!.material.type = t)).commit!(v);
-            },
-        );
-        rows.push(row('Type', type.el));
+        const type = new SelectField<MaterialType>(MATERIAL_TYPES, m.type, (v) => {
+            if (v === 'shader') {
+                const first = this.store.doc.shaders.find((s) => s.kind === 'material');
+                const sel = this.store.selection;
+                if (!first) {
+                    const created = this.editor.createShader({ template: 'lit' });
+                    this.editor.assignShader(sel, created.id);
+                } else this.editor.assignShader(sel, m.shader && this.store.doc.shaders.some((s) => s.id === m.shader) ? m.shader : first.id);
+                return;
+            }
+            this.hooks<MaterialType>('Material Type', has, (n, t) => (n.mesh!.material.type = t)).commit!(v);
+        });
+        rows.push(row('Type', type.el, MATERIAL_TYPES.find((t) => t.value === m.type)?.hint));
 
         if (m.type === 'shader') rows.push(...this.shaderRows(m.shader ?? null));
 
-        const color = new ColorField({ value: m.color, ...this.hooks<string>('Color', has, (n, v) => (n.mesh!.material.color = v)) });
+        const color = new ColorField({ value: m.color, ...set('color', 'Color') });
         rows.push(row('Color', color.el));
-        const opacity = new SliderField({ value: m.opacity, min: 0, max: 1, step: 0.01, ...this.hooks<number>('Opacity', has, (n, v) => (n.mesh!.material.opacity = v)) });
+        const opacity = new SliderField({ value: m.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Opacity') });
         rows.push(row('Opacity', opacity.el));
+        const alpha = new SelectField<AlphaMode>(ALPHA_MODES, m.alphaMode ?? 'auto', (v) => set('alphaMode', 'Alpha Mode').commit!(v === 'auto' ? undefined : v));
+        rows.push(row('Alpha', alpha.el, 'Auto blends when opacity is below 1; Mask cuts out pixels below the cutoff'));
+        let cutoff: SliderField | null = null;
+        if (m.alphaMode === 'mask') {
+            cutoff = new SliderField({ value: m.alphaCutoff ?? 0.5, min: 0, max: 1, step: 0.01, ...set('alphaCutoff', 'Alpha Cutoff') });
+            rows.push(row('Cutoff', cutoff.el, 'Pixels with less alpha are cut out'));
+        }
 
         let metallic: SliderField | null = null, roughness: SliderField | null = null, emissive: ColorField | null = null, emissiveI: NumberField | null = null;
         if (lit) {
-            metallic = new SliderField({ value: m.metallic, min: 0, max: 1, step: 0.01, ...this.hooks<number>('Metallic', has, (n, v) => (n.mesh!.material.metallic = v)) });
-            roughness = new SliderField({ value: m.roughness, min: 0, max: 1, step: 0.01, ...this.hooks<number>('Roughness', has, (n, v) => (n.mesh!.material.roughness = v)) });
-            emissive = new ColorField({ value: m.emissive, ...this.hooks<string>('Emissive', has, (n, v) => (n.mesh!.material.emissive = v)) });
-            emissiveI = new NumberField({ value: m.emissiveIntensity, step: 0.05, min: 0, precision: 2, ...this.hooks<number>('Emissive Intensity', has, (n, v) => (n.mesh!.material.emissiveIntensity = v)) });
-            rows.push(row('Metallic', metallic.el), row('Roughness', roughness.el), row('Emissive', emissive.el), row('Emission', emissiveI.el, 'Emissive intensity'));
+            metallic = new SliderField({ value: m.metallic, min: 0, max: 1, step: 0.01, ...set('metallic', 'Metallic') });
+            roughness = new SliderField({ value: m.roughness, min: 0, max: 1, step: 0.01, ...set('roughness', 'Roughness') });
+            emissive = new ColorField({ value: m.emissive, ...set('emissive', 'Emissive') });
+            emissiveI = new NumberField({ value: m.emissiveIntensity, step: 0.05, min: 0, precision: 2, ...set('emissiveIntensity', 'Emissive Intensity') });
+            if (m.type !== 'lambert') rows.push(row('Metallic', metallic.el), row('Roughness', roughness.el));
+            rows.push(row('Emissive', emissive.el), row('Emission', emissiveI.el, 'Emissive intensity'));
         }
         const doubleSide = new CheckboxField(m.doubleSide, (v) => this.hooks<boolean>('Double Sided', has, (n, b) => (n.mesh!.material.doubleSide = b)).commit!(v));
         rows.push(row('Double Sided', doubleSide.el));
 
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
-        const map = new SelectField<string>(
-            [{ value: '', label: 'None' }, ...textures.map((t) => ({ value: t.id, label: t.name }))],
-            m.map ?? '',
-            (v) => this.editor.applyTexture(v || null),
-        );
-        rows.push(row('Texture', h('div', { class: 'inline' }, map.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()))));
+        const map = this.textureSelect(m.map ?? null, textures, (v) => this.editor.applyTexture(v));
+        rows.push(row('Texture', map.el, 'Base color map'));
+        const tiling = new Vec2Field({ value: m.tiling ?? [1, 1], step: 0.01, precision: 3, ...set('tiling', 'Texture Tiling') });
+        const offset = new Vec2Field({ value: m.offset ?? [0, 0], step: 0.005, precision: 3, ...set('offset', 'Texture Offset') });
+        rows.push(row('Tiling', tiling.el, 'Texture repeat'), row('Offset', offset.el, 'Texture offset'));
+
+        // PBR extras of the lit material.
+        const extra: { set(md: MaterialDoc): void }[] = [];
+        if (pbr) {
+            rows.push(h('div', { class: 'group-label', text: 'Maps' }));
+            const mapRow = (key: 'normalMap' | 'metalRoughMap' | 'aoMap' | 'emissiveMap', label: string, hint: string) => {
+                const f = this.textureSelect((m[key] as string | null | undefined) ?? null, textures, (v) => set(key, label).commit!(v));
+                extra.push({ set: (md) => f.set((md[key] as string | null | undefined) ?? null) });
+                rows.push(row(label, f.el, hint));
+            };
+            mapRow('normalMap', 'Normal Map', 'Tangent space normal map');
+            const normalScale = new SliderField({ value: m.normalScale ?? 1, min: 0, max: 2, step: 0.01, ...set('normalScale', 'Normal Strength') });
+            extra.push({ set: (md) => normalScale.set(md.normalScale ?? 1) });
+            rows.push(row('Strength', normalScale.el, 'Normal map strength'));
+            mapRow('metalRoughMap', 'Metal / Rough', 'glTF metallic-roughness map: roughness in green, metallic in blue. Multiplies the sliders.');
+            mapRow('aoMap', 'Occlusion', 'Ambient occlusion map (red channel)');
+            mapRow('emissiveMap', 'Emission Map', 'Multiplied by the emissive color');
+
+            rows.push(h('div', { class: 'group-label', text: 'Clear Coat' }));
+            const coat = new SliderField({ value: m.clearcoat ?? 0, min: 0, max: 1, step: 0.01, ...set('clearcoat', 'Clear Coat') });
+            const coatR = new SliderField({ value: m.clearcoatRoughness ?? 0, min: 0, max: 1, step: 0.01, ...set('clearcoatRoughness', 'Clear Coat Roughness') });
+            extra.push({ set: (md) => { coat.set(md.clearcoat ?? 0); coatR.set(md.clearcoatRoughness ?? 0); } });
+            rows.push(row('Coat', coat.el, 'Glossy varnish layer (car paint, lacquer)'), row('Coat Rough.', coatR.el, 'Roughness of the clear coat'));
+
+            rows.push(h('div', { class: 'group-label', text: 'Transmission' }));
+            const trans = new SliderField({ value: m.transmission ?? 0, min: 0, max: 1, step: 0.01, ...set('transmission', 'Transmission') });
+            const ior = new SliderField({ value: m.ior ?? 1.5, min: 1, max: 2.5, step: 0.01, ...set('ior', 'IOR') });
+            const thick = new NumberField({ value: m.thickness ?? 0, step: 0.01, min: 0, precision: 3, ...set('thickness', 'Thickness') });
+            const attC = new ColorField({ value: m.attenuationColor ?? '#ffffff', ...set('attenuationColor', 'Attenuation Color') });
+            const attD = new NumberField({ value: m.attenuationDistance ?? 0, step: 0.05, min: 0, precision: 2, ...set('attenuationDistance', 'Attenuation Distance') });
+            extra.push({
+                set: (md) => {
+                    trans.set(md.transmission ?? 0);
+                    ior.set(md.ior ?? 1.5);
+                    thick.set(md.thickness ?? 0);
+                    attC.set(md.attenuationColor ?? '#ffffff');
+                    attD.set(md.attenuationDistance ?? 0);
+                },
+            });
+            rows.push(
+                row('Transmission', trans.el, 'Light passing through the surface: glass, water, gems'),
+                row('IOR', ior.el, 'Index of refraction (glass 1.5, water 1.33, diamond 2.4)'),
+                row('Thickness', thick.el, 'Thickness of the volume behind the surface'),
+                row('Tint', attC.el, 'Color light turns into while it travels through the volume'),
+                row('Tint Distance', attD.el, 'Distance at which light reaches the tint color; 0 means no tint'),
+            );
+        }
 
         if (m.type === 'shader' && m.shader) {
             const shaderId = m.shader;
@@ -424,17 +498,37 @@ export class InspectorPanel {
             type.set(mat.type);
             color.set(mat.color);
             opacity.set(mat.opacity);
+            alpha.set(mat.alphaMode ?? 'auto');
+            cutoff?.set(mat.alphaCutoff ?? 0.5);
             metallic?.set(mat.metallic);
             roughness?.set(mat.roughness);
             emissive?.set(mat.emissive);
             emissiveI?.set(mat.emissiveIntensity);
             doubleSide.set(mat.doubleSide);
-            map.set(mat.map ?? '');
+            map.set(mat.map ?? null);
+            tiling.set(mat.tiling ?? [1, 1]);
+            offset.set(mat.offset ?? [0, 0]);
+            for (const e of extra) e.set(mat);
+        });
+        const presets = iconButton('dots', 'Material presets', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                MATERIAL_PRESETS.map((p) => ({ label: p.label, action: () => this.editor.applyMaterialPreset(this.store.selection, p.id) })),
+                r.left - 150,
+                r.bottom + 4,
+            );
         });
         const reset = iconButton('undo', 'Reset material', () => {
             this.hooks<null>('Reset Material', has, (n) => (n.mesh!.material = defaultMaterial())).commit!(null);
         });
-        return section('material', 'Material', 'sphere', rows, [reset]);
+        return section('material', 'Material', 'sphere', rows, [presets, reset]);
+    }
+
+    /** Texture asset picker with an import button; `null` means no texture. */
+    private textureSelect(value: string | null, textures: AssetMeta[], onPick: (id: string | null) => void): { el: HTMLElement; set(v: string | null): void } {
+        const select = new SelectField<string>([{ value: '', label: 'None' }, ...textures.map((t) => ({ value: t.id, label: t.name }))], value ?? '', (v) => onPick(v || null));
+        const el = h('div', { class: 'inline' }, select.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()));
+        return { el, set: (v) => select.set(v ?? '') };
     }
 
     /** Shader picker with status and edit / new actions. */
@@ -625,13 +719,16 @@ export class InspectorPanel {
         const o: MaterialOverride = node.model!.materials?.[slot.key] ?? {};
         const open = this.openSlots.has(slot.key);
         const focusedSlot = this.editor.focusedPart?.node === node.id ? info(this.editor, node.id)?.part(this.editor.focusedPart.path)?.slot : null;
+        const shading = slotShading(o, this.editor.shaders);
         const swatch = h('span', { class: 'swatch', style: { background: o.color ?? slot.base.color } });
+        const tag = shading === 'model' ? '' : shading === 'shader' ? this.store.doc.shaders.find((x) => x.id === o.shader)?.name ?? 'shader' : shading;
         const head = h(
             'button',
             { class: 'slot-head' + (open ? ' open' : '') + (focusedSlot === slot.key ? ' focused' : ''), attrs: { type: 'button' } },
             icon('chevron', 12, 'slot-caret'),
             swatch,
             h('span', { class: 'slot-name', text: slot.key }),
+            tag ? h('span', { class: 'slot-tag', text: tag }) : null,
             Object.keys(o).length ? h('span', { class: 'override-dot', title: 'Changed from the model file' }) : null,
             h('span', { class: 'slot-count', text: `${slot.parts.length}` , title: `${slot.parts.length} mesh(es) use this material` }),
         );
@@ -644,18 +741,70 @@ export class InspectorPanel {
         if (!open) return item;
 
         const b = slot.base;
+        const ids = () => this.sameModel();
         const set = <K extends keyof MaterialOverride>(key: K, label: string) =>
             this.modelHooks<MaterialOverride[K]>(label, (model, v) => {
                 const map = { ...(model.materials ?? {}) };
-                map[slot.key] = { ...(map[slot.key] ?? {}), [key]: v };
+                const next = { ...(map[slot.key] ?? {}), [key]: v };
+                if (v === undefined) delete (next as any)[key];
+                map[slot.key] = next;
                 model.materials = map;
             });
+
+        // Shading: the file's PBR material, a built-in material, or a custom shader.
+        const shadingSel = new SelectField<string>(SLOT_SHADING, shading, (v) => {
+            if (v === 'shader') {
+                const shaders = this.store.doc.shaders.filter((x) => x.kind === 'material');
+                const id = o.shader && shaders.some((x) => x.id === o.shader) ? o.shader : shaders[0]?.id ?? this.editor.createShader({ template: 'lit' }).id;
+                this.editor.setModelMaterial(ids(), slot.key, { shader: id, shading: undefined, params: o.params ?? {} }, 'Material Shader');
+                return;
+            }
+            this.editor.setModelMaterial(ids(), slot.key, { shading: v === 'model' ? undefined : (v as SlotShading), shader: undefined, params: undefined }, 'Material Shading');
+        });
+        const rows: HTMLElement[] = [row('Shading', shadingSel.el, 'Model: the PBR material from the file. Unlit and Lambert replace it with that engine material. Custom Shader renders with a WGSL material shader.')];
+        if (shading === 'shader' || (o.shader && !this.editor.shaders.isValid(o.shader))) {
+            rows.push(...this.shaderRows(o.shader ?? null, (id) => this.editor.setModelMaterial(ids(), slot.key, { shader: id ?? undefined, shading: undefined, params: id ? o.params ?? {} : undefined }, 'Material Shader')));
+        }
+
         const color = new ColorField({ value: o.color ?? b.color, ...set('color', 'Material Color') });
         const opacity = new SliderField({ value: o.opacity ?? b.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Material Opacity') });
+        const alpha = new SelectField<AlphaMode>(ALPHA_MODES, o.alphaMode ?? 'auto', (v) => set('alphaMode', 'Material Alpha').commit!(v === 'auto' ? undefined : v));
+        rows.push(row('Color', color.el), row('Opacity', opacity.el), row('Alpha', alpha.el, 'Auto keeps the file\'s blending, and blends when opacity is below 1'));
+        let cutoff: SliderField | null = null;
+        if (o.alphaMode === 'mask') {
+            cutoff = new SliderField({ value: o.alphaCutoff ?? b.alphaCutoff, min: 0, max: 1, step: 0.01, ...set('alphaCutoff', 'Material Alpha Cutoff') });
+            rows.push(row('Cutoff', cutoff.el));
+        }
+        const pbrValues = shading === 'model' || shading === 'shader';
         const metallic = new SliderField({ value: o.metallic ?? b.metallic, min: 0, max: 1, step: 0.01, ...set('metallic', 'Material Metallic') });
         const roughness = new SliderField({ value: o.roughness ?? b.roughness, min: 0, max: 1, step: 0.01, ...set('roughness', 'Material Roughness') });
         const emissive = new ColorField({ value: o.emissive ?? b.emissive, ...set('emissive', 'Material Emissive') });
         const emissiveI = new NumberField({ value: o.emissiveIntensity ?? b.emissiveIntensity, step: 0.05, min: 0, precision: 2, ...set('emissiveIntensity', 'Material Emission') });
+        if (pbrValues) rows.push(row('Metallic', metallic.el), row('Roughness', roughness.el), row('Emissive', emissive.el), row('Emission', emissiveI.el, 'Emissive intensity'));
+
+        const extra: (() => void)[] = [];
+        if (shading === 'model' && b.pbr) {
+            const normal = new SliderField({ value: o.normalScale ?? b.normalScale, min: 0, max: 2, step: 0.01, ...set('normalScale', 'Material Normal Strength') });
+            const coat = new SliderField({ value: o.clearcoat ?? b.clearcoat, min: 0, max: 1, step: 0.01, ...set('clearcoat', 'Material Clear Coat') });
+            const coatR = new SliderField({ value: o.clearcoatRoughness ?? b.clearcoatRoughness, min: 0, max: 1, step: 0.01, ...set('clearcoatRoughness', 'Material Coat Roughness') });
+            const trans = new SliderField({ value: o.transmission ?? b.transmission, min: 0, max: 1, step: 0.01, ...set('transmission', 'Material Transmission') });
+            const ior = new SliderField({ value: o.ior ?? b.ior, min: 1, max: 2.5, step: 0.01, ...set('ior', 'Material IOR') });
+            rows.push(
+                row('Normal Str.', normal.el, 'Strength of the file\'s normal map'),
+                row('Coat', coat.el, 'Clear coat layer'),
+                row('Coat Rough.', coatR.el),
+                row('Transmission', trans.el, 'Light passing through the surface (glass)'),
+                row('IOR', ior.el, 'Index of refraction'),
+            );
+            extra.push(() => {
+                const cur = this.node.model?.materials?.[slot.key] ?? {};
+                normal.set(cur.normalScale ?? b.normalScale);
+                coat.set(cur.clearcoat ?? b.clearcoat);
+                coatR.set(cur.clearcoatRoughness ?? b.clearcoatRoughness);
+                trans.set(cur.transmission ?? b.transmission);
+                ior.set(cur.ior ?? b.ior);
+            });
+        }
         const doubleSide = new CheckboxField(o.doubleSide ?? b.doubleSide, (v) => set('doubleSide', 'Material Double Sided').commit!(v));
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
         const mapValue = o.map === undefined ? '__file' : o.map === null ? '' : o.map;
@@ -666,24 +815,15 @@ export class InspectorPanel {
                 ...textures.map((t) => ({ value: t.id, label: t.name })),
             ],
             mapValue,
-            (v) => this.editor.setModelMaterial(this.sameModel(), slot.key, { map: v === '__file' ? undefined : v || null }, 'Material Texture'),
+            (v) => this.editor.setModelMaterial(ids(), slot.key, { map: v === '__file' ? undefined : v || null }, 'Material Texture'),
         );
-        const reset = button('Reset', () => this.editor.setModelMaterial(this.sameModel(), slot.key, null, 'Reset Material'), 'small subtle', 'undo');
-        const rows: HTMLElement[] = [
-            row('Color', color.el),
-            row('Opacity', opacity.el),
-            row('Metallic', metallic.el),
-            row('Roughness', roughness.el),
-            row('Emissive', emissive.el),
-            row('Emission', emissiveI.el, 'Emissive intensity'),
-            row('Double Sided', doubleSide.el),
-            row('Texture', h('div', { class: 'inline' }, map.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()))),
-            ...this.shaderRows(o.shader ?? null, (id) => this.editor.setModelMaterial(this.sameModel(), slot.key, { shader: id ?? undefined, params: id ? o.params ?? {} : undefined }, 'Material Shader')),
-        ];
-        if (o.shader) {
+        rows.push(row('Double Sided', doubleSide.el), row('Texture', h('div', { class: 'inline' }, map.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()))));
+        if (shading === 'shader' && o.shader) {
             const shaderId = o.shader;
             const props = this.editor.shaders.props(shaderId);
             if (props.length) {
+                const watchers: ((v: Record<string, ParamValue>) => void)[] = [];
+                rows.push(h('div', { class: 'group-label', text: 'Shader Properties' }));
                 rows.push(
                     ...shaderParamRows(
                         props,
@@ -696,15 +836,25 @@ export class InspectorPanel {
                                 model.materials = m;
                             }),
                         textures,
+                        (fn) => watchers.push(fn),
+                        true,
                     ),
                 );
+                extra.push(() => {
+                    const params = this.node.model?.materials?.[slot.key]?.params ?? {};
+                    for (const w of watchers) w(params);
+                });
             }
         }
+        const reset = button('Reset', () => this.editor.setModelMaterial(ids(), slot.key, null, 'Reset Material'), 'small subtle', 'undo');
         rows.push(row('', h('div', { class: 'inline' }, reset, h('span', { class: 'muted small', text: `${slot.parts.length} mesh(es)` }))));
         this.watch(() => {
             const cur = this.node.model?.materials?.[slot.key] ?? {};
+            shadingSel.set(slotShading(cur, this.editor.shaders));
             color.set(cur.color ?? b.color);
             opacity.set(cur.opacity ?? b.opacity);
+            alpha.set(cur.alphaMode ?? 'auto');
+            cutoff?.set(cur.alphaCutoff ?? b.alphaCutoff);
             metallic.set(cur.metallic ?? b.metallic);
             roughness.set(cur.roughness ?? b.roughness);
             emissive.set(cur.emissive ?? b.emissive);
@@ -712,6 +862,7 @@ export class InspectorPanel {
             doubleSide.set(cur.doubleSide ?? b.doubleSide);
             map.set(cur.map === undefined ? '__file' : cur.map === null ? '' : cur.map);
             swatch.style.background = cur.color ?? b.color;
+            for (const fn of extra) fn();
         });
         item.appendChild(h('div', { class: 'slot-body' }, rows));
         return item;

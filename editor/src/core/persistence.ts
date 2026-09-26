@@ -117,7 +117,8 @@ export function usedAssetIds(doc: SceneDoc): Set<string> {
     };
     for (const n of doc.nodes) {
         if (n.model?.asset) ids.add(n.model.asset);
-        if (n.mesh?.material.map) ids.add(n.mesh.material.map);
+        const m = n.mesh?.material;
+        for (const id of [m?.map, m?.normalMap, m?.metalRoughMap, m?.aoMap, m?.emissiveMap]) if (id) ids.add(id);
         params(n.mesh?.material.params);
         for (const o of Object.values(n.model?.materials ?? {})) {
             if (o.map) ids.add(o.map);
