@@ -5,6 +5,7 @@ import { FRAME_MARGIN, frameRect } from '../design/shotCamera';
 import { h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
+import { openPaintoverDialog } from './paintoverDialog';
 
 export type ShotReference = 'concept' | 'target' | 'capture' | 'none';
 
@@ -65,11 +66,13 @@ export class ShotView {
                 toast(`Capture failed: ${e?.message || e}`, 'error');
             }
         });
+        const paint = h('button', { class: 'tool-btn wide', title: 'Paintovers of this shot', attrs: { type: 'button' } }, icon('paint', 15), h('span', { text: 'Paintover' }));
+        paint.addEventListener('click', () => pipeline.activeShot && openPaintoverDialog(editor, pipeline.activeShot));
         const back = h('button', { class: 'tool-btn', title: 'Back to the shot camera', attrs: { type: 'button' } }, icon('undo', 15));
         back.addEventListener('click', () => pipeline.activeShot && pipeline.showShot(pipeline.activeShot));
         const close = h('button', { class: 'tool-btn', title: 'Hide the frame', attrs: { type: 'button' } }, icon('close', 15));
         close.addEventListener('click', () => pipeline.showShot(null));
-        this.bar = h('div', { class: 'shot-bar' }, icon('camera', 15), this.title, this.refSelect, this.opacity, this.grayBtn, back, update, capture, close);
+        this.bar = h('div', { class: 'shot-bar' }, icon('camera', 15), this.title, this.refSelect, this.opacity, this.grayBtn, back, update, capture, paint, close);
         this.el = h('div', { class: 'shot-view', attrs: { hidden: true } }, this.frame, this.bar);
         viewportEl.appendChild(this.el);
 

@@ -4152,3 +4152,325 @@ kbd {
 .inline.wrap {
     flex-wrap: wrap;
 }
+
+/* ------------------------------------------------------------ paintovers */
+
+.dialog.po-modal {
+    width: min(1080px, 100%);
+    height: min(760px, calc(100vh - 32px));
+}
+
+.po-modal .dialog-body {
+    flex: 1;
+    min-height: 0;
+    overflow: hidden;
+    display: flex;
+}
+
+.po-modal .dialog-footer {
+    align-items: center;
+}
+
+.po-dialog {
+    flex: 1;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(300px, 400px) 1fr;
+    gap: 16px;
+}
+
+.po-form,
+.po-results {
+    min-height: 0;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.po-form {
+    padding-right: 4px;
+}
+
+.po-form .group-label.inline {
+    display: flex;
+    align-items: center;
+}
+
+.po-prompt {
+    width: 100%;
+    resize: vertical;
+    min-height: 120px;
+    font-size: 12px;
+    line-height: 1.45;
+}
+
+.po-refs {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.po-ref {
+    margin: 0;
+    width: 112px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.po-ref img {
+    width: 112px;
+    height: 72px;
+    object-fit: cover;
+    border-radius: 5px;
+    border: 1px solid var(--border);
+    background: var(--panel-2);
+    cursor: zoom-in;
+}
+
+.po-ref img.missing,
+.po-tile img.missing {
+    cursor: default;
+    background: repeating-linear-gradient(45deg, var(--panel-2), var(--panel-2) 6px, var(--panel-3) 6px, var(--panel-3) 12px);
+}
+
+.po-ref figcaption {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    font-size: 10.5px;
+    color: var(--muted);
+    min-width: 0;
+}
+
+.po-ref figcaption > span {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.po-ref figcaption .icon-btn {
+    width: 20px;
+    height: 20px;
+}
+
+.po-add {
+    height: 72px;
+    align-items: center;
+    justify-content: center;
+    border: 1px dashed var(--border-strong);
+    border-radius: 5px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+}
+
+.po-add:hover {
+    color: var(--text-strong);
+    border-color: var(--accent);
+}
+
+.po-options {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px 10px;
+}
+
+.po-field {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+    font-size: 11px;
+    color: var(--muted);
+}
+
+.po-row .po-field,
+.po-row label.po-field {
+    flex-direction: row;
+    align-items: center;
+    gap: 6px;
+}
+
+.po-field .select,
+.po-field .text {
+    width: 100%;
+    min-width: 0;
+}
+
+.po-num {
+    width: 96px !important;
+}
+
+.po-num.po-seed {
+    width: 128px !important;
+}
+
+.po-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 4px;
+}
+
+.po-form .muted.small.warn {
+    color: var(--warn);
+}
+
+.po-results-head {
+    display: flex;
+    align-items: center;
+}
+
+.po-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.po-tile {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--panel-2);
+}
+
+.po-tile.target {
+    border-color: var(--success);
+    box-shadow: 0 0 0 1px rgba(63, 191, 127, 0.35);
+}
+
+.po-tile img {
+    width: 100%;
+    aspect-ratio: 16 / 10;
+    object-fit: contain;
+    background: #0c0d10;
+    border-radius: 5px;
+    cursor: zoom-in;
+}
+
+.po-tile.running {
+    min-height: 150px;
+    justify-content: center;
+    align-items: center;
+}
+
+.po-tile.running img {
+    opacity: 0.85;
+}
+
+.po-spinner {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    color: var(--muted);
+    animation: po-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes po-pulse {
+    50% {
+        opacity: 0.45;
+    }
+}
+
+.po-tile-bar {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+}
+
+.po-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--muted);
+    font-size: 11px;
+}
+
+.po-tile-actions {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.po-warn {
+    color: var(--warn);
+    font-size: 10.5px;
+}
+
+.po-status {
+    margin-right: 6px;
+}
+
+.po-details {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    max-width: 420px;
+    padding: 4px 2px;
+}
+
+.po-detail {
+    display: grid;
+    grid-template-columns: 84px 1fr;
+    gap: 8px;
+    overflow-wrap: anywhere;
+}
+
+.po-detail-prompt {
+    margin: 6px 0 0;
+    max-height: 220px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font: 11px/1.45 var(--mono);
+    color: var(--text);
+}
+
+@media (max-width: 760px) {
+    .po-dialog {
+        grid-template-columns: 1fr;
+        overflow: auto;
+    }
+
+    .po-form,
+    .po-results {
+        overflow: visible;
+    }
+}
+
+.lightbox {
+    position: fixed;
+    inset: 0;
+    z-index: 1400;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    padding: 24px;
+    background: rgba(5, 6, 8, 0.86);
+    cursor: zoom-out;
+}
+
+.lightbox img {
+    max-width: 100%;
+    max-height: calc(100% - 32px);
+    object-fit: contain;
+    border-radius: 6px;
+    box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6);
+}
+
+.lightbox-caption {
+    color: var(--text);
+    font-size: 12px;
+}

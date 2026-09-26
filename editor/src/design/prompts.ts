@@ -27,7 +27,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
         'Work on the Level stage (greybox). Read the plan with read_design.',
         'Build the layout in the gray greybox material only (no colors or textures, material slots are fine): ground, floors, walls and openings sized by the specs, ramps and stairs, and every object the areas list, under one group per area named after the area. Reuse repeated objects as prefabs.',
         'Add a player capsule for scale. Frame a shot for every concept image (create_shot), check the route and the landmark sight lines from the player\'s eye height (capture_player_view, check_sightline) and tick what is done with update_checklist.',
-        'Tell me what is left, including the paintovers. Answer in the language of the brief.',
+        'When the route and sight lines pass, make a paintover of every shot (generate_paintover) and ask me to choose the targets. Tell me what is left. Answer in the language of the brief.',
     ].join(' '),
     light: [
         'Work on the Lighting stage (pass 1). Placement is locked and every surface stays gray, so only the light is judged. Read the mood with read_design.',

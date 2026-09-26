@@ -7,6 +7,7 @@ import type { AreaDoc, AssetMeta, DesignDoc, ShotDoc, StageId, Vec3 } from '../c
 import { STAGE_PROMPTS, structurePrompt } from '../design/prompts';
 import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
+import { generating, openPaintoverDialog, paintoverJobs } from './paintoverDialog';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { confirmDialog, popover, showMenu, toast } from './overlays';
@@ -41,6 +42,7 @@ export class DesignPanel {
         store.on('load', () => this.schedule(true));
         editor.pipeline.on('busy', () => this.schedule(true));
         editor.pipeline.on('shot', () => this.schedule(true));
+        paintoverJobs.on('change', () => this.schedule(true));
         // Values typed into a field are committed on blur; render after that.
         this.body.addEventListener('focusout', () => {
             if (this.pending) this.schedule();
@@ -522,6 +524,7 @@ export class DesignPanel {
                     { label: active ? 'Hide Frame' : 'Show', icon: 'camera', action: () => pipeline.showShot(active ? null : shot.id) },
                     { label: 'Update from View', icon: 'focus', enabled: () => active, action: () => pipeline.updateShotFromView(shot.id) },
                     { label: 'Capture Now', icon: 'image', action: () => void this.captureNow(shot) },
+                    { label: 'Paintovers...', icon: 'paint', action: () => openPaintoverDialog(this.editor, shot.id) },
                     { label: 'History', icon: 'history', enabled: () => shot.history.length > 0, action: () => this.showHistory(shot, img) },
                     { separator: true },
                     {
@@ -553,6 +556,7 @@ export class DesignPanel {
                     'div',
                     { class: 'inline' },
                     button(active ? 'Showing' : 'Show', () => pipeline.showShot(active ? null : shot.id), 'small' + (active ? ' primary' : ''), 'camera'),
+                    button(generating(shot.id) ? 'Painting...' : `Paintover${shot.paintovers.length ? ` (${shot.paintovers.length})` : ''}`, () => openPaintoverDialog(this.editor, shot.id), 'small', 'paint'),
                 ),
             ),
         );

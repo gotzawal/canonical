@@ -119,6 +119,8 @@ export class Agent extends Emitter<AgentEvents> {
             allowPlay: () => aiSettings.value.allowPlay,
             screenshots: () => aiSettings.value.screenshots,
             stageTools: () => aiSettings.value.stageTools,
+            allowImages: () => aiSettings.value.allowImages,
+            signal: this.abort?.signal,
         };
     }
 

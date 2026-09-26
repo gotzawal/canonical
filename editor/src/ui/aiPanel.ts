@@ -6,6 +6,7 @@ import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../ai/openrouter';
 import { aiSettings } from '../ai/settings';
+import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
 import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -417,6 +418,28 @@ export class AIPanel {
         const memo = new CheckboxField(s.memo, () => {}, 'Keep a scene memo up to date at checkpoints');
         const stageTools = new CheckboxField(s.stageTools, () => {}, 'The pipeline stage decides which tools the assistant gets');
         const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (paintovers, swatches)');
+        const imageModel = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-image-models', spellcheck: 'false', placeholder: DEFAULT_IMAGE_MODEL } });
+        imageModel.value = s.imageModel;
+        imageModel.addEventListener('keydown', (e) => e.stopPropagation());
+        const imageList = h('datalist', { attrs: { id: 'ai-image-models' } });
+        const imageInfo = h('div', { class: 'muted small', text: 'Used for paintovers and swatches, by you and the assistant.' });
+        let imageModels: ImageModel[] = [];
+        const describeImageModel = () => {
+            const id = imageModel.value.trim() || DEFAULT_IMAGE_MODEL;
+            const m = imageModels.find((x) => x.id === id);
+            if (!imageModels.length) return;
+            imageInfo.textContent = m
+                ? `${m.name}${takesImages(m) ? ' · takes reference images' : ' · no reference images (cannot paint over)'}${m.supports_streaming ? ' · streams' : ''} · options: ${Object.keys(modelParams(m)).filter((k) => !OWN_PARAMS.has(k)).join(', ') || 'none'}`
+                : `"${id}" is not in the list of ${imageModels.length} image models.`;
+        };
+        imageModel.addEventListener('input', describeImageModel);
+        void listImageModels()
+            .then((list) => {
+                imageModels = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
+                for (const m of imageModels) imageList.appendChild(h('option', { attrs: { value: m.id }, text: m.name }));
+                describeImageModel();
+            })
+            .catch(() => (imageInfo.textContent = 'Image model list unavailable (offline?). Type a model id.'));
         const body = h(
             'div',
             { class: 'ai-settings' },
@@ -431,6 +454,9 @@ export class AIPanel {
             row('', allowPlay.el),
             row('', shots.el),
             row('', images.el),
+            row('Image model', imageModel),
+            row('', imageInfo),
+            imageList,
             row('', stageTools.el),
             row('', memo.el, 'The memo is a few lines about the scene stored in the project, so a new conversation (or another session) knows where the work stands.'),
             h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code), images and screenshots are sent to OpenRouter and the model provider you choose. Each project keeps its conversation in this browser; long conversations are compacted into a summary. The key is stored in this browser only.' }),
@@ -454,6 +480,7 @@ export class AIPanel {
             allowPlay: box(allowPlay),
             screenshots: box(shots),
             allowImages: box(images),
+            imageModel: imageModel.value.trim(),
             stageTools: box(stageTools),
             memo: box(memo),
         });

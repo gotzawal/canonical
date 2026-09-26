@@ -66,3 +66,25 @@ export function blobToDataUrl(blob: Blob): Promise<string> {
         r.readAsDataURL(blob);
     });
 }
+
+/**
+ * Re-encodes a lossless raster image (PNG, BMP) as WebP when that is
+ * smaller, as generated paintings usually are; other files stay as they are.
+ */
+export async function compactImage(blob: Blob, quality = 0.92): Promise<Blob> {
+    if (!/^image\/(png|bmp|x-ms-bmp)$/.test(blob.type)) return blob;
+    const bmp = await createImageBitmap(blob);
+    try {
+        const c = canvas(bmp.width, bmp.height);
+        c.getContext('2d')!.drawImage(bmp, 0, 0);
+        const out = await canvasBlob(c, 'image/webp', quality).catch(() => null);
+        return out && out.type === 'image/webp' && out.size < blob.size ? out : blob;
+    } finally {
+        bmp.close();
+    }
+}
+
+/** File extension for an image type. */
+export function imageExt(type: string): string {
+    return type === 'image/jpeg' ? 'jpg' : type === 'image/svg+xml' ? 'svg' : type.startsWith('image/') ? type.slice(6) : 'png';
+}

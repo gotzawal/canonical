@@ -13,6 +13,7 @@ import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
 import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
 import { designToolDefs, runDesignTool } from './designTools';
 import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
+import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -32,6 +33,10 @@ export interface ToolEnv {
     screenshots(): boolean;
     /** The pipeline stage limits the tools. */
     stageTools(): boolean;
+    /** Tools may spend credits on images. */
+    allowImages(): boolean;
+    /** Aborts long tools (image generation) when the request is stopped. */
+    signal?: AbortSignal;
 }
 
 
@@ -152,6 +157,9 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     check_sightline: ['capture'],
     create_prefab: ['prefabs'],
     place_prefab: ['prefabs'],
+    generate_paintover: ['images'],
+    choose_paintover: ['images', 'shots'],
+    image_model_info: ['images'],
     update_design: ['design'],
     ask_user: ['design'],
     update_checklist: ['design'],
@@ -313,6 +321,7 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
     defs.push(...designToolDefs());
     if (env.screenshots()) defs.push(...greyboxToolDefs());
     else defs.push(...greyboxToolDefs().filter((d) => !/^capture|^check_sightline/.test(d.function.name)));
+    defs.push(...imageToolDefs().filter((d) => env.allowImages() || !PAID_IMAGE_TOOLS.has(d.function.name)));
     return defs;
 }
 
@@ -662,7 +671,7 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             const stage = stageDef(ed.pipeline.design.stage);
             throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
         }
-        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args));
+        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args)) ?? (await runImageTool(env, name, args));
         if (design) return design;
         switch (name) {
             case 'get_scene': {
@@ -1126,6 +1135,8 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
         }
         throw new ToolError(`Unknown tool "${name}".`);
     } catch (e: any) {
+        // A stopped request stops here; the agent reports it.
+        if (e?.name === 'AbortError') throw e;
         const message = e instanceof ToolError ? e.message : `${e?.name || 'Error'}: ${e?.message || e}`;
         if (!(e instanceof ToolError)) console.error('[ai] tool failed', name, e);
         return { data: { error: message }, summary: 'error' };

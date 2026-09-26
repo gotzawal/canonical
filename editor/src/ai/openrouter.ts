@@ -116,7 +116,7 @@ export class OpenRouterError extends Error {
     }
 }
 
-function headers(key: string): Record<string, string> {
+export function headers(key: string): Record<string, string> {
     return {
         Authorization: `Bearer ${key}`,
         'Content-Type': 'application/json',
@@ -126,7 +126,7 @@ function headers(key: string): Record<string, string> {
     };
 }
 
-function errorText(body: string, status: number): string {
+export function errorText(body: string, status: number): string {
     try {
         const json = JSON.parse(body);
         const msg = json?.error?.message || json?.message;

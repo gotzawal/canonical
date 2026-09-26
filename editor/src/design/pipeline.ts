@@ -4,7 +4,7 @@
 // scene like any other edit.
 
 import { putAsset, putDesignImage } from '../core/assets';
-import { stageIndex, STAGE_IDS } from '../core/design';
+import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import type {
@@ -385,6 +385,25 @@ export class Pipeline extends Emitter<PipelineEvents> {
             if (patch.target !== undefined) delete s.stale;
             if (s.stale === false) delete s.stale;
             if (s.approved === false) delete s.approved;
+        }, { design: true });
+    }
+
+    /** Makes a paintover the shot's target, the image every later comparison uses (null clears it). */
+    choosePaintover(shotId: string, asset: string | null) {
+        this.updateShot(shotId, { target: asset }, asset ? 'Choose Paintover' : 'Clear Paintover Target');
+    }
+
+    deletePaintover(shotId: string, asset: string) {
+        this.store.commit('Delete Paintover', (d) => {
+            const s = d.design.shots.find((x) => x.id === shotId);
+            if (!s) return;
+            s.paintovers = s.paintovers.filter((p) => p.asset !== asset);
+            if (s.target === asset) {
+                s.target = null;
+                delete s.stale;
+            }
+            // The file goes too unless something else uses it.
+            if (!designAssetIds(d.design).has(asset)) d.assets = d.assets.filter((a) => a.id !== asset);
         }, { design: true });
     }
 

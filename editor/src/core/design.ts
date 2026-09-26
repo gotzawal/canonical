@@ -383,7 +383,10 @@ export function designAssetIds(design: DesignDoc): Set<string> {
     for (const s of design.shots) {
         if (s.concept) out.add(s.concept);
         if (s.target) out.add(s.target);
-        for (const p of s.paintovers) out.add(p.asset);
+        for (const p of s.paintovers) {
+            out.add(p.asset);
+            for (const r of p.refs ?? []) out.add(r);
+        }
         for (const h of s.history) out.add(h.asset);
     }
     for (const m of design.materials) if (m.swatch) out.add(m.swatch);
