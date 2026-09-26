@@ -142,14 +142,49 @@ Please read the [Docs](https://www.orillusion.com/guide/) to Learn More.
 
 **https://gotzawal.github.io/canonical/**
 
-- Create primitives, lights and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
+- Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
 - Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
 - Edit materials, lights, sky, exposure, bloom, ambient occlusion and fog
-- Scenes autosave to the browser (imported files live in IndexedDB); `Ctrl+S` downloads a `.scene.json` with assets embedded, `Ctrl+O` opens one
+- Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (color, PBR values, texture, or a custom shader). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
+- Write WGSL material shaders and full screen post effects in the built-in code editor; properties declared in the code become Inspector controls
+- Inspect the engine's render graph (passes and the resources they read and write), switch passes off and order the post chain
+- Write JavaScript behaviours and run the scene in Play mode (`Ctrl+P`); Stop puts the scene back exactly as it was
+- An AI assistant (via OpenRouter) that edits the scene, writes and fixes scripts and shaders, runs Play tests and reads the console
+- Scenes autosave to the browser (imported files live in IndexedDB); `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one
+
+**File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions.
 
 Run it locally with `pnpm run editor` (http://localhost:8100). `pnpm run editor:build` writes the static site to `editor/dist`.
 
 The Pages deployment is done by `.github/workflows/editor-pages.yml`. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+
+### Scripts and Play mode
+A script is a class that extends `Script`. Its public fields show up in the Inspector, where each object can set its own values:
+
+```js
+export default class Spinner extends Script {
+    speed = 90; // degrees per second
+
+    update(dt) {
+        this.object3D.rotationY += this.speed * dt;
+    }
+}
+```
+
+The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)` and `onPointerDown` / `onPointerUp` / `onClick(e)`. Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes, mouse) and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the scene's main camera, or the editor view when the scene has none. Script errors in the console link to their line.
+
+### Shaders and the render graph
+Shaders are WGSL. Properties are declared with comments, such as `// @property speed float 1 0 10` (types `float`, `color`, `vec4` and `texture`), and read as `materialUniform.speed`. A material shader implements `fn frag()`, and optionally `fn vert(...)`. It is either lit (it fills `ORI_ShadingInput` and uses the engine's PBR lighting and shadows) or unlit. A post shader implements `fn post(uv: vec2f) -> vec4f`, reads the image with `sceneColor(uv)` and runs before anti-aliasing and tone mapping. Compile errors show on their line, and the last version that compiled keeps rendering.
+
+The Render Graph tab of the bottom dock lists the forward renderer's passes in execution order, with the resources each one reads and writes. Switching off a pass that an enabled pass still depends on is refused, with the reason.
+
+### AI assistant
+The AI tab works with any OpenRouter model that supports tool calls: use **Connect with OpenRouter** or paste an API key in its settings. The assistant reads the scene and edits it: objects, model overrides, scripts, shaders and render passes. It can also run Play tests, read the console and, with vision models, look at the viewport. Everything one request changes is a single undo step.
+
+The key is kept in this browser's local storage, or only for the current tab when "Remember on this device" is off, and it is sent only to openrouter.ai. The editor contacts OpenRouter only when you open the AI tab (to list the models) and when you send a request. A request carries your message, a short description of the editor state and the results of the tools the model calls.
+
+### Scripts from scene files
+Scripts run JavaScript in the editor page, which also holds your OpenRouter key. When you open a scene file, its scripts stay paused (they are not even compiled) until you choose **Enable Scripts**, so you can read them first. Scenes you make yourself and the built-in example are not affected.
 
 ## Dev and Contribution
 Please make sure to read the [Contributing Guide](.github/contributing.md) before developing or making a pull request.

@@ -30,3 +30,14 @@ export function normalizeHex(hex: string): string {
     const [r, g, b] = parseHex(hex);
     return toHex(r, g, b);
 }
+
+export function linearToSrgb(c: number): number {
+    const v = Math.min(1, Math.max(0, c));
+    return v <= 0.0031308 ? v * 12.92 : 1.055 * Math.pow(v, 1 / 2.4) - 0.055;
+}
+
+/** Engine Color (linear) to #rrggbb (sRGB) for color pickers. */
+export function colorToHex(c: { r: number; g: number; b: number } | null | undefined): string {
+    if (!c) return '#ffffff';
+    return toHex(linearToSrgb(c.r), linearToSrgb(c.g), linearToSrgb(c.b));
+}

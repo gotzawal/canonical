@@ -49,6 +49,26 @@ export function logInfo(text: string) {
     push('info', [text]);
 }
 
+/** Latest console entries, oldest first (used by the AI tools). */
+export function recentLogs(limit = 50, levels: LogEntry['level'][] = ['error', 'warn', 'info']): { level: string; text: string; time: string }[] {
+    return logs
+        .filter((l) => levels.includes(l.level))
+        .slice(-limit)
+        .map((l) => ({ level: l.level, text: l.text.slice(0, 2000), time: l.time.toISOString() }));
+}
+
+export function clearLogs() {
+    logs.length = 0;
+    for (const l of listeners) l();
+}
+
+let openLocation: (file: string, line: number) => void = () => {};
+
+/** Called when a "[Name.js:12]" reference in the console is clicked. */
+export function onLogLocation(fn: (file: string, line: number) => void) {
+    openLocation = fn;
+}
+
 function build(): { sha: string; ref: string; repo: string; time: string } {
     try {
         return __EDITOR_BUILD__;
@@ -85,7 +105,7 @@ export function statusbar(editor: Editor): HTMLElement {
             { class: 'log-header' },
             h('span', { text: 'Console' }),
             h('div', { class: 'spacer' }),
-            h('button', { class: 'btn small', text: 'Clear', attrs: { type: 'button' }, on: { click: () => { logs.length = 0; renderLogs(); } } }),
+            h('button', { class: 'btn small', text: 'Clear', attrs: { type: 'button' }, on: { click: () => clearLogs() } }),
             h('button', { class: 'icon-btn', attrs: { type: 'button', 'aria-label': 'Close console' }, on: { click: () => (drawer.hidden = true) } }, icon('close', 14)),
         ),
         list,
@@ -103,9 +123,14 @@ export function statusbar(editor: Editor): HTMLElement {
         clear(list);
         if (!logs.length) list.appendChild(h('div', { class: 'empty-hint', text: 'No messages.' }));
         for (const l of logs.slice().reverse()) {
-            list.appendChild(
-                h('div', { class: 'log-entry ' + l.level }, h('span', { class: 'log-time', text: l.time.toLocaleTimeString() }), h('pre', { text: l.text })),
-            );
+            const pre = h('pre', { text: l.text });
+            const loc = /\[([^\]\s:]+\.(?:js|wgsl)):(\d+)\]/.exec(l.text);
+            if (loc) {
+                pre.classList.add('linked');
+                pre.title = `Open ${loc[1]} at line ${loc[2]}`;
+                pre.addEventListener('click', () => openLocation(loc[1], Number(loc[2])));
+            }
+            list.appendChild(h('div', { class: 'log-entry ' + l.level }, h('span', { class: 'log-time', text: l.time.toLocaleTimeString() }), pre));
         }
     };
     listeners.add(renderLogs);
@@ -128,6 +153,20 @@ export function statusbar(editor: Editor): HTMLElement {
         fps.textContent = `${editor.runtime.fps.toFixed(0)} fps`;
     }, 500);
 
-    const bar = h('footer', { class: 'statusbar' }, selection, saved, fps, gpu, version, logButton);
+    const playing = h('span', { class: 'status-item play-indicator', attrs: { hidden: true } });
+    let playTimer = 0;
+    editor.player.on('state', (st) => {
+        playing.hidden = st === 'stopped';
+        clearInterval(playTimer);
+        const draw = () => {
+            playing.replaceChildren(icon(st === 'paused' ? 'pause' : 'play', 12), h('span', { text: `${st === 'paused' ? 'Paused' : 'Playing'} ${editor.player.time.elapsed.toFixed(1)}s` }));
+        };
+        if (st !== 'stopped') {
+            draw();
+            playTimer = window.setInterval(draw, 250);
+        }
+    });
+
+    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, fps, gpu, version, logButton);
     return h('div', { class: 'status-wrap' }, drawer, bar);
 }

@@ -1,6 +1,8 @@
 import { Emitter } from './events';
-import { defaultCamera, defaultEnvironment, uid } from './defaults';
-import type { CameraState, NodeDoc, SceneDoc } from './types';
+import { defaultCamera, defaultCameraDoc, defaultEnvironment, defaultRenderGraph, uid } from './defaults';
+import type {
+    CameraState, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
+} from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
 export interface ChangeHint {
@@ -29,6 +31,14 @@ interface Snapshot {
     selection: string[];
 }
 
+/** Full editor state saved when Play starts and restored when it stops. */
+export interface Checkpoint {
+    doc: string;
+    selection: string[];
+    undo: (Snapshot & { label: string })[];
+    redo: (Snapshot & { label: string })[];
+}
+
 interface StoreEvents {
     /** The document changed (live, also fired during drags). */
     change: ChangeHint | undefined;
@@ -40,6 +50,8 @@ interface StoreEvents {
     history: { canUndo: boolean; canRedo: boolean; undoLabel: string; redoLabel: string };
     prefs: Prefs;
     camera: CameraState;
+    /** Play mode started or stopped. */
+    playing: boolean;
 }
 
 const HISTORY_LIMIT = 200;
@@ -77,6 +89,8 @@ export class Store extends Emitter<StoreEvents> {
     selection: string[] = [];
     camera: CameraState = defaultCamera();
     prefs: Prefs = loadPrefs();
+    /** True while Play mode runs; edits made meanwhile are reverted on Stop. */
+    playing = false;
 
     private index = new Map<string, NodeDoc>();
     private undoStack: (Snapshot & { label: string })[] = [];
@@ -203,6 +217,11 @@ export class Store extends Emitter<StoreEvents> {
         return !!this.txn;
     }
 
+    /** Label of the step Undo would revert, or '' when there is none. */
+    get undoLabel(): string {
+        return this.undoStack[this.undoStack.length - 1]?.label ?? '';
+    }
+
     undo() {
         if (this.txn || !this.undoStack.length) return;
         const snap = this.undoStack.pop()!;
@@ -234,6 +253,36 @@ export class Store extends Emitter<StoreEvents> {
         this.emit('change', undefined);
         this.emit('selection', this.selection);
         this.emitHistory();
+    }
+
+    // ---------------------------------------------------------- play mode
+
+    /** Captures the document and its history so Play can be undone as a whole. */
+    checkpoint(): Checkpoint {
+        return {
+            doc: JSON.stringify(this.doc),
+            selection: this.selection.slice(),
+            undo: this.undoStack.slice(),
+            redo: this.redoStack.slice(),
+        };
+    }
+
+    /** Returns to a checkpoint: the document, selection and undo history. */
+    restoreCheckpoint(cp: Checkpoint) {
+        this.doc = JSON.parse(cp.doc);
+        this.reindex();
+        this.undoStack = cp.undo.slice();
+        this.redoStack = cp.redo.slice();
+        this.selection = cp.selection.filter((id) => this.index.has(id));
+        this.emit('change', undefined);
+        this.emit('selection', this.selection);
+        this.emitHistory();
+    }
+
+    setPlaying(playing: boolean) {
+        if (this.playing === playing) return;
+        this.playing = playing;
+        this.emit('playing', playing);
     }
 
     // ----------------------------------------------------------- selection
@@ -305,6 +354,133 @@ export class Store extends Emitter<StoreEvents> {
 const finite = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
 const vec = (v: any, d: [number, number, number]): [number, number, number] =>
     Array.isArray(v) && v.length === 3 ? [finite(v[0], d[0]), finite(v[1], d[1]), finite(v[2], d[2])] : [...d];
+const str = (v: any, d: string) => (typeof v === 'string' ? v : d);
+const isObj = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
+
+function paramValue(v: any): ParamValue | undefined {
+    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
+    if (typeof v === 'string' || typeof v === 'boolean') return v;
+    if (Array.isArray(v) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) return v.slice();
+    return undefined;
+}
+
+function params(raw: any): Record<string, ParamValue> {
+    const out: Record<string, ParamValue> = {};
+    if (!isObj(raw)) return out;
+    for (const [k, v] of Object.entries(raw)) {
+        const pv = paramValue(v);
+        if (pv !== undefined) out[k] = pv;
+    }
+    return out;
+}
+
+function sanitizeScripts(raw: any): ScriptDoc[] {
+    const seen = new Set<string>();
+    const out: ScriptDoc[] = [];
+    for (const s of Array.isArray(raw) ? raw : []) {
+        if (!isObj(s)) continue;
+        let id = str(s.id, '') || uid('s');
+        if (seen.has(id)) id = uid('s');
+        seen.add(id);
+        out.push({ id, name: str(s.name, 'Script.js') || 'Script.js', code: str(s.code, '') });
+    }
+    return out;
+}
+
+function sanitizeShaders(raw: any): ShaderDoc[] {
+    const seen = new Set<string>();
+    const out: ShaderDoc[] = [];
+    for (const s of Array.isArray(raw) ? raw : []) {
+        if (!isObj(s)) continue;
+        let id = str(s.id, '') || uid('sh');
+        if (seen.has(id)) id = uid('sh');
+        seen.add(id);
+        out.push({
+            id,
+            name: str(s.name, 'Shader.wgsl') || 'Shader.wgsl',
+            kind: s.kind === 'post' ? 'post' : 'material',
+            lighting: s.lighting === 'unlit' ? 'unlit' : 'lit',
+            code: str(s.code, ''),
+        });
+    }
+    return out;
+}
+
+function sanitizeRenderGraph(raw: any, shaders: ShaderDoc[]): RenderGraphDoc {
+    const rg = defaultRenderGraph();
+    if (!isObj(raw)) return rg;
+    rg.disabled = Array.isArray(raw.disabled) ? raw.disabled.filter((n: any) => typeof n === 'string') : [];
+    const ids = new Set(shaders.filter((s) => s.kind === 'post').map((s) => s.id));
+    const seen = new Set<string>();
+    for (const p of Array.isArray(raw.posts) ? raw.posts : []) {
+        if (!isObj(p) || !ids.has(p.shader)) continue;
+        let id = str(p.id, '') || uid('p');
+        if (seen.has(id)) id = uid('p');
+        seen.add(id);
+        const post: PostDoc = { id, shader: p.shader, enabled: p.enabled !== false, params: params(p.params) };
+        rg.posts.push(post);
+    }
+    return rg;
+}
+
+/** Repairs node components loaded from files or older builds. */
+function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
+    if (node.camera !== undefined) {
+        if (!isObj(node.camera)) delete node.camera;
+        else {
+            const d = defaultCameraDoc();
+            const c = node.camera as any;
+            node.camera = {
+                fov: Math.min(170, Math.max(1, finite(c.fov, d.fov))),
+                near: Math.max(0.001, finite(c.near, d.near)),
+                far: Math.max(0.01, finite(c.far, d.far)),
+                main: c.main !== false,
+            };
+        }
+    }
+    if (node.scripts !== undefined) {
+        const refs: ScriptRef[] = [];
+        for (const r of Array.isArray(node.scripts) ? node.scripts : []) {
+            if (!isObj(r) || typeof r.script !== 'string' || !scriptIds.has(r.script)) continue;
+            refs.push({ script: r.script, enabled: r.enabled !== false, props: params(r.props) });
+        }
+        if (refs.length) node.scripts = refs;
+        else delete node.scripts;
+    }
+    if (node.mesh && isObj(node.mesh.material)) {
+        const m = node.mesh.material as any;
+        if (m.type !== 'lit' && m.type !== 'unlit' && m.type !== 'shader') m.type = 'lit';
+        if (m.params !== undefined) m.params = params(m.params);
+        if (m.shader !== undefined && m.shader !== null && typeof m.shader !== 'string') m.shader = null;
+    }
+    if (node.model) {
+        const model = node.model as any;
+        if (model.materials !== undefined) {
+            if (!isObj(model.materials)) delete model.materials;
+            else {
+                for (const [k, o] of Object.entries(model.materials)) {
+                    if (!isObj(o)) delete model.materials[k];
+                    else if ((o as any).params !== undefined) (o as any).params = params((o as any).params);
+                }
+            }
+        }
+        if (model.parts !== undefined) {
+            if (!isObj(model.parts)) delete model.parts;
+            else {
+                for (const [k, o] of Object.entries(model.parts)) {
+                    if (!isObj(o)) {
+                        delete model.parts[k];
+                        continue;
+                    }
+                    const part = o as any;
+                    for (const t of ['position', 'rotation', 'scale'] as const) {
+                        if (part[t] !== undefined) part[t] = vec(part[t], t === 'scale' ? [1, 1, 1] : [0, 0, 0]);
+                    }
+                }
+            }
+        }
+    }
+}
 
 /** Repairs documents from files or older builds: ids, parents, cycles, defaults. */
 export function sanitize(input: any): SceneDoc {
@@ -312,6 +488,9 @@ export function sanitize(input: any): SceneDoc {
     for (const k of ['bloom', 'ao', 'fog'] as const) {
         env[k] = { ...defaultEnvironment()[k], ...(input?.environment?.[k] || {}) } as any;
     }
+    const scripts = sanitizeScripts(input?.scripts);
+    const shaders = sanitizeShaders(input?.shaders);
+    const scriptIds = new Set(scripts.map((s) => s.id));
     const seen = new Set<string>();
     const nodes: NodeDoc[] = [];
     for (const raw of Array.isArray(input?.nodes) ? input.nodes : []) {
@@ -329,6 +508,7 @@ export function sanitize(input: any): SceneDoc {
             rotation: vec(raw.rotation, [0, 0, 0]),
             scale: vec(raw.scale, [1, 1, 1]),
         };
+        sanitizeComponents(node, scriptIds);
         nodes.push(node);
     }
     const ids = new Set(nodes.map((n) => n.id));
@@ -353,6 +533,9 @@ export function sanitize(input: any): SceneDoc {
         name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
         environment: env,
         assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
+        scripts,
+        shaders,
+        renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
         nodes,
     };
 }

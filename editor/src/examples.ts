@@ -1,9 +1,35 @@
-import { defaultEnvironment, defaultMaterial, makeLightNode, makeMeshNode, makeNode } from './core/defaults';
-import type { GeometryType, NodeDoc, SceneDoc, Vec3 } from './core/types';
+import {
+    defaultEnvironment, defaultMaterial, defaultRenderGraph, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
+} from './core/defaults';
+import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
+import type { GeometryType, NodeDoc, ParamValue, SceneDoc, ScriptDoc, ShaderDoc, Vec3 } from './core/types';
 
-/** A small scene that shows off primitives, materials and light types. */
+function script(template: string, name: string): ScriptDoc {
+    const t = SCRIPT_TEMPLATES.find((x) => x.id === template)!;
+    return { id: uid('s'), name: `${name}.js`, code: t.code(name) };
+}
+
+function shader(template: string, name: string): ShaderDoc {
+    const t = SHADER_TEMPLATES.find((x) => x.id === template)!;
+    return { id: uid('sh'), name: `${name}.wgsl`, kind: t.kind, lighting: t.lighting, code: t.code };
+}
+
+function attach(node: NodeDoc, s: ScriptDoc, props: Record<string, ParamValue> = {}) {
+    node.scripts = [...(node.scripts ?? []), { script: s.id, enabled: true, props }];
+}
+
+/**
+ * A small scene that shows off primitives, materials and light types, plus
+ * scripts (press Play), a custom shader material, a post effect and a game
+ * camera.
+ */
 export function exampleShowcase(): SceneDoc {
     const nodes: NodeDoc[] = [];
+    const rotator = script('rotator', 'Rotator');
+    const bob = script('bob', 'Bobbing');
+    const click = script('click', 'ClickToRecolor');
+    const hologram = shader('unlit', 'Hologram');
+    const vignette = shader('vignette', 'Vignette');
     const sun = makeLightNode('directional');
     sun.name = 'Sun';
     sun.rotation = [42, 145, 0];
@@ -26,12 +52,22 @@ export function exampleShowcase(): SceneDoc {
         { type: 'torus', color: '#4f8fe6', metallic: 0.7, roughness: 0.3, x: 2 },
         { type: 'sphere', color: '#dcdfe3', metallic: 0, roughness: 0.05, x: 4 },
     ];
+    const prims: NodeDoc[] = [];
     for (const s of shapes) {
         const n = makeMeshNode(s.type, group.id);
         n.position = [s.x, n.position[1], 0] as Vec3;
         n.mesh.material = { ...defaultMaterial(s.color), metallic: s.metallic, roughness: s.roughness };
         nodes.push(n);
+        prims.push(n);
     }
+    const [box, , , torus, pearl] = prims;
+    attach(box, click);
+    torus.name = 'Spinning Torus';
+    // Raised so it clears the floor while it tumbles.
+    torus.position = [2, 0.9, 0];
+    attach(torus, rotator, { speed: 60, axis: 'x' });
+    pearl.name = 'Hologram Sphere';
+    pearl.mesh!.material = { ...pearl.mesh!.material, type: 'shader', shader: hologram.id, params: { glow: '#3dd8ff' } };
 
     const glass = makeMeshNode('box');
     glass.name = 'Glass Panel';
@@ -46,6 +82,7 @@ export function exampleShowcase(): SceneDoc {
     glow.scale = [0.6, 0.6, 0.6];
     glow.mesh.material = { ...defaultMaterial('#ffffff'), emissive: '#ff8a3d', emissiveIntensity: 4 };
     glow.mesh.castShadow = false;
+    attach(glow, bob, { height: 0.3, speed: 1.5 });
     nodes.push(glow);
 
     const warm = makeLightNode('point');
@@ -61,14 +98,26 @@ export function exampleShowcase(): SceneDoc {
     spot.light = { ...spot.light, color: '#9fc4ff', intensity: 5, range: 12, outerAngle: 50 };
     nodes.push(spot);
 
+    // Play renders through this camera.
+    const cam = makeCameraNode();
+    cam.name = 'Main Camera';
+    cam.position = [0, 4.5, 11];
+    cam.rotation = [17.6, 180, 0];
+    nodes.push(cam);
+
     const env = defaultEnvironment();
     env.bloom = { enable: true, intensity: 0.5, threshold: 1 };
+    const renderGraph = defaultRenderGraph();
+    renderGraph.posts.push({ id: uid('p'), shader: vignette.id, enabled: true, params: { strength: 0.5 } });
     return {
         format: 'canonical-scene',
         version: 1,
         name: 'Showcase',
         environment: env,
         assets: [],
+        scripts: [rotator, bob, click],
+        shaders: [hologram, vignette],
+        renderGraph,
         nodes,
     };
 }

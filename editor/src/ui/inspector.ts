@@ -1,10 +1,15 @@
 import type { Editor } from '../editor';
 import { formatBytes } from '../core/assets';
-import { defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
-import type { GeometryType, LightType, NodeDoc, Vec3 } from '../core/types';
+import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
+import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
+import type {
+    GeometryType, LightType, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScriptRef, Vec3,
+} from '../core/types';
+import type { ModelInfo, ModelPart, ModelSlot } from '../engine/modelParts';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu } from './overlays';
+import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
     CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec3Field, button,
     iconButton, row, section,
@@ -24,6 +29,8 @@ const LIGHT_OPTIONS: { value: LightType; label: string }[] = [
     { value: 'spot', label: 'Spot' },
 ];
 
+const MAX_PARTS = 150;
+
 type Filter = (n: NodeDoc) => boolean;
 
 /** Property editor for the selected object(s). Edits apply to every selected object that has the property. */
@@ -34,6 +41,9 @@ export class InspectorPanel {
     private shape = '';
     /** Continuous edits begun by widgets that have not ended yet. */
     private open = 0;
+    private openSlots = new Set<string>();
+    private openParts = new Set<string>();
+    private partFilter = '';
 
     constructor(private editor: Editor, private showScene: () => void) {
         this.body = h('div', { class: 'panel-body inspector-body' });
@@ -47,6 +57,22 @@ export class InspectorPanel {
         editor.sync.on('model', (id) => {
             if (store.selection.includes(id)) this.render();
         });
+        editor.shaders.on('status', () => {
+            if (this.shapeKey() !== this.shape) this.render();
+        });
+        editor.compiler.on('compiled', () => {
+            if (this.shapeKey() !== this.shape) this.render();
+        });
+        editor.on('focus-part', ({ node, path }) => {
+            if (node !== store.primary?.id || !path) return;
+            this.openParts.add(path);
+            const slot = editor.sync.modelInfo(node)?.part(path)?.slot;
+            if (slot) this.openSlots.add(slot);
+            this.render();
+            requestAnimationFrame(() => {
+                this.body.querySelector('.part-row.focused')?.scrollIntoView({ block: 'nearest' });
+            });
+        });
         this.render();
     }
 
@@ -57,14 +83,34 @@ export class InspectorPanel {
     private shapeKey(): string {
         const n = this.store.primary;
         if (!n) return 'none';
+        const mat = n.mesh?.material;
+        const shaderId = mat?.type === 'shader' ? mat.shader ?? '' : '';
+        const info = n.model ? this.editor.sync.modelInfo(n.id) : null;
         return [
             n.id,
             this.store.selection.length,
-            n.mesh ? n.mesh.geometry.type + ':' + n.mesh.material.type : '-',
+            n.mesh ? n.mesh.geometry.type + ':' + mat!.type + ':' + shaderId + ':' + this.propsKey(shaderId) : '-',
             n.light ? n.light.type : '-',
-            n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') : '-',
+            n.camera ? 'cam' : '-',
+            n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
+            n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
+            n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
+            (n.scripts ?? []).map((r) => r.script + ':' + this.scriptKey(r.script)).join(','),
             this.store.doc.assets.length,
+            this.store.doc.scripts.map((s) => s.id + s.name).join(','),
+            this.store.doc.shaders.map((s) => s.id + s.name + s.kind + s.lighting).join(','),
         ].join('|');
+    }
+
+    private propsKey(shaderId: string): string {
+        if (!shaderId) return '';
+        return this.editor.shaders.props(shaderId).map((p) => p.name + p.type).join(',') + ':' + this.editor.shaders.status(shaderId).state;
+    }
+
+    private scriptKey(id: string): string {
+        const c = this.editor.compiler.get(id);
+        if (!c) return 'missing';
+        return (c.paused ? 'paused' : c.error ? 'err' : 'ok') + c.fields.map((f) => f.name + f.type).join(',') + (c.fieldError ? 'fe' : '');
     }
 
     private refresh() {
@@ -79,6 +125,7 @@ export class InspectorPanel {
         }
         this.shape = this.shapeKey();
         this.syncs = [];
+        const scroll = this.body.scrollTop;
         clear(this.body);
         const node = this.store.primary;
         if (!node) {
@@ -100,8 +147,11 @@ export class InspectorPanel {
             this.body.append(this.materialSection());
         }
         if (node.light) this.body.append(this.lightSection());
-        if (node.model) this.body.append(this.modelSection(node));
+        if (node.camera) this.body.append(this.cameraSection());
+        if (node.model) this.body.append(...this.modelSections(node));
+        (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         this.body.append(this.addComponent(node));
+        this.body.scrollTop = scroll;
     }
 
     // -------------------------------------------------------------- binding
@@ -291,17 +341,33 @@ export class InspectorPanel {
     private materialSection(): HTMLElement {
         const has: Filter = (n) => !!n.mesh;
         const m = this.node.mesh!.material;
-        const lit = m.type === 'lit';
+        const shaderDoc = m.type === 'shader' ? this.store.doc.shaders.find((s) => s.id === m.shader) : null;
+        // Unlit shaders ignore metallic, roughness and emission.
+        const lit = m.type === 'lit' || (m.type === 'shader' && shaderDoc?.lighting !== 'unlit');
         const rows: HTMLElement[] = [];
-        const type = new SelectField(
+        const type = new SelectField<MaterialType>(
             [
                 { value: 'lit', label: 'Lit (PBR)' },
                 { value: 'unlit', label: 'Unlit' },
+                { value: 'shader', label: 'Custom Shader' },
             ],
             m.type,
-            (v) => this.hooks<'lit' | 'unlit'>('Material Type', has, (n, t) => (n.mesh!.material.type = t)).commit!(v),
+            (v) => {
+                if (v === 'shader') {
+                    const first = this.store.doc.shaders.find((s) => s.kind === 'material');
+                    const sel = this.store.selection;
+                    if (!first) {
+                        const created = this.editor.createShader({ template: 'lit' });
+                        this.editor.assignShader(sel, created.id);
+                    } else this.editor.assignShader(sel, m.shader && this.store.doc.shaders.some((s) => s.id === m.shader) ? m.shader : first.id);
+                    return;
+                }
+                this.hooks<MaterialType>('Material Type', has, (n, t) => (n.mesh!.material.type = t)).commit!(v);
+            },
         );
         rows.push(row('Type', type.el));
+
+        if (m.type === 'shader') rows.push(...this.shaderRows(m.shader ?? null));
 
         const color = new ColorField({ value: m.color, ...this.hooks<string>('Color', has, (n, v) => (n.mesh!.material.color = v)) });
         rows.push(row('Color', color.el));
@@ -327,6 +393,31 @@ export class InspectorPanel {
         );
         rows.push(row('Texture', h('div', { class: 'inline' }, map.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()))));
 
+        if (m.type === 'shader' && m.shader) {
+            const shaderId = m.shader;
+            const props = this.editor.shaders.props(shaderId);
+            if (props.length) {
+                rows.push(h('div', { class: 'group-label', text: 'Shader Properties' }));
+                const watchers: ((v: Record<string, ParamValue>) => void)[] = [];
+                rows.push(
+                    ...shaderParamRows(
+                        props,
+                        m.params ?? {},
+                        (name, label) =>
+                            this.hooks<ParamValue>(label, (n) => n.mesh?.material.shader === shaderId, (n, v) => {
+                                n.mesh!.material.params = { ...(n.mesh!.material.params ?? {}), [name]: v };
+                            }),
+                        textures,
+                        (fn) => watchers.push(fn),
+                    ),
+                );
+                this.watch(() => {
+                    const params = this.node.mesh?.material.params ?? {};
+                    for (const w of watchers) w(params);
+                });
+            }
+        }
+
         this.watch(() => {
             const mat = this.node.mesh?.material;
             if (!mat) return;
@@ -344,6 +435,56 @@ export class InspectorPanel {
             this.hooks<null>('Reset Material', has, (n) => (n.mesh!.material = defaultMaterial())).commit!(null);
         });
         return section('material', 'Material', 'sphere', rows, [reset]);
+    }
+
+    /** Shader picker with status and edit / new actions. */
+    private shaderRows(current: string | null, onPick?: (id: string | null) => void): HTMLElement[] {
+        const shaders = this.store.doc.shaders.filter((s) => s.kind === 'material');
+        const pick = onPick ?? ((id: string | null) => this.editor.assignShader(this.store.selection, id));
+        const select = new SelectField<string>(
+            [...(onPick ? [{ value: '', label: 'None (file material)' }] : []), ...shaders.map((s) => ({ value: s.id, label: s.name }))],
+            current ?? '',
+            (v) => pick(v || null),
+        );
+        const edit = iconButton('code', 'Edit shader', () => current && this.editor.emit('open-code', { kind: 'shader', id: current }));
+        edit.disabled = !current;
+        const add = iconButton('plus', 'New shader', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                SHADER_TEMPLATES.filter((t) => t.kind === 'material').map((t) => ({
+                    label: t.label,
+                    action: () => {
+                        const doc = this.editor.createShader({ template: t.id });
+                        pick(doc.id);
+                    },
+                })),
+                r.left - 140,
+                r.bottom + 4,
+            );
+        });
+        const rows = [row('Shader', h('div', { class: 'inline' }, select.el, edit, add))];
+        if (current) {
+            const st = this.editor.shaders.status(current);
+            const valid = this.editor.shaders.isValid(current);
+            let text = '';
+            let cls = 'readonly';
+            if (st.state === 'compiling') text = 'Compiling...';
+            else if (st.state === 'error') {
+                text = valid ? 'Has errors, using the last version that compiled' : 'Does not compile (shown magenta)';
+                cls += ' error-text';
+            } else if (valid) text = st.messages.length ? `Compiled with ${st.messages.length} warning(s)` : 'Compiled';
+            if (text) {
+                const status = h('div', { class: cls, text });
+                if (st.state === 'error') {
+                    status.appendChild(document.createTextNode(' '));
+                    const fix = h('button', { class: 'link-btn', text: 'Open', attrs: { type: 'button' } });
+                    fix.addEventListener('click', () => this.editor.emit('open-code', { kind: 'shader', id: current }));
+                    status.appendChild(fix);
+                }
+                rows.push(row('Status', status));
+            }
+        }
+        return rows;
     }
 
     // ---------------------------------------------------------------- light
@@ -388,22 +529,387 @@ export class InspectorPanel {
         return section('light', 'Light', l.type === 'directional' ? 'sun' : l.type === 'point' ? 'bulb' : 'spot', rows, [remove]);
     }
 
+    // --------------------------------------------------------------- camera
+
+    private cameraSection(): HTMLElement {
+        const has: Filter = (n) => !!n.camera;
+        const c = this.node.camera!;
+        const fov = new SliderField({ value: c.fov, min: 10, max: 120, step: 1, precision: 0, ...this.hooks<number>('Field of View', has, (n, v) => (n.camera!.fov = v)) });
+        const near = new NumberField({ value: c.near, step: 0.01, min: 0.001, precision: 3, ...this.hooks<number>('Near Plane', has, (n, v) => (n.camera!.near = v)) });
+        const far = new NumberField({ value: c.far, step: 1, min: 0.1, precision: 1, ...this.hooks<number>('Far Plane', has, (n, v) => (n.camera!.far = v)) });
+        const main = new CheckboxField(c.main, (v) => {
+            const id = this.node.id;
+            this.store.commit('Main Camera', (doc) => {
+                for (const n of doc.nodes) if (n.camera) n.camera.main = v ? n.id === id : n.id === id ? false : n.camera.main;
+            });
+        }, 'Used by Play');
+        this.watch(() => {
+            const cur = this.node.camera;
+            if (!cur) return;
+            fov.set(cur.fov);
+            near.set(cur.near);
+            far.set(cur.far);
+            main.set(cur.main);
+        });
+        const actions = h(
+            'div',
+            { class: 'inline' },
+            button('Align to View', () => this.editor.alignCameraToView(), 'small', 'focus'),
+            button('Look Through', () => this.editor.viewThroughCamera(this.node.id), 'small', 'camera'),
+        );
+        const remove = iconButton('trash', 'Remove camera', () => this.hooks<null>('Remove Camera', has, (n) => delete n.camera).commit!(null));
+        return section('camera', 'Camera', 'camera', [row('Main', main.el), row('Field of View', fov.el), row('Near', near.el), row('Far', far.el), row('', actions)], [remove]);
+    }
+
     // ---------------------------------------------------------------- model
 
-    private modelSection(node: NodeDoc): HTMLElement {
+    /** Selected model nodes of the same model file as the primary one. */
+    private sameModel(): string[] {
+        const asset = this.node.model?.asset;
+        return this.store.selection.filter((id) => this.store.node(id)?.model?.asset === asset);
+    }
+
+    private modelHooks<T>(label: string, apply: (model: NonNullable<NodeDoc['model']>, v: T) => void): EditHooks<T> {
+        const asset = this.node.model?.asset;
+        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v));
+    }
+
+    private modelSections(node: NodeDoc): HTMLElement[] {
         const asset = this.store.doc.assets.find((a) => a.id === node.model!.asset);
         const state = this.editor.sync.modelState(node.id);
+        const info = this.editor.sync.modelInfo(node.id);
         const status = state?.status === 'ready' ? 'Loaded' : state?.status === 'error' ? `Failed: ${state.error}` : 'Loading...';
-        return section('model', 'Model', 'model', [
+        const rows: HTMLElement[] = [
             row('File', h('div', { class: 'readonly', text: asset ? asset.name : 'Missing asset' })),
             row('Size', h('div', { class: 'readonly', text: asset ? formatBytes(asset.size) : '-' })),
             row('Status', h('div', { class: 'readonly' + (state?.status === 'error' ? ' error-text' : ''), text: status })),
-        ]);
+        ];
+        if (info) {
+            const tris = info.parts.reduce((s, p) => s + p.triangles, 0);
+            const verts = info.parts.reduce((s, p) => s + p.vertices, 0);
+            rows.push(
+                row(
+                    'Contents',
+                    h('div', { class: 'readonly', text: `${info.parts.length} meshes · ${info.slots.length} materials · ${tris.toLocaleString()} tris · ${verts.toLocaleString()} verts` }),
+                ),
+            );
+        }
+        const overrides = Object.keys(node.model!.materials ?? {}).length + Object.keys(node.model!.parts ?? {}).length;
+        const menu = iconButton('dots', 'Model options', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                [
+                    { label: 'Reset All Overrides', icon: 'undo', enabled: () => overrides > 0, action: () => this.editor.resetModelOverrides(this.sameModel()) },
+                    { label: 'Apply to All Instances', icon: 'copy', action: () => this.editor.copyOverridesToInstances(node.id) },
+                ],
+                r.left - 180,
+                r.bottom + 4,
+            );
+        });
+        if (overrides) rows.push(row('Overrides', h('div', { class: 'readonly', text: `${overrides} changed ${overrides === 1 ? 'item' : 'items'}` })));
+        const out = [section('model', 'Model', 'model', rows, [menu])];
+        if (info) {
+            out.push(this.materialSlotsSection(node, info));
+            out.push(this.partsSection(node, info));
+        }
+        return out;
+    }
+
+    private materialSlotsSection(node: NodeDoc, info: ModelInfo): HTMLElement {
+        const list = h('div', { class: 'slot-list' });
+        for (const slot of info.slots) list.appendChild(this.slotItem(node, slot));
+        return section('model-materials', `Materials (${info.slots.length})`, 'sphere', [list]);
+    }
+
+    private slotItem(node: NodeDoc, slot: ModelSlot): HTMLElement {
+        const o: MaterialOverride = node.model!.materials?.[slot.key] ?? {};
+        const open = this.openSlots.has(slot.key);
+        const focusedSlot = this.editor.focusedPart?.node === node.id ? info(this.editor, node.id)?.part(this.editor.focusedPart.path)?.slot : null;
+        const swatch = h('span', { class: 'swatch', style: { background: o.color ?? slot.base.color } });
+        const head = h(
+            'button',
+            { class: 'slot-head' + (open ? ' open' : '') + (focusedSlot === slot.key ? ' focused' : ''), attrs: { type: 'button' } },
+            icon('chevron', 12, 'slot-caret'),
+            swatch,
+            h('span', { class: 'slot-name', text: slot.key }),
+            Object.keys(o).length ? h('span', { class: 'override-dot', title: 'Changed from the model file' }) : null,
+            h('span', { class: 'slot-count', text: `${slot.parts.length}` , title: `${slot.parts.length} mesh(es) use this material` }),
+        );
+        head.addEventListener('click', () => {
+            if (open) this.openSlots.delete(slot.key);
+            else this.openSlots.add(slot.key);
+            this.render();
+        });
+        const item = h('div', { class: 'slot-item' }, head);
+        if (!open) return item;
+
+        const b = slot.base;
+        const set = <K extends keyof MaterialOverride>(key: K, label: string) =>
+            this.modelHooks<MaterialOverride[K]>(label, (model, v) => {
+                const map = { ...(model.materials ?? {}) };
+                map[slot.key] = { ...(map[slot.key] ?? {}), [key]: v };
+                model.materials = map;
+            });
+        const color = new ColorField({ value: o.color ?? b.color, ...set('color', 'Material Color') });
+        const opacity = new SliderField({ value: o.opacity ?? b.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Material Opacity') });
+        const metallic = new SliderField({ value: o.metallic ?? b.metallic, min: 0, max: 1, step: 0.01, ...set('metallic', 'Material Metallic') });
+        const roughness = new SliderField({ value: o.roughness ?? b.roughness, min: 0, max: 1, step: 0.01, ...set('roughness', 'Material Roughness') });
+        const emissive = new ColorField({ value: o.emissive ?? b.emissive, ...set('emissive', 'Material Emissive') });
+        const emissiveI = new NumberField({ value: o.emissiveIntensity ?? b.emissiveIntensity, step: 0.05, min: 0, precision: 2, ...set('emissiveIntensity', 'Material Emission') });
+        const doubleSide = new CheckboxField(o.doubleSide ?? b.doubleSide, (v) => set('doubleSide', 'Material Double Sided').commit!(v));
+        const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
+        const mapValue = o.map === undefined ? '__file' : o.map === null ? '' : o.map;
+        const map = new SelectField<string>(
+            [
+                ...(b.hasMap ? [{ value: '__file', label: 'From model file' }] : [{ value: '__file', label: 'None (file)' }]),
+                { value: '', label: 'None' },
+                ...textures.map((t) => ({ value: t.id, label: t.name })),
+            ],
+            mapValue,
+            (v) => this.editor.setModelMaterial(this.sameModel(), slot.key, { map: v === '__file' ? undefined : v || null }, 'Material Texture'),
+        );
+        const reset = button('Reset', () => this.editor.setModelMaterial(this.sameModel(), slot.key, null, 'Reset Material'), 'small subtle', 'undo');
+        const rows: HTMLElement[] = [
+            row('Color', color.el),
+            row('Opacity', opacity.el),
+            row('Metallic', metallic.el),
+            row('Roughness', roughness.el),
+            row('Emissive', emissive.el),
+            row('Emission', emissiveI.el, 'Emissive intensity'),
+            row('Double Sided', doubleSide.el),
+            row('Texture', h('div', { class: 'inline' }, map.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()))),
+            ...this.shaderRows(o.shader ?? null, (id) => this.editor.setModelMaterial(this.sameModel(), slot.key, { shader: id ?? undefined, params: id ? o.params ?? {} : undefined }, 'Material Shader')),
+        ];
+        if (o.shader) {
+            const shaderId = o.shader;
+            const props = this.editor.shaders.props(shaderId);
+            if (props.length) {
+                rows.push(
+                    ...shaderParamRows(
+                        props,
+                        o.params ?? {},
+                        (name, label) =>
+                            this.modelHooks<ParamValue>(label, (model, v) => {
+                                const m = { ...(model.materials ?? {}) };
+                                const cur = m[slot.key] ?? {};
+                                m[slot.key] = { ...cur, params: { ...(cur.params ?? {}), [name]: v } };
+                                model.materials = m;
+                            }),
+                        textures,
+                    ),
+                );
+            }
+        }
+        rows.push(row('', h('div', { class: 'inline' }, reset, h('span', { class: 'muted small', text: `${slot.parts.length} mesh(es)` }))));
+        this.watch(() => {
+            const cur = this.node.model?.materials?.[slot.key] ?? {};
+            color.set(cur.color ?? b.color);
+            opacity.set(cur.opacity ?? b.opacity);
+            metallic.set(cur.metallic ?? b.metallic);
+            roughness.set(cur.roughness ?? b.roughness);
+            emissive.set(cur.emissive ?? b.emissive);
+            emissiveI.set(cur.emissiveIntensity ?? b.emissiveIntensity);
+            doubleSide.set(cur.doubleSide ?? b.doubleSide);
+            map.set(cur.map === undefined ? '__file' : cur.map === null ? '' : cur.map);
+            swatch.style.background = cur.color ?? b.color;
+        });
+        item.appendChild(h('div', { class: 'slot-body' }, rows));
+        return item;
+    }
+
+    private partsSection(node: NodeDoc, info: ModelInfo): HTMLElement {
+        const list = h('div', { class: 'part-list' });
+        const rows: HTMLElement[] = [];
+        if (info.parts.length > 8) {
+            const search = h('input', { class: 'search', attrs: { type: 'search', placeholder: 'Filter meshes', spellcheck: 'false' } });
+            search.value = this.partFilter;
+            search.addEventListener('keydown', (e) => e.stopPropagation());
+            search.addEventListener('input', () => {
+                this.partFilter = search.value.trim().toLowerCase();
+                this.fillParts(list, node, info);
+            });
+            rows.push(h('div', { class: 'panel-search inset' }, icon('search', 14), search));
+        }
+        rows.push(list);
+        this.fillParts(list, node, info);
+        const allShown = info.parts.every((p) => node.model!.parts?.[p.path]?.visible !== false);
+        const toggleAll = iconButton(allShown ? 'eye' : 'eyeOff', 'Show / hide all meshes', () => {
+            const ids = this.sameModel();
+            this.store.commit('Toggle Meshes', (doc) => {
+                for (const n of doc.nodes) {
+                    if (!ids.includes(n.id) || !n.model) continue;
+                    const parts = { ...(n.model.parts ?? {}) };
+                    for (const p of info.parts) {
+                        const cur = { ...(parts[p.path] ?? {}) };
+                        if (allShown) cur.visible = false;
+                        else delete cur.visible;
+                        if (Object.keys(cur).length) parts[p.path] = cur;
+                        else delete parts[p.path];
+                    }
+                    if (Object.keys(parts).length) n.model.parts = parts;
+                    else delete n.model.parts;
+                }
+            }, { nodes: ids });
+        });
+        return section('model-parts', `Meshes (${info.parts.length})`, 'cube', rows, [toggleAll]);
+    }
+
+    private fillParts(list: HTMLElement, node: NodeDoc, info: ModelInfo) {
+        clear(list);
+        const parts = this.partFilter ? info.parts.filter((p) => p.path.toLowerCase().includes(this.partFilter)) : info.parts;
+        for (const part of parts.slice(0, MAX_PARTS)) list.appendChild(this.partItem(node, info, part));
+        if (parts.length > MAX_PARTS) list.appendChild(h('div', { class: 'muted small pad', text: `${parts.length - MAX_PARTS} more; use the filter to find them.` }));
+        if (!parts.length) list.appendChild(h('div', { class: 'muted small pad', text: 'No meshes match.' }));
+    }
+
+    private partItem(node: NodeDoc, info: ModelInfo, part: ModelPart): HTMLElement {
+        const po: PartOverride = node.model!.parts?.[part.path] ?? {};
+        const open = this.openParts.has(part.path);
+        const focused = this.editor.focusedPart?.node === node.id && this.editor.focusedPart.path === part.path;
+        const visible = po.visible !== false;
+        const eye = h('button', { class: 'tree-eye' + (visible ? '' : ' off'), title: visible ? 'Hide mesh' : 'Show mesh', attrs: { type: 'button' } }, icon(visible ? 'eye' : 'eyeOff', 13));
+        eye.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.editor.setModelPart(this.sameModel(), part.path, { visible: visible ? false : undefined }, visible ? 'Hide Mesh' : 'Show Mesh');
+        });
+        const slotKey = po.material ?? part.slot;
+        const head = h(
+            'div',
+            { class: 'part-row' + (open ? ' open' : '') + (focused ? ' focused' : '') + (visible ? '' : ' hidden-node'), attrs: { role: 'button', tabindex: 0 } },
+            icon('chevron', 12, 'slot-caret'),
+            h('span', { class: 'part-name', text: part.name, title: part.path }),
+            Object.keys(po).length ? h('span', { class: 'override-dot', title: 'Changed from the model file' }) : null,
+            h('span', { class: 'part-meta', text: `${slotKey} · ${part.triangles.toLocaleString()} tris` }),
+            eye,
+        );
+        head.addEventListener('click', () => {
+            if (open) this.openParts.delete(part.path);
+            else this.openParts.add(part.path);
+            this.editor.focusPart(node.id, open ? null : part.path);
+            this.render();
+        });
+        const item = h('div', { class: 'part-item' }, head);
+        if (!open) return item;
+
+        const slot = new SelectField<string>(
+            info.slots.map((s) => ({ value: s.key, label: s.key + (s.key === part.slot ? ' (original)' : '') })),
+            slotKey,
+            (v) => this.editor.setModelPart(this.sameModel(), part.path, { material: v === part.slot ? undefined : v }, 'Mesh Material'),
+        );
+        const cast = new CheckboxField(po.castShadow ?? part.base.castShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { castShadow: v }, 'Mesh Cast Shadow'), 'Cast');
+        const receive = new CheckboxField(po.receiveShadow ?? part.base.receiveShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { receiveShadow: v }, 'Mesh Receive Shadow'), 'Receive');
+        const setT = (key: 'position' | 'rotation' | 'scale', label: string) =>
+            this.modelHooks<Vec3>(label, (model, v) => {
+                const parts = { ...(model.parts ?? {}) };
+                parts[part.path] = { ...(parts[part.path] ?? {}), [key]: v };
+                model.parts = parts;
+            });
+        const pos = new Vec3Field({ value: po.position ?? part.base.position, step: 0.01, precision: 3, ...setT('position', 'Move Mesh') });
+        const rot = new Vec3Field({ value: po.rotation ?? part.base.rotation, step: 0.5, precision: 2, ...setT('rotation', 'Rotate Mesh') });
+        const scl = new Vec3Field({ value: po.scale ?? part.base.scale, step: 0.01, precision: 3, ...setT('scale', 'Scale Mesh') });
+        this.watch(() => {
+            const cur = this.node.model?.parts?.[part.path] ?? {};
+            slot.set(cur.material ?? part.slot);
+            cast.set(cur.castShadow ?? part.base.castShadow);
+            receive.set(cur.receiveShadow ?? part.base.receiveShadow);
+            pos.set(cur.position ?? part.base.position);
+            rot.set(cur.rotation ?? part.base.rotation);
+            scl.set(cur.scale ?? part.base.scale);
+        });
+        const reset = button('Reset', () => this.editor.setModelPart(this.sameModel(), part.path, null, 'Reset Mesh'), 'small subtle', 'undo');
+        item.appendChild(
+            h(
+                'div',
+                { class: 'slot-body' },
+                row('Material', slot.el),
+                row('Shadows', h('div', { class: 'inline' }, cast.el, receive.el)),
+                row('Position', pos.el),
+                row('Rotation', rot.el),
+                row('Scale', scl.el),
+                row('', h('div', { class: 'inline' }, reset, h('span', { class: 'muted small', text: `${part.vertices.toLocaleString()} verts` }))),
+            ),
+        );
+        return item;
+    }
+
+    // --------------------------------------------------------------- scripts
+
+    private scriptSection(node: NodeDoc, ref: ScriptRef, index: number): HTMLElement {
+        const doc = this.store.doc.scripts.find((s) => s.id === ref.script);
+        const compiled = this.editor.compiler.get(ref.script);
+        const rows: HTMLElement[] = [];
+        if (compiled?.paused) {
+            rows.push(
+                h(
+                    'div',
+                    { class: 'script-paused' },
+                    h('span', { class: 'muted small', text: 'Paused: this script came with an opened scene file. Its fields show up once scripts are enabled.' }),
+                    button('Enable Scripts', () => this.editor.enableScripts(), 'small'),
+                ),
+            );
+        } else if (compiled?.error) {
+            const err = h('div', { class: 'readonly error-text', text: `Line ${compiled.error.line || '?'}: ${compiled.error.message}` });
+            rows.push(row('Error', err));
+        } else if (compiled?.fieldError) {
+            rows.push(row('Fields', h('div', { class: 'readonly error-text', text: compiled.fieldError })));
+        }
+        if (compiled?.fields.length) {
+            const watchers: ((v: Record<string, ParamValue>) => void)[] = [];
+            rows.push(
+                ...scriptFieldRows(
+                    compiled.fields,
+                    ref.props,
+                    (name, label) =>
+                        this.hooks<ParamValue>(label, (n) => !!n.scripts?.some((r) => r.script === ref.script), (n, v) => {
+                            const r = n.scripts!.find((x) => x.script === ref.script)!;
+                            r.props = { ...r.props, [name]: v };
+                        }),
+                    (fn) => watchers.push(fn),
+                ),
+            );
+            this.watch(() => {
+                const r = this.node.scripts?.[index];
+                if (r) for (const w of watchers) w(r.props);
+            });
+        } else if (compiled && !compiled.error) {
+            rows.push(h('div', { class: 'muted small pad', text: 'Public fields of the class show up here.' }));
+        }
+        const enabled = new CheckboxField(ref.enabled, (v) => {
+            this.store.commit(v ? 'Enable Script' : 'Disable Script', (d) => {
+                const n = d.nodes.find((x) => x.id === node.id);
+                const r = n?.scripts?.[index];
+                if (r) r.enabled = v;
+            }, { nodes: [node.id] });
+        });
+        enabled.el.title = 'Enabled';
+        const edit = iconButton('code', 'Edit script', () => this.editor.emit('open-code', { kind: 'script', id: ref.script }));
+        const menu = iconButton('dots', 'Script options', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                [
+                    {
+                        label: 'Reset Fields',
+                        icon: 'undo',
+                        enabled: () => Object.keys(ref.props).length > 0,
+                        action: () =>
+                            this.store.commit('Reset Script Fields', (d) => {
+                                const r2 = d.nodes.find((x) => x.id === node.id)?.scripts?.[index];
+                                if (r2) r2.props = {};
+                            }, { nodes: [node.id] }),
+                    },
+                    { label: 'Remove Script', icon: 'trash', action: () => this.editor.detachScript(node.id, index) },
+                ],
+                r.left - 160,
+                r.bottom + 4,
+            );
+        });
+        const title = doc ? doc.name : 'Missing script';
+        return section(`script-${index}`, title, 'script', rows, [enabled.el, edit, menu]);
     }
 
     private addComponent(node: NodeDoc): HTMLElement {
         const items: MenuItem[] = [];
-        if (!node.mesh && !node.model) {
+        if (!node.mesh && !node.model && !node.camera) {
             items.push({
                 label: 'Mesh',
                 icon: 'cube',
@@ -412,7 +918,7 @@ export class InspectorPanel {
                 }).commit!(null),
             });
         }
-        if (!node.light) {
+        if (!node.light && !node.camera) {
             for (const t of LIGHT_OPTIONS) {
                 items.push({
                     label: t.label + ' Light',
@@ -421,11 +927,36 @@ export class InspectorPanel {
                 });
             }
         }
+        if (!node.camera && !node.mesh && !node.light && !node.model) {
+            items.push({
+                label: 'Camera',
+                icon: 'camera',
+                action: () => this.hooks<null>('Add Camera', (n) => !n.camera, (n) => (n.camera = defaultCameraDoc())).commit!(null),
+            });
+        }
+        if (items.length) items.push({ separator: true });
+        const scripts = this.store.doc.scripts;
+        items.push({
+            label: 'Script',
+            icon: 'script',
+            submenu: [
+                ...scripts.map((s) => ({ label: s.name, icon: 'script', action: () => this.editor.attachScript(this.store.selection, s.id) })),
+                ...(scripts.length ? [{ separator: true } as MenuItem] : []),
+                ...SCRIPT_TEMPLATES.map((t) => ({
+                    label: `New: ${t.label}`,
+                    icon: 'plus',
+                    action: () => this.editor.createScript({ name: t.id === 'empty' ? 'NewScript' : t.label.replace(/\s+/g, ''), template: t.id, attachTo: this.store.selection }),
+                })),
+            ],
+        });
         const btn = button('Add Component', (e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
             showMenu(items, r.left, r.bottom + 4);
         }, 'add-component', 'plus');
-        if (!items.length) btn.disabled = true;
         return h('div', { class: 'add-component-row' }, btn);
     }
+}
+
+function info(editor: Editor, id: string): ModelInfo | null {
+    return editor.sync.modelInfo(id);
 }

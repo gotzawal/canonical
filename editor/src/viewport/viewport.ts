@@ -1,4 +1,5 @@
-import { add, normalize, scale, sub, transformDir } from '../core/math';
+import type { RenderNode } from '@orillusion/core';
+import { add, normalize, scale, sub, transformDir, transformPoint } from '../core/math';
 import type { Store } from '../core/store';
 import type { NodeDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
@@ -7,7 +8,7 @@ import type { SceneSync } from '../engine/sync';
 import type { CameraController } from './cameraController';
 import { AXIS_COLORS, Gizmo } from './gizmo';
 
-type DragMode = 'none' | 'pending' | 'orbit' | 'pan' | 'gizmo' | 'pinch';
+type DragMode = 'none' | 'pending' | 'orbit' | 'pan' | 'gizmo' | 'pinch' | 'play';
 
 interface IconHit {
     id: string;
@@ -20,9 +21,24 @@ export interface ViewportHooks {
     onContextMenu(x: number, y: number, clientX: number, clientY: number, hitId: string | null): void;
     onDropFiles(files: File[], worldPoint: Vec3): void;
     onDropAsset(assetId: string, worldPoint: Vec3, hitId: string | null): void;
+    /** A mesh inside a model node was clicked. */
+    onPickPart?(nodeId: string, renderer: RenderNode | null): void;
+    /** The model part to outline, if any. */
+    focusedPart?(): { node: string; renderer: RenderNode } | null;
+    /** Play mode input. */
+    play?: PlayHooks;
+}
+
+export interface PlayHooks {
+    active(): boolean;
+    /** Play renders through a scene camera, so the editor camera controls are off. */
+    gameCamera(): boolean;
+    pointer(type: 'down' | 'move' | 'up', x: number, y: number, button: number): void;
+    wheel(delta: number): void;
 }
 
 const SELECT_COLOR = '#ffa53d';
+const PART_COLOR = '#3dd8ff';
 const HELPER_COLOR = 'rgba(255, 228, 150, 0.9)';
 
 /**
@@ -90,12 +106,27 @@ export class Viewport {
 
     // --------------------------------------------------------------- input
 
+    private get playing(): boolean {
+        return !!this.hooks.play?.active();
+    }
+
     private onDown(e: PointerEvent) {
         this.overlay.focus({ preventScroll: true });
         const [x, y] = this.local(e);
         this.pointers.set(e.pointerId, { x, y });
         this.overlay.setPointerCapture(e.pointerId);
         this.picker.update();
+
+        if (this.playing) {
+            // Left button (and every button with a scene camera) goes to scripts;
+            // otherwise right / middle still move the editor camera.
+            const game = this.hooks.play!.gameCamera();
+            if (e.button === 0 || game) {
+                this.mode = 'play' as DragMode;
+                this.hooks.play!.pointer('down', x, y, e.button);
+                return;
+            }
+        }
 
         if (this.pointers.size === 2) {
             // Second finger: switch to pinch / two-finger pan.
@@ -130,6 +161,12 @@ export class Viewport {
         const [x, y] = this.local(e);
         if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x, y });
 
+        if (this.playing) this.hooks.play!.pointer('move', x, y, e.button);
+        if (this.mode === 'play') return;
+        if (this.mode === 'none' && this.playing) {
+            this.overlay.style.cursor = 'default';
+            return;
+        }
         if (this.mode === 'none') {
             this.picker.update();
             const hover = this.gizmo.hitTest(x, y);
@@ -178,12 +215,16 @@ export class Viewport {
         if (this.overlay.hasPointerCapture?.(e.pointerId)) this.overlay.releasePointerCapture(e.pointerId);
         if (mode === 'pinch') return;
         this.overlay.style.cursor = 'default';
+        if (mode === 'play') {
+            this.hooks.play?.pointer('up', x, y, e.button);
+            return;
+        }
         if (mode === 'gizmo') {
             if (cancelled) this.gizmo.cancel();
             else this.gizmo.end();
             return;
         }
-        if (mode === 'pending' && !cancelled) {
+        if (mode === 'pending' && !cancelled && !this.playing) {
             this.picker.update();
             if (this.downButton === 0) this.clickSelect(x, y, e.shiftKey || e.ctrlKey || e.metaKey);
             else if (this.downButton === 2) {
@@ -210,10 +251,15 @@ export class Viewport {
         let dy = e.deltaY;
         if (e.deltaMode === 1) dy *= 16;
         else if (e.deltaMode === 2) dy *= 400;
+        if (this.playing) {
+            this.hooks.play!.wheel(dy);
+            if (this.hooks.play!.gameCamera()) return;
+        }
         this.camera.dolly(Math.max(-1, Math.min(1, dy * 0.0012)), x, y);
     }
 
     private onDoubleClick(e: MouseEvent) {
+        if (this.playing) return;
         const [x, y] = this.local(e);
         this.picker.update();
         const id = this.hitId(x, y);
@@ -234,9 +280,12 @@ export class Viewport {
             this.camera.setView(axis.yaw, axis.pitch);
             return;
         }
-        const id = this.hitId(x, y);
+        const icon = this.iconAt(x, y);
+        const hit = icon ? null : this.picker.pick(x, y);
+        const id = icon ? icon.id : hit?.id ?? null;
         if (id) this.store.select([id], additive ? 'toggle' : 'replace');
         else if (!additive) this.store.select([]);
+        if (id && this.store.node(id)?.model) this.hooks.onPickPart?.(id, hit?.renderer ?? null);
     }
 
     private iconAt(x: number, y: number): IconHit | null {
@@ -332,8 +381,12 @@ export class Viewport {
         ctx.clearRect(0, 0, w, h);
         this.picker.update();
 
-        const selected = new Set(this.store.selection);
         this.icons = [];
+        if (this.playing) {
+            this.axisWidget = [];
+            return;
+        }
+        const selected = new Set(this.store.selection);
         for (const node of this.store.doc.nodes) {
             const entry = this.sync.entries.get(node.id);
             if (!entry) continue;
@@ -359,21 +412,34 @@ export class Viewport {
 
     private drawSelection(node: NodeDoc) {
         const ctx = this.ctx;
+        const focus = this.hooks.focusedPart?.();
         const boxes = this.picker.localBoxes(node.id);
         ctx.save();
         ctx.strokeStyle = SELECT_COLOR;
         ctx.lineWidth = 1.5;
-        for (const corners of boxes) {
-            const p = corners.map((c) => this.picker.project(c));
-            ctx.beginPath();
-            for (const [a, b] of BOX_EDGES) {
-                if (!p[a].visible || !p[b].visible) continue;
-                ctx.moveTo(p[a].x, p[a].y);
-                ctx.lineTo(p[b].x, p[b].y);
-            }
-            ctx.stroke();
+        // A model with a focused part: dim the other parts' boxes.
+        if (focus && focus.node === node.id) ctx.globalAlpha = 0.35;
+        for (const corners of boxes) this.strokeBox(corners);
+        if (focus && focus.node === node.id) {
+            ctx.globalAlpha = 1;
+            ctx.strokeStyle = PART_COLOR;
+            ctx.lineWidth = 2;
+            const corners = rendererBox(focus.renderer);
+            if (corners) this.strokeBox(corners);
         }
         ctx.restore();
+    }
+
+    private strokeBox(corners: Vec3[]) {
+        const ctx = this.ctx;
+        const p = corners.map((c) => this.picker.project(c));
+        ctx.beginPath();
+        for (const [a, b] of BOX_EDGES) {
+            if (!p[a].visible || !p[b].visible) continue;
+            ctx.moveTo(p[a].x, p[a].y);
+            ctx.lineTo(p[b].x, p[b].y);
+        }
+        ctx.stroke();
     }
 
     private drawHelper(node: NodeDoc, selected: boolean, visible: boolean) {
@@ -409,6 +475,10 @@ export class Viewport {
                 }
             }
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 13 });
+        } else if (node.camera) {
+            drawCameraIcon(ctx, sp.x, sp.y);
+            this.drawFrustum(m, node.camera.fov, selected ? 2.2 : 0.8);
+            this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 13 });
         } else if (!node.mesh && !node.model) {
             ctx.beginPath();
             ctx.moveTo(sp.x - 6, sp.y);
@@ -425,6 +495,40 @@ export class Viewport {
             ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 10 });
         }
+        ctx.restore();
+    }
+
+    /** Camera frustum outline, `depth` units long, for a camera looking down local +Z. */
+    private drawFrustum(m: ArrayLike<number>, fov: number, depth: number) {
+        const [w, h] = this.runtime.cssSize;
+        const aspect = h > 0 ? w / h : 1.6;
+        const ty = Math.tan((Math.min(170, Math.max(1, fov)) * Math.PI) / 360) * depth;
+        const tx = ty * aspect;
+        const apex = this.picker.project(transformPoint(m, [0, 0, 0]));
+        const c = [[-tx, -ty], [tx, -ty], [tx, ty], [-tx, ty]].map(([x, y]) => this.picker.project(transformPoint(m, [x, y, depth])));
+        const up = this.picker.project(transformPoint(m, [0, ty * 1.35, depth]));
+        const ctx = this.ctx;
+        ctx.save();
+        ctx.globalAlpha *= 0.8;
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+            const a = c[i], b = c[(i + 1) % 4];
+            if (a.visible && b.visible) {
+                ctx.moveTo(a.x, a.y);
+                ctx.lineTo(b.x, b.y);
+            }
+            if (apex.visible && a.visible) {
+                ctx.moveTo(apex.x, apex.y);
+                ctx.lineTo(a.x, a.y);
+            }
+        }
+        // Up marker so the camera's roll is visible.
+        if (up.visible && c[2].visible && c[3].visible) {
+            ctx.moveTo(c[3].x + (c[2].x - c[3].x) * 0.3, c[3].y + (c[2].y - c[3].y) * 0.3);
+            ctx.lineTo(up.x, up.y);
+            ctx.lineTo(c[3].x + (c[2].x - c[3].x) * 0.7, c[3].y + (c[2].y - c[3].y) * 0.7);
+        }
+        ctx.stroke();
         ctx.restore();
     }
 
@@ -563,6 +667,28 @@ function dashed(ctx: CanvasRenderingContext2D, x0: number, y0: number, x1: numbe
     ctx.lineTo(x1, y1);
     ctx.stroke();
     ctx.restore();
+}
+
+function drawCameraIcon(ctx: CanvasRenderingContext2D, x: number, y: number) {
+    ctx.beginPath();
+    ctx.rect(x - 8, y - 5, 11, 10);
+    ctx.moveTo(x + 3, y - 1);
+    ctx.lineTo(x + 8, y - 4);
+    ctx.lineTo(x + 8, y + 4);
+    ctx.lineTo(x + 3, y + 1);
+    ctx.stroke();
+}
+
+/** Oriented bounding box corners of one renderer in world space. */
+function rendererBox(r: RenderNode): Vec3[] | null {
+    const b = r.geometry?.bounds;
+    if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) return null;
+    const m = r.object3D.transform.worldMatrix.rawData;
+    const out: Vec3[] = [];
+    for (let i = 0; i < 8; i++) {
+        out.push(transformPoint(m, [i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]));
+    }
+    return out;
 }
 
 function drawSun(ctx: CanvasRenderingContext2D, x: number, y: number) {

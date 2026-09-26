@@ -385,6 +385,10 @@ export class SliderField {
         if (!this.live) this.range.value = String(v);
         this.num.set(v);
     }
+
+    get(): number {
+        return this.num.get();
+    }
 }
 
 export class CheckboxField {

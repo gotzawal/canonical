@@ -1,4 +1,4 @@
-import { RenderNode, VertexAttributeName } from '@orillusion/core';
+import { Object3D, RenderNode, VertexAttributeName } from '@orillusion/core';
 import {
     Mat4, Ray, add, invert, mul, normalize, rayBox, rayTriangle, sub, transform4, transformDir, transformPoint,
 } from '../core/math';
@@ -18,6 +18,15 @@ export interface ScreenPoint {
 
 export interface Hit {
     id: string;
+    distance: number;
+    point: Vec3;
+    /** The renderer that was hit (a part of a model, or the node's mesh). */
+    renderer: RenderNode;
+}
+
+export interface ObjectHit {
+    renderer: RenderNode;
+    object: Object3D;
     distance: number;
     point: Vec3;
 }
@@ -41,14 +50,18 @@ export class Picker {
 
     /** Refreshes cached camera matrices; call once per frame / interaction. */
     update() {
-        const cam = this.runtime.camera;
+        const cam = this.runtime.activeCamera;
         const world = cam.transform.worldMatrix.rawData;
         const view = invert(world) ?? new Float64Array(16);
         mul(cam.projectionMatrix.rawData, view, this.viewProj);
         invert(this.viewProj, this.invViewProj);
         this.cameraPos = [world[12], world[13], world[14]];
-        const toTarget = sub(this.store.camera.target, this.cameraPos);
-        this.cameraForward = normalize(toTarget);
+        if (cam === this.runtime.camera) {
+            this.cameraForward = normalize(sub(this.store.camera.target, this.cameraPos));
+        } else {
+            // Scene cameras look down their local +Z axis.
+            this.cameraForward = normalize([world[8], world[9], world[10]]);
+        }
     }
 
     get eye(): Vec3 {
@@ -84,7 +97,7 @@ export class Picker {
     /** World units per CSS pixel at the depth of `p`. */
     pixelSize(p: Vec3): number {
         const [, h] = this.size;
-        const cam = this.runtime.camera;
+        const cam = this.runtime.activeCamera;
         const depth = Math.max(0.001, transform4(this.viewProj, p)[3]);
         return (2 * Math.tan(((cam.fov || 50) * Math.PI) / 360) * depth) / Math.max(1, h);
     }
@@ -98,16 +111,41 @@ export class Picker {
             const entry = this.sync.entries.get(node.id);
             if (!entry || (ignoreHidden && !entry.visible)) continue;
             for (const r of this.sync.renderersOf(node.id)) {
+                if (!r.enable) continue;
                 const t = this.intersectRenderer(r, ray);
                 if (t !== null && (!best || t < best.distance)) {
-                    best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]) };
+                    best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: r };
                 }
             }
         }
         return best;
     }
 
-    private intersectRenderer(r: RenderNode, ray: Ray): number | null {
+    /**
+     * Ray cast against every enabled renderer under `root`, including
+     * objects that are not document nodes (e.g. spawned by scripts).
+     */
+    pickObject(x: number, y: number, root: Object3D, skip?: (o: Object3D) => boolean): ObjectHit | null {
+        const ray = this.ray(x, y);
+        let best: ObjectHit | null = null;
+        const visit = (o: Object3D) => {
+            if (skip?.(o)) return;
+            o.components.forEach((c) => {
+                if (!(c instanceof RenderNode)) return;
+                const r = c as RenderNode;
+                if (!r.enable || !r.geometry) return;
+                const t = this.intersectRenderer(r, ray);
+                if (t !== null && (!best || t < best.distance)) {
+                    best = { renderer: r, object: o, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]) };
+                }
+            });
+            for (const child of o.entityChildren as Object3D[]) if (child instanceof Object3D) visit(child);
+        };
+        visit(root);
+        return best;
+    }
+
+    intersectRenderer(r: RenderNode, ray: Ray): number | null {
         const geo = r.geometry;
         if (!geo || !r.object3D) return null;
         const world = r.object3D.transform.worldMatrix.rawData;
