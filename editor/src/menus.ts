@@ -16,6 +16,7 @@ export function createMenu(editor: Editor): MenuItem[] {
         { label: 'Sphere', icon: 'sphere', action: () => editor.createPrimitive('sphere') },
         { label: 'Plane', icon: 'plane', action: () => editor.createPrimitive('plane') },
         { label: 'Cylinder', icon: 'cylinder', action: () => editor.createPrimitive('cylinder') },
+        { label: 'Cone', icon: 'cone', action: () => editor.createPrimitive('cone') },
         { label: 'Torus', icon: 'torus', action: () => editor.createPrimitive('torus') },
         { label: 'Ramp', icon: 'ramp', action: () => editor.createPrimitive('ramp') },
         { label: 'Stairs', icon: 'stairs', action: () => editor.createPrimitive('stairs') },

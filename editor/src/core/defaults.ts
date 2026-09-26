@@ -13,6 +13,7 @@ export function defaultGeometry(type: GeometryType): GeometryDoc {
         case 'sphere': return { type, radius: 0.5, segments: 32 };
         case 'plane': return { type, width: 10, height: 10 };
         case 'cylinder': return { type, radiusTop: 0.5, radiusBottom: 0.5, height: 1, segments: 32 };
+        case 'cone': return { type, radius: 0.5, height: 1, segments: 32 };
         case 'torus': return { type, radius: 0.5, tube: 0.18, segments: 32 };
         case 'ramp': return { type, width: 2, height: 1, depth: 3 };
         case 'stairs': return { type, width: 1.5, height: 1.5, depth: 3, steps: 8 };
@@ -105,6 +106,7 @@ const GEOMETRY_NAMES: Record<GeometryType, string> = {
     sphere: 'Sphere',
     plane: 'Plane',
     cylinder: 'Cylinder',
+    cone: 'Cone',
     torus: 'Torus',
     ramp: 'Ramp',
     stairs: 'Stairs',
@@ -118,6 +120,7 @@ export function geometryHeight(g: GeometryDoc): number {
         case 'ramp':
         case 'stairs':
         case 'cylinder':
+        case 'cone':
         case 'capsule':
             return g.height;
         case 'sphere':

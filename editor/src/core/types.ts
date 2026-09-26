@@ -7,13 +7,15 @@ export type Vec3 = [number, number, number];
 /**
  * Primitive shapes. Every shape is centered on its origin like the box.
  * The ramp and the stairs rise toward -Z (the first step is at +Z); the
- * capsule's height includes its round caps.
+ * capsule's height includes its round caps. The cone stands on its base;
+ * up to 8 segments its sides are flat (4: a square pyramid).
  */
 export type GeometryDoc =
     | { type: 'box'; width: number; height: number; depth: number }
     | { type: 'sphere'; radius: number; segments: number }
     | { type: 'plane'; width: number; height: number }
     | { type: 'cylinder'; radiusTop: number; radiusBottom: number; height: number; segments: number }
+    | { type: 'cone'; radius: number; height: number; segments: number }
     | { type: 'torus'; radius: number; tube: number; segments: number }
     | { type: 'ramp'; width: number; height: number; depth: number }
     | { type: 'stairs'; width: number; height: number; depth: number; steps: number }

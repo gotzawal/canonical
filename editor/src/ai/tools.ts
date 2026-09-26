@@ -106,18 +106,20 @@ const objectFields = {
     scale: vec3,
     visible: { type: 'boolean' },
     size: { type: 'array', items: { type: 'number' }, description: 'box, ramp, stairs: [width, height, depth]; plane: [width, length].' },
-    radius: { type: 'number', description: 'sphere / torus / capsule radius, cylinder radius (both ends).' },
-    height: { type: 'number', description: 'cylinder height, capsule height (caps included)' },
+    radius: { type: 'number', description: 'sphere / torus / capsule radius, cone base radius, cylinder radius (both ends).' },
+    radius_top: { type: 'number', description: 'cylinder: top radius, to taper it (0 closes it to a point).' },
+    radius_bottom: { type: 'number', description: 'cylinder: bottom radius.' },
+    height: { type: 'number', description: 'cylinder / cone height, capsule height (caps included)' },
     steps: { type: 'number', description: 'stairs: number of steps' },
     tube: { type: 'number', description: 'torus tube radius' },
-    segments: { type: 'number' },
+    segments: { type: 'number', description: 'Round shapes: segments around. A cone with 8 or fewer has flat sides (4: a square pyramid).' },
     material: materialSchema,
     light: lightSchema,
     camera: cameraSchema,
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
-const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs', 'capsule'];
+const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
 const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
@@ -453,6 +455,8 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
             if (g.type === 'cylinder') g.radiusTop = g.radiusBottom = r;
             else if ('radius' in g) g.radius = r;
         }
+        if (spec.radius_top !== undefined && g.type === 'cylinder') g.radiusTop = Math.max(0, num(spec.radius_top, 'radius_top'));
+        if (spec.radius_bottom !== undefined && g.type === 'cylinder') g.radiusBottom = Math.max(0, num(spec.radius_bottom, 'radius_bottom'));
         if (spec.height !== undefined && 'height' in g) g.height = num(spec.height, 'height');
         if (spec.tube !== undefined && g.type === 'torus') g.tube = num(spec.tube, 'tube');
         if (spec.steps !== undefined && g.type === 'stairs') g.steps = Math.max(1, Math.round(num(spec.steps, 'steps')));
@@ -560,6 +564,7 @@ function makeTyped(type: string): NodeDoc {
         case 'sphere':
         case 'plane':
         case 'cylinder':
+        case 'cone':
         case 'torus':
         case 'ramp':
         case 'stairs':
@@ -613,7 +618,7 @@ async function shaderInfo(env: ToolEnv, id: string): Promise<Json> {
 
 // ------------------------------------------------------------------ policy
 
-const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 'size', 'radius', 'height', 'tube', 'segments', 'steps', 'visible'];
+const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 'size', 'radius', 'radius_top', 'radius_bottom', 'height', 'tube', 'segments', 'steps', 'visible'];
 
 /**
  * What the current stage lets the assistant change: lights in the lighting

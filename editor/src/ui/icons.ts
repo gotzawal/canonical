@@ -5,6 +5,7 @@ const PATHS: Record<string, string> = {
     sphere: '<circle cx="12" cy="12" r="8.5"/><ellipse cx="12" cy="12" rx="8.5" ry="3.2"/>',
     plane: '<path d="M3 15 9 8h12l-6 7Z"/>',
     cylinder: '<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6"/>',
+    cone: '<path d="M12 3 5 18c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6Z"/><path d="M5 18c0-1.4 3.1-2.6 7-2.6s7 1.2 7 2.6"/>',
     torus: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/>',
     ramp: '<path d="M3 19h18V6Z"/><path d="M8.5 16.5 21 9"/>',
     stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',

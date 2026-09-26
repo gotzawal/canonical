@@ -1,7 +1,7 @@
 import { GeometryBase, VertexAttributeName } from '@orillusion/core';
 import type { Vec3 } from '../core/types';
 
-// Greybox shapes the engine has no geometry for: ramp, stairs and capsule.
+// Greybox shapes the engine has no geometry for: ramp, stairs, cone and capsule.
 // Like the engine's box they are centered on their origin. The ramp and the
 // stairs rise toward -Z, so a player walking from +Z climbs them.
 
@@ -112,6 +112,56 @@ export class StairsGeometry extends GeometryBase {
         }
         m.quad([x, y0, -zf], [-x, y0, -zf], [-x, y0 + height, -zf], [x, y0 + height, -zf], [0, 0, -1]);
         m.quad([-x, y0, zf], [x, y0, zf], [x, y0, -zf], [-x, y0, -zf], [0, -1, 0]);
+        m.build(this);
+    }
+}
+
+/**
+ * Cone standing on its base, apex up. Up to 8 segments the sides are flat
+ * (4: a square pyramid); more segments make a round, smoothly shaded cone.
+ * The corners sit half a segment off +Z, so one side faces +Z and a
+ * pyramid's sides face the axes.
+ */
+export class ConeGeometry extends GeometryBase {
+    constructor(readonly radius: number, readonly height: number, segments: number) {
+        super();
+        const r = Math.max(0.001, radius);
+        const h = Math.max(0.001, height);
+        const seg = Math.max(3, Math.min(256, Math.round(segments)));
+        const y0 = -h / 2;
+        const corner = (j: number) => ((j + 0.5) / seg) * Math.PI * 2;
+        const base = (t: number): V => [r * Math.sin(t), y0, r * Math.cos(t)];
+        const apex: V = [0, h / 2, 0];
+        // Normal of a side at angle t, `d` from the axis at the base (the radius, or a flat side's apothem).
+        const side = (t: number, d: number): V => normalize([h * Math.sin(t), d, h * Math.cos(t)]);
+        const m = new MeshBuilder();
+        if (seg <= 8) {
+            const apothem = r * Math.cos(Math.PI / seg);
+            for (let j = 0; j < seg; j++) {
+                const n = side((j + 1) / seg * Math.PI * 2, apothem);
+                const a = m.vertex(base(corner(j)), n, j / seg, 1);
+                const b = m.vertex(base(corner(j + 1)), n, (j + 1) / seg, 1);
+                const c = m.vertex(apex, n, (j + 0.5) / seg, 0);
+                m.triangle(a, b, c, n);
+            }
+        } else {
+            const ring: number[] = [];
+            for (let j = 0; j <= seg; j++) ring.push(m.vertex(base(corner(j)), side(corner(j), r), j / seg, 1));
+            for (let j = 0; j < seg; j++) {
+                // One apex vertex per side, with the normal of its middle, so the tip is not pinched.
+                const n = side((j + 1) / seg * Math.PI * 2, r);
+                const c = m.vertex(apex, n, (j + 0.5) / seg, 0);
+                m.triangle(ring[j], ring[j + 1], c, n);
+            }
+        }
+        const down: V = [0, -1, 0];
+        const center = m.vertex([0, y0, 0], down, 0.5, 0.5);
+        const cap: number[] = [];
+        for (let j = 0; j < seg; j++) {
+            const t = corner(j);
+            cap.push(m.vertex(base(t), down, 0.5 + Math.sin(t) / 2, 0.5 + Math.cos(t) / 2));
+        }
+        for (let j = 0; j < seg; j++) m.triangle(center, cap[j], cap[(j + 1) % seg], down);
         m.build(this);
     }
 }

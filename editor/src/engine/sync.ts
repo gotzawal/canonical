@@ -11,7 +11,7 @@ import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { castGI } from './gi';
-import { CapsuleGeometry, RampGeometry, StairsGeometry } from './shapes';
+import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
     applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
 } from './materials';
@@ -710,6 +710,8 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
             return new PlaneGeometry(pos(g.width), pos(g.height));
         case 'cylinder':
             return new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1);
+        case 'cone':
+            return new ConeGeometry(pos(g.radius), pos(g.height), seg(g.segments));
         case 'torus':
             return new TorusGeometry(pos(g.radius), pos(g.tube), seg(g.segments), seg(g.segments / 2));
         case 'ramp':

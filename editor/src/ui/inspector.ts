@@ -24,6 +24,7 @@ const GEOMETRY_OPTIONS: { value: GeometryType; label: string }[] = [
     { value: 'sphere', label: 'Sphere' },
     { value: 'plane', label: 'Plane' },
     { value: 'cylinder', label: 'Cylinder' },
+    { value: 'cone', label: 'Cone' },
     { value: 'torus', label: 'Torus' },
     { value: 'ramp', label: 'Ramp' },
     { value: 'stairs', label: 'Stairs' },
@@ -389,6 +390,11 @@ export class InspectorPanel {
                 param('Height', 'height', 0.01, 0.001);
                 param('Segments', 'segments', 0.25, 3, true);
                 break;
+            case 'cone':
+                param('Radius', 'radius', 0.01, 0.001);
+                param('Height', 'height', 0.01, 0.001);
+                param('Segments', 'segments', 0.25, 3, true);
+                break;
             case 'torus':
                 param('Radius', 'radius', 0.01, 0.001);
                 param('Tube', 'tube', 0.005, 0.001);
@@ -420,6 +426,20 @@ export class InspectorPanel {
                 hint.textContent = cur.type === 'stairs'
                     ? `Step ${(cur.height / Math.max(1, cur.steps)).toFixed(2)} m high, ${(cur.depth / Math.max(1, cur.steps)).toFixed(2)} m deep, ${slope.toFixed(0)} deg`
                     : `Slope ${slope.toFixed(1)} deg, rising toward -Z`;
+            };
+            update();
+            this.watch(update);
+            rows.push(row('', hint));
+        }
+        if (g.type === 'cone') {
+            const hint = h('div', { class: 'readonly' });
+            const update = () => {
+                const cur = this.node.mesh?.geometry;
+                if (cur?.type !== 'cone') return;
+                const seg = Math.max(3, Math.round(cur.segments));
+                hint.textContent = seg <= 8
+                    ? `${seg} flat sides${seg === 4 ? `: a pyramid ${(cur.radius * Math.SQRT2).toFixed(2)} m wide` : ''}`
+                    : 'Round; 8 segments or fewer give flat sides (4: a pyramid)';
             };
             update();
             this.watch(update);

@@ -520,7 +520,7 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
 }
 
 const MATERIAL_TYPES = ['lit', 'unlit', 'lambert', 'shader'];
-const GEOMETRY_TYPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs', 'capsule'];
+const GEOMETRY_TYPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
 
 /** Known shape with every size a finite number (missing sizes take the defaults). */
 function sanitizeGeometry(raw: any): GeometryDoc {
