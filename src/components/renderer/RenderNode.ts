@@ -673,6 +673,20 @@ export class RenderNode extends ComponentBase {
                         }
                     }
 
+                    // DDGI: bind the irradiance atlases straight from the
+                    // graph pool, like the shadow maps below. ColorPass only
+                    // hands them to opaque draws through its pass state, so
+                    // transparent / transmissive draws (other pass states)
+                    // and pipelines first built before GIPass joined the
+                    // graph would keep sampling the placeholder texture.
+                    const giGraph = view.renderGraph;
+                    if (giGraph && giGraph.pool.has('_DDGIIrradianceMap')) {
+                        const irradiance = giGraph.pool.get('_DDGIIrradianceMap');
+                        const irradianceDepth = giGraph.pool.get('_DDGIDepthMap');
+                        if (irradiance) renderShader.setTexture(`irradianceMap`, irradiance as any);
+                        if (irradianceDepth) renderShader.setTexture(`irradianceDepthMap`, irradianceDepth as any);
+                    }
+
                     if (renderShader.pipeline) {
                         renderShader.apply(view.engine3D.context3D, node._geometry, renderPassState, () => node.noticeShaderChange());
                         continue;
