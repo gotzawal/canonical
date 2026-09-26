@@ -21,7 +21,8 @@ export default defineConfig({
     // Relative base so the build works under any sub path,
     // e.g. https://<user>.github.io/<repo>/
     base: './',
-    publicDir: false,
+    // Favicons and logo files, copied as they are next to index.html.
+    publicDir: here('./public'),
     define: {
         __EDITOR_BUILD__: JSON.stringify({
             sha: gitSha(),
