@@ -73,6 +73,9 @@ export class Runtime {
                 pick: { enable: false },
                 shadow: { type: 'PCF', shadowBound: 60, shadowSize: 2048 },
                 gi: giEngineSetting(),
+                // Imported models keep the node matrices of their files
+                // (unit scale, Z-up to Y-up), as other glTF viewers do.
+                loader: { gltfNodeMatrix: true },
             },
             beforeRender: () => runtime?.beforeTick(),
             lateRender: () => runtime?.tick(),
