@@ -60,6 +60,10 @@ export interface StageDef {
     locksPlacement: boolean;
     tools: ToolGroup[];
     checks: CheckDef[];
+    /** How shots are compared with their targets in this stage (lightness only, or color). */
+    compare?: 'gray' | 'color';
+    /** What marking a shot as matching means in this stage. */
+    matchLabel?: string;
 }
 
 export interface CheckState {
@@ -97,6 +101,17 @@ export function shadowLights(doc: SceneDoc): number {
 }
 
 const count = (done: number, total: number, noun: string) => `${done} of ${total} ${noun}`;
+
+/** Every shot was marked as matching its target in `stage` (see Pipeline.markMatched). */
+function shotsMatched(stage: StageId) {
+    return ({ design }: CheckContext): CheckResult => {
+        const shots = design.shots;
+        if (!shots.length) return { done: false, detail: 'no shots' };
+        const ok = shots.filter((s) => s.target && s.matched?.includes(stage)).length;
+        const noTarget = shots.filter((s) => !s.target).length;
+        return { done: ok === shots.length, detail: count(ok, shots.length, 'shots') + (noTarget ? `, ${noTarget} without a target` : '') };
+    };
+}
 
 export const STAGES: StageDef[] = [
     {
@@ -215,9 +230,16 @@ export const STAGES: StageDef[] = [
         description:
             'Placement is locked and every surface is gray, so only light is judged. Set the sky and time of day, key and fill lights, interior lights, exposure and GI. Compare each shot with its paintover in grayscale.',
         locksPlacement: true,
+        compare: 'gray',
+        matchLabel: 'Values match the target',
         tools: ['read', 'design', 'lights', 'environment', 'capture', 'compare'],
         checks: [
-            { id: 'light.values', text: 'Every shot matches its paintover in grayscale (value structure)', hint: 'The match score is only a reference; judge by eye.' },
+            {
+                id: 'light.values',
+                text: 'Every shot matches its paintover in grayscale (value structure)',
+                hint: 'Compare each shot in the shot bar and mark it; the score is only a reference, judge by eye.',
+                auto: shotsMatched('light'),
+            },
             { id: 'light.exposure', text: 'Exposure is settled' },
             {
                 id: 'light.shadows',
@@ -236,6 +258,8 @@ export const STAGES: StageDef[] = [
         description:
             'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Then correct light intensities and exposure for the new albedo.',
         locksPlacement: true,
+        compare: 'color',
+        matchLabel: 'Colors match the target',
         tools: ['read', 'design', 'materials', 'lights', 'environment', 'capture', 'compare', 'images'],
         checks: [
             {
@@ -247,7 +271,12 @@ export const STAGES: StageDef[] = [
                     return { done: m.length > 0 && ok === m.length, detail: m.length ? count(ok, m.length, 'slots') : 'no slots yet' };
                 },
             },
-            { id: 'material.colors', text: 'Every shot matches its paintover in color' },
+            {
+                id: 'material.colors',
+                text: 'Every shot matches its paintover in color',
+                hint: 'Compare each shot in color in the shot bar and mark it.',
+                auto: shotsMatched('material'),
+            },
             { id: 'material.light2', text: 'Lighting pass 2 done (intensities and exposure)' },
         ],
     },
@@ -257,6 +286,8 @@ export const STAGES: StageDef[] = [
         long: 'Effects',
         description: 'Particles and post effects (fog, bloom, vignette). Compare the shots with their paintovers again, also in grayscale so the effects keep the value structure.',
         locksPlacement: true,
+        compare: 'gray',
+        matchLabel: 'Value structure still holds',
         tools: ['read', 'design', 'effects', 'environment', 'lights', 'code', 'play', 'capture', 'compare'],
         checks: [
             {
@@ -268,7 +299,12 @@ export const STAGES: StageDef[] = [
                     return { done: ok === e.length, detail: e.length ? count(ok, e.length, 'effects') : 'none listed' };
                 },
             },
-            { id: 'effects.values', text: 'The grayscale comparison still holds' },
+            {
+                id: 'effects.values',
+                text: 'The grayscale comparison still holds',
+                hint: 'Compare each shot in grayscale again and mark it.',
+                auto: shotsMatched('effects'),
+            },
             { id: 'effects.perf', text: 'Within the performance budget', hint: 'Check the frame rate in the status bar against the budget.' },
         ],
     },
@@ -278,6 +314,7 @@ export const STAGES: StageDef[] = [
         long: 'Finish',
         description: 'Final lighting pass and polish, then color grading (lift, gamma, gain and saturation as a post effect). Compare every shot with its paintover one last time and approve it.',
         locksPlacement: false,
+        compare: 'color',
         tools: [...ALL_TOOL_GROUPS],
         checks: [
             { id: 'finish.light', text: 'Final lighting pass and polish' },

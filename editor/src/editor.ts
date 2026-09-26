@@ -52,6 +52,8 @@ interface EditorEvents {
     saved: 'scene' | 'project';
     /** Show the Design tab (pipeline, brief, shots). */
     'show-design': void;
+    /** Show the Scene tab (sky, exposure, post effects, GI). */
+    'show-scene': void;
     /** Open the planning brief screen. */
     'show-brief': void;
     /** A prefab instance is edited on its own (id of its root), or editing ended (null). */

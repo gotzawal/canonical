@@ -3,6 +3,8 @@
 
 import { add, DEG, len, normalize, sub } from '../core/math';
 import type { CameraState, SceneDoc, ShotDoc, Vec3 } from '../core/types';
+import { getAssetBlob } from '../core/assets';
+import { describeComparison, sideBySide } from '../core/compare';
 import { blobToDataUrl } from '../core/images';
 import { assetImageDataUrl } from '../core/images';
 import type { ToolDef } from './openrouter';
@@ -40,6 +42,10 @@ export function greyboxToolDefs(): ToolDef[] {
         def('capture_shot', 'Render a shot and look at it next to its target paintover and concept image (vision models). Adds the capture to the shot history.', {
             shot: { type: 'string' },
             compare: { type: 'string', enum: ['both', 'target', 'concept', 'none'], description: 'Images to show next to the capture (default both).' },
+        }, ['shot']),
+        def('compare_shot', 'Compare a shot with its target paintover without a model call: a fresh capture and the target on a 64 pixel grid in CIE Lab. Returns a score (100 = the same; a reference only), the value structure (correlation of lightness, whatever the exposure), brightness and contrast of both, zones that are darker or brighter, in color mode saturation and color cast, and notes in plain words. The capture (left) and the target (right) are attached side by side, in grayscale for gray mode, with the difference map. Adds the capture to the shot history. The user judges and marks matching shots.', {
+            shot: { type: 'string' },
+            mode: { type: 'string', enum: ['gray', 'color'], description: 'Default: the stage\'s (gray in Lighting and Effects, color in Materials and Finish).' },
         }, ['shot']),
         def('capture_player_view', 'See what the player sees: the camera stands on the ground at `from`, at the brief\'s eye height, and looks at `look_at`.', {
             from: place,
@@ -193,6 +199,38 @@ export async function runGreyboxTool(env: ToolEnv, name: string, args: Json): Pr
                 }
             }
             return { data: { ok: true, capture: meta.id, images_in_order: labels, note: 'The images are attached in the next message.' }, images, summary: shot.name };
+        }
+        case 'compare_shot': {
+            const shot = findShot(doc(), args.shot);
+            const mode = args.mode === 'gray' || args.mode === 'color' ? args.mode : pipeline.compareMode;
+            const res = await pipeline.compareShot(shot.id, mode);
+            const r = res.result;
+            await pipeline.addCapture(shot.id, res.blob, 'compare', { score: r.score, compare: mode });
+            const images: string[] = [];
+            if (env.screenshots()) {
+                const target = await getAssetBlob(res.ref);
+                if (target) images.push(await sideBySide(res.blob, target, shot.aspect, mode === 'gray'));
+                images.push(r.heat);
+            }
+            const stage = doc().design.stage;
+            return {
+                data: {
+                    shot: shot.name,
+                    mode,
+                    against: res.against === 'target' ? 'target paintover' : 'concept (the shot has no target yet)',
+                    score: r.score,
+                    structure: r.structure,
+                    brightness: { capture: r.brightness[0], target: r.brightness[1] },
+                    contrast: { capture: r.contrast[0], target: r.contrast[1] },
+                    zones_capture_minus_target: r.zones,
+                    ...(mode === 'color' ? { saturation: { capture: r.chroma[0], target: r.chroma[1] }, cast: r.cast } : {}),
+                    notes: describeComparison(r),
+                    marked_matching: !!pipeline.shot(shot.id)?.matched?.includes(stage),
+                    ...(images.length ? { attached: 'capture (left) and target (right), then the difference map (blue: the capture is darker, red: brighter)' } : {}),
+                },
+                images,
+                summary: `${shot.name}: score ${r.score}, structure ${r.structure}`,
+            };
         }
         case 'capture_player_view': {
             const from = resolvePlace(env, args.from, 'from');

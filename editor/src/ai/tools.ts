@@ -153,6 +153,8 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     update_shot: ['shots'],
     delete_shot: ['shots'],
     capture_shot: ['shots', 'capture', 'compare'],
+    compare_shot: ['compare'],
+    apply_key_light: ['lights'],
     capture_player_view: ['capture'],
     check_sightline: ['capture'],
     create_prefab: ['prefabs'],

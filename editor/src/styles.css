@@ -4034,7 +4034,8 @@ kbd {
     inset: 0;
     width: 100%;
     height: 100%;
-    object-fit: fill;
+    /* Cropped like the comparison crops it. */
+    object-fit: cover;
     pointer-events: none;
 }
 
@@ -4473,4 +4474,116 @@ kbd {
 .lightbox-caption {
     color: var(--text);
     font-size: 12px;
+}
+
+/* ------------------------------------------------------ shot comparison */
+
+.shot-compare {
+    position: absolute;
+    left: 12px;
+    bottom: 60px;
+    z-index: 3;
+    width: min(560px, calc(100% - 24px));
+    max-height: calc(100% - 80px);
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    padding: 8px 10px 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: rgba(27, 30, 35, 0.96);
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    pointer-events: auto;
+}
+
+.shot-compare-head {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.shot-compare-title {
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+.shot-compare-head .select {
+    width: auto;
+}
+
+.shot-compare-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.shot-compare-images {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 6px;
+}
+
+.shot-compare-images figure {
+    margin: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+}
+
+.shot-compare-images figcaption {
+    color: var(--muted);
+    font-size: 10.5px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.shot-compare-img {
+    width: 100%;
+    aspect-ratio: 16 / 9;
+    object-fit: cover;
+    border-radius: 4px;
+    background: #0c0d10;
+    cursor: zoom-in;
+}
+
+.shot-compare-img.gray {
+    filter: grayscale(1);
+}
+
+.shot-compare-img.heat {
+    image-rendering: pixelated;
+}
+
+.shot-compare-metrics {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px 14px;
+}
+
+.shot-metric {
+    display: flex;
+    align-items: baseline;
+    gap: 5px;
+}
+
+.shot-metric strong {
+    color: var(--text-strong);
+    font-size: 13px;
+}
+
+.shot-compare-notes {
+    margin: 0;
+    padding-left: 16px;
+    color: var(--text);
+    line-height: 1.45;
+}
+
+.shot-compare-foot {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px 12px;
 }

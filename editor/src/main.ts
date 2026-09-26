@@ -297,6 +297,11 @@ async function main() {
     });
     editor.on('ai-prompt', () => showTab('ai'));
     editor.on('show-design', () => showTab('design'));
+    editor.on('show-scene', () => {
+        showTab('scene');
+        app.classList.remove('hide-right');
+        if (isNarrow()) app.classList.add('show-right');
+    });
     editor.on('show-brief', () => brief.open());
     showTab('inspector');
     pipelineSlot.append(new PipelineBar(editor, { design: () => showTab('design'), brief: () => brief.open() }).el);

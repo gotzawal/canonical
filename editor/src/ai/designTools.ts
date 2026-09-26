@@ -102,6 +102,7 @@ export function designToolDefs(): ToolDef[] {
         def('propose_stage_complete', 'Propose completing the current stage once its checklist is done. The user reviews and approves; completing captures every shot and takes a snapshot.', {
             summary: { type: 'string', description: 'What was done and what was checked, a few lines.' },
         }, ['summary']),
+        def('apply_key_light', 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the atmospheric sky\'s sun there too. Change the mood first with update_design to use another direction.'),
     ];
 }
 
@@ -501,6 +502,12 @@ export async function runDesignTool(env: ToolEnv, name: string, args: Json): Pro
                 },
                 summary: stageDef(store.doc.design.stage).title,
             };
+        }
+        case 'apply_key_light': {
+            const id = ed.pipeline.applyKeyLight();
+            const n = store.node(id);
+            const k = store.doc.design.mood.keyLight;
+            return { data: { ok: true, light: n?.name ?? id, id, rotation: n?.rotation, color: k.color, from: { azimuth: k.azimuth, elevation: k.elevation } }, summary: n?.name ?? id };
         }
     }
     return null;

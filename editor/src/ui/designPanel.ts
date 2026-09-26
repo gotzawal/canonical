@@ -160,6 +160,20 @@ export class DesignPanel {
         } else actions.append(h('span', { class: 'muted small', text: 'Every stage is complete. Reopen a stage from the pipeline bar to change it.' }));
         if (id === 'brief') actions.append(button('Open brief', () => this.hooks.showBrief(), 'small', 'open'));
         rows.push(actions);
+        if ((id === 'light' || id === 'material' || id === 'finish') && st.status !== 'done') {
+            rows.push(
+                h(
+                    'div',
+                    { class: 'design-actions' },
+                    button('Key light from the mood', () => {
+                        pipeline.applyKeyLight();
+                        toast('The key light and the sky\'s sun follow the mood now.', 'success');
+                    }, 'small', 'sun'),
+                    button('Sky, exposure and GI', () => this.editor.emit('show-scene', undefined), 'small', 'sliders'),
+                    d.shots.some((s) => s.target) ? button('Compare shots', () => pipeline.openCompare((d.shots.find((s) => s.target && !s.matched?.includes(id)) ?? d.shots.find((s) => s.target))!.id), 'small', 'graph') : null,
+                ),
+            );
+        }
         return section('design-stage', 'Stage', 'flag', rows);
     }
 
@@ -304,6 +318,10 @@ export class DesignPanel {
         const kc = new ColorField({ value: d.mood.keyLight.color, commit: (v) => this.edit('Key Light Color', (dd) => (dd.mood.keyLight.color = v)) });
         const palette = h('div', { class: 'palette' }, d.mood.palette.map((c) => h('span', { class: 'swatch', title: c, style: { background: c } })));
         rows.push(mood.el, row('Time of Day', tod.el), row('Key Light', h('div', { class: 'inline' }, az.el, el.el), 'Azimuth (around +Y from +Z) and elevation, degrees'), row('Key Color', kc.el));
+        rows.push(row('', button('Apply to the Sun', () => {
+            this.editor.pipeline.applyKeyLight();
+            toast('The key light and the sky\'s sun follow the mood now.', 'success');
+        }, 'small', 'sun'), 'Points the first directional light and the sky\'s sun the way the key light comes from, with its color'));
         if (d.mood.palette.length) rows.push(row('Palette', palette));
 
         // Play requirements.
@@ -516,6 +534,13 @@ export class DesignPanel {
         else badges.push(h('span', { class: 'shot-badge', text: 'no target' }));
         if (shot.stale) badges.push(h('span', { class: 'shot-badge warn', text: 'needs update', title: 'The level was reopened after this paintover was chosen' }));
         if (shot.approved) badges.push(h('span', { class: 'shot-badge ok', text: 'approved' }));
+        const stage = stageDef(d.stage);
+        if (stage.matchLabel && shot.target) {
+            const ok = !!shot.matched?.includes(d.stage);
+            badges.push(h('span', { class: 'shot-badge' + (ok ? ' ok' : ''), text: ok ? 'matches' : 'to compare', title: stage.matchLabel }));
+        }
+        const lastScore = [...shot.history].reverse().find((c) => c.score != null);
+        if (lastScore) badges.push(h('span', { class: 'shot-badge', text: `score ${Math.round(lastScore.score!)}`, title: `Last comparison (${lastScore.compare ?? 'gray'}, ${stageDef(lastScore.stage).title})` }));
         const name = new TextField(shot.name, (v) => v.trim() && pipeline.updateShot(shot.id, { name: v.trim() }, 'Rename Shot'));
         const menu = iconButton('dots', 'Shot options', (e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -525,6 +550,7 @@ export class DesignPanel {
                     { label: 'Update from View', icon: 'focus', enabled: () => active, action: () => pipeline.updateShotFromView(shot.id) },
                     { label: 'Capture Now', icon: 'image', action: () => void this.captureNow(shot) },
                     { label: 'Paintovers...', icon: 'paint', action: () => openPaintoverDialog(this.editor, shot.id) },
+                    { label: 'Compare with Target', icon: 'graph', enabled: () => !!(shot.target || shot.concept), action: () => pipeline.openCompare(shot.id) },
                     { label: 'History', icon: 'history', enabled: () => shot.history.length > 0, action: () => this.showHistory(shot, img) },
                     { separator: true },
                     {

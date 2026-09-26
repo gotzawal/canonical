@@ -3,12 +3,14 @@
 // changes go through the store, so they autosave, undo and save with the
 // scene like any other edit.
 
-import { putAsset, putDesignImage } from '../core/assets';
+import { getAssetBlob, putAsset, putDesignImage } from '../core/assets';
+import { compareImages, type CompareMode, type CompareResult } from '../core/compare';
+import { makeLightNode } from '../core/defaults';
 import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import type {
-    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotDoc, SnapshotDoc, StageId,
+    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
 } from '../core/types';
 import type { Editor } from '../editor';
 import { confirmDialog, toast } from '../ui/overlays';
@@ -21,6 +23,8 @@ interface PipelineEvents {
     busy: boolean;
     /** The shot shown in the viewport changed. */
     shot: string | null;
+    /** Open the comparison of a shot (it is shown first). */
+    compare: string;
 }
 
 /** Snapshot file: the scene without its design section. */
@@ -87,6 +91,36 @@ export class Pipeline extends Emitter<PipelineEvents> {
             if (v) d.design.unlocked = true;
             else delete d.design.unlocked;
         }, { design: true });
+    }
+
+    // ----------------------------------------------------------- key light
+
+    /**
+     * Points the key light (the first directional light; one is made when
+     * there is none) the way the mood describes it, with its color, and
+     * puts the atmospheric sky's sun in the same place. Returns its id.
+     */
+    applyKeyLight(): string {
+        const k = this.design.mood.keyLight;
+        const wrap = (v: number) => ((v % 360) + 360) % 360;
+        // Directional lights shine along local +Z: from the key light's azimuth and elevation toward the scene.
+        const rotation: Vec3 = [Math.round(k.elevation * 10) / 10, Math.round(wrap(k.azimuth + 180) * 10) / 10, 0];
+        let id = '';
+        this.store.commit('Apply Key Light', (d) => {
+            let sun = d.nodes.find((n) => n.light?.type === 'directional' && n.visible) ?? d.nodes.find((n) => n.light?.type === 'directional');
+            if (!sun) {
+                sun = makeLightNode('directional');
+                sun.name = 'Sun';
+                d.nodes.push(sun);
+            }
+            sun.rotation = rotation;
+            sun.light!.color = k.color;
+            id = sun.id;
+            // The sky's sun follows the same rule as a light driving it (AtmosphericComponent).
+            d.environment.sunX = wrap(rotation[1] + 90) / 360;
+            d.environment.sunY = Math.max(0, Math.min(1, rotation[0] / 180 + 0.5));
+        });
+        return id;
     }
 
     // ----------------------------------------------------------- checklist
@@ -164,12 +198,13 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.setBusy(true);
         try {
             const at = now();
-            const captures: { shot: string; meta: AssetMeta }[] = [];
+            const captures: { shot: string; meta: AssetMeta; score?: number; compare?: CompareMode }[] = [];
             for (const shot of design.shots) {
                 try {
                     const blob = await this.captureShot(shot.id);
                     const meta = await putDesignImage(blob, `${fileStem(shot.name)}-${id}.jpg`);
-                    captures.push({ shot: shot.id, meta });
+                    const scored = def.compare && shot.target ? await this.score(blob, shot.target, shot.aspect, def.compare) : null;
+                    captures.push({ shot: shot.id, meta, ...(scored != null ? { score: scored, compare: def.compare } : {}) });
                 } catch (e: any) {
                     console.warn('[pipeline] shot capture failed', shot.name, e);
                 }
@@ -178,7 +213,9 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const next = nextStage(id);
             this.store.commit(`Complete Stage: ${def.title}`, (d) => {
                 d.assets.push(...captures.map((c) => c.meta), snapMeta);
-                for (const c of captures) d.design.shots.find((s) => s.id === c.shot)?.history.push({ stage: id, asset: c.meta.id, at });
+                for (const c of captures) {
+                    d.design.shots.find((s) => s.id === c.shot)?.history.push({ stage: id, asset: c.meta.id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
+                }
                 d.design.snapshots.push(snap);
                 const st = d.design.stages[id];
                 st.status = 'done';
@@ -245,6 +282,12 @@ export class Pipeline extends Emitter<PipelineEvents> {
             dd.stages[id].proposal = null;
             delete dd.unlocked;
             if (target <= stageIndex('level')) for (const s of dd.shots) if (s.target) s.stale = true;
+            // Matches judged in the reopened stage and after it are judged again.
+            for (const s of dd.shots) {
+                if (!s.matched) continue;
+                s.matched = s.matched.filter((m) => stageIndex(m) < target);
+                if (!s.matched.length) delete s.matched;
+            }
         }, { design: true });
         return true;
     }
@@ -381,6 +424,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.store.commit(label, (d) => {
             const s = d.design.shots.find((x) => x.id === id);
             if (!s) return;
+            if (patch.target !== undefined && patch.target !== s.target) delete s.matched;
             Object.assign(s, patch);
             if (patch.target !== undefined) delete s.stale;
             if (s.stale === false) delete s.stale;
@@ -437,6 +481,12 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.emit('shot', this.activeShot);
     }
 
+    /** Shows a shot with its comparison card open. */
+    openCompare(id: string) {
+        if (this.activeShot !== id) this.showShot(id);
+        this.emit('compare', id);
+    }
+
     /**
      * Renders a shot: the camera jumps to it for a couple of frames, the
      * frame is cut out of the canvas, and the view goes back.
@@ -469,15 +519,74 @@ export class Pipeline extends Emitter<PipelineEvents> {
 
     /** Captures a shot now and adds it to the shot's history (marked as a manual capture). */
     async captureShotAsset(id: string, label = 'capture', score?: number | null): Promise<AssetMeta> {
-        const shot = this.shot(id);
         const blob = await this.captureShot(id);
+        return this.addCapture(id, blob, label, score != null ? { score } : {});
+    }
+
+    /** Adds a capture to the shot's history (as a manual capture of the current stage). */
+    async addCapture(id: string, blob: Blob, label: string, extra: { score?: number; compare?: CompareMode } = {}): Promise<AssetMeta> {
+        const shot = this.shot(id);
         const meta = await putDesignImage(blob, `${fileStem(shot?.name ?? 'shot')}-${label}.jpg`);
         const stage = this.design.stage;
         this.store.commit('Capture Shot', (d) => {
             d.assets.push(meta);
-            d.design.shots.find((s) => s.id === id)?.history.push({ stage, asset: meta.id, at: now(), manual: true, ...(score != null ? { score } : {}) });
+            d.design.shots.find((s) => s.id === id)?.history.push({ stage, asset: meta.id, at: now(), manual: true, ...extra });
         }, { design: true });
         return meta;
+    }
+
+    // ---------------------------------------------------------- comparison
+
+    /** The comparison mode of the current stage (gray until the Materials stage). */
+    get compareMode(): CompareMode {
+        return stageDef(this.design.stage).compare ?? 'gray';
+    }
+
+    private async score(capture: Blob, target: string, aspect: number, mode: CompareMode): Promise<number | null> {
+        const blob = await getAssetBlob(target);
+        if (!blob) return null;
+        return (await compareImages(capture, blob, aspect, mode)).score;
+    }
+
+    /**
+     * Compares a shot with its target paintover (its concept while it has
+     * no target): a fresh capture scored on a small grid, no model call.
+     * Nothing is stored.
+     */
+    async compareShot(id: string, mode: CompareMode = this.compareMode): Promise<{ blob: Blob; result: CompareResult; against: 'target' | 'concept'; ref: string }> {
+        const shot = this.shot(id);
+        if (!shot) throw new Error('No such shot.');
+        const ref = shot.target ?? shot.concept;
+        if (!ref) throw new Error(`${shot.name} has no target paintover or concept image to compare with.`);
+        const refBlob = await getAssetBlob(ref);
+        if (!refBlob) throw new Error('The target image is not stored in this browser.');
+        const blob = await this.captureShot(id);
+        const result = await compareImages(blob, refBlob, shot.aspect, mode);
+        return { blob, result, against: shot.target ? 'target' : 'concept', ref };
+    }
+
+    /**
+     * Marks a shot as matching its target in the current stage, keeping the
+     * compared capture in its history, or clears the mark. The user judges.
+     */
+    async markMatched(id: string, on: boolean, evidence?: { blob: Blob; score: number; mode: CompareMode }) {
+        const stage = this.design.stage;
+        const shot = this.shot(id);
+        if (!shot) return;
+        const meta = on && evidence ? await putDesignImage(evidence.blob, `${fileStem(shot.name)}-${stage}-match.jpg`) : null;
+        this.store.commit(on ? 'Mark Shot as Matching' : 'Unmark Shot', (d) => {
+            const s = d.design.shots.find((x) => x.id === id);
+            if (!s) return;
+            const set = new Set(s.matched ?? []);
+            if (on) set.add(stage);
+            else set.delete(stage);
+            if (set.size) s.matched = [...set];
+            else delete s.matched;
+            if (meta && evidence) {
+                d.assets.push(meta);
+                s.history.push({ stage, asset: meta.id, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
+            }
+        }, { design: true });
     }
 }
 

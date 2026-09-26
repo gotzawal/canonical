@@ -6,6 +6,8 @@ import { h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
 import { openPaintoverDialog } from './paintoverDialog';
+import { ShotCompare } from './shotCompare';
+import { stageDef } from '../design/stages';
 
 export type ShotReference = 'concept' | 'target' | 'capture' | 'none';
 
@@ -26,6 +28,9 @@ export class ShotView {
     private opacity: HTMLInputElement;
     private grayBtn: HTMLButtonElement;
     reference: ShotReference = 'concept';
+    private compare: ShotCompare;
+    /** The shot the defaults were set for. */
+    private shown: string | null = null;
     grayscale = false;
     private refAsset = '';
 
@@ -66,17 +71,23 @@ export class ShotView {
                 toast(`Capture failed: ${e?.message || e}`, 'error');
             }
         });
+        this.compare = new ShotCompare(editor);
+        const compare = h('button', { class: 'tool-btn wide', title: 'Compare with the target: a score and where it is darker or brighter', attrs: { type: 'button' } }, icon('graph', 15), h('span', { text: 'Compare' }));
+        compare.addEventListener('click', () => pipeline.activeShot && this.compare.toggle(pipeline.activeShot));
         const paint = h('button', { class: 'tool-btn wide', title: 'Paintovers of this shot', attrs: { type: 'button' } }, icon('paint', 15), h('span', { text: 'Paintover' }));
         paint.addEventListener('click', () => pipeline.activeShot && openPaintoverDialog(editor, pipeline.activeShot));
         const back = h('button', { class: 'tool-btn', title: 'Back to the shot camera', attrs: { type: 'button' } }, icon('undo', 15));
         back.addEventListener('click', () => pipeline.activeShot && pipeline.showShot(pipeline.activeShot));
         const close = h('button', { class: 'tool-btn', title: 'Hide the frame', attrs: { type: 'button' } }, icon('close', 15));
         close.addEventListener('click', () => pipeline.showShot(null));
-        this.bar = h('div', { class: 'shot-bar' }, icon('camera', 15), this.title, this.refSelect, this.opacity, this.grayBtn, back, update, capture, paint, close);
-        this.el = h('div', { class: 'shot-view', attrs: { hidden: true } }, this.frame, this.bar);
+        this.bar = h('div', { class: 'shot-bar' }, icon('camera', 15), this.title, this.refSelect, this.opacity, this.grayBtn, compare, back, update, capture, paint, close);
+        this.el = h('div', { class: 'shot-view', attrs: { hidden: true } }, this.frame, this.compare.el, this.bar);
         viewportEl.appendChild(this.el);
 
         pipeline.on('shot', () => this.update());
+        pipeline.on('compare', (id) => {
+            if (pipeline.activeShot === id && !this.compare.open) this.compare.show(id);
+        });
         editor.store.on('change', () => {
             if (pipeline.activeShot) this.update();
         });
@@ -113,7 +124,14 @@ export class ShotView {
         this.viewportEl.classList.toggle('shot-mode', !!shot);
         if (!shot) {
             this.setGrayscale(false);
+            this.shown = null;
             return;
+        }
+        if (shot.id !== this.shown) {
+            // A newly shown shot starts from its target, in grayscale in the stages that judge values.
+            this.shown = shot.id;
+            this.reference = shot.target ? 'target' : 'concept';
+            this.setGrayscale(stageDef(this.editor.store.doc.design.stage).compare === 'gray' && !!shot.target);
         }
         this.title.textContent = shot.name;
         const lastCapture = shot.history[shot.history.length - 1]?.asset;

@@ -515,6 +515,8 @@ export interface ShotCaptureDoc {
     score?: number | null;
     /** Captured by hand during the stage (not at its completion). */
     manual?: boolean;
+    /** How the score was measured: lightness only, or the whole color. */
+    compare?: 'gray' | 'color';
 }
 
 /** A camera bookmark framed like a concept image. */
@@ -535,6 +537,8 @@ export interface ShotDoc {
     history: ShotCaptureDoc[];
     /** Accepted in the final comparison. */
     approved?: boolean;
+    /** Stages in which the user judged the shot to match its target. */
+    matched?: StageId[];
 }
 
 /** A named surface of the level; its swatch is applied with the world space triplanar shader. */

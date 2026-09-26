@@ -310,10 +310,13 @@ export function sanitizeDesign(input: any): DesignDoc {
                         at: str(hc.at, '', 64),
                         ...(typeof hc.score === 'number' && Number.isFinite(hc.score) ? { score: hc.score } : {}),
                         ...(hc.manual === true ? { manual: true } : {}),
+                        ...(hc.compare === 'gray' || hc.compare === 'color' ? { compare: hc.compare } : {}),
                     })),
             };
             if (sh.stale === true) shot.stale = true;
             if (sh.approved === true) shot.approved = true;
+            const matched = [...new Set(list(sh.matched).filter((m): m is StageId => !!stageId(m)))];
+            if (matched.length) shot.matched = matched;
             return shot;
         }),
         'sh',

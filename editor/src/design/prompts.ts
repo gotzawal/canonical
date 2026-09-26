@@ -31,8 +31,8 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     ].join(' '),
     light: [
         'Work on the Lighting stage (pass 1). Placement is locked and every surface stays gray, so only the light is judged. Read the mood with read_design.',
-        'Set the sky and time of day, the key light (direction and color from the mood), fill and interior lights, exposure and global illumination. Keep the shadow-casting lights within the budget.',
-        'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches. Tick what is done with update_checklist and propose completing the stage when it matches.',
+        'Set the sky and time of day, the key light (apply_key_light points it the way the mood says), fill and interior lights, exposure and global illumination. Keep the shadow-casting lights within the budget.',
+        'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches; I mark the shots that match. Tick what is done with update_checklist and propose completing the stage when it matches.',
         'Answer in the language of the brief.',
     ].join(' '),
     material: [
