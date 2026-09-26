@@ -18,6 +18,8 @@
   &nbsp;·&nbsp;
   <a href="#the-ai-assistant">AI assistant</a>
   &nbsp;·&nbsp;
+  <a href="#the-pipeline-from-brief-to-finish">Pipeline</a>
+  &nbsp;·&nbsp;
   <a href="#the-engine-orillusion">Engine</a>
   &nbsp;·&nbsp;
   <a href="#development">Development</a>
@@ -42,9 +44,16 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 **AI assistant**
 
 - Works on the open project through tools: it reads and edits the scene and imported models, writes and fixes scripts and shaders, changes the render graph, runs Play tests and reads the console
-- With vision models it can also look at the viewport to check the result
+- With vision models it can also look at the viewport, the shots and the images you attach (drop or paste them into the AI tab)
 - Everything one request changes is a single undo step
+- Remembers each project: the conversation is kept in the browser, long conversations are compacted, and a short scene memo carries the context to later sessions
 - Works with any OpenRouter model that supports tool calls
+
+**Pipeline**
+
+- Stage gates from the planning brief to the finished scene: Brief, Level (greybox), Lighting, Materials, Effects, Finish, each with a checklist the assistant fills and you approve
+- Shots framed like the concept art, paintovers generated with image models, grayscale and color comparisons with a reference score, snapshots and a capture history per stage
+- Greybox tools (ramps, stairs, capsules, prefabs, a walk camera at eye height), material slots with a world space triplanar shader and a shared swatch library, GPU particles and a color grade
 
 **Scene editing**
 
@@ -63,7 +72,8 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 **Files**
 
 - Scenes autosave to the browser (imported files live in IndexedDB)
-- `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one
+- `Ctrl+S` downloads a `.scene.json` with assets, scripts and shaders embedded, `Ctrl+O` opens one. Planning images (concepts, paintovers, captures, snapshots) are left out of it to keep it small
+- `Ctrl+Shift+S` saves the whole project as a `.zip`, planning files included; **Open Scene or Project** opens either
 - **File > Build & Deploy** (`Ctrl+B`) turns the scene into a standalone web game: run it in a new tab, download it as a `.zip` for any static host, or publish it to GitHub Pages
 
 **File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions.
@@ -74,6 +84,24 @@ Open the AI tab and use **Connect with OpenRouter**, or paste an API key in its 
 The assistant has tools for the whole editor: reading the scene, creating and updating objects, model overrides, scripts, shaders, render passes and post effects, running Play tests, reading the console and, with vision models, capturing the viewport. It uses them in a loop: after writing a script or shader it reads the compile result and fixes the errors, and when behaviour matters it runs the scene and reads the logs before it reports back.
 
 The key is kept in this browser's local storage, or only for the current tab when "Remember on this device" is off, and it is sent only to openrouter.ai. The editor contacts OpenRouter only when you open the AI tab (to list the models) and when you send a request. A request carries your message, a short description of the editor state and the results of the tools the model calls.
+
+The assistant remembers each project: its conversation is stored in this browser with the project, and when a conversation grows long the older part is replaced by a summary. With Anthropic models the fixed start of each request (instructions and tool definitions) and the conversation so far are sent as cache breakpoints, so the following steps of a request read them from the provider's cache. After a stretch of work the assistant rewrites a short scene memo (Design tab), which every later request reads, so a new session knows where the work stands.
+
+Notifications appear in the corner of the page when the assistant finishes a request, when it proposes completing a stage, and at save checkpoints, which ask whether to download the project. Each card has **Don't show this notification**; the bell menu at the top turns them back on and can also show them as system notifications while the tab is in the background.
+
+## The pipeline: from brief to finish
+A scene goes through stages, in the order of a usual art pipeline. The pipeline bar at the top shows the current stage, its checklist and the button to complete it; the **Design** tab holds the stage, the brief, the structured plan, the shots, the material slots, the snapshots and the scene memo. Some checklist items are measured from the project (every listed object placed, every shot with a target), the others are ticked by hand or proposed by the assistant, and only you complete a stage. Completing one captures every shot into its history and takes a snapshot of the scene that can be restored. An earlier stage can be reopened: the stages after it then need a recheck, and reopening the level marks the chosen paintovers as needing an update. The stage also decides which tools the assistant gets (in Lighting only lights, sky, exposure and GI) and, from Lighting to Effects, placement is locked except for lights, cameras and effects (the pipeline bar can unlock it).
+
+1. **Brief.** Paste the planning document (or drop `.md` / `.txt` files) and drop the concept images on the start screen. The assistant first decides how the scene is built (the kind of place, its size, where the areas sit and how they connect), then structures the areas and their objects, the specs (player height, eye height, door width, step height), the mood (time of day, key light, palette), the play requirements (route, landmark sight lines, area order), the effects and the mapping of concepts to areas, and asks about what the brief leaves open. When the brief changes later, only the areas that changed go back for rework.
+2. **Level.** A greybox in one mid gray material: primitives, ramps, stairs, capsules and prefabs (groups placed as instances; a prefab is edited on its own in the same view, and a `.glb` can later replace it in every instance). Shots are camera bookmarks framed like the concepts, with the concept laid over the view. The walk camera (`V`) walks the route at the brief's eye height with the ground and walls in the way, and ticks route points as they are reached; the assistant checks sight lines from the player's eyes. The stage ends with a paintover per shot: the greybox capture and the concept go to an image model (OpenRouter's Image API; the options each model accepts are read from its parameter list), which keeps the composition and paints the style and mood over it. You can also upload a drawing. The chosen paintover becomes the shot's target for every later comparison; the concept stays as the record.
+3. **Lighting.** Sky and time of day, key and fill lights (**Key light from the mood** points the sun the way the brief says), interior lights, exposure and GI, with every surface still gray. **Compare** in the shot bar sets a fresh capture next to the target in grayscale, with a score computed on a small grid without a model call (brightness, contrast, value structure and where it is too dark or bright). The score is a reference: you mark each shot that matches. The shadow-casting lights have to stay within the budget.
+4. **Materials.** Material slots are the named surfaces of the level. Objects linked to a slot use a world space triplanar shader, so a texture keeps its real size on every mesh, with one roughness and one metallic value per slot. Swatches come from a library shared by every project in this browser: search it first, and generate a swatch with the image model (from the slot's description, with the concepts and paintovers as references) only when nothing fits. Every swatch is cropped square, its baked shading evened out, its edges blended so it tiles, its brightness kept within about sRGB 30-240 and stored as WebP. The **Reference room** shows the swatches under neutral light next to a gray ball and a chrome ball. Then the shots are compared in color and the lighting corrected for the new albedo.
+5. **Effects.** Particles (the `packages/particle` GPU system, with presets for fire, smoke, sparks, embers, dust, rain, snow, mist and sparkles), fog, bloom and a vignette, checked against the effects of the brief and the frame rate budget, and compared with the paintovers again in grayscale.
+6. **Finish.** A final lighting pass, then a lift / gamma / gain and saturation color grade as a post shader, and a last comparison of every shot, which you approve.
+
+Planning images are marked as planning assets: they are saved in project files, but not in `.scene.json` files or built games.
+
+Planned, not built yet: a Blender extension (sending GLBs over a local WebSocket to replace proxies by asset id, custom properties as glTF extras), an optimization stage after Finish (distance based LOD, instancing, draw call budget) and parallel tracks for sound, navmesh and UI.
 
 ## Scripts and Play mode
 A script is a class that extends `Script`. Its public fields show up in the Inspector, where each object can set its own values:
