@@ -11,13 +11,32 @@ export interface AISettings {
     allowPlay: boolean;
     /** Send viewport screenshots to models that accept images. */
     screenshots: boolean;
+    /** Keep a short scene memo up to date at checkpoints (one small extra request). */
+    memo: boolean;
+    /** The pipeline stage decides which tools the assistant gets. */
+    stageTools: boolean;
+    /** The assistant may generate images (paintovers, swatches), which costs credits. */
+    allowImages: boolean;
+    /** Image generation model (OpenRouter image API). */
+    imageModel: string;
 }
 
 const SETTINGS_KEY = 'canonical-editor/ai';
 const API_KEY = 'canonical-editor/openrouter-key';
 
 function defaults(): AISettings {
-    return { model: '', temperature: 0.3, maxSteps: 24, remember: true, allowPlay: true, screenshots: true };
+    return {
+        model: '',
+        temperature: 0.3,
+        maxSteps: 24,
+        remember: true,
+        allowPlay: true,
+        screenshots: true,
+        memo: true,
+        stageTools: true,
+        allowImages: true,
+        imageModel: '',
+    };
 }
 
 /** AI settings and the OpenRouter key, kept in this browser only. */

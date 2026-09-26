@@ -69,3 +69,9 @@ WGSL notes: use f32 literals (1.0), vec3f / vec4f constructors, no implicit int/
 
 # Render graph
 get_render_graph lists the engine's render passes in execution order with the resources they read and write. set_render_pass switches a pass off or on; changes that would break the graph are refused with the reason.`;
+
+/** Instructions for compacting the older part of a conversation. */
+export const COMPACT_PROMPT = `You compact a conversation between a user and you, the assistant built into Canonical Editor, so that it can continue with less context. Write a summary for yourself that keeps everything needed to continue the work: the user's goals and preferences, decisions made, what was built or changed (object names and ids, prefabs, shots, scripts, shaders, settings), problems found and how they were solved, and what is still open. Keep ids and names exactly as they are. Be concise: short lines, at most about 400 words, no preamble. Write in the language the user writes in.`;
+
+/** Instructions for refreshing the scene memo (DesignDoc.memo). */
+export const MEMO_PROMPT = `You keep a short memo about one 3D scene project in Canonical Editor. The memo is your own long-term context for this scene: a later session reads it instead of the conversation. Rewrite it from the current memo, the project state and the recent work. Keep what the scene is, the current pipeline stage and what is left in it, important decisions and conventions (names, sizes, materials, lighting choices), what was done recently and the next steps. Drop anything that is no longer true. At most about 150 words in short lines, no preamble or heading. Write in the language of the recent work.`;

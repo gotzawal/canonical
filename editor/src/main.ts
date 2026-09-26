@@ -8,6 +8,8 @@ import { RenderGraphController } from './engine/renderGraph';
 import { Runtime } from './engine/runtime';
 import { ShaderManager } from './engine/shaders';
 import { SceneSync } from './engine/sync';
+import { Checkpoints } from './design/checkpoints';
+import { designSummary, memoLines, pipelineSummary } from './design/context';
 import { createMenu, menuDefinitions, showShortcuts } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
@@ -22,6 +24,7 @@ import { InspectorPanel } from './ui/inspector';
 import { logo } from './ui/logo';
 import { closeMenus, menubar, showMenu, toast } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
+import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
@@ -57,6 +60,7 @@ async function main() {
     const menuSlot = h('div', { class: 'menu-slot' });
     const sceneName = h('span', { class: 'scene-name' });
     const statusSlot = h('div', { class: 'status-slot' });
+    const bell = h('button', { class: 'icon-btn', title: 'Notifications', attrs: { type: 'button', 'aria-label': 'Notification settings' } }, icon('bell', 16));
     const leftToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Hierarchy', attrs: { type: 'button', 'aria-label': 'Toggle hierarchy' } }, icon('layers', 16));
     const rightToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Inspector', attrs: { type: 'button', 'aria-label': 'Toggle inspector' } }, icon('sliders', 16));
 
@@ -69,6 +73,7 @@ async function main() {
             h('div', { class: 'spacer' }),
             sceneName,
             h('div', { class: 'spacer' }),
+            bell,
             leftToggle,
             rightToggle,
         ),
@@ -258,6 +263,43 @@ async function main() {
     });
     editor.on('ai-prompt', () => showTab('ai'));
     showTab('inspector');
+
+    // Page notifications: the assistant finished, save checkpoints.
+    const checkpoints = new Checkpoints(editor, aiPanel.agent);
+    editor.checkpoints = checkpoints;
+    aiPanel.agent.on('done', (d) => {
+        const first = d.answer.replace(/[#*`>]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
+        notices.show({
+            kind: 'ai-done',
+            key: 'ai-done',
+            icon: d.error ? 'alert' : 'sparkle',
+            title: d.error ? 'The assistant ran into an error' : d.stopped ? 'The assistant stopped' : 'The assistant finished',
+            body: d.error ? d.error.slice(0, 200) : first.length > 180 ? first.slice(0, 177) + '...' : first,
+            timeout: d.error ? 0 : 9000,
+            actions: [{ label: 'Show', run: () => showTab('ai') }],
+        });
+    });
+    bell.addEventListener('click', () => {
+        const r = bell.getBoundingClientRect();
+        showMenu(
+            [
+                ...NOTICE_KINDS.map((k) => ({
+                    label: k.label,
+                    checked: () => notices.enabled(k.kind),
+                    action: () => notices.setEnabled(k.kind, !notices.enabled(k.kind)),
+                })),
+                { separator: true },
+                {
+                    label: 'Also as system notifications in the background',
+                    checked: () => notices.prefs.system,
+                    enabled: () => notices.systemSupported,
+                    action: () => void notices.setSystem(!notices.prefs.system),
+                },
+            ],
+            Math.max(8, r.right - 300),
+            r.bottom + 4,
+        );
+    });
     right.append(tabs, inspector.el, scenePanel.el, aiPanel.el);
 
     onLogLocation((file, line) => {
@@ -329,8 +371,9 @@ function aiContext(editor: Editor, dock: Dock): string {
     if (doc) lines.push(`Open in the code editor: ${doc.name} (${doc.kind} id ${doc.id})`);
     const f = editor.focusedPart;
     if (f) lines.push(`Picked model mesh: ${f.path} of ${store.node(f.node)?.name ?? f.node}`);
-    lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
+    lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.prefabs.length} prefabs, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
     if (!editor.compiler.trusted && store.doc.scripts.length) lines.push('Scripts are paused: the scene was opened from a file and the user has not enabled its scripts yet.');
+    lines.push(...pipelineSummary(store.doc, editor.runtime.fps), ...designSummary(store.doc), ...memoLines(store.doc));
     return lines.join('\n');
 }
 

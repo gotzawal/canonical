@@ -15,7 +15,14 @@ export interface OpenRouterModel {
     architecture?: { input_modalities?: string[] };
 }
 
-export type ContentPart = { type: 'text'; text: string } | { type: 'image_url'; image_url: { url: string } };
+/** Anthropic style prompt cache breakpoint (OpenRouter passes it to providers that support it). */
+export interface CacheControl {
+    type: 'ephemeral';
+}
+
+export type ContentPart =
+    | { type: 'text'; text: string; cache_control?: CacheControl }
+    | { type: 'image_url'; image_url: { url: string } };
 
 export interface ToolCall {
     id: string;
@@ -30,6 +37,48 @@ export interface ChatMessage {
     tool_call_id?: string;
 }
 
+/** Explicit prompt caching: models that only cache at cache_control breakpoints. */
+export function usesCacheBreakpoints(model: string): boolean {
+    return model.startsWith('anthropic/');
+}
+
+/**
+ * Adds cache breakpoints for models that need them: one after the system
+ * prompt (with the tool definitions it covers the fixed prefix of every
+ * request) and one on the last user message, so the next steps of a request
+ * read the conversation so far from the cache. Returns a new array; the
+ * history itself is left untouched.
+ */
+export function withCacheBreakpoints(messages: ChatMessage[]): ChatMessage[] {
+    const out = messages.map((m) => ({ ...m }));
+    const mark = (m: ChatMessage) => {
+        if (typeof m.content === 'string') {
+            if (!m.content) return;
+            m.content = [{ type: 'text', text: m.content, cache_control: { type: 'ephemeral' } }];
+            return;
+        }
+        if (!Array.isArray(m.content)) return;
+        const parts = m.content.map((p) => ({ ...p })) as ContentPart[];
+        for (let i = parts.length - 1; i >= 0; i--) {
+            const p = parts[i];
+            if (p.type === 'text') {
+                parts[i] = { ...p, cache_control: { type: 'ephemeral' } };
+                break;
+            }
+        }
+        m.content = parts;
+    };
+    const system = out.find((m) => m.role === 'system');
+    if (system) mark(system);
+    for (let i = out.length - 1; i >= 0; i--) {
+        if (out[i].role === 'user') {
+            mark(out[i]);
+            break;
+        }
+    }
+    return out;
+}
+
 export interface ToolDef {
     type: 'function';
     function: { name: string; description: string; parameters: Record<string, unknown> };
@@ -41,6 +90,8 @@ export interface Usage {
     total_tokens?: number;
     /** Credits spent, when OpenRouter reports it. */
     cost?: number;
+    /** Prompt tokens read from the provider's cache. */
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
 }
 
 export interface ChatRequest {
@@ -128,7 +179,7 @@ export function pickDefaultModel(models: OpenRouterModel[]): string {
 export async function chat(key: string, req: ChatRequest, opts: { signal?: AbortSignal; onText?: (delta: string) => void } = {}): Promise<ChatResult> {
     const body: Record<string, unknown> = {
         model: req.model,
-        messages: req.messages,
+        messages: usesCacheBreakpoints(req.model) ? withCacheBreakpoints(req.messages) : req.messages,
         stream: true,
         usage: { include: true },
     };

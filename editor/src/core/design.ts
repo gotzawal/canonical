@@ -342,11 +342,12 @@ export function sanitizeDesign(input: any): DesignDoc {
         if (typeof st.recheck === 'string' && st.recheck) doc.recheck = st.recheck.slice(0, 2000);
         out.stages[id] = doc;
     }
-    // Exactly the current stage is active; stages before it can't be 'todo'.
+    // Exactly the current stage is active (or done, once the last stage is
+    // complete); stages before it can't be 'todo'.
     const cur = stageIndex(out.stage);
     STAGE_IDS.forEach((id, i) => {
         const st = out.stages[id];
-        if (i === cur) st.status = 'active';
+        if (i === cur) st.status = st.status === 'done' && i === STAGE_IDS.length - 1 ? 'done' : 'active';
         else if (st.status === 'active') st.status = i < cur ? 'done' : 'todo';
         else if (i < cur && st.status === 'todo') st.status = 'done';
     });

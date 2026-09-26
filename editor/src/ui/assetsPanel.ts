@@ -95,7 +95,7 @@ export class AssetsPanel {
         }
         if (planning) {
             this.list.appendChild(
-                h('div', { class: 'asset-note muted small', text: `${planning} planning file${planning === 1 ? '' : 's'} (concepts, paintovers, captures, snapshots) are in the Design tab.` }),
+                h('div', { class: 'asset-note muted small', text: `${planning} planning file${planning === 1 ? ' (concept, paintover, capture or snapshot) is' : 's (concepts, paintovers, captures, snapshots) are'} in the Design tab.` }),
             );
         }
     }

@@ -25,6 +25,7 @@ import type { ScriptCompiler } from './play/compiler';
 import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
+import type { Checkpoints } from './design/checkpoints';
 import type { Viewport } from './viewport/viewport';
 import { exampleShowcase } from './examples';
 
@@ -57,6 +58,8 @@ export class Editor extends Emitter<EditorEvents> {
     readonly graph: RenderGraphController;
     /** Model part picked last, shown highlighted in the inspector. */
     focusedPart: { node: string; path: string } | null = null;
+    /** Save checkpoints (set up by main.ts once the assistant exists). */
+    checkpoints: Checkpoints | null = null;
 
     constructor(
         readonly store: Store,

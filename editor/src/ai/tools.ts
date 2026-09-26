@@ -8,6 +8,7 @@ import { tidy } from '../core/math';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
 } from '../core/types';
+import { assetImageDataUrl } from '../core/images';
 import { normalizeHex } from '../engine/color';
 import { recentLogs } from '../ui/statusbar';
 import type { ToolDef } from './openrouter';
@@ -17,6 +18,8 @@ export interface ToolResult {
     data: unknown;
     /** A data: URL image to show the model (vision models only). */
     image?: string;
+    /** More images to show the model. */
+    images?: string[];
     /** Short line for the chat log. */
     summary?: string;
 }
@@ -231,6 +234,9 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
         def('remove_post_effect', 'Remove a custom post effect from the chain.', { id: { type: 'string' } }, ['id']),
         def('get_console', 'Recent editor console messages (errors, warnings, script logs).', { limit: { type: 'number' }, errors_only: { type: 'boolean' } }),
         def('select_objects', 'Select objects in the editor and frame them in the view.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
+        def('view_images', 'Look at images of the project again: concept images, paintovers, captures, swatches or images the user attached, by asset id. They are shown in the next message (vision models only).', {
+            assets: { type: 'array', items: { type: 'string' }, description: 'Asset ids (at most 6).' },
+        }, ['assets']),
     ];
     if (env.allowPlay()) {
         defs.push(
@@ -1001,6 +1007,27 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             case 'stop': {
                 ed.stopPlay();
                 return { data: { state: ed.player.state } };
+            }
+            case 'view_images': {
+                const refs: unknown[] = Array.isArray(args.assets) ? args.assets.slice(0, 6) : [];
+                if (!refs.length) throw new ToolError('assets is empty.');
+                const images: string[] = [];
+                const shown: string[] = [];
+                const missing: string[] = [];
+                for (const ref of refs) {
+                    const meta = doc().assets.find((a) => a.id === ref && (a.kind === 'image' || a.kind === 'texture'));
+                    const url = meta ? await assetImageDataUrl(meta.id, 1024).catch(() => null) : null;
+                    if (url && meta) {
+                        images.push(url);
+                        shown.push(`${meta.name} (${meta.id})`);
+                    } else missing.push(String(ref));
+                }
+                if (!images.length) throw new ToolError(`No images found for ${missing.join(', ')}.`);
+                return {
+                    data: { shown, ...(missing.length ? { missing } : {}), note: 'The images are attached in the next message, in this order.' },
+                    images,
+                    summary: `${images.length} image${images.length === 1 ? '' : 's'}`,
+                };
             }
             case 'capture_viewport': {
                 const image = await ed.runtime.capture(768);
