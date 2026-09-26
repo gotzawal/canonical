@@ -92,6 +92,9 @@ function editorSha(): string {
 export function gameScene(source: SceneDoc, scripts: boolean): SceneDoc {
     const doc = JSON.parse(JSON.stringify(source)) as SceneDoc;
     delete doc.build;
+    // Planning data and prefab templates (instances are already in the nodes) stay in the editor.
+    delete (doc as Partial<SceneDoc>).design;
+    doc.prefabs = [];
     if (!scripts) {
         doc.scripts = [];
         for (const n of doc.nodes) if (n.scripts) n.scripts = [];

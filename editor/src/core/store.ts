@@ -1,8 +1,12 @@
 import { Emitter } from './events';
-import { defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGI, defaultRenderGraph, uid } from './defaults';
+import {
+    defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
+} from './defaults';
+import { sanitizeDesign } from './design';
 import { clampGIGrid } from './giLimits';
 import type {
-    BuildDoc, CameraState, GIDoc, NodeDoc, ParamValue, PostDoc, RenderGraphDoc, SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
+    BuildDoc, CameraState, GeometryDoc, GeometryType, GIDoc, NodeDoc, ParamValue, PostDoc, PrefabDoc, RenderGraphDoc,
+    SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
 } from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
@@ -13,6 +17,8 @@ export interface ChangeHint {
     env?: boolean;
     /** Only settings that do not change the scene changed (such as build settings). */
     meta?: boolean;
+    /** Only the design section (the planning pipeline) changed. */
+    design?: boolean;
 }
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';
@@ -453,8 +459,15 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
         if (refs.length) node.scripts = refs;
         else delete node.scripts;
     }
+    if (node.mesh !== undefined) {
+        if (!isObj(node.mesh) || !isObj(node.mesh.material)) delete node.mesh;
+        else node.mesh.geometry = sanitizeGeometry(node.mesh.geometry);
+    }
+    if (node.prefab !== undefined && (typeof node.prefab !== 'string' || !node.prefab)) delete node.prefab;
+    if (node.prefabChild !== undefined && node.prefabChild !== true) delete node.prefabChild;
     if (node.mesh && isObj(node.mesh.material)) {
         const m = node.mesh.material as any;
+        if (m.slot !== undefined && (typeof m.slot !== 'string' || !m.slot)) delete m.slot;
         if (!MATERIAL_TYPES.includes(m.type)) m.type = 'lit';
         if (m.params !== undefined) m.params = params(m.params);
         if (m.shader !== undefined && m.shader !== null && typeof m.shader !== 'string') m.shader = null;
@@ -501,6 +514,19 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
 }
 
 const MATERIAL_TYPES = ['lit', 'unlit', 'lambert', 'shader'];
+const GEOMETRY_TYPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs', 'capsule'];
+
+/** Known shape with every size a finite number (missing sizes take the defaults). */
+function sanitizeGeometry(raw: any): GeometryDoc {
+    const type: GeometryType = isObj(raw) && GEOMETRY_TYPES.includes(raw.type) ? raw.type : 'box';
+    const d = defaultGeometry(type) as any;
+    const out: any = { type };
+    for (const [k, v] of Object.entries(d)) {
+        if (k === 'type') continue;
+        out[k] = finite(isObj(raw) ? raw[k] : undefined, v as number);
+    }
+    return out as GeometryDoc;
+}
 const ALPHA_MODES = ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'];
 
 function sanitizeGI(raw: any): GIDoc {
@@ -527,22 +553,44 @@ export function sanitize(input: any): SceneDoc {
     const scripts = sanitizeScripts(input?.scripts);
     const shaders = sanitizeShaders(input?.shaders);
     const scriptIds = new Set(scripts.map((s) => s.id));
+    const nodes = sanitizeNodes(input?.nodes, scriptIds);
+    const prefabs = sanitizePrefabs(input?.prefabs, scriptIds);
+    const prefabIds = new Set(prefabs.map((p) => p.id));
+    for (const n of nodes) if (n.prefab && !prefabIds.has(n.prefab)) delete n.prefab;
+    return {
+        format: 'canonical-scene',
+        version: 1,
+        name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
+        environment: env,
+        assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
+        scripts,
+        shaders,
+        renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
+        nodes,
+        prefabs,
+        build: sanitizeBuild(input?.build),
+        design: sanitizeDesign(input?.design),
+    };
+}
+
+/** Nodes with unique ids, valid parents (no cycles) and repaired components. */
+function sanitizeNodes(raw: any, scriptIds: Set<string>): NodeDoc[] {
     const seen = new Set<string>();
     const nodes: NodeDoc[] = [];
-    for (const raw of Array.isArray(input?.nodes) ? input.nodes : []) {
-        if (!raw || typeof raw !== 'object') continue;
-        let id = typeof raw.id === 'string' && raw.id ? raw.id : uid();
+    for (const item of Array.isArray(raw) ? raw : []) {
+        if (!item || typeof item !== 'object') continue;
+        let id = typeof item.id === 'string' && item.id ? item.id : uid();
         if (seen.has(id)) id = uid();
         seen.add(id);
         const node: NodeDoc = {
-            ...raw,
+            ...item,
             id,
-            name: typeof raw.name === 'string' ? raw.name : 'Object',
-            parent: typeof raw.parent === 'string' ? raw.parent : null,
-            visible: raw.visible !== false,
-            position: vec(raw.position, [0, 0, 0]),
-            rotation: vec(raw.rotation, [0, 0, 0]),
-            scale: vec(raw.scale, [1, 1, 1]),
+            name: typeof item.name === 'string' ? item.name : 'Object',
+            parent: typeof item.parent === 'string' ? item.parent : null,
+            visible: item.visible !== false,
+            position: vec(item.position, [0, 0, 0]),
+            rotation: vec(item.rotation, [0, 0, 0]),
+            scale: vec(item.scale, [1, 1, 1]),
         };
         sanitizeComponents(node, scriptIds);
         nodes.push(node);
@@ -563,18 +611,29 @@ export function sanitize(input: any): SceneDoc {
             p = byId.get(p)?.parent ?? null;
         }
     }
-    return {
-        format: 'canonical-scene',
-        version: 1,
-        name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
-        environment: env,
-        assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
-        scripts,
-        shaders,
-        renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
-        nodes,
-        build: sanitizeBuild(input?.build),
-    };
+    return nodes;
+}
+
+function sanitizePrefabs(raw: any, scriptIds: Set<string>): PrefabDoc[] {
+    const seen = new Set<string>();
+    const out: PrefabDoc[] = [];
+    for (const p of Array.isArray(raw) ? raw : []) {
+        if (!isObj(p)) continue;
+        let id = str(p.id, '') || uid('pf');
+        if (seen.has(id)) id = uid('pf');
+        seen.add(id);
+        // Templates never hold instances of other prefabs (no nesting).
+        const nodes = sanitizeNodes(p.nodes, scriptIds);
+        for (const n of nodes) {
+            delete n.prefab;
+            delete n.prefabChild;
+        }
+        const prefab: PrefabDoc = { id, name: str(p.name, 'Prefab') || 'Prefab', nodes, asset: str(p.asset, '') || uid('a') };
+        if (p.useModel === true) prefab.useModel = true;
+        if (Array.isArray(p.modelOffset)) prefab.modelOffset = vec(p.modelOffset, [0, 0, 0]);
+        out.push(prefab);
+    }
+    return out;
 }
 
 function sanitizeBuild(input: any): BuildDoc | undefined {

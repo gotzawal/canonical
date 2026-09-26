@@ -32,7 +32,7 @@ const MEMBERS: [string, string][] = [
     ['this.input', "key(k), keyDown(k), keyUp(k), axis('horizontal' | 'vertical') from WASD and arrows, mouse { x, y, dx, dy, wheel }, mouseButton(b), mouseDown(b), mouseUp(b)."],
     ['this.find(name) / this.findAll(name)', 'Objects by name.'],
     ['this.getScript(objOrName, scriptName?)', 'A script instance on another object.'],
-    ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder' or 'torus'. Options: position, rotation, scale, color, parent, name. Spawned objects are removed when Play stops; this.spawned lists them."],
+    ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs' or 'capsule'. Options: position, rotation, scale, color, parent, name. Spawned objects are removed when Play stops; this.spawned lists them."],
     ['this.destroy(obj?, seconds?)', 'Removes an object (this one by default), optionally after a delay.'],
     ['this.setColor(hex, obj?) / this.setEmissive(hex, intensity, obj?)', 'Changes the material of this or another object.'],
     ['this.lookAt(objOrPoint)', 'Turns the object toward another object or a point.'],

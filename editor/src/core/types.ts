@@ -4,12 +4,20 @@
 
 export type Vec3 = [number, number, number];
 
+/**
+ * Primitive shapes. Every shape is centered on its origin like the box.
+ * The ramp and the stairs rise toward -Z (the first step is at +Z); the
+ * capsule's height includes its round caps.
+ */
 export type GeometryDoc =
     | { type: 'box'; width: number; height: number; depth: number }
     | { type: 'sphere'; radius: number; segments: number }
     | { type: 'plane'; width: number; height: number }
     | { type: 'cylinder'; radiusTop: number; radiusBottom: number; height: number; segments: number }
-    | { type: 'torus'; radius: number; tube: number; segments: number };
+    | { type: 'torus'; radius: number; tube: number; segments: number }
+    | { type: 'ramp'; width: number; height: number; depth: number }
+    | { type: 'stairs'; width: number; height: number; depth: number; steps: number }
+    | { type: 'capsule'; radius: number; height: number; segments: number };
 
 export type GeometryType = GeometryDoc['type'];
 
@@ -82,6 +90,11 @@ export interface MaterialDoc {
     attenuationColor?: string;
     /** Lit only: distance at which light inside the volume reaches the attenuation color; 0 means no absorption. */
     attenuationDistance?: number;
+    /**
+     * Material slot (DesignDoc.materials) this surface belongs to. Setting a
+     * slot's swatch rewrites the material of every mesh in the slot.
+     */
+    slot?: string;
 }
 
 export interface MeshDoc {
@@ -201,6 +214,34 @@ export interface NodeDoc {
     model?: ModelDoc;
     camera?: CameraDoc;
     scripts?: ScriptRef[];
+    /**
+     * Prefab instance: the id of the prefab (SceneDoc.prefabs). The node's
+     * children are generated from the prefab (see prefabChild).
+     */
+    prefab?: string;
+    /** Generated from the prefab of an ancestor instance; replaced whenever the prefab changes. */
+    prefabChild?: boolean;
+}
+
+/**
+ * A reusable group of primitives (a greybox asset) placed as instances.
+ * Once the final mesh exists, a model asset replaces the template in every
+ * instance: importing a .glb into the prefab stores it under `asset`.
+ */
+export interface PrefabDoc {
+    id: string;
+    name: string;
+    /**
+     * Template nodes. Nodes with parent null sit directly under an instance,
+     * positioned relative to the prefab's pivot (the bottom center).
+     */
+    nodes: NodeDoc[];
+    /** Asset id reserved for the model that replaces the template. */
+    asset: string;
+    /** True once a model is stored under `asset`: instances show the model instead of the template. */
+    useModel?: boolean;
+    /** Offset that puts the model's bottom center on the pivot. */
+    modelOffset?: Vec3;
 }
 
 export type SkyType = 'atmospheric' | 'color';
@@ -242,7 +283,12 @@ export interface EnvironmentDoc {
     gi: GIDoc;
 }
 
-export type AssetKind = 'model' | 'texture';
+/**
+ * 'image' is a picture used for planning (concepts, paintovers, captures,
+ * attachments), 'data' a JSON blob (scene snapshots). Neither is used by the
+ * game.
+ */
+export type AssetKind = 'model' | 'texture' | 'image' | 'data';
 
 export interface AssetMeta {
     id: string;
@@ -250,6 +296,14 @@ export interface AssetMeta {
     kind: AssetKind;
     mime: string;
     size: number;
+    /**
+     * 'design' assets belong to the planning pipeline. Scene files (Ctrl+S)
+     * list them without their data to stay small; project files carry them.
+     */
+    purpose?: 'design';
+    /** Pixel size of images, when known. */
+    width?: number;
+    height?: number;
 }
 
 /** A JavaScript behaviour that runs in Play mode (see play/script.ts). */
@@ -304,7 +358,245 @@ export interface SceneDoc {
     shaders: ShaderDoc[];
     renderGraph: RenderGraphDoc;
     nodes: NodeDoc[];
+    /** Prefab definitions; their instances are expanded into `nodes`. */
+    prefabs: PrefabDoc[];
     build?: BuildDoc;
+    /** The planning pipeline: brief, structure, shots and stage state. Not part of built games. */
+    design: DesignDoc;
+}
+
+// ------------------------------------------------------------------ design
+
+/**
+ * Stages of the pipeline, in order: planning input, level (greybox),
+ * lighting, materials (with a second lighting pass), effects, finish.
+ */
+export type StageId = 'brief' | 'level' | 'light' | 'material' | 'effects' | 'finish';
+
+/** 'recheck': done before, but an earlier stage was reopened or the brief changed. */
+export type StageStatus = 'todo' | 'active' | 'done' | 'recheck';
+
+/** Stored state of a checklist item (automatic items are computed, see design/stages.ts). */
+export interface CheckItemDoc {
+    id: string;
+    /** Text of items added by the user or the assistant; empty for built-in items. */
+    text: string;
+    done: boolean;
+    by?: 'user' | 'ai';
+    note?: string;
+}
+
+export interface StageDoc {
+    status: StageStatus;
+    checks: CheckItemDoc[];
+    /** The assistant proposed completing the stage; the user approves it. */
+    proposal?: { summary: string; at: string } | null;
+    doneAt?: string;
+    /** Why the stage needs another look. */
+    recheck?: string;
+}
+
+export interface AreaObjectDoc {
+    name: string;
+    count?: number;
+    note?: string;
+    /** Placed in the level (ticked by the user or the assistant). */
+    placed?: boolean;
+}
+
+export interface AreaDoc {
+    id: string;
+    name: string;
+    description: string;
+    /** What the area needs. */
+    objects: AreaObjectDoc[];
+    /** Mood of this area when it differs from the scene's mood. */
+    mood?: string;
+    /** Rough placement for the greybox in meters: center on the ground, size x y z. */
+    bounds?: { center: Vec3; size: Vec3 } | null;
+    /** Earliest stage the area has to go through again after the brief changed it. */
+    rework?: StageId | null;
+    reworkNote?: string;
+}
+
+/** How the scene is built: decided first, before the areas. */
+export interface LayoutDoc {
+    /** Kind of place, overall size, ground, how the areas sit and connect. */
+    summary: string;
+    /** Overall footprint x and z and height y, in meters. */
+    size?: Vec3 | null;
+    connections: { from: string; to: string; kind?: string; note?: string }[];
+}
+
+/** Measurements the level is built to. */
+export interface SpecsDoc {
+    playerHeight: number;
+    eyeHeight: number;
+    playerRadius: number;
+    doorWidth: number;
+    doorHeight: number;
+    /** Highest step the player climbs without jumping. */
+    stepHeight: number;
+    /** Steepest walkable slope, degrees. */
+    maxSlope: number;
+    notes: string;
+}
+
+export interface MoodDoc {
+    description: string;
+    timeOfDay: string;
+    /** Key light direction in degrees (azimuth around +Y from +Z, elevation above the horizon) and color. */
+    keyLight: { azimuth: number; elevation: number; color: string; note: string };
+    palette: string[];
+}
+
+export interface RoutePointDoc {
+    id: string;
+    name: string;
+    area?: string | null;
+    position?: Vec3 | null;
+    note?: string;
+    /** Reached with the walk camera. */
+    visited?: boolean;
+}
+
+export interface SightlineDoc {
+    id: string;
+    /** Route point or area id, or a free description. */
+    from: string;
+    /** Landmark: object name, area id or a description. */
+    to: string;
+    note?: string;
+    /** Checked: true visible, false blocked, missing not checked yet. */
+    ok?: boolean | null;
+}
+
+/** Play requirements: route, landmark sight lines and the order of areas. */
+export interface PlayDoc {
+    route: RoutePointDoc[];
+    sightlines: SightlineDoc[];
+    areaOrder: string[];
+    notes: string;
+}
+
+export interface EffectItemDoc {
+    id: string;
+    name: string;
+    area?: string | null;
+    note?: string;
+    done?: boolean;
+}
+
+export interface ConceptDoc {
+    /** Image asset id. */
+    asset: string;
+    area?: string | null;
+    note?: string;
+}
+
+export interface PaintoverDoc {
+    asset: string;
+    source: 'generated' | 'upload';
+    at: string;
+    model?: string;
+    prompt?: string;
+    seed?: number | null;
+    /** Asset ids of the reference images. */
+    refs?: string[];
+    params?: Record<string, ParamValue>;
+    cost?: number | null;
+}
+
+export interface ShotCaptureDoc {
+    stage: StageId;
+    asset: string;
+    at: string;
+    /** Match with the target image (0..100) when it was captured. */
+    score?: number | null;
+}
+
+/** A camera bookmark framed like a concept image. */
+export interface ShotDoc {
+    id: string;
+    name: string;
+    area?: string | null;
+    /** The concept this shot matches, kept as the record of the original idea. */
+    concept?: string | null;
+    camera: CameraState;
+    /** Frame width / height (the concept image's). */
+    aspect: number;
+    paintovers: PaintoverDoc[];
+    /** Chosen paintover: the target every later comparison uses. */
+    target?: string | null;
+    /** The level changed after the target was chosen. */
+    stale?: boolean;
+    history: ShotCaptureDoc[];
+    /** Accepted in the final comparison. */
+    approved?: boolean;
+}
+
+/** A named surface of the level; its swatch is applied with the world space triplanar shader. */
+export interface MaterialSlotDoc {
+    id: string;
+    name: string;
+    description: string;
+    /** Albedo swatch texture asset, or null while the slot is empty. */
+    swatch?: string | null;
+    color: string;
+    roughness: number;
+    metallic: number;
+    /** Meters per texture tile. */
+    tile: number;
+}
+
+export interface SnapshotDoc {
+    id: string;
+    /** 'data' asset holding the scene JSON. */
+    asset: string;
+    name: string;
+    stage?: StageId | null;
+    at: string;
+    /** Assets the snapshot uses, kept in the browser while the snapshot exists. */
+    assets: string[];
+}
+
+export interface QuestionDoc {
+    id: string;
+    text: string;
+    answer: string;
+    area?: string | null;
+}
+
+export interface DesignDoc {
+    version: 1;
+    /** Project id; keys the assistant's saved conversation in this browser. */
+    id: string;
+    brief: {
+        text: string;
+        /** The user chose to work without a brief. */
+        skipped?: boolean;
+        /** Brief text the current structure was made from. */
+        structured?: string;
+        structuredAt?: string;
+    };
+    layout: LayoutDoc;
+    areas: AreaDoc[];
+    concepts: ConceptDoc[];
+    specs: SpecsDoc;
+    mood: MoodDoc;
+    play: PlayDoc;
+    effects: EffectItemDoc[];
+    materials: MaterialSlotDoc[];
+    budget: { shadowLights: number; fps: number };
+    questions: QuestionDoc[];
+    shots: ShotDoc[];
+    stage: StageId;
+    stages: Record<StageId, StageDoc>;
+    snapshots: SnapshotDoc[];
+    /** Short running context of the scene for the assistant, refreshed at checkpoints. */
+    memo: { text: string; at?: string };
+    /** Placement stays editable in the stages that lock it. */
+    unlocked?: boolean;
 }
 
 /** Build & Deploy settings of a project (File > Build & Deploy). */

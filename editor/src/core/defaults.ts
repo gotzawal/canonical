@@ -1,12 +1,11 @@
+import { defaultDesign } from './design';
 import type {
     CameraDoc, CameraState, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType,
     MaterialDoc, NodeDoc, RenderGraphDoc, SceneDoc, Vec3,
 } from './types';
 
-export function uid(prefix = 'n'): string {
-    const rnd = crypto.getRandomValues(new Uint32Array(2));
-    return `${prefix}_${rnd[0].toString(36)}${rnd[1].toString(36)}`;
-}
+export { uid } from './ids';
+import { uid } from './ids';
 
 export function defaultGeometry(type: GeometryType): GeometryDoc {
     switch (type) {
@@ -15,6 +14,9 @@ export function defaultGeometry(type: GeometryType): GeometryDoc {
         case 'plane': return { type, width: 10, height: 10 };
         case 'cylinder': return { type, radiusTop: 0.5, radiusBottom: 0.5, height: 1, segments: 32 };
         case 'torus': return { type, radius: 0.5, tube: 0.18, segments: 32 };
+        case 'ramp': return { type, width: 2, height: 1, depth: 3 };
+        case 'stairs': return { type, width: 1.5, height: 1.5, depth: 3, steps: 8 };
+        case 'capsule': return { type, radius: 0.35, height: 1.8, segments: 24 };
     }
 }
 
@@ -104,7 +106,28 @@ const GEOMETRY_NAMES: Record<GeometryType, string> = {
     plane: 'Plane',
     cylinder: 'Cylinder',
     torus: 'Torus',
+    ramp: 'Ramp',
+    stairs: 'Stairs',
+    capsule: 'Capsule',
 };
+
+/** Height of a shape's bounds, to rest it on the ground (shapes are centered on their origin). */
+export function geometryHeight(g: GeometryDoc): number {
+    switch (g.type) {
+        case 'box':
+        case 'ramp':
+        case 'stairs':
+        case 'cylinder':
+        case 'capsule':
+            return g.height;
+        case 'sphere':
+            return g.radius * 2;
+        case 'torus':
+            return g.tube * 2;
+        case 'plane':
+            return 0;
+    }
+}
 
 export function makeMeshNode(type: GeometryType, parent: string | null = null): NodeDoc {
     const node = makeNode(GEOMETRY_NAMES[type], parent);
@@ -114,8 +137,7 @@ export function makeMeshNode(type: GeometryType, parent: string | null = null): 
         castShadow: true,
         receiveShadow: true,
     };
-    if (type === 'torus') node.position = [0, 0.18, 0];
-    else if (type !== 'plane') node.position = [0, 0.5, 0];
+    node.position = [0, geometryHeight(node.mesh.geometry) / 2, 0];
     return node;
 }
 
@@ -176,6 +198,8 @@ export function newScene(): SceneDoc {
         shaders: [],
         renderGraph: defaultRenderGraph(),
         nodes: [sun, ground, cube, sphere],
+        prefabs: [],
+        design: defaultDesign(),
     };
 }
 
@@ -192,5 +216,7 @@ export function emptyScene(): SceneDoc {
         shaders: [],
         renderGraph: defaultRenderGraph(),
         nodes: [sun],
+        prefabs: [],
+        design: defaultDesign(),
     };
 }

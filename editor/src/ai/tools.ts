@@ -92,9 +92,10 @@ const objectFields = {
     rotation: { ...vec3, description: 'Euler degrees.' },
     scale: vec3,
     visible: { type: 'boolean' },
-    size: { type: 'array', items: { type: 'number' }, description: 'box: [width, height, depth]; plane: [width, length].' },
-    radius: { type: 'number', description: 'sphere / torus radius, cylinder radius (both ends).' },
-    height: { type: 'number', description: 'cylinder height' },
+    size: { type: 'array', items: { type: 'number' }, description: 'box, ramp, stairs: [width, height, depth]; plane: [width, length].' },
+    radius: { type: 'number', description: 'sphere / torus / capsule radius, cylinder radius (both ends).' },
+    height: { type: 'number', description: 'cylinder height, capsule height (caps included)' },
+    steps: { type: 'number', description: 'stairs: number of steps' },
     tube: { type: 'number', description: 'torus tube radius' },
     segments: { type: 'number' },
     material: materialSchema,
@@ -103,7 +104,8 @@ const objectFields = {
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
-const TYPES = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
+const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs', 'capsule'];
+const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
     return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
@@ -119,7 +121,7 @@ export function toolDefs(env: ToolEnv): ToolDef[] {
         def('update_objects', 'Change objects: name, parent, transform, visibility, material, primitive size, light or camera settings.', {
             updates: {
                 type: 'array',
-                items: { type: 'object', properties: { id: { type: 'string' }, shape: { type: 'string', enum: ['box', 'sphere', 'plane', 'cylinder', 'torus'] }, ...objectFields }, required: ['id'] },
+                items: { type: 'object', properties: { id: { type: 'string' }, shape: { type: 'string', enum: SHAPES }, ...objectFields }, required: ['id'] },
             },
         }, ['updates']),
         def('delete_objects', 'Delete objects and their children.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
@@ -403,13 +405,13 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     if (spec.visible !== undefined) n.visible = !!spec.visible;
     if (n.mesh) {
         if (spec.shape !== undefined && spec.shape !== n.mesh.geometry.type) {
-            if (!['box', 'sphere', 'plane', 'cylinder', 'torus'].includes(spec.shape)) throw new ToolError(`Unknown shape "${spec.shape}".`);
+            if (!SHAPES.includes(spec.shape)) throw new ToolError(`Unknown shape "${spec.shape}".`);
             n.mesh.geometry = defaultGeometry(spec.shape as GeometryType);
         }
         const g = n.mesh.geometry as any;
         if (spec.size !== undefined) {
             const s = Array.isArray(spec.size) ? spec.size.map((x: unknown) => num(x, 'size')) : [num(spec.size, 'size')];
-            if (g.type === 'box') [g.width, g.height, g.depth] = [s[0], s[1] ?? s[0], s[2] ?? s[0]];
+            if (g.type === 'box' || g.type === 'ramp' || g.type === 'stairs') [g.width, g.height, g.depth] = [s[0], s[1] ?? s[0], s[2] ?? s[0]];
             else if (g.type === 'plane') [g.width, g.height] = [s[0], s[1] ?? s[0]];
             else if (g.type === 'sphere') g.radius = s[0] / 2;
         }
@@ -420,6 +422,7 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         }
         if (spec.height !== undefined && 'height' in g) g.height = num(spec.height, 'height');
         if (spec.tube !== undefined && g.type === 'torus') g.tube = num(spec.tube, 'tube');
+        if (spec.steps !== undefined && g.type === 'stairs') g.steps = Math.max(1, Math.round(num(spec.steps, 'steps')));
         if (spec.segments !== undefined && 'segments' in g) g.segments = Math.round(num(spec.segments, 'segments'));
         if (spec.cast_shadow !== undefined) n.mesh.castShadow = !!spec.cast_shadow;
         if (spec.receive_shadow !== undefined) n.mesh.receiveShadow = !!spec.receive_shadow;
@@ -525,6 +528,9 @@ function makeTyped(type: string): NodeDoc {
         case 'plane':
         case 'cylinder':
         case 'torus':
+        case 'ramp':
+        case 'stairs':
+        case 'capsule':
             return makeMeshNode(type);
         case 'empty':
             return makeNode('Empty');

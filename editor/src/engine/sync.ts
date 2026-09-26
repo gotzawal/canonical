@@ -9,6 +9,7 @@ import type { ChangeHint, Store } from '../core/store';
 import type { GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc } from '../core/types';
 import { hexToColor } from './color';
 import { castGI } from './gi';
+import { CapsuleGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
     applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
 } from './materials';
@@ -90,7 +91,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     // ---------------------------------------------------------------- sync
 
     sync(hint?: ChangeHint) {
-        if (hint?.meta) return;
+        if (hint?.meta || hint?.design) return;
         const doc = this.store.doc;
         this.runtime.applyEnvironment(doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
@@ -125,6 +126,26 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     rebuild() {
         for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        this.sync();
+    }
+
+    /**
+     * Loads an asset again after its data was replaced under the same id (a
+     * new version of a model from Blender, a reworked texture): models using
+     * it are rebuilt and materials showing it are recreated.
+     */
+    reloadAsset(id: string) {
+        this.prefabs.delete(id);
+        for (const key of Array.from(this.textures.keys())) if (key.startsWith(id + '|')) this.textures.delete(key);
+        for (const entry of Array.from(this.entries.values())) {
+            const node = this.store.node(entry.id);
+            if (!node) continue;
+            if (entry.model && (entry.model.asset === id || JSON.stringify(node.model?.materials ?? {}).includes(id))) {
+                this.dropModel(entry);
+                entry.model = null;
+            }
+            if (node.mesh && JSON.stringify(node.mesh.material).includes(id)) entry.materialKind = '';
+        }
         this.sync();
     }
 
@@ -626,5 +647,13 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
             return new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1);
         case 'torus':
             return new TorusGeometry(pos(g.radius), pos(g.tube), seg(g.segments), seg(g.segments / 2));
+        case 'ramp':
+            return new RampGeometry(pos(g.width), pos(g.height), pos(g.depth));
+        case 'stairs':
+            return new StairsGeometry(pos(g.width), pos(g.height), pos(g.depth), seg(g.steps, 1));
+        case 'capsule':
+            return new CapsuleGeometry(pos(g.radius), pos(g.height), seg(g.segments, 6));
+        default:
+            return new BoxGeometry(1, 1, 1);
     }
 }

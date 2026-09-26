@@ -6,6 +6,10 @@ const PATHS: Record<string, string> = {
     plane: '<path d="M3 15 9 8h12l-6 7Z"/>',
     cylinder: '<ellipse cx="12" cy="6" rx="7" ry="2.6"/><path d="M5 6v12c0 1.4 3.1 2.6 7 2.6s7-1.2 7-2.6V6"/>',
     torus: '<circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.2"/>',
+    ramp: '<path d="M3 19h18V6Z"/><path d="M8.5 16.5 21 9"/>',
+    stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',
+    capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
+    prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
     bulb: '<path d="M9 17h6M10 20.5h4M8.2 14.2A6 6 0 1 1 15.8 14.2c-.6.6-.8 1.3-.8 2V17H9v-.8c0-.7-.2-1.4-.8-2Z"/>',
@@ -78,7 +82,8 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown }): string {
+export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string }): string {
+    if (node.prefab) return 'prefab';
     if (node.light) return node.light.type === 'directional' ? 'sun' : node.light.type === 'point' ? 'bulb' : 'spot';
     if (node.camera) return 'camera';
     if (node.model) return 'model';

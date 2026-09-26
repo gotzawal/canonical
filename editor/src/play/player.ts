@@ -472,7 +472,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
     }
 
     spawn(owner: Script, shape: Shape, opts: SpawnOptions = {}): Object3D {
-        const kind = (['box', 'sphere', 'plane', 'cylinder', 'torus'] as Shape[]).includes(shape) ? shape : 'box';
+        const kind = (['box', 'sphere', 'plane', 'cylinder', 'torus', 'ramp', 'stairs', 'capsule'] as Shape[]).includes(shape) ? shape : 'box';
         const obj = new Object3D();
         obj.name = opts.name ?? kind;
         const mr = obj.addComponent(MeshRenderer);

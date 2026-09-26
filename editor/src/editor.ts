@@ -7,7 +7,8 @@ import {
 import { Emitter } from './core/events';
 import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
 import {
-    AutoSaver, collectGarbage, download, exportSceneFile, fileNameFor, importSceneFile, pickFiles, usedAssetIds,
+    AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
+    projectFileNameFor, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
@@ -43,6 +44,8 @@ interface EditorEvents {
     'ai-prompt': { text: string; send: boolean };
     /** Show the render graph tab of the dock. */
     'show-graph': void;
+    /** The scene (Ctrl+S) or the whole project was written to a file. */
+    saved: 'scene' | 'project';
 }
 
 /** Editor commands shared by menus, shortcuts, panels and the AI tools. */
@@ -285,7 +288,7 @@ export class Editor extends Emitter<EditorEvents> {
         for (const file of files) {
             const lower = file.name.toLowerCase();
             try {
-                if (lower.endsWith('.json')) {
+                if (lower.endsWith('.json') || lower.endsWith('.zip')) {
                     await this.openSceneFromFile(file);
                     continue;
                 }
@@ -898,20 +901,43 @@ export class Editor extends Emitter<EditorEvents> {
             download(blob, fileNameFor(this.store.doc));
             this.autosave.flush();
             toast(`Saved ${fileNameFor(this.store.doc)}`, 'success');
+            this.emit('saved', 'scene');
         } catch (e: any) {
             console.error(e);
             toast(`Save failed: ${e?.message || e}`, 'error');
         }
     }
 
+    /**
+     * Downloads the whole project as one .zip: the scene with its design
+     * section and every file, planning images and snapshots included.
+     */
+    async saveProjectFile(): Promise<boolean> {
+        const name = projectFileNameFor(this.store.doc);
+        try {
+            const { blob, missing } = await exportProject(this.store);
+            download(blob, name);
+            this.autosave.flush();
+            if (missing.length) {
+                toast(`Saved ${name}. ${missing.length} file(s) are not stored in this browser and were left out: ${missing.slice(0, 3).join(', ')}${missing.length > 3 ? ', ...' : ''}`, 'info', 8000);
+            } else toast(`Saved ${name}`, 'success');
+            this.emit('saved', 'project');
+            return true;
+        } catch (e: any) {
+            console.error(e);
+            toast(`Saving the project failed: ${e?.message || e}`, 'error');
+            return false;
+        }
+    }
+
     async openSceneFile() {
-        const [file] = await pickFiles('.json,application/json');
+        const [file] = await pickFiles('.json,.zip,application/json,application/zip');
         if (file) await this.openSceneFromFile(file);
     }
 
     private async openSceneFromFile(file: File) {
         try {
-            const { doc, camera } = await importSceneFile(await file.text());
+            const { doc, camera } = file.name.toLowerCase().endsWith('.zip') ? await importProject(file) : await importSceneFile(await file.text());
             this.loadDoc(doc, camera ?? defaultCamera(), false);
             const scripts = this.store.doc.scripts.length;
             if (scripts) toast(`Opened ${file.name}. Its ${scripts} script${scripts === 1 ? ' is' : 's are'} paused until you enable ${scripts === 1 ? 'it' : 'them'}.`, 'info', 6000);

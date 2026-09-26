@@ -1,6 +1,7 @@
 import {
     defaultEnvironment, defaultMaterial, defaultRenderGraph, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
+import { defaultDesign } from './core/design';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type { GeometryType, NodeDoc, ParamValue, SceneDoc, ScriptDoc, ShaderDoc, Vec3 } from './core/types';
 
@@ -119,5 +120,7 @@ export function exampleShowcase(): SceneDoc {
         shaders: [hologram, vignette],
         renderGraph,
         nodes,
+        prefabs: [],
+        design: defaultDesign(),
     };
 }

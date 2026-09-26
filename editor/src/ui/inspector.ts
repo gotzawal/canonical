@@ -23,6 +23,9 @@ const GEOMETRY_OPTIONS: { value: GeometryType; label: string }[] = [
     { value: 'plane', label: 'Plane' },
     { value: 'cylinder', label: 'Cylinder' },
     { value: 'torus', label: 'Torus' },
+    { value: 'ramp', label: 'Ramp' },
+    { value: 'stairs', label: 'Stairs' },
+    { value: 'capsule', label: 'Capsule' },
 ];
 
 const LIGHT_OPTIONS: { value: LightType; label: string }[] = [
@@ -349,6 +352,36 @@ export class InspectorPanel {
                 param('Tube', 'tube', 0.005, 0.001);
                 param('Segments', 'segments', 0.25, 3, true);
                 break;
+            case 'ramp':
+                param('Width', 'width', 0.01, 0.001);
+                param('Height', 'height', 0.01, 0.001);
+                param('Length', 'depth', 0.01, 0.001);
+                break;
+            case 'stairs':
+                param('Width', 'width', 0.01, 0.001);
+                param('Height', 'height', 0.01, 0.001);
+                param('Length', 'depth', 0.01, 0.001);
+                param('Steps', 'steps', 0.1, 1, true);
+                break;
+            case 'capsule':
+                param('Radius', 'radius', 0.01, 0.001);
+                param('Height', 'height', 0.01, 0.001);
+                param('Segments', 'segments', 0.25, 6, true);
+                break;
+        }
+        if (g.type === 'ramp' || g.type === 'stairs') {
+            const hint = h('div', { class: 'readonly' });
+            const update = () => {
+                const cur = this.node.mesh?.geometry as any;
+                if (!cur || (cur.type !== 'ramp' && cur.type !== 'stairs')) return;
+                const slope = (Math.atan2(cur.height, cur.depth) * 180) / Math.PI;
+                hint.textContent = cur.type === 'stairs'
+                    ? `Step ${(cur.height / Math.max(1, cur.steps)).toFixed(2)} m high, ${(cur.depth / Math.max(1, cur.steps)).toFixed(2)} m deep, ${slope.toFixed(0)} deg`
+                    : `Slope ${slope.toFixed(1)} deg, rising toward -Z`;
+            };
+            update();
+            this.watch(update);
+            rows.push(row('', hint));
         }
         const cast = new CheckboxField(this.node.mesh!.castShadow, (v) => this.hooks<boolean>('Cast Shadow', has, (n, b) => (n.mesh!.castShadow = b)).commit!(v), 'Cast');
         const receive = new CheckboxField(this.node.mesh!.receiveShadow, (v) => this.hooks<boolean>('Receive Shadow', has, (n, b) => (n.mesh!.receiveShadow = b)).commit!(v), 'Receive');

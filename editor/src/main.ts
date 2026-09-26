@@ -365,7 +365,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
             if (mod && (key === 's' || key === 'o')) {
                 e.preventDefault();
                 (e.target as HTMLElement).blur();
-                if (key === 's') void editor.saveSceneFile();
+                if (key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
                 else void editor.openSceneFile();
             }
             return;
@@ -373,7 +373,7 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
         let handled = true;
         if (mod && key === 'z') e.shiftKey ? store.redo() : store.undo();
         else if (mod && key === 'y') store.redo();
-        else if (mod && key === 's') void editor.saveSceneFile();
+        else if (mod && key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
         else if (mod && key === 'o') void editor.openSceneFile();
         else if (mod && key === 'b') showBuildDialog(editor);
         else if (mod && key === 'd') editor.duplicateSelection();

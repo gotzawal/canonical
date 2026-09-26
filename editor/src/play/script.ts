@@ -17,7 +17,7 @@ import type { Input } from './input';
 // the prototype or behind a symbol, so the enumerable own properties of an
 // instance are exactly the user's fields.
 
-export type Shape = 'box' | 'sphere' | 'plane' | 'cylinder' | 'torus';
+export type Shape = 'box' | 'sphere' | 'plane' | 'cylinder' | 'torus' | 'ramp' | 'stairs' | 'capsule';
 
 export interface SpawnOptions {
     position?: [number, number, number];
