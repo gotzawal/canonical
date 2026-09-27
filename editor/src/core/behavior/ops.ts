@@ -458,36 +458,55 @@ function buildKey(input: unknown, schema: BlackboardSchemaDoc, at: Partial<OpErr
     return key;
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** Texts of an item that can hold {key} placeholders: templates and question texts. */
-function templateTexts(item: any): string[] {
-    const out: string[] = [];
-    for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') out.push(item[f]);
-    if (Array.isArray(item.questions)) for (const q of item.questions) if (typeof q?.text === 'string') out.push(q.text);
-    return out;
+/** Every item of a tree (its nodes, their decorators and services) with its type, and the id of the node or service it is. */
+function walkItems(tree: BehaviorTreeDoc, fn: (item: any, def: ItemTypeDef, id: string) => void) {
+    const visit = (item: any, def: ItemTypeDef | undefined, id: string) => def && fn(item, def, id);
+    walkNodes(tree.root, (n) => {
+        visit(n, nodeType(n.type), n.id);
+        for (const dec of n.decorators ?? []) visit(dec, decoratorType(dec.type), n.id);
+        for (const s of n.services ?? []) visit(s, serviceType(s.type), s.id);
+    });
 }
 
-/** Fields of the node and service types that are templates. */
-const TEMPLATE_FIELDS = Array.from(new Set([...NODE_TYPES, ...SERVICE_TYPES].flatMap((t) => t.fields.filter((f) => f.kind === 'template').map((f) => f.name))));
+/**
+ * Maps every name the items of a tree refer to, as the fields of their types
+ * say: keys (key and keys fields, question keys) and the {name} placeholders
+ * of templates and question texts ({key}, or context:slot for a slot of the
+ * context pool). `fn` gets each name and the id of the node or service that
+ * holds it, and returns the name to keep.
+ */
+function mapRefs(tree: BehaviorTreeDoc, fn: (name: string, id: string) => string) {
+    walkItems(tree, (item, def, id) => {
+        const text = (s: string) =>
+            s.replace(/\{([^{}]+)\}/g, (m, raw: string) => {
+                const name = raw.trim();
+                const next = fn(name, id);
+                return next === name ? m : `{${next}}`;
+            });
+        for (const f of def.fields) {
+            const v = item[f.name];
+            if (f.kind === 'key' && typeof v === 'string' && v) item[f.name] = fn(v, id);
+            else if (f.kind === 'keys' && Array.isArray(v)) item[f.name] = v.map((k: string) => fn(k, id));
+            else if (f.kind === 'template' && typeof v === 'string') item[f.name] = text(v);
+            else if (f.kind === 'questions' && Array.isArray(v)) {
+                for (const q of v) {
+                    if (q.key) q.key = fn(q.key, id);
+                    if (typeof q.text === 'string') q.text = text(q.text);
+                }
+            }
+        }
+    });
+}
 
 /** Where a key is used: node ids per tree, and objects (and prefab parts) with a starting value for it. */
 function keyUsers(d: Draft, schemaId: string, name: string): { trees: { tree: BehaviorTreeDoc; nodes: string[] }[]; objects: AgentHolder[] } {
     const trees: { tree: BehaviorTreeDoc; nodes: string[] }[] = [];
-    const placeholder = new RegExp(`\\{\\s*${escapeRe(name)}\\s*\\}`);
     for (const tree of d.behaviors) {
         if (tree.schema !== schemaId) continue;
         const nodes = new Set<string>();
-        const visit = (id: string, item: any) => {
-            if (item.key === name) nodes.add(id);
-            if (Array.isArray(item.facts) && item.facts.includes(name)) nodes.add(id);
-            if (Array.isArray(item.questions) && item.questions.some((q: any) => q.key === name)) nodes.add(id);
-            if (templateTexts(item).some((t) => placeholder.test(t))) nodes.add(id);
-        };
-        walkNodes(tree.root, (n) => {
-            visit(n.id, n);
-            for (const dec of n.decorators ?? []) visit(n.id, dec);
-            for (const s of n.services ?? []) visit(s.id, s);
+        mapRefs(tree, (k, id) => {
+            if (k === name) nodes.add(id);
+            return k;
         });
         if (nodes.size) trees.push({ tree, nodes: Array.from(nodes) });
     }
@@ -532,29 +551,13 @@ function renameMemoryItem(d: Draft, from: string, to: string) {
 }
 
 function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string, to: string) {
-    const placeholder = new RegExp(`\\{\\s*${escapeRe(from)}\\s*\\}`, 'g');
-    const fix = (item: any) => {
-        if (item.key === from) item.key = to;
-        if (Array.isArray(item.facts)) item.facts = item.facts.map((k: string) => (k === from ? to : k));
-        if (Array.isArray(item.questions)) {
-            for (const q of item.questions) {
-                if (q.key === from) q.key = to;
-                if (typeof q.text === 'string') q.text = q.text.replace(placeholder, `{${to}}`);
-            }
-        }
-        for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') item[f] = item[f].replace(placeholder, `{${to}}`);
-    };
     for (const tree of d.behaviors) {
         if (tree.schema !== schema.id) continue;
-        let hit = false;
-        walkNodes(tree.root, (n) => {
-            const before = JSON.stringify(n);
-            fix(n);
-            for (const dec of n.decorators ?? []) fix(dec);
-            for (const s of n.services ?? []) fix(s);
-            if (JSON.stringify(n) !== before) hit = true;
+        mapRefs(tree, (k) => {
+            if (k !== from) return k;
+            d.touchTree(tree);
+            return to;
         });
-        if (hit) d.touchTree(tree);
         // Objects running this tree (and prefab parts that give instances an agent) keep their starting value under the new name.
         for (const { node, agent } of d.objectsWithAgents()) {
             if (agent.tree !== tree.id || !Object.hasOwn(agent.values, from)) continue;
