@@ -1248,6 +1248,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     /** Starts Play; `asked` skips the question about paused scripts (already answered). */
     play(asked = false) {
+        if (this.player.state === 'stopped') {
+            // The game needs the whole scene and the keys: leave these view modes first.
+            if (this.isolated) {
+                toast('Finish editing the prefab first (Apply or Discard).', 'info');
+                return;
+            }
+            if (this.walk?.active) this.walk.stop();
+            if (this.room?.active) this.room.close();
+        }
         if (!asked && this.player.state === 'stopped' && !this.compiler.trusted && this.usesScripts()) {
             void this.confirmScripts().then((run) => {
                 if (run) this.play(true);

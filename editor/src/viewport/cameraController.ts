@@ -42,6 +42,12 @@ export class CameraController {
         return add(state.target, scale(dir, state.distance));
     }
 
+    /** Puts the engine camera back on the stored view, also when something else moved it (a script in Play). */
+    reapply() {
+        this.applied = '';
+        this.apply();
+    }
+
     apply() {
         const s = this.state;
         const key = `${s.target.join(',')}|${s.yaw}|${s.pitch}|${s.distance}|${s.fov}`;

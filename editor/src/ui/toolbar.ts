@@ -46,8 +46,16 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], actions: T
 
     const play = h('button', { class: 'tool-btn wide play-btn', attrs: { type: 'button' } });
     play.addEventListener('click', () => editor.togglePlay());
-    const pause = toolButton('pause', `Pause (${shortcutLabel('Mod+Shift+P')})`, () => editor.pausePlay());
-    const step = toolButton('step', 'Next frame (while paused)', () => editor.player.step());
+    // The keys go back to the game view (a focused button would take Space and Enter).
+    const refocus = () => editor.viewport.overlay.focus({ preventScroll: true });
+    const pause = toolButton('pause', `Pause (${shortcutLabel('Mod+Shift+P')})`, () => {
+        editor.pausePlay();
+        refocus();
+    });
+    const step = toolButton('step', 'Next frame (while paused)', () => {
+        editor.player.step();
+        refocus();
+    });
     const updatePlay = () => {
         const st = editor.player.state;
         play.classList.toggle('active', st !== 'stopped');

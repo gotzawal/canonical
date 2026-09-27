@@ -434,7 +434,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     keyEvent(e: KeyboardEvent, down: boolean) {
         if (this.state === 'stopped') return;
         const key = this.input.keyEvent(e, down);
-        if (e.repeat) return;
+        // Paused scripts run nothing; this.input still follows the keys.
+        if (e.repeat || this.state === 'paused') return;
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, down ? 'onKeyDown' : 'onKeyUp', key);
         }
@@ -446,6 +447,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.input.pointerMove(x, y);
         if (type === 'move') return;
         this.input.pointerButton(button, type === 'down');
+        if (this.state === 'paused') {
+            this.pointerTarget = null;
+            return;
+        }
         this.picker.update();
         const skip = (o: Object3D) => o === this.runtime.grid || o === this.runtime.camera.object3D || this.runtime.gi.isHelper(o);
         const hit = this.picker.pickObject(x, y, this.runtime.scene, skip);

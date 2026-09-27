@@ -167,6 +167,12 @@ export class Viewport {
 
     private onMove(e: PointerEvent) {
         const [x, y] = this.local(e);
+        // The mouse button went up where no pointerup reached us (another
+        // window had focus): end the drag instead of dragging on without a button.
+        if (e.pointerType === 'mouse' && e.buttons === 0 && this.mode !== 'none' && this.pointers.has(e.pointerId)) {
+            this.onUp(e);
+            return;
+        }
         if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x, y });
 
         if (this.playing) this.hooks.play!.pointer('move', x, y, e.button);

@@ -41,10 +41,16 @@ export class Pipeline extends Emitter<PipelineEvents> {
     busy = false;
     /** Shot framed in the viewport (see ui/shotView.ts). */
     activeShot: string | null = null;
+    /** The view's field of view before a shot was shown. */
+    private viewFov: number | null = null;
 
     constructor(private editor: Editor) {
         super();
-        editor.store.on('load', () => this.showShot(null));
+        editor.store.on('load', () => {
+            // The loaded scene comes with its own camera.
+            this.viewFov = null;
+            this.showShot(null);
+        });
         editor.store.on('change', () => {
             if (this.activeShot && !this.shot(this.activeShot)) this.showShot(null);
         });
@@ -484,11 +490,17 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** Shows a shot: the camera moves to it and the viewport draws its frame. */
     showShot(id: string | null, animate = true) {
         const shot = this.shot(id);
+        // A shot widens the lens to fit its frame; hiding it goes back to the
+        // view's own lens (else every new shot from the view came out wider).
+        if (shot && !this.activeShot) this.viewFov = this.store.camera.fov;
         this.activeShot = shot ? shot.id : null;
         if (shot) {
             const cam = this.shotCamera(shot);
             if (animate) this.editor.camera.animateTo(cam, 320);
             else this.editor.camera.jump(cam);
+        } else if (this.viewFov !== null) {
+            this.editor.camera.jump({ ...this.store.camera, fov: this.viewFov });
+            this.viewFov = null;
         }
         this.emit('shot', this.activeShot);
     }

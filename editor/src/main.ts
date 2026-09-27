@@ -101,6 +101,8 @@ async function main() {
         statusSlot,
     );
     restoreLayout(app);
+    clampLayout(app);
+    window.addEventListener('resize', () => clampLayout(app));
     installSplitters(app);
     const toggle = (cls: string) => app.classList.toggle(cls);
     leftToggle.addEventListener('click', () => toggle(isNarrow() ? 'show-left' : 'hide-left'));
@@ -436,8 +438,13 @@ async function main() {
     store.on('playing', updateProbeHelpers);
     updateProbeHelpers();
     player.on('state', (st) => app.classList.toggle('paused', st === 'paused'));
+    // Scenes without a camera node play through the editor camera, which scripts may have moved.
+    player.on('state', (st) => {
+        if (st === 'stopped') camera.reapply();
+    });
 
     installShortcuts(editor, rename, dock);
+    installDropGuard();
     autosave.schedule();
     if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
 
@@ -545,6 +552,23 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
     });
 }
 
+/**
+ * Files dropped outside the drop targets (viewport, AI tab, brief) would make
+ * the browser open them and leave the editor, losing the undo history,
+ * unapplied code and a running AI request.
+ */
+function installDropGuard() {
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    document.addEventListener('dragover', (e) => {
+        if (files(e)) e.preventDefault();
+    });
+    document.addEventListener('drop', (e) => {
+        if (!files(e) || e.defaultPrevented) return;
+        e.preventDefault();
+        toast('Drop files onto the viewport to import them, or onto the AI tab to attach them.', 'info');
+    });
+}
+
 function isNarrow() {
     return window.matchMedia('(max-width: 900px)').matches;
 }
@@ -554,6 +578,20 @@ function restoreLayout(app: HTMLElement) {
         const layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
         for (const [k, v] of Object.entries(layout)) app.style.setProperty(k, String(v));
     } catch { /* ignore */ }
+}
+
+/** Keeps panel sizes (saved on a larger window, say) within the window, as the splitters do. */
+function clampLayout(app: HTMLElement) {
+    const fit = (k: string, min: number, max: number) => {
+        const v = parseFloat(app.style.getPropertyValue(k));
+        if (Number.isFinite(v)) app.style.setProperty(k, clampPx(v, min, Math.max(min, max)));
+    };
+    fit('--left-w', 180, window.innerWidth * 0.4);
+    fit('--right-w', 240, window.innerWidth * 0.5);
+    const center = app.querySelector('.center')?.getBoundingClientRect();
+    if (center?.height) fit('--dock-h', 120, center.height - 140);
+    const left = app.querySelector('.side.left')?.getBoundingClientRect();
+    if (left?.height) fit('--assets-h', 60, left.height - 120);
 }
 
 function saveLayout(app: HTMLElement) {
