@@ -34,11 +34,21 @@ export interface ToolCall {
     function: { name: string; arguments: string };
 }
 
+/** A block of a model's reasoning: text with a signature, a summary, or encrypted data. */
+export interface ReasoningDetail {
+    type: string;
+    index?: number;
+    [field: string]: unknown;
+}
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | ContentPart[] | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
+    /** The reasoning of a thinking model, sent back unchanged with its message (see chat). */
+    reasoning?: string;
+    reasoning_details?: ReasoningDetail[];
 }
 
 export interface ToolDef {
@@ -249,20 +259,12 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
     }
 
     const type = res.headers.get('content-type') || '';
-    if (!type.includes('text/event-stream') || !res.body) {
-        // Some routes answer without streaming.
-        const json = await res.json();
-        if (json?.error) throw new OpenRouterError(json.error.message || 'Request failed');
-        const choice = json?.choices?.[0];
-        const message: ChatMessage = { role: 'assistant', content: choice?.message?.content ?? '', tool_calls: choice?.message?.tool_calls };
-        if (message.content) opts.onText?.(String(message.content));
-        return { message, finishReason: choice?.finish_reason ?? 'stop', usage: json?.usage ?? null, model: json?.model ?? req.model };
-    }
-
-    const reader = res.body.getReader();
+    const reader = type.includes('text/event-stream') ? res.body?.getReader() : undefined;
     const decoder = new TextDecoder();
     let buffer = '';
     let content = '';
+    let reasoning = '';
+    const details: ReasoningDetail[] = [];
     const calls: ToolCall[] = [];
     let finishReason = '';
     let usage: Usage | null = null;
@@ -286,6 +288,8 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
             content += delta.content;
             opts.onText?.(delta.content);
         }
+        if (typeof delta.reasoning === 'string') reasoning += delta.reasoning;
+        for (const piece of delta.reasoning_details ?? []) addReasoning(details, piece);
         for (const tc of delta.tool_calls ?? []) {
             let i: number = typeof tc.index === 'number' ? tc.index : -1;
             if (i < 0) {
@@ -301,7 +305,9 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
         if (choice.finish_reason) finishReason = choice.finish_reason;
     };
 
-    for (;;) {
+    // Some routes answer without streaming: the whole answer is one chunk.
+    if (!reader) handle(await res.text());
+    while (reader) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -320,7 +326,34 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
     const toolCalls = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || `call_${Date.now().toString(36)}_${i}` }));
     const message: ChatMessage = { role: 'assistant', content: content || null };
     if (toolCalls.length) message.tool_calls = toolCalls;
+    // A thinking model needs its reasoning back, unchanged, with the message
+    // it came with, or the next step of a tool loop is refused. Other models
+    // send none, so their messages stay as they were.
+    if (details.length) {
+        message.reasoning_details = details;
+        if (reasoning) message.reasoning = reasoning;
+    }
     return { message, finishReason: finishReason || (toolCalls.length ? 'tool_calls' : 'stop'), usage, model };
+}
+
+/** Where the streamed text of a reasoning block goes, per type. */
+const REASONING_TEXT: Record<string, string> = { 'reasoning.text': 'text', 'reasoning.summary': 'summary' };
+
+/**
+ * Adds a streamed piece of reasoning. The pieces of one block (its type and
+ * index) come in a row and make one detail, their text joined and the
+ * signature kept: the provider checks the block as a whole.
+ */
+function addReasoning(details: ReasoningDetail[], piece: ReasoningDetail) {
+    const last = details[details.length - 1];
+    const key = REASONING_TEXT[piece.type];
+    if (!key || last?.type !== piece.type || last.index !== piece.index) {
+        details.push({ ...piece });
+        return;
+    }
+    for (const [k, v] of Object.entries(piece)) {
+        if (v !== null && v !== undefined) last[k] = k === key ? `${last[k] ?? ''}${v}` : v;
+    }
 }
 
 // --------------------------------------------------------------- OAuth PKCE
