@@ -45,7 +45,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 - Works on the open project through tools: it reads and edits the scene and imported models, writes and fixes scripts and shaders, changes the render graph, runs Play tests and reads the console
 - With vision models it can also look at the viewport, the shots and the images you attach (drop or paste them into the AI tab)
-- Everything one request changes is a single undo step
+- Everything one request changes is a single undo step; edits you make by hand while it works stay steps of their own
 - Remembers each project: the conversation is kept in the browser, long conversations are compacted, and a short scene memo carries the context to later sessions
 - Works with any OpenRouter model that supports tool calls
 

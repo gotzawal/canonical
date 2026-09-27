@@ -290,17 +290,14 @@ export async function runGreyboxTool(env: ToolEnv, name: string, args: Json): Pr
             const list: Json[] = Array.isArray(args.instances) ? args.instances : [];
             if (!list.length) throw new ToolError('instances is empty.');
             const placed: { id: string; name: string }[] = [];
-            store.begin('AI: Place Prefab');
-            try {
+            store.transact('AI: Place Prefab', () => {
                 for (const inst of list) {
                     const id = ed.placePrefab(prefab.id, v3(inst.position, 'position'), inst.rotation_y !== undefined ? num(inst.rotation_y, 'rotation_y') : 0, false);
                     if (!id) throw new ToolError('Placement is locked in this stage.');
                     if (inst.name) ed.rename(id, String(inst.name));
                     placed.push({ id, name: store.node(id)?.name ?? '' });
                 }
-            } finally {
-                store.end();
-            }
+            });
             return { data: { placed }, summary: `${placed.length} x ${prefab.name}` };
         }
     }

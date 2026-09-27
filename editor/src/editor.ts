@@ -200,16 +200,13 @@ export class Editor extends Emitter<EditorEvents> {
         const parentWorld = parent ? this.picker.worldMatrix(parent) : null;
         const invParent = (parentWorld && invert(parentWorld)) || mat4();
         group.position = tidy3(transformPoint(invParent, center), 3);
-        this.store.begin('Group');
-        try {
+        this.store.transact('Group', () => {
             this.store.update((doc) => {
                 const idx = doc.nodes.findIndex((n) => n.id === roots[0]);
                 doc.nodes.splice(Math.max(0, idx), 0, group);
             });
             this.moveNodes(roots, group.id, null, 'Group');
-        } finally {
-            this.store.end();
-        }
+        });
         this.store.select([group.id]);
     }
 

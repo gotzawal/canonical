@@ -50,12 +50,15 @@ interface Snapshot {
     selection: string[];
 }
 
+/** An undo step: the state before it. `batch` marks the steps of an assistant request (see squash). */
+type Step = Snapshot & { label: string; batch?: string };
+
 /** Full editor state saved when Play starts and restored when it stops. */
 export interface Checkpoint {
     doc: string;
     selection: string[];
-    undo: (Snapshot & { label: string })[];
-    redo: (Snapshot & { label: string })[];
+    undo: Step[];
+    redo: Step[];
 }
 
 interface StoreEvents {
@@ -114,9 +117,11 @@ export class Store extends Emitter<StoreEvents> {
     playing = false;
 
     private index = new Map<string, NodeDoc>();
-    private undoStack: (Snapshot & { label: string })[] = [];
-    private redoStack: (Snapshot & { label: string })[] = [];
-    private txn: { base: Snapshot; label: string; depth: number } | null = null;
+    private undoStack: Step[] = [];
+    private redoStack: Step[] = [];
+    private txn: { base: Snapshot; label: string; depth: number; batch?: string } | null = null;
+    /** Set while an assistant tool runs (see inBatch). */
+    batch: string | null = null;
 
     constructor(doc: SceneDoc) {
         super();
@@ -174,7 +179,7 @@ export class Store extends Emitter<StoreEvents> {
             this.txn.depth++;
             return;
         }
-        this.txn = { base: this.snapshot(), label, depth: 1 };
+        this.txn = { base: this.snapshot(), label, depth: 1, batch: this.batch ?? undefined };
     }
 
     /** Apply `fn` to the document. Outside a transaction this is one undo step. */
@@ -193,12 +198,43 @@ export class Store extends Emitter<StoreEvents> {
     }
 
     commit(label: string, fn: (doc: SceneDoc) => void, hint?: ChangeHint) {
+        this.transact(label, () => this.update(fn, hint));
+    }
+
+    /** Runs `fn` as one undo step; its `update` calls give the change hints. */
+    transact(label: string, fn: () => void) {
         this.begin(label);
         try {
-            this.update(fn, hint);
+            fn();
         } finally {
             this.end();
         }
+    }
+
+    /** Runs `fn` with the undo steps it starts marked as part of `batch`. */
+    async inBatch<T>(batch: string, fn: () => Promise<T>): Promise<T> {
+        this.batch = batch;
+        try {
+            return await fn();
+        } finally {
+            this.batch = null;
+        }
+    }
+
+    /**
+     * Makes one step, called `label`, of each run of adjacent steps of
+     * `batch`: an assistant request undoes as a whole, while edits made by
+     * hand in between stay steps of their own. False when none are left.
+     */
+    squash(batch: string, label: string): boolean {
+        const steps = this.undoStack;
+        if (!steps.some((s) => s.batch === batch)) return false;
+        // The first step of a run holds the state from before the run.
+        this.undoStack = steps
+            .filter((s, i) => s.batch !== batch || steps[i - 1]?.batch !== batch)
+            .map((s) => (s.batch === batch ? { ...s, label, batch: undefined } : s));
+        this.emitHistory();
+        return true;
     }
 
     end() {
@@ -207,7 +243,7 @@ export class Store extends Emitter<StoreEvents> {
         if (--txn.depth > 0) return;
         this.txn = null;
         if (JSON.stringify(this.doc) !== txn.base.doc) {
-            this.undoStack.push({ ...txn.base, label: txn.label });
+            this.undoStack.push({ ...txn.base, label: txn.label, batch: txn.batch });
             if (this.undoStack.length > HISTORY_LIMIT) this.undoStack.shift();
             this.redoStack.length = 0;
             this.emitHistory();
@@ -261,6 +297,7 @@ export class Store extends Emitter<StoreEvents> {
     /** Replace the whole document and clear history. */
     load(doc: SceneDoc, camera?: CameraState) {
         this.txn = null;
+        this.batch = null;
         this.doc = sanitize(doc);
         this.reindex();
         this.undoStack.length = 0;

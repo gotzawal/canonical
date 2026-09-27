@@ -283,10 +283,9 @@ export class Agent extends Emitter<AgentEvents> {
         const signal = this.abort.signal;
         const store = this.editor.store;
         const label = `AI: ${(prompt || 'images').replace(/\s+/g, ' ').slice(0, 40)}${prompt.length > 40 ? '...' : ''}`;
+        // The tools' edits undo as one step (store.squash); edits by hand meanwhile stay apart.
+        const batch = uid('r');
         let committed = false;
-        const offCommit = store.on('commit', (l) => {
-            if (l === label) committed = true;
-        });
         let last: AgentTurn | null = null;
         let answer = '';
         const toolLines: string[] = [];
@@ -294,7 +293,6 @@ export class Agent extends Emitter<AgentEvents> {
         let stopped = false;
         let vision = false;
         let caches = false;
-        let begun = false;
         try {
             const models = await listModels().catch(() => []);
             const info = models.find((m) => m.id === model);
@@ -309,9 +307,6 @@ export class Agent extends Emitter<AgentEvents> {
             cut();
             this.history.push(message);
 
-            // One undo step for everything this request changes.
-            store.begin(label);
-            begun = true;
             const maxSteps = Math.max(1, Math.min(60, aiSettings.value.maxSteps || 24));
             let step = 0;
             for (; step < maxSteps; step++) {
@@ -375,7 +370,7 @@ export class Agent extends Emitter<AgentEvents> {
                         toolTurn.tool!.state = 'error';
                         toolTurn.tool!.summary = 'invalid arguments';
                     } else {
-                        const result = await runTool(this.env, call.function.name, args);
+                        const result = await store.inBatch(batch, () => runTool(this.env, call.function.name, args));
                         cut();
                         content = JSON.stringify(result.data ?? null);
                         const failed = !!(result.data && typeof result.data === 'object' && 'error' in (result.data as any));
@@ -419,8 +414,7 @@ export class Agent extends Emitter<AgentEvents> {
             // Leave the history consistent: every tool call needs a result.
             if (live()) this.repairHistory();
         } finally {
-            if (begun) store.end();
-            offCommit();
+            committed = store.squash(batch, label);
             // A step stopped or failed before its first word leaves an empty
             // bubble (it would show the typing dots for good), and a tool cut
             // off leaves its row spinning.
