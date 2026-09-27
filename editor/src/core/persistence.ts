@@ -2,7 +2,7 @@ import { createZip, readZip, type ZipEntry } from '../build/zip';
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset } from './assets';
 import { designAssetIds } from './design';
 import { sanitize, Store } from './store';
-import type { AssetMeta, CameraState, ParamValue, SceneDoc, SceneFile } from './types';
+import type { AssetMeta, CameraState, NodeDoc, ParamValue, SceneDoc, SceneFile } from './types';
 
 const AUTOSAVE_KEY = 'canonical-editor/autosave';
 
@@ -217,7 +217,7 @@ export function usedAssetIds(doc: SceneDoc): Set<string> {
     const params = (values?: Record<string, ParamValue>) => {
         for (const v of Object.values(values ?? {})) if (typeof v === 'string' && known.has(v)) ids.add(v);
     };
-    for (const n of doc.nodes) {
+    const visit = (n: NodeDoc) => {
         if (n.model?.asset) ids.add(n.model.asset);
         const m = n.mesh?.material;
         for (const id of [m?.map, m?.normalMap, m?.metalRoughMap, m?.aoMap, m?.emissiveMap]) if (id) ids.add(id);
@@ -226,6 +226,14 @@ export function usedAssetIds(doc: SceneDoc): Set<string> {
             if (o.map) ids.add(o.map);
             params(o.params);
         }
+        if (n.particles?.texture) ids.add(n.particles.texture);
+    };
+    for (const n of doc.nodes) visit(n);
+    // Prefab templates are placed again later, and a prefab keeps its model
+    // while its instances show the template.
+    for (const p of doc.prefabs) {
+        for (const n of p.nodes) visit(n);
+        if (known.has(p.asset)) ids.add(p.asset);
     }
     for (const p of doc.renderGraph.posts) params(p.params);
     // ... and a property's default may name one in the shader code.
