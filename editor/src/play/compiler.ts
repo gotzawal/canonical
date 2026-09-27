@@ -50,7 +50,7 @@ interface CompilerEvents {
     trust: boolean;
 }
 
-export const PAUSED_MESSAGE = 'Scripts from an opened scene file are paused. Choose "Enable Scripts" to run them.';
+export const PAUSED_MESSAGE = 'Scripts from an opened scene file or snapshot are paused. Choose "Enable Scripts" to run them.';
 
 const MODULES: Record<string, () => any> = {
     '@orillusion/core': () => core,

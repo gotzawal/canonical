@@ -334,6 +334,14 @@ export class Pipeline extends Emitter<PipelineEvents> {
         }
         if (this.editor.player.state !== 'stopped') this.editor.stopPlay();
         const s = file.scene;
+        // A snapshot can come with an opened file: script code the scene does
+        // not have yet stays paused until the user reads and enables it, as
+        // for the file itself (compiling runs it). Paused before the commit compiles.
+        const known = new Set(this.store.doc.scripts.map((x) => x.code));
+        if (this.editor.compiler.trusted && s.scripts.some((x) => !known.has(x.code))) {
+            this.editor.compiler.setTrusted(false);
+            toast('The snapshot brings back script code: its scripts are paused until you enable them.', 'info', 6000);
+        }
         this.store.commit(`Restore Snapshot: ${snap.name}`, (d) => {
             d.environment = s.environment;
             d.scripts = s.scripts;

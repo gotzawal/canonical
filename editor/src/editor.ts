@@ -1273,8 +1273,8 @@ export class Editor extends Emitter<EditorEvents> {
     private async confirmScripts(): Promise<boolean> {
         const count = this.store.doc.scripts.length;
         const choice = await dialog(
-            'Run scripts from this file?',
-            `This scene was opened from a file and has ${count} script${count === 1 ? '' : 's'}. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
+            'Run the paused scripts?',
+            `This scene has ${count} script${count === 1 ? '' : 's'} from an opened file or snapshot. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
             [
                 { label: 'Cancel', value: 'cancel' },
                 { label: 'Play Without Scripts', value: 'without' },

@@ -250,7 +250,7 @@ async function main() {
         const one = count === 1;
         scriptNotice.replaceChildren(
             icon('alert', 15),
-            h('span', { text: `${count} script${one ? '' : 's'} from the opened file ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
+            h('span', { text: `${count} script${one ? '' : 's'} from an opened file or snapshot ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
             button('Review', () => {
                 const first = store.doc.scripts[0];
                 if (first) dock.open('script', first.id);
