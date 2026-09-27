@@ -81,6 +81,8 @@ export class InspectorPanel {
     private openSlots = new Set<string>();
     private openParts = new Set<string>();
     private partFilter = '';
+    /** The object the mesh filter was typed for: another object starts unfiltered. */
+    private partFilterFor = '';
 
     constructor(private editor: Editor, private showScene: () => void) {
         this.body = h('div', { class: 'panel-body inspector-body' });
@@ -184,6 +186,10 @@ export class InspectorPanel {
         const scroll = this.body.scrollTop;
         clear(this.body);
         const node = this.store.primary;
+        if (node?.id !== this.partFilterFor) {
+            this.partFilter = '';
+            this.partFilterFor = node?.id ?? '';
+        }
         if (!node) {
             this.body.append(
                 h(

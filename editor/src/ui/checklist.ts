@@ -45,6 +45,8 @@ export function checklistView(editor: Editor, stage: StageId, opts: { add?: bool
             if (e.key === 'Enter' && input.value.trim()) {
                 pipeline.addCheck(stage, input.value);
                 input.value = '';
+                // The lists are drawn again once no field in them has focus: show the new item now.
+                input.blur();
             }
         });
         list.appendChild(input);
