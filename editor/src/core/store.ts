@@ -3,11 +3,14 @@ import { sanitizeParticles } from './particles';
 import {
     defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
 } from './defaults';
+import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory } from './behavior/format';
 import { sanitizeDesign } from './design';
 import { clampGIGrid } from './giLimits';
-import type {
-    BuildDoc, CameraState, GeometryDoc, GeometryType, GIDoc, NodeDoc, ParamValue, PostDoc, PrefabDoc, RenderGraphDoc,
-    SceneDoc, ScriptDoc, ScriptRef, ShaderDoc,
+import { migrateScene } from './migrate';
+import {
+    SCENE_VERSION, type BuildDoc, type CameraState, type GeometryDoc, type GeometryType, type GIDoc, type NodeDoc,
+    type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc, type SceneDoc, type ScriptDoc, type ScriptRef,
+    type ShaderDoc,
 } from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
@@ -20,6 +23,8 @@ export interface ChangeHint {
     meta?: boolean;
     /** Only the design section (the planning pipeline) changed. */
     design?: boolean;
+    /** Only AI behavior data changed (blackboards, behavior trees, memory, agents). */
+    behavior?: boolean;
 }
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';
@@ -469,6 +474,11 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
         if (!isObj(node.mesh) || !isObj(node.mesh.material)) delete node.mesh;
         else node.mesh.geometry = sanitizeGeometry(node.mesh.geometry);
     }
+    if (node.agent !== undefined) {
+        const agent = sanitizeAgent(node.agent);
+        if (agent) node.agent = agent;
+        else delete node.agent;
+    }
     if (node.prefab !== undefined && (typeof node.prefab !== 'string' || !node.prefab)) delete node.prefab;
     if (node.prefabChild !== undefined && node.prefabChild !== true) delete node.prefabChild;
     if (node.mesh && isObj(node.mesh.material)) {
@@ -549,8 +559,9 @@ function sanitizeGI(raw: any): GIDoc {
     };
 }
 
-/** Repairs documents from files or older builds: ids, parents, cycles, defaults. */
+/** Repairs documents from files or older builds: migrations, ids, parents, cycles, defaults. */
 export function sanitize(input: any): SceneDoc {
+    if (input && typeof input === 'object') input = migrateScene(input);
     const env = { ...defaultEnvironment(), ...(input?.environment || {}) };
     for (const k of ['bloom', 'ao', 'fog'] as const) {
         env[k] = { ...defaultEnvironment()[k], ...(input?.environment?.[k] || {}) } as any;
@@ -565,7 +576,7 @@ export function sanitize(input: any): SceneDoc {
     for (const n of nodes) if (n.prefab && !prefabIds.has(n.prefab)) delete n.prefab;
     return {
         format: 'canonical-scene',
-        version: 1,
+        version: SCENE_VERSION,
         name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
         environment: env,
         assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
@@ -574,6 +585,9 @@ export function sanitize(input: any): SceneDoc {
         renderGraph: sanitizeRenderGraph(input?.renderGraph, shaders),
         nodes,
         prefabs,
+        blackboards: sanitizeBlackboards(input?.blackboards),
+        behaviors: sanitizeBehaviors(input?.behaviors),
+        memory: sanitizeMemory(input?.memory),
         build: sanitizeBuild(input?.build),
         design: sanitizeDesign(input?.design),
     };

@@ -2,6 +2,8 @@ import * as core from '@orillusion/core';
 import type { Camera3D, Engine3D, Object3D, Scene3D, Transform } from '@orillusion/core';
 import { invert, transformPoint } from '../core/math';
 import type { Vec3 } from '../core/types';
+import type { BlackboardApi } from './ai/agents';
+import type { SayOptions } from './ai/speech';
 import type { Input } from './input';
 
 // Base class of user scripts. Scripts are plain classes:
@@ -13,7 +15,7 @@ import type { Input } from './input';
 //
 // Lifecycle methods (all optional): awake, start, update(dt), lateUpdate(dt),
 // onDestroy, onKeyDown(key), onKeyUp(key), onPointerDown(e), onPointerUp(e),
-// onClick(e). `dt` is in seconds. Everything the runtime provides lives on
+// onClick(e), onTaskAbort(task). `dt` is in seconds. Everything the runtime provides lives on
 // the prototype or behind a symbol, so the enumerable own properties of an
 // instance are exactly the user's fields.
 
@@ -37,6 +39,18 @@ export interface PointerEventInfo {
     button: number;
     /** World position of the hit on this object. */
     point: [number, number, number];
+}
+
+/** A request to the language model (this.chat). */
+export interface ChatRequest {
+    /** The user message, or the whole conversation. */
+    prompt: string | { role: 'system' | 'user' | 'assistant'; content: string }[];
+    system?: string;
+    /** OpenRouter model id; the assistant's model by default. */
+    model?: string;
+    maxTokens?: number;
+    temperature?: number;
+    signal?: AbortSignal;
 }
 
 export interface ScriptTime {
@@ -64,6 +78,12 @@ export interface PlayApi {
     setColor(obj: Object3D, color: string, emissive: boolean, intensity: number): void;
     timer(owner: Script, seconds: number, fn: () => void, repeat: boolean): () => void;
     spawned(owner: Script): Object3D[];
+    blackboard(target: Object3D | string): BlackboardApi | null;
+    setPlayer(obj: Object3D | null): void;
+    remember(text: string, tags: string[]): string | null;
+    memory(id: string): { id: string; text: string; tags: string[] } | null;
+    say(owner: Script, text: string, opts?: SayOptions): Promise<void>;
+    chat(owner: Script, req: ChatRequest): Promise<string>;
 }
 
 /** @internal */
@@ -237,9 +257,49 @@ export class Script {
     every(seconds: number, fn: () => void): () => void {
         return this.api.timer(this, seconds, fn, true);
     }
+
+    // ------------------------------------------------------------ behavior
+
+    /**
+     * The blackboard of this object's behavior tree (null when the object has
+     * no agent). Read any key; write fact keys: blackboard.set('distance', 'near').
+     */
+    get blackboard(): BlackboardApi | null {
+        return this.api.blackboard(this.object3D);
+    }
+
+    /** The blackboard of another object's behavior tree (by object or name). */
+    getBlackboard(target: Object3D | string): BlackboardApi | null {
+        return this.api.blackboard(target);
+    }
+
+    /** Agents near this object (the player) get their questions answered first. The camera counts until a script sets one. */
+    setPlayer(obj: Object3D | null = this.object3D) {
+        this.api.setPlayer(obj);
+    }
+
+    /** Adds a memory that Recall and Ask can find for the rest of the game (kept in saves). Returns its id. */
+    remember(text: string, tags: string[] = []): string | null {
+        return this.api.remember(text, tags);
+    }
+
+    /** A memory item by id (e.g. the one an Ask picked into a key): { id, text, tags }, or null. */
+    memory(id: string): { id: string; text: string; tags: string[] } | null {
+        return this.api.memory(id);
+    }
+
+    /** Speaks a line, one sentence at a time. Resolves when it has been spoken; a task's signal stops it. */
+    say(text: string, opts?: SayOptions): Promise<void> {
+        return this.api.say(this, text, opts);
+    }
+
+    /** Asks the language model (OpenRouter, in the editor) and resolves with its answer. */
+    chat(prompt: ChatRequest['prompt'], opts: Omit<ChatRequest, 'prompt'> = {}): Promise<string> {
+        return this.api.chat(this, { ...opts, prompt });
+    }
 }
 
 /** Lifecycle method names a script class may implement. */
 export const LIFECYCLE = [
-    'awake', 'start', 'update', 'lateUpdate', 'onDestroy', 'onKeyDown', 'onKeyUp', 'onPointerDown', 'onPointerUp', 'onClick',
+    'awake', 'start', 'update', 'lateUpdate', 'onDestroy', 'onKeyDown', 'onKeyUp', 'onPointerDown', 'onPointerUp', 'onClick', 'onTaskAbort',
 ] as const;

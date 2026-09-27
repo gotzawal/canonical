@@ -9,12 +9,13 @@ import { h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
 
-export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage';
+export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'model';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
     { kind: 'ai-done', label: 'AI finished', hint: 'When the assistant finishes a request' },
     { kind: 'checkpoint', label: 'Save checkpoints', hint: 'Asks to save the project after a stretch of work' },
     { kind: 'stage', label: 'Stage proposals', hint: 'When the assistant proposes completing a stage' },
+    { kind: 'model', label: 'AI models', hint: 'When agents need a model that is not downloaded yet' },
 ];
 
 export interface NoticeAction {

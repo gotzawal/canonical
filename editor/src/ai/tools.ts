@@ -16,6 +16,7 @@ import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
 import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
 import { materialToolDefs, PAID_MATERIAL_TOOLS, runMaterialTool } from './materialTools';
 import { effectToolDefs, runEffectTool } from './effectTools';
+import { behaviorToolDefs, runBehaviorTool } from './behaviorTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -175,6 +176,7 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     update_particles: ['effects'],
     add_vignette: ['effects'],
     add_color_grade: ['effects'],
+    apply_behavior_ops: ['code'],
     update_design: ['design'],
     ask_user: ['design'],
     update_checklist: ['design'],
@@ -339,6 +341,7 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
     defs.push(...imageToolDefs().filter((d) => env.allowImages() || !PAID_IMAGE_TOOLS.has(d.function.name)));
     defs.push(...materialToolDefs().filter((d) => env.allowImages() || !PAID_MATERIAL_TOOLS.has(d.function.name)));
     defs.push(...effectToolDefs());
+    defs.push(...behaviorToolDefs());
     return defs;
 }
 
@@ -696,7 +699,13 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             const stage = stageDef(ed.pipeline.design.stage);
             throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
         }
-        const design = (await runDesignTool(env, name, args)) ?? (await runGreyboxTool(env, name, args)) ?? (await runImageTool(env, name, args)) ?? (await runMaterialTool(env, name, args)) ?? (await runEffectTool(env, name, args));
+        const design =
+            (await runDesignTool(env, name, args)) ??
+            (await runGreyboxTool(env, name, args)) ??
+            (await runImageTool(env, name, args)) ??
+            (await runMaterialTool(env, name, args)) ??
+            (await runEffectTool(env, name, args)) ??
+            (await runBehaviorTool(env, name, args));
         if (design) return design;
         switch (name) {
             case 'get_scene': {
@@ -1111,6 +1120,8 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 if (!ed.compiler.trusted && ed.store.doc.scripts.length) throw new ToolError(PAUSED_TOOL_ERROR);
                 const seconds = Math.min(20, Math.max(0.5, Number(args.seconds) || 3));
                 const res = await ed.player.runFor(seconds);
+                const log = ed.player.agents.log;
+                const agents = ed.store.doc.nodes.filter((n) => n.agent?.enabled).length;
                 return {
                     summary: `${seconds}s, ${res.issues.length} error(s)`,
                     data: {
@@ -1118,6 +1129,7 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                         frames: res.frames,
                         errors: res.issues.map((i) => ({ script: i.scriptName, object: i.node, method: i.method, line: i.line, message: i.message, at: r3(i.time) })),
                         logs: res.logs.slice(-60).map((l) => `${r3(l.time)}s ${l.level}: ${l.text}`),
+                        ...(agents ? { behavior: { agents, decisions: log.entries.length, outcomes: log.outcomes(), note: 'get_decision_log shows the decisions.' } } : {}),
                         note: res.frames < 2 ? 'Very few frames ran; the tab may be in the background.' : undefined,
                     },
                 };

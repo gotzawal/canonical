@@ -6,6 +6,7 @@ import { buildInfo } from './ui/statusbar';
 import { h, shortcutLabel } from './ui/dom';
 import { showBuildDialog } from './ui/buildDialog';
 import { dialog, MenuItem } from './ui/overlays';
+import { showBehaviorReference } from './ui/behaviorReference';
 import { showReference } from './ui/reference';
 
 export function createMenu(editor: Editor): MenuItem[] {
@@ -148,6 +149,7 @@ export function menuDefinitions(
             items: (): MenuItem[] => [
                 { label: 'Keyboard Shortcuts', icon: 'keyboard', shortcut: '?', action: () => showShortcuts() },
                 { label: 'Scripting & Shader Reference', icon: 'code', action: () => showReference() },
+                { label: 'Behavior Tree Reference', icon: 'btSelector', action: () => showBehaviorReference() },
                 { label: 'About', icon: 'info', action: () => showAbout(editor) },
             ],
         },

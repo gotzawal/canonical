@@ -1,6 +1,7 @@
 import type { Editor } from '../editor';
+import { validateTree } from '../core/behavior/validate';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES, className } from '../core/templates';
-import type { ScriptDoc, ShaderDoc } from '../core/types';
+import type { BehaviorTreeDoc, ScriptDoc, ShaderDoc } from '../core/types';
 import type { ShaderMessage } from '../engine/shaders';
 import { CodeEditor, type Diagnostic } from './codeEditor';
 import { clear, h, shortcutLabel } from './dom';
@@ -8,7 +9,24 @@ import { icon } from './icons';
 import { confirmDialog, showMenu, toast, type MenuItem } from './overlays';
 import { SelectField, TextField, button, iconButton } from './widgets';
 
-export type CodeKind = 'script' | 'shader';
+export type CodeKind = 'script' | 'shader' | 'behavior';
+
+/** A behavior tree as the JSON view shows it. */
+export function treeJson(t: BehaviorTreeDoc): string {
+    return JSON.stringify({ id: t.id, name: t.name, version: t.version, schema: t.schema, root: t.root }, null, 2) + '\n';
+}
+
+/** 1-based line of a character position. */
+function lineAt(text: string, pos: number): number {
+    return text.slice(0, Math.max(0, pos)).split('\n').length;
+}
+
+/** The line where a node or service id is written in a tree's JSON (0 when not found). */
+function idLine(text: string, id: string | undefined): number {
+    if (!id) return 0;
+    const i = text.indexOf(`"id": ${JSON.stringify(id)}`);
+    return i < 0 ? 0 : lineAt(text, i);
+}
 
 /** Editor for one script or shader: code, apply, diagnostics and actions. */
 export class CodePanel {
@@ -36,7 +54,7 @@ export class CodePanel {
         const doc = this.doc!;
         this.base = doc.code;
         this.code = new CodeEditor({
-            language: kind === 'script' ? 'js' : 'wgsl',
+            language: kind === 'script' ? 'js' : kind === 'behavior' ? 'json' : 'wgsl',
             value: doc.code,
             onChange: () => this.onEdit(),
             onSave: () => this.apply(),
@@ -56,6 +74,7 @@ export class CodePanel {
         this.meta = h('span', { class: 'code-meta' });
         this.nameField = new TextField(doc.name, (v) => {
             if (kind === 'script') editor.renameScript(id, v);
+            else if (kind === 'behavior') editor.applyBehaviorOps([{ op: 'update_tree', tree: id, name: v.replace(/\.json$/i, '').trim() }], { label: 'Rename Tree' });
             else editor.updateShader(id, { name: v });
         });
         this.nameField.el.classList.add('code-name');
@@ -93,7 +112,7 @@ export class CodePanel {
             h(
                 'div',
                 { class: 'code-toolbar' },
-                icon(kind === 'script' ? 'script' : 'shader', 15),
+                icon(kind === 'script' ? 'script' : kind === 'behavior' ? 'behavior' : 'shader', 15),
                 this.nameField.el,
                 ...controls,
                 this.meta,
@@ -116,6 +135,7 @@ export class CodePanel {
             store.on('selection', () => this.refreshAction()),
         );
         if (kind === 'shader') this.offs.push(editor.shaders.on('status', (sid) => sid === id && this.refreshStatus()));
+        else if (kind === 'behavior') this.offs.push(editor.player.on('state', () => this.refreshStatus()));
         else {
             this.offs.push(editor.compiler.on('compiled', (sid) => sid === id && this.refreshStatus()));
             this.offs.push(editor.player.on('issue', (issue) => issue.script === id && this.refreshStatus()));
@@ -127,6 +147,10 @@ export class CodePanel {
 
     get doc(): ScriptDoc | ShaderDoc | undefined {
         const d = this.editor.store.doc;
+        if (this.kind === 'behavior') {
+            const t = d.behaviors.find((x) => x.id === this.id);
+            return t ? { id: t.id, name: `${t.name}.json`, code: treeJson(t) } : undefined;
+        }
         return this.kind === 'script' ? d.scripts.find((s) => s.id === this.id) : d.shaders.find((s) => s.id === this.id);
     }
 
@@ -152,10 +176,50 @@ export class CodePanel {
         const doc = this.doc;
         if (!doc) return;
         const value = this.code.value;
+        if (this.kind === 'behavior') {
+            this.applyTree(value);
+            return;
+        }
         this.base = value;
         this.banner.hidden = true;
         if (this.kind === 'script') this.editor.updateScript(this.id, value);
         else this.editor.updateShader(this.id, { code: value });
+        this.draftDiagnostics = null;
+        this.onDirty(false);
+        this.refreshStatus();
+    }
+
+    /**
+     * Saves the JSON view: it goes through the same edit operation and
+     * validation as every other edit. Structural errors refuse it (with the
+     * line); problems such as a missing key are saved and shown.
+     */
+    private applyTree(value: string) {
+        let parsed: any;
+        try {
+            parsed = JSON.parse(value);
+        } catch (e: any) {
+            const msg = String(e?.message || e);
+            const pos = /position (\d+)/.exec(msg);
+            this.draftDiagnostics = [{ line: pos ? lineAt(value, Number(pos[1])) : 0, column: 1, message: `Not valid JSON: ${msg}`, severity: 'error' }];
+            this.refreshStatus();
+            return;
+        }
+        if (!parsed || typeof parsed !== 'object' || !parsed.root) {
+            this.draftDiagnostics = [{ line: 1, column: 1, message: 'The JSON needs a "root" node.', severity: 'error' }];
+            this.refreshStatus();
+            return;
+        }
+        const r = this.editor.applyBehaviorOps([{ op: 'replace_tree', tree: this.id, root: parsed.root, name: parsed.name, schema: parsed.schema }], { label: 'Edit Tree JSON' });
+        if (!r.ok) {
+            this.draftDiagnostics = r.errors.map((e) => ({ line: idLine(value, e.node), column: 1, message: `${e.node ? `${e.node}: ` : ''}${e.field ? `${e.field}: ` : ''}${e.message}`, severity: 'error' }));
+            this.refreshStatus();
+            return;
+        }
+        const doc = this.doc;
+        this.base = doc?.code ?? value;
+        this.code.setValue(this.base);
+        this.banner.hidden = true;
         this.draftDiagnostics = null;
         this.onDirty(false);
         this.refreshStatus();
@@ -197,7 +261,15 @@ export class CodePanel {
             return;
         }
         let list: Diagnostic[];
-        if (this.kind === 'script') {
+        if (this.kind === 'behavior') {
+            try {
+                JSON.parse(code);
+                list = [];
+            } catch (e: any) {
+                const pos = /position (\d+)/.exec(String(e?.message));
+                list = [{ line: pos ? lineAt(code, Number(pos[1])) : 0, column: 1, message: `Not valid JSON: ${e?.message || e}`, severity: 'error' }];
+            }
+        } else if (this.kind === 'script') {
             const c = this.editor.compiler.compile({ ...(doc as ScriptDoc), code });
             list = c.error && !c.paused ? [{ line: c.error.line, column: c.error.column, message: c.error.message, severity: 'error' }] : [];
         } else {
@@ -247,6 +319,13 @@ export class CodePanel {
     private diagnostics(): Diagnostic[] {
         if (this.draftDiagnostics) return this.draftDiagnostics;
         if (this.kind === 'shader') return this.editor.shaders.status(this.id).messages.map(toDiagnostic);
+        if (this.kind === 'behavior') {
+            const d = this.editor.store.doc;
+            const t = d.behaviors.find((x) => x.id === this.id);
+            if (!t) return [];
+            const text = this.code.value;
+            return validateTree(t, d.blackboards, d.memory).map((i) => ({ line: idLine(text, i.node), column: 1, message: `${i.node ? `${i.node}: ` : ''}${i.field ? `${i.field}: ` : ''}${i.message}`, severity: i.severity }));
+        }
         const c = this.editor.compiler.get(this.id);
         const list: Diagnostic[] = [];
         if (c?.error && !c.paused) list.push({ line: c.error.line, column: c.error.column, message: c.error.message, severity: 'error' });
@@ -265,7 +344,11 @@ export class CodePanel {
         const warnings = diags.length - errors;
         let text = '';
         let cls = 'code-status';
-        if (this.kind === 'shader') {
+        if (this.kind === 'behavior') {
+            text = errors ? `${errors} error${errors > 1 ? 's' : ''}` : warnings ? `${warnings} warning${warnings > 1 ? 's' : ''}` : 'Valid';
+            if (this.editor.player.state !== 'stopped') text += ' · locked while playing';
+            this.meta.textContent = 'Saved through the same edit operations and checks as the outliner';
+        } else if (this.kind === 'shader') {
             const st = this.editor.shaders.status(this.id);
             if (st.state === 'compiling') text = 'Compiling...';
             else if (errors) text = `${errors} error${errors > 1 ? 's' : ''}` + (this.editor.shaders.isValid(this.id) ? ' (last good version in use)' : '');
@@ -287,7 +370,7 @@ export class CodePanel {
             this.meta.textContent = props.length ? `properties: ${props.map((p) => p.name).join(', ')}` : '';
         }
         if (this.dirty) text = (text ? text + ' · ' : '') + 'unsaved';
-        cls += errors ? ' error' : warnings ? ' warn' : text === 'Compiled' || text === 'Ready' ? ' ok' : '';
+        cls += errors ? ' error' : warnings ? ' warn' : text === 'Compiled' || text === 'Ready' || text === 'Valid' ? ' ok' : '';
         this.status.className = cls;
         this.status.textContent = text;
 
@@ -313,7 +396,11 @@ export class CodePanel {
         const sel = this.editor.store.selection;
         let label = '';
         let title = '';
-        if (this.kind === 'script') {
+        if (this.kind === 'behavior') {
+            label = 'Show in Outliner';
+            title = 'Open this tree in the Behavior tab';
+            btn.disabled = false;
+        } else if (this.kind === 'script') {
             label = 'Attach to Selection';
             title = sel.length ? `Add this script to ${sel.length} selected object(s)` : 'Select objects to attach this script to';
             btn.disabled = !sel.length;
@@ -337,7 +424,9 @@ export class CodePanel {
         if (!doc) return;
         if (this.dirty) this.apply();
         const sel = this.editor.store.selection;
-        if (this.kind === 'script') {
+        if (this.kind === 'behavior') {
+            this.editor.showBehavior({ tree: this.id });
+        } else if (this.kind === 'script') {
             this.editor.attachScript(sel, this.id);
             toast(`Attached ${doc.name} to ${sel.length} object(s)`, 'success');
         } else if ((doc as ShaderDoc).kind === 'material') {
@@ -352,7 +441,7 @@ export class CodePanel {
         const doc = this.doc;
         if (!doc) return;
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const what = this.kind === 'script' ? 'script' : 'shader';
+        const what = this.kind === 'script' ? 'script' : this.kind === 'behavior' ? 'behavior tree' : 'shader';
         const ref = `${what} "${doc.name}" (id ${doc.id})`;
         const errors = this.diagnostics().filter((d) => d.severity === 'error');
         const items: MenuItem[] = [
@@ -362,7 +451,12 @@ export class CodePanel {
                 enabled: () => errors.length > 0,
                 action: () => {
                     if (this.dirty) this.apply();
-                    this.editor.askAI(`Fix the errors in the ${ref}. Read it first, apply a corrected version and check it compiles.`, true);
+                    this.editor.askAI(
+                        this.kind === 'behavior'
+                            ? `Fix the problems of the ${ref}: read it with get_behavior_outline, then fix it with apply_behavior_ops and check it with validate_behavior.`
+                            : `Fix the errors in the ${ref}. Read it first, apply a corrected version and check it compiles.`,
+                        true,
+                    );
                 },
             },
             {
@@ -389,7 +483,9 @@ export class CodePanel {
             this.onEdit();
         };
         const templates: MenuItem[] =
-            this.kind === 'script'
+            this.kind === 'behavior'
+                ? []
+                : this.kind === 'script'
                 ? SCRIPT_TEMPLATES.map((t) => ({ label: t.label, action: () => void replace(t.code(className(doc.name))) }))
                 : SHADER_TEMPLATES.filter((t) => t.kind === (doc as ShaderDoc).kind).map((t) => ({
                       label: t.label,
@@ -401,13 +497,17 @@ export class CodePanel {
         showMenu(
             [
                 { label: 'Revert Changes', icon: 'undo', enabled: () => this.dirty, action: () => this.revert() },
-                { label: 'Replace with Template', icon: 'copy', submenu: templates },
-                { separator: true },
-                {
-                    label: 'Delete File',
-                    icon: 'trash',
-                    action: () => void (this.kind === 'script' ? this.editor.deleteScript(this.id) : this.editor.deleteShader(this.id)),
-                },
+                ...(this.kind === 'behavior'
+                    ? []
+                    : ([
+                          { label: 'Replace with Template', icon: 'copy', submenu: templates },
+                          { separator: true },
+                          {
+                              label: 'Delete File',
+                              icon: 'trash',
+                              action: () => void (this.kind === 'script' ? this.editor.deleteScript(this.id) : this.editor.deleteShader(this.id)),
+                          },
+                      ] as MenuItem[])),
             ],
             r.right - 220,
             r.bottom + 4,

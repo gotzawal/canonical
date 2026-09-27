@@ -4,7 +4,7 @@ import { h } from './dom';
 // input (so selection, IME, undo and accessibility come from the browser)
 // on top of a syntax highlighted <pre> that follows its scroll position.
 
-export type CodeLanguage = 'js' | 'wgsl';
+export type CodeLanguage = 'js' | 'wgsl' | 'json';
 
 export interface Diagnostic {
     /** 1-based line; 0 when the problem has no position. */
@@ -44,6 +44,7 @@ const WGSL_TYPE = /^(f32|f16|i32|u32|bool|vec[234][fhiu]?|mat[234]x[234][fh]?|ar
 const TOKEN = {
     js: /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|(`(?:\\[\s\S]|[^\\`])*`?|'(?:\\.|[^\\'\n])*'?|"(?:\\.|[^\\"\n])*"?)|(\b(?:0x[0-9a-fA-F]+|\d+\.?\d*(?:e[+-]?\d+)?|\.\d+(?:e[+-]?\d+)?)\b)|([A-Za-z_$][\w$]*)(\s*\()?|(\S)/g,
     wgsl: /(\/\/[^\n]*|\/\*[\s\S]*?(?:\*\/|$))|(#[A-Za-z_]+[^\n]*)|(\b(?:0x[0-9a-fA-F]+[iu]?|\d+\.?\d*(?:e[+-]?\d+)?[fhiu]?|\.\d+(?:e[+-]?\d+)?[fh]?)\b)|(@[A-Za-z_]\w*)|([A-Za-z_]\w*)(\s*\()?|(\S)/g,
+    json: /("(?:\\.|[^\\"\n])*"?)(\s*:)?|(-?\b\d+\.?\d*(?:[eE][+-]?\d+)?\b)|\b(true|false|null)\b|(\S)/g,
 };
 
 function esc(s: string): string {
@@ -63,7 +64,13 @@ export function highlight(code: string, lang: CodeLanguage): string {
     while ((m = re.exec(code))) {
         if (m.index > last) out += esc(code.slice(last, m.index));
         last = re.lastIndex;
-        if (lang === 'js') {
+        if (lang === 'json') {
+            const [, str, colon, num, constant, other] = m;
+            if (str) out += span(colon ? 'attr' : 'string', str) + (colon ? esc(colon) : '');
+            else if (num) out += span('number', num);
+            else if (constant) out += span('constant', constant);
+            else if (other) out += /[{}[\]]/.test(other) ? span('bracket', other) : esc(other);
+        } else if (lang === 'js') {
             const [, comment, str, num, ident, call, other] = m;
             if (comment) out += span('comment', comment);
             else if (str) out += span('string', str);

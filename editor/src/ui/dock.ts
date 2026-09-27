@@ -1,5 +1,7 @@
 import type { Editor } from '../editor';
+import { BehaviorPanel } from './behavior/behaviorPanel';
 import { CodePanel, type CodeKind } from './codePanel';
+import { DecisionLogPanel } from './decisionLogPanel';
 import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
 import { confirmDialog } from './overlays';
@@ -16,23 +18,36 @@ interface OpenDoc {
 
 const DOCK_KEY = 'canonical-editor/dock';
 
+/** Tabs that are always there, before the file tabs. */
+type FixedKey = 'graph' | 'behavior' | 'decisions';
+
 /**
- * Bottom panel under the viewport: the render graph and one tab per open
- * script or shader.
+ * Bottom panel under the viewport: the render graph, the behavior trees, the
+ * decision log and one tab per open script, shader or tree JSON.
  */
 export class Dock {
     readonly el: HTMLElement;
     readonly graph: RenderGraphPanel;
+    readonly behavior: BehaviorPanel;
+    readonly decisions: DecisionLogPanel;
     private tabs: HTMLElement;
     private body: HTMLElement;
     private graphTab: HTMLElement;
+    private fixed: Record<FixedKey, { tab: HTMLElement; el: HTMLElement; setVisible(v: boolean): void }>;
     private docs: OpenDoc[] = [];
     private active = 'graph';
 
     constructor(private editor: Editor, private app: HTMLElement) {
         this.graph = new RenderGraphPanel(editor);
+        this.behavior = new BehaviorPanel(editor);
+        this.decisions = new DecisionLogPanel(editor);
         this.graphTab = this.makeTab('graph', icon('graph', 13), 'Render Graph', null);
-        this.tabs = h('div', { class: 'dock-tabs', attrs: { role: 'tablist' } }, this.graphTab);
+        this.fixed = {
+            graph: { tab: this.graphTab, el: this.graph.el, setVisible: (v) => this.graph.setVisible(v) },
+            behavior: { tab: this.makeTab('behavior', icon('behavior', 13), 'Behavior', null), el: this.behavior.el, setVisible: (v) => this.behavior.setVisible(v) },
+            decisions: { tab: this.makeTab('decisions', icon('list', 13), 'Decisions', null), el: this.decisions.el, setVisible: (v) => this.decisions.setVisible(v) },
+        };
+        this.tabs = h('div', { class: 'dock-tabs', attrs: { role: 'tablist' } }, this.graphTab, this.fixed.behavior.tab, this.fixed.decisions.tab);
         const collapse = h(
             'button',
             { class: 'icon-btn dock-collapse', title: `Collapse / expand (${shortcutLabel('Mod+J')})`, attrs: { type: 'button', 'aria-label': 'Collapse panel' } },
@@ -44,6 +59,7 @@ export class Dock {
 
         editor.on('open-code', ({ kind, id }) => this.open(kind, id));
         editor.on('show-graph', () => this.show('graph'));
+        editor.on('show-behavior', () => this.show('behavior'));
         editor.store.on('change', () => this.syncDocs());
         editor.store.on('load', () => this.syncDocs());
         this.restore();
@@ -55,7 +71,7 @@ export class Dock {
 
     setCollapsed(v: boolean) {
         this.app.classList.toggle('dock-collapsed', v);
-        this.graph.setVisible(!v && this.active === 'graph');
+        for (const [key, f] of Object.entries(this.fixed)) f.setVisible(!v && this.active === key);
         this.save();
     }
 
@@ -65,14 +81,15 @@ export class Dock {
 
     /** Opens (or focuses) the code tab of a script or shader. */
     open(kind: CodeKind, id: string, focus = true): CodePanel | null {
-        const exists = kind === 'script' ? this.editor.store.doc.scripts.some((s) => s.id === id) : this.editor.store.doc.shaders.some((s) => s.id === id);
+        const d = this.editor.store.doc;
+        const exists = kind === 'script' ? d.scripts.some((s) => s.id === id) : kind === 'behavior' ? d.behaviors.some((t) => t.id === id) : d.shaders.some((s) => s.id === id);
         if (!exists) return null;
         const key = `${kind}:${id}`;
         let doc = this.docs.find((d) => d.key === key);
         if (!doc) {
             const panel = new CodePanel(this.editor, kind, id);
             const title = h('span', { class: 'dock-tab-title', text: panel.title });
-            const tab = this.makeTab(key, icon(kind === 'script' ? 'script' : 'shader', 13), '', title);
+            const tab = this.makeTab(key, icon(kind === 'script' ? 'script' : kind === 'behavior' ? 'behavior' : 'shader', 13), '', title);
             doc = { key, kind, id, panel, tab, title };
             panel.onDirty = (dirty) => tab.classList.toggle('dirty', dirty);
             this.docs.push(doc);
@@ -101,15 +118,16 @@ export class Dock {
 
     show(key: string, reveal = true) {
         this.active = key;
-        for (const t of [this.graphTab, ...this.docs.map((d) => d.tab)]) t.classList.toggle('active', t.dataset.key === key);
+        for (const t of [...Object.values(this.fixed).map((f) => f.tab), ...this.docs.map((d) => d.tab)]) t.classList.toggle('active', t.dataset.key === key);
         clear(this.body);
-        if (key === 'graph') this.body.appendChild(this.graph.el);
+        const fixed = this.fixed[key as FixedKey];
+        if (fixed) this.body.appendChild(fixed.el);
         else {
             const doc = this.docs.find((d) => d.key === key);
             if (doc) this.body.appendChild(doc.panel.el);
         }
-        this.graph.setVisible(key === 'graph' && !this.collapsed);
         if (reveal && this.collapsed) this.setCollapsed(false);
+        for (const [k, f] of Object.entries(this.fixed)) f.setVisible(k === key && !this.collapsed);
         this.save();
     }
 
@@ -121,24 +139,25 @@ export class Dock {
         doc.panel.dispose();
         doc.tab.remove();
         this.docs.splice(i, 1);
-        if (this.active === key) this.show(this.docs[Math.min(i, this.docs.length - 1)]?.key ?? 'graph');
+        if (this.active === key) this.show(this.docs[Math.min(i, this.docs.length - 1)]?.key ?? 'behavior');
         this.save();
     }
 
     private makeTab(key: string, ic: Element, label: string, title: HTMLElement | null): HTMLElement {
         const tab = h('div', { class: 'dock-tab', dataset: { key }, attrs: { role: 'tab', tabindex: 0 } }, ic, title ?? h('span', { class: 'dock-tab-title', text: label }));
+        const fixed = key === 'graph' || key === 'behavior' || key === 'decisions';
         tab.addEventListener('click', (e) => {
             if ((e.target as HTMLElement).closest('.dock-tab-close')) return;
             if (this.active === key && !this.collapsed) {
-                if (key === 'graph') this.setCollapsed(true);
+                if (fixed) this.setCollapsed(true);
                 return;
             }
             this.show(key);
         });
         tab.addEventListener('auxclick', (e) => {
-            if (e.button === 1 && key !== 'graph') void this.close(key);
+            if (e.button === 1 && !fixed) void this.close(key);
         });
-        if (key !== 'graph') {
+        if (!fixed) {
             const close = h('button', { class: 'dock-tab-close', title: 'Close', attrs: { type: 'button', 'aria-label': 'Close tab' } }, icon('close', 11));
             close.addEventListener('click', () => void this.close(key));
             tab.appendChild(close);
@@ -171,9 +190,9 @@ export class Dock {
         } catch { /* ignore */ }
         this.app.classList.toggle('dock-collapsed', state ? !!state.collapsed : true);
         for (const d of Array.isArray(state?.open) ? state.open : []) {
-            if (d && (d.kind === 'script' || d.kind === 'shader') && typeof d.id === 'string') this.open(d.kind, d.id, false);
+            if (d && (d.kind === 'script' || d.kind === 'shader' || d.kind === 'behavior') && typeof d.id === 'string') this.open(d.kind, d.id, false);
         }
-        const active = typeof state?.active === 'string' && (state.active === 'graph' || this.docs.some((d) => d.key === state.active)) ? state.active : 'graph';
+        const active = typeof state?.active === 'string' && (state.active in this.fixed || this.docs.some((d) => d.key === state.active)) ? state.active : 'graph';
         this.show(active, false);
     }
 }

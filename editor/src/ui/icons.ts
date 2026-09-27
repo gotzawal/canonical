@@ -81,6 +81,14 @@ const PATHS: Record<string, string> = {
     dots: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
     rocket: '<path d="M9.5 14.5c1-5.5 4.5-9.5 10.5-10.5-1 6-5 9.5-10.5 10.5Z"/><path d="M9.5 14.5 7 12l1.5-3.5h4M9.5 14.5 12 17l3.5-1.5v-4"/><path d="M6.5 16.5c-1.3.5-2 2-2 3.5 1.5 0 3-.7 3.5-2"/>',
     maximize: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
+    behavior: '<circle cx="12" cy="5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="18.5" r="2"/><path d="M12 7v4M12 11H6v5.5M12 11h6v5.5"/>',
+    btSelector: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.8 2.1c-.8.5-1.3 1-1.3 2M12 16.5v.01"/>',
+    btSequence: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M7.5 12h9M13 8.5l3.5 3.5-3.5 3.5"/>',
+    key: '<circle cx="8" cy="15.5" r="4"/><path d="m11 12.5 8.5-8.5M16 7l2.5 2.5M13.5 9.5 16 12"/>',
+    filter: '<path d="M4 5h16l-6.2 7.3V18l-3.6 2v-7.7Z"/>',
+    agent: '<rect x="5" y="8" width="14" height="11" rx="2.5"/><path d="M12 8V5.5M9.5 13h.01M14.5 13h.01M9.5 16h5"/><circle cx="12" cy="4.2" r="1.2"/>',
+    list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
+    book: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 20.5A2.5 2.5 0 0 1 7.5 18H19v3H7.5"/>',
     minimize: '<path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
 };
 

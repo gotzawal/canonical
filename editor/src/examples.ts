@@ -1,9 +1,10 @@
 import {
     defaultEnvironment, defaultMaterial, defaultRenderGraph, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
+import { defaultMemory } from './core/behavior/format';
 import { defaultDesign } from './core/design';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
-import type { GeometryType, NodeDoc, ParamValue, SceneDoc, ScriptDoc, ShaderDoc, Vec3 } from './core/types';
+import { SCENE_VERSION, type GeometryType, type NodeDoc, type ParamValue, type SceneDoc, type ScriptDoc, type ShaderDoc, type Vec3 } from './core/types';
 
 function script(template: string, name: string): ScriptDoc {
     const t = SCRIPT_TEMPLATES.find((x) => x.id === template)!;
@@ -112,7 +113,7 @@ export function exampleShowcase(): SceneDoc {
     renderGraph.posts.push({ id: uid('p'), shader: vignette.id, enabled: true, params: { strength: 0.5 } });
     return {
         format: 'canonical-scene',
-        version: 1,
+        version: SCENE_VERSION,
         name: 'Showcase',
         environment: env,
         assets: [],
@@ -121,6 +122,9 @@ export function exampleShowcase(): SceneDoc {
         renderGraph,
         nodes,
         prefabs: [],
+        blackboards: [],
+        behaviors: [],
+        memory: defaultMemory(),
         design: defaultDesign(),
     };
 }

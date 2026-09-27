@@ -264,6 +264,8 @@ export interface NodeDoc {
     camera?: CameraDoc;
     particles?: ParticlesDoc;
     scripts?: ScriptRef[];
+    /** AI behavior: the object runs a behavior tree in Play mode. */
+    agent?: AgentDoc;
     /**
      * Prefab instance: the id of the prefab (SceneDoc.prefabs). The node's
      * children are generated from the prefab (see prefabChild).
@@ -398,9 +400,12 @@ export interface RenderGraphDoc {
     posts: PostDoc[];
 }
 
+/** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents). */
+export const SCENE_VERSION = 2;
+
 export interface SceneDoc {
     format: 'canonical-scene';
-    version: 1;
+    version: typeof SCENE_VERSION;
     name: string;
     environment: EnvironmentDoc;
     assets: AssetMeta[];
@@ -410,9 +415,282 @@ export interface SceneDoc {
     nodes: NodeDoc[];
     /** Prefab definitions; their instances are expanded into `nodes`. */
     prefabs: PrefabDoc[];
+    /** Blackboard schemas: the keys behavior trees read and write. Trees can share one. */
+    blackboards: BlackboardSchemaDoc[];
+    /** Behavior trees; objects run them through NodeDoc.agent. */
+    behaviors: BehaviorTreeDoc[];
+    /** What agents can recall: planning notes and lore, embedded in the editor. */
+    memory: MemoryDoc;
     build?: BuildDoc;
     /** The planning pipeline: brief, structure, shots and stage state. Not part of built games. */
     design: DesignDoc;
+}
+
+// ---------------------------------------------------------------- behavior
+//
+// AI behavior (see play/ai/ for the runtime and core/behavior/ for editing).
+// Three formats: blackboard schemas, behavior trees and decision log
+// entries. The model only writes blackboard values; trees decide what to do
+// with the standard behavior tree rules, so a scene plays with the schema
+// defaults when no model is available.
+
+/**
+ * Value types of blackboard keys. 'probability' is a number in 0..1, 'enum'
+ * one of the key's values, 'object' a scene object (a node id in the
+ * document; the engine object while playing).
+ */
+export type BlackboardKeyType = 'bool' | 'number' | 'probability' | 'enum' | 'string' | 'object';
+
+/**
+ * Who writes a key. 'fact': scripts only, for what the agent perceives
+ * (categories such as near / mid / far change less often than numbers).
+ * 'ai': exactly one Ask of the tree; the value comes with a confidence, a
+ * source and a time. 'tree': Set Key tasks and script tasks of the tree,
+ * for goals (a move target) and the step of a sequence.
+ */
+export type BlackboardKeyOwner = 'fact' | 'ai' | 'tree';
+
+/** A blackboard value. Object keys hold a node id (or null) in documents. */
+export type BlackboardValue = boolean | number | string | null;
+
+export interface EnumValueDoc {
+    value: string;
+    /** Short description; Choice questions show it to the model as the option text. */
+    description: string;
+}
+
+export interface BlackboardKeyDoc {
+    /** Unique in the schema, e.g. "threat". */
+    name: string;
+    type: BlackboardKeyType;
+    /** Value until something writes the key, and the value AI keys keep without a model. */
+    default: BlackboardValue;
+    description: string;
+    owner: BlackboardKeyOwner;
+    /** Enum keys: the allowed values, in order. */
+    values?: EnumValueDoc[];
+}
+
+export interface BlackboardSchemaDoc {
+    id: string;
+    name: string;
+    /** Revision, raised by every edit. */
+    version: number;
+    keys: BlackboardKeyDoc[];
+}
+
+export type BtCompositeType = 'selector' | 'sequence';
+export type BtTaskType = 'script' | 'wait' | 'set_key' | 'ask';
+export type BtNodeType = BtCompositeType | BtTaskType;
+export type BtDecoratorType = 'condition' | 'cooldown';
+export type BtServiceType = 'recall' | 'ask';
+
+/** eq / ne: equal, not equal; ge / le: at least, at most; set: has a value (see the reference). */
+export type CompareOp = 'eq' | 'ne' | 'ge' | 'le' | 'set';
+
+export interface ConditionDecoratorDoc {
+    type: 'condition';
+    key: string;
+    op: CompareOp;
+    value: BlackboardValue;
+    /** AI keys: the answer's confidence must be at least this. */
+    minConfidence: number;
+}
+
+export interface CooldownDecoratorDoc {
+    type: 'cooldown';
+    /** After the node finishes it cannot run again for this long. */
+    seconds: number;
+}
+
+export type BtDecoratorDoc = ConditionDecoratorDoc | CooldownDecoratorDoc;
+
+export type AskPriority = 'low' | 'normal' | 'high';
+export type AskTrigger = 'activate' | 'facts' | 'interval';
+
+export interface AskQuestionDoc {
+    /** The AI key the answer is written to. Probability keys are asked as Noul, enum keys as Choice. */
+    key: string;
+    /** The question for this key, e.g. "Is the player about to attack?". */
+    text: string;
+}
+
+/** Settings shared by the Ask task and the Ask service. */
+export interface AskSettingsDoc {
+    questions: AskQuestionDoc[];
+    /** Fact keys the model sees; a change of their write version triggers the Ask service. */
+    facts: string[];
+    /** Also show the model the context Recall assembled. */
+    context: boolean;
+    /** Answers less confident than this keep the key's previous value. */
+    minConfidence: number;
+    /** Seconds a written value stays before another answer may change it. */
+    minHold: number;
+    priority: AskPriority;
+    /** Options of Choice questions: the key's enum values, or memory items found by a search (string keys). */
+    choices: 'enum' | 'memory';
+    /** Memory choices: search text, {key} is replaced with the blackboard value. */
+    memoryQuery: string;
+    memoryTags: string[];
+    memoryCount: number;
+}
+
+interface BtNodeBase {
+    /** Readable name, fixed and unique in the tree (nodes and services share it), e.g. "threat_gate". */
+    id: string;
+    note?: string;
+    decorators?: BtDecoratorDoc[];
+    services?: BtServiceDoc[];
+}
+
+export interface SelectorNodeDoc extends BtNodeBase {
+    type: 'selector';
+    children: BtNodeDoc[];
+}
+
+export interface SequenceNodeDoc extends BtNodeBase {
+    type: 'sequence';
+    children: BtNodeDoc[];
+}
+
+export interface ScriptTaskDoc extends BtNodeBase {
+    type: 'script';
+    /** Method of a script on the agent's object. */
+    method: string;
+    /** Script file or class name; empty searches every script on the object. */
+    script: string;
+}
+
+export interface WaitTaskDoc extends BtNodeBase {
+    type: 'wait';
+    seconds: number;
+    /** Random deviation, plus or minus seconds. */
+    deviation: number;
+}
+
+export interface SetKeyTaskDoc extends BtNodeBase {
+    type: 'set_key';
+    key: string;
+    value: BlackboardValue;
+}
+
+export interface AskTaskDoc extends BtNodeBase, AskSettingsDoc {
+    type: 'ask';
+}
+
+export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | AskTaskDoc;
+export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc;
+
+interface BtServiceBase {
+    /** Readable name, unique in the tree (shared with the nodes). */
+    id: string;
+    note?: string;
+    /** Seconds between runs while the node it is attached to is active. */
+    interval: number;
+    /** Random deviation of the interval, as a fraction (0.2 = plus or minus 20%). */
+    jitter: number;
+}
+
+export interface RecallServiceDoc extends BtServiceBase {
+    type: 'recall';
+    /** Search text; {key} is replaced with the blackboard value. */
+    query: string;
+    tags: string[];
+    /** How many memory items to take (the best matches). */
+    count: number;
+    /** Most tokens the assembled context may take. */
+    tokenBudget: number;
+}
+
+export interface AskServiceDoc extends BtServiceBase, AskSettingsDoc {
+    type: 'ask';
+    /** When to ask: when the node becomes active, when a fact changes, every interval. */
+    triggers: AskTrigger[];
+}
+
+export type BtServiceDoc = RecallServiceDoc | AskServiceDoc;
+
+export interface BehaviorTreeDoc {
+    id: string;
+    name: string;
+    /** Revision, raised by every edit. */
+    version: number;
+    /** Blackboard schema id. */
+    schema: string;
+    root: BtNodeDoc;
+}
+
+/** A behavior tree attached to an object (same shape as ScriptRef). */
+export interface AgentDoc {
+    /** Behavior tree id. */
+    tree: string;
+    enabled: boolean;
+    /** Initial values by key name, replacing the schema defaults for this object. */
+    values: Record<string, BlackboardValue>;
+}
+
+export interface MemoryItemDoc {
+    /** Readable id, unique in the scene; a Choice from memory writes it to the key. */
+    id: string;
+    text: string;
+    tags: string[];
+    /** Embedding made in the editor (int8, base64). Missing until embedded. */
+    vector?: string;
+}
+
+export interface MemoryDoc {
+    /** Embedding model the vectors were made with (see play/ai/models.ts). */
+    embedder: string;
+    items: MemoryItemDoc[];
+}
+
+/**
+ * What happened to one answer. written: stored in the key. low_confidence:
+ * below the Ask's minimum, the key kept its value. superseded: a newer
+ * request of the same Ask was made. held: the key's minimum hold time had
+ * not passed. timeout: no answer within 1.5 s. unavailable: no model.
+ */
+export type AskOutcome = 'written' | 'low_confidence' | 'superseded' | 'held' | 'timeout' | 'unavailable';
+
+export interface DecisionQuestion {
+    key: string;
+    format: 'noul' | 'choice';
+    text: string;
+    /** Choice options: the value written to the key and the text the model saw. */
+    options?: { value: string; text: string }[];
+    /** Probability per option (noul: [false, true]); null without an answer. */
+    probabilities: number[] | null;
+    /** The answer: P(true) for Noul, the chosen value for Choice. */
+    value: BlackboardValue;
+    /** Probability of the chosen answer (Noul: of the likelier side). */
+    confidence: number | null;
+    outcome: AskOutcome;
+}
+
+/** One entry of the decision log: one Ask request and what became of it. */
+export interface DecisionLogEntry {
+    /** Play time in seconds, frame number and wall clock time. */
+    time: number;
+    frame: number;
+    at: string;
+    /** Object (node id and name), tree, tree revision, Ask node id and the request's number. */
+    agent: string;
+    agentName: string;
+    tree: string;
+    treeVersion: number;
+    node: string;
+    seq: number;
+    /** Fact values the model saw, and the ids of the memory items in the context. */
+    facts: Record<string, BlackboardValue>;
+    context: string[];
+    questions: DecisionQuestion[];
+    /** Provider and model with its calibration, cache hit, milliseconds from request to answer. */
+    provider: string;
+    model: string;
+    cache: 'none' | 'exact' | 'semantic' | 'joined';
+    latency: number;
+    /** Right or wrong, set by a person. Only the format exists in v1. */
+    label: 'right' | 'wrong' | null;
 }
 
 // ------------------------------------------------------------------ design
