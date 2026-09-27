@@ -10,7 +10,7 @@ import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import type {
-    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
+    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
 } from '../core/types';
 import type { Editor } from '../editor';
 import { confirmDialog, toast } from '../ui/overlays';
@@ -231,10 +231,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const { meta: snapMeta, snap } = await this.makeSnapshot(`${def.title} complete`, id);
             const next = nextStage(id);
             this.store.commit(`Complete Stage: ${def.title}`, (d) => {
-                d.assets.push(...captures.map((c) => c.meta), snapMeta);
-                for (const c of captures) {
-                    d.design.shots.find((s) => s.id === c.shot)?.history.push({ stage: id, asset: c.meta.id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
-                }
+                d.assets.push(snapMeta);
+                for (const c of captures) addToHistory(d, c.shot, c.meta, { stage: id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
                 d.design.snapshots.push(snap);
                 const st = d.design.stages[id];
                 st.status = 'done';
@@ -585,10 +583,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const shot = this.shot(id);
         const meta = await putDesignImage(blob, `${fileStem(shot?.name ?? 'shot')}-${label}.jpg`);
         const stage = this.design.stage;
-        this.store.commit('Capture Shot', (d) => {
-            d.assets.push(meta);
-            d.design.shots.find((s) => s.id === id)?.history.push({ stage, asset: meta.id, at: now(), manual: true, ...extra });
-        }, { design: true });
+        this.store.commit('Capture Shot', (d) => addToHistory(d, id, meta, { stage, at: now(), manual: true, ...extra }), { design: true });
         return meta;
     }
 
@@ -639,12 +634,30 @@ export class Pipeline extends Emitter<PipelineEvents> {
             else set.delete(stage);
             if (set.size) s.matched = [...set];
             else delete s.matched;
-            if (meta && evidence) {
-                d.assets.push(meta);
-                s.history.push({ stage, asset: meta.id, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
-            }
+            if (meta && evidence) addToHistory(d, id, meta, { stage, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
         }, { design: true });
     }
+}
+
+/** Manual captures (by hand or by the assistant) a shot keeps; the captures of stage completions all stay. */
+const KEEP_CAPTURES = 12;
+
+/**
+ * Adds a capture and its file to a shot's history (inside a commit). Past
+ * KEEP_CAPTURES manual captures the oldest go, and so do their files unless
+ * something else uses them.
+ */
+function addToHistory(d: SceneDoc, shotId: string, meta: AssetMeta, capture: Omit<ShotCaptureDoc, 'asset'>) {
+    const shot = d.design.shots.find((s) => s.id === shotId);
+    if (!shot) return;
+    d.assets.push(meta);
+    shot.history.push({ ...capture, asset: meta.id });
+    const old = new Set(shot.history.filter((c) => c.manual).slice(0, -KEEP_CAPTURES));
+    if (!old.size) return;
+    shot.history = shot.history.filter((c) => !old.has(c));
+    const used = designAssetIds(d.design);
+    const gone = new Set([...old].map((c) => c.asset));
+    d.assets = d.assets.filter((a) => !gone.has(a.id) || used.has(a.id));
 }
 
 function fileStem(name: string): string {

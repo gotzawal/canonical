@@ -397,7 +397,8 @@ class PaintoverDialog {
         if (p.prompt) this.prompt.value = p.prompt;
         if (p.model) this.modelInput.value = p.model;
         this.seed.value = p.seed != null ? String(p.seed) : '';
-        this.extra = (p.refs ?? []).filter((r) => r !== this.shot?.concept && this.editor.store.doc.design.shots.every((s) => !s.history.some((hh) => hh.asset === r)));
+        // The first reference was the capture of that time: a fresh one is sent instead.
+        this.extra = (p.refs ?? []).slice(1).filter((r) => r !== this.shot?.concept);
         this.params = { ...(p.params ?? {}) };
         this.modelChanged(this.params);
         this.renderRefs();
