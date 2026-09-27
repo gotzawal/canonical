@@ -45,6 +45,8 @@ export class BehaviorPanel {
     private modelChip: HTMLElement;
     private visible = false;
     private agentId: string | null = null;
+    /** The debug view's agent picker, and the agents it lists. */
+    private agentPick: { key: string; field: SelectField<string>; ticks: HTMLElement; head: HTMLElement } | null = null;
     private timer = 0;
     private issueCache: { key: string; issues: Issue[] } = { key: '', issues: [] };
 
@@ -491,17 +493,27 @@ export class BehaviorPanel {
         const el = this.debugEl;
         const list = this.agents();
         const agent = this.agent();
-        clear(el);
         if (!list.length) {
-            el.appendChild(h('div', { class: 'empty-hint', text: 'No object runs this tree in this Play session.' }));
+            el.replaceChildren(h('div', { class: 'empty-hint', text: 'No object runs this tree in this Play session.' }));
             return;
         }
-        const pick = new SelectField(list.map((a) => ({ value: a.id, label: a.name })), agent?.id ?? '', (id) => {
-            this.agentId = id;
-            this.renderDebug();
-            this.outliner.render(true);
-        });
-        el.appendChild(h('div', { class: 'bt-debug-head' }, icon('agent', 14), pick.el, h('span', { class: 'muted small', text: agent ? `${agent.tree.ticks} ticks` : '' })));
+        // The agent picker stays while the agents stay the same: a drop-down that is rebuilt closes.
+        const options = list.map((a) => ({ value: a.id, label: a.name }));
+        const key = JSON.stringify(options);
+        if (this.agentPick?.key !== key) {
+            const field = new SelectField(options, agent?.id ?? '', (id) => {
+                this.agentId = id;
+                this.renderDebug();
+                this.outliner.render(true);
+            });
+            const ticks = h('span', { class: 'muted small' });
+            this.agentPick = { key, field, ticks, head: h('div', { class: 'bt-debug-head' }, icon('agent', 14), field.el, ticks) };
+        }
+        const { head, field, ticks } = this.agentPick;
+        field.set(agent?.id ?? '');
+        ticks.textContent = agent ? `${agent.tree.ticks} ticks` : '';
+        for (const c of Array.from(el.childNodes)) if (c !== head) c.remove();
+        if (head.parentNode !== el) el.prepend(head);
         if (!agent) return;
         const dbg = this.editor.player.agents.debug(agent);
         const now = this.editor.player.time.elapsed;
