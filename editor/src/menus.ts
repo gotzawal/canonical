@@ -6,6 +6,7 @@ import { buildInfo } from './ui/statusbar';
 import { h, shortcutLabel } from './ui/dom';
 import { showBuildDialog } from './ui/buildDialog';
 import { dialog, MenuItem } from './ui/overlays';
+import { showBehaviorReference } from './ui/behaviorReference';
 import { showReference } from './ui/reference';
 
 export function createMenu(editor: Editor): MenuItem[] {
@@ -64,6 +65,7 @@ export function menuDefinitions(
                 { label: 'New Scene', icon: 'plus', action: () => void editor.newScene('default') },
                 { label: 'New Empty Scene', action: () => void editor.newScene('empty') },
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
+                { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
                 { separator: true },
                 { label: 'Open Scene or Project...', icon: 'open', shortcut: 'Mod+O', action: () => void editor.openSceneFile() },
                 { label: 'Save Scene File', icon: 'save', shortcut: 'Mod+S', action: () => void editor.saveSceneFile() },
@@ -148,6 +150,7 @@ export function menuDefinitions(
             items: (): MenuItem[] => [
                 { label: 'Keyboard Shortcuts', icon: 'keyboard', shortcut: '?', action: () => showShortcuts() },
                 { label: 'Scripting & Shader Reference', icon: 'code', action: () => showReference() },
+                { label: 'Behavior Tree Reference', icon: 'btSelector', action: () => showBehaviorReference() },
                 { label: 'About', icon: 'info', action: () => showAbout(editor) },
             ],
         },

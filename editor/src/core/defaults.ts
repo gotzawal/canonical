@@ -1,7 +1,8 @@
+import { defaultMemory } from './behavior/format';
 import { defaultDesign } from './design';
-import type {
-    CameraDoc, CameraState, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType,
-    MaterialDoc, NodeDoc, RenderGraphDoc, SceneDoc, Vec3,
+import {
+    SCENE_VERSION, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
+    type LightDoc, type LightType, type MaterialDoc, type NodeDoc, type RenderGraphDoc, type SceneDoc, type Vec3,
 } from './types';
 
 export { uid } from './ids';
@@ -193,7 +194,7 @@ export function newScene(): SceneDoc {
     sphere.mesh.material.roughness = 0.25;
     return {
         format: 'canonical-scene',
-        version: 1,
+        version: SCENE_VERSION,
         name: 'Untitled Scene',
         environment: defaultEnvironment(),
         assets: [],
@@ -202,6 +203,10 @@ export function newScene(): SceneDoc {
         renderGraph: defaultRenderGraph(),
         nodes: [sun, ground, cube, sphere],
         prefabs: [],
+        blackboards: [],
+        behaviors: [],
+        memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
 }
@@ -211,7 +216,7 @@ export function emptyScene(): SceneDoc {
     sun.name = 'Sun';
     return {
         format: 'canonical-scene',
-        version: 1,
+        version: SCENE_VERSION,
         name: 'Untitled Scene',
         environment: defaultEnvironment(),
         assets: [],
@@ -220,6 +225,10 @@ export function emptyScene(): SceneDoc {
         renderGraph: defaultRenderGraph(),
         nodes: [sun],
         prefabs: [],
+        blackboards: [],
+        behaviors: [],
+        memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
 }

@@ -24,6 +24,7 @@ const LIFECYCLE: [string, string][] = [
     ['onDestroy()', 'When the object is destroyed, and when Play stops.'],
     ['onKeyDown(key) / onKeyUp(key)', 'Key names in lower case: "w", "space", "arrowup", "shift".'],
     ['onPointerDown(e) / onPointerUp(e) / onClick(e)', 'This object was clicked in Play mode. e has x, y, button and point [x, y, z].'],
+    ['onTaskAbort(task)', 'A behavior tree aborted a script task of this script (task.signal fired too).'],
 ];
 
 const MEMBERS: [string, string][] = [
@@ -38,6 +39,12 @@ const MEMBERS: [string, string][] = [
     ['this.lookAt(objOrPoint)', 'Turns the object toward another object or a point.'],
     ['this.after(seconds, fn) / this.every(seconds, fn)', 'Timers. Both return a function that cancels them.'],
     ['this.log / warn / error(...args)', 'Writes to the console. Click a message location to jump to the line.'],
+    ['this.blackboard / this.getBlackboard(objOrName)', 'The blackboard of this object\'s behavior tree (null without an agent) or another agent\'s: get(key), set(key, value) for fact keys, version(key), answer(key). See Help > Behavior Tree Reference.'],
+    ['this.say(text, options?)', 'Speaks a line one sentence at a time and resolves when it was spoken. Options: voice, lang, rate, pitch, volume, signal.'],
+    ['this.chat(prompt, options?)', 'Asks an OpenRouter model with the assistant\'s key (in the editor only) and resolves with the text.'],
+    ['this.remember(text, tags?) / this.memory(id)', 'Adds a memory that Recall and memory choices can find, or reads one.'],
+    ['this.saveMemories() / this.loadMemories(saved)', 'The memories remembered while playing as JSON for a game save, and back.'],
+    ['this.setPlayer(obj?)', 'Agents nearest to this object get their questions answered first (the camera until a script sets one).'],
     ['this.camera, this.scene, this.engine, this.core', "Engine access. You can also import { Vector3 } from '@orillusion/core'."],
 ];
 

@@ -75,7 +75,7 @@ export class RenderGraphPanel {
         );
         editor.graph.on('changed', () => this.refresh());
         editor.store.on('change', (hint) => {
-            if (hint?.nodes) return;
+            if (hint?.nodes || hint?.behavior) return;
             this.renderSide();
         });
         editor.shaders.on('status', () => this.renderSide());

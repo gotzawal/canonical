@@ -53,12 +53,20 @@ function shared() {
         esbuild: {
             keepNames: true,
         },
+        // The agents' inference worker imports ONNX Runtime when a model is
+        // first loaded; a dynamic import in a worker needs module workers.
+        worker: {
+            format: 'es',
+        },
     }
 }
 
 /**
  * Writes player-manifest.json: player.html and every file it loads (its
- * entry chunk, the chunks that imports, CSS and assets, the favicon).
+ * entry chunk, the chunks that imports, CSS and assets, workers and the
+ * files their code names, the favicon). `ai` lists the files only agents
+ * with models use (the inference worker, ONNX Runtime and its WebAssembly),
+ * which games without Ask or Recall leave out.
  */
 function playerManifest() {
     return {
@@ -69,19 +77,60 @@ function playerManifest() {
                 (c) => c.type === 'chunk' && c.isEntry && (c.facadeModuleId || '').endsWith('player.html'),
             )
             if (!entry) return
-            const files = new Set(['player.html'])
-            const visit = (name) => {
-                const item = bundle[name]
-                if (!item || files.has(name)) return
-                files.add(name)
-                if (item.type !== 'chunk') return
-                for (const n of [...item.imports, ...item.dynamicImports]) visit(n)
-                for (const n of item.viteMetadata?.importedCss ?? []) files.add(n)
-                for (const n of item.viteMetadata?.importedAssets ?? []) files.add(n)
+            const names = Object.keys(bundle)
+            const code = (item) => {
+                if (item.type === 'chunk') return item.code
+                if (!/\.m?js$/.test(item.fileName)) return ''
+                return typeof item.source === 'string' ? item.source : Buffer.from(item.source).toString('utf8')
             }
-            visit(entry.fileName)
+            // What a file loads: its imports, CSS and assets, and the files its
+            // code names (a worker, the chunks the worker imports, WebAssembly).
+            const refs = (name) => {
+                const item = bundle[name]
+                if (!item) return []
+                const out = []
+                if (item.type === 'chunk') {
+                    out.push(...item.imports, ...item.dynamicImports)
+                    out.push(...(item.viteMetadata?.importedCss ?? []), ...(item.viteMetadata?.importedAssets ?? []))
+                }
+                const text = code(item)
+                if (text) for (const n of names) if (n !== name && text.includes(path.posix.basename(n))) out.push(n)
+                return out
+            }
+            const reach = (skip) => {
+                const seen = new Set()
+                const visit = (name) => {
+                    if (seen.has(name) || name === skip) return
+                    seen.add(name)
+                    for (const n of refs(name)) visit(n)
+                }
+                visit(entry.fileName)
+                return seen
+            }
+            // The chunk the player imports dynamically for the models (play/ai/services.ts;
+            // Rollup gives it no facade when it holds more modules). Only when nothing
+            // imports it statically from the player page are its files optional.
+            const aiChunk = Object.values(bundle).find(
+                (c) => c.type === 'chunk' && c.moduleIds.some((m) => m.replace(/\\/g, '/').endsWith('/play/ai/services.ts')),
+            )
+            const statics = new Set()
+            const visitStatic = (name) => {
+                const item = bundle[name]
+                if (!item || item.type !== 'chunk' || statics.has(name)) return
+                statics.add(name)
+                for (const n of item.imports) visitStatic(n)
+            }
+            visitStatic(entry.fileName)
+            const split = aiChunk && !statics.has(aiChunk.fileName)
+            const all = reach(null)
+            const core = split ? reach(aiChunk.fileName) : all
+            const files = new Set(['player.html', ...all])
             if (fs.existsSync(path.join(options.dir, 'favicon.svg'))) files.add('favicon.svg')
-            const manifest = { html: 'player.html', files: Array.from(files).sort() }
+            const manifest = {
+                html: 'player.html',
+                files: Array.from(files).sort(),
+                ai: Array.from(all).filter((n) => !core.has(n)).sort(),
+            }
             fs.writeFileSync(path.join(options.dir, PLAYER_MANIFEST), JSON.stringify(manifest, null, 1))
         },
     }

@@ -9,9 +9,13 @@ import type { Picker } from '../engine/picking';
 import type { Runtime } from '../engine/runtime';
 import { buildGeometry, type SceneSync } from '../engine/sync';
 import { logInfo } from '../ui/statusbar';
+import { AgentSystem, type AgentHost, type AIServices, type BlackboardApi } from './ai/agents';
+import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
-import { CTX, Script, withContext, type PlayApi, type Shape, type SpawnOptions, type ScriptTime } from './script';
+import {
+    CTX, Script, withContext, type ChatRequest, type PlayApi, type Shape, type SpawnOptions, type ScriptTime,
+} from './script';
 
 export type PlayState = 'stopped' | 'playing' | 'paused';
 
@@ -62,14 +66,23 @@ const MAX_DT = 0.1;
 /**
  * Play mode: instantiates the scripts attached to nodes, runs their
  * lifecycle every frame and, on Stop, puts the document, its undo history
- * and the engine scene back the way they were.
+ * and the engine scene back the way they were. Objects with an agent run
+ * their behavior trees in the same frame loop (see play/ai/agents.ts).
  */
-export class Player extends Emitter<PlayerEvents> implements PlayApi {
+export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost {
     state: PlayState = 'stopped';
     readonly input = new Input();
     readonly time: ScriptTime = { delta: 0, elapsed: 0, frame: 0 };
     readonly issues: ScriptIssue[] = [];
     readonly logs: ScriptLog[] = [];
+    /** Behavior trees of the objects with an agent. */
+    readonly agents: AgentSystem;
+    /** Voice lines of scripts (this.say), one sentence at a time. */
+    readonly speech = new SpeechQueue();
+    /** The agents' models; set by the editor or the game player. */
+    aiServices: () => AIServices | null = () => null;
+    /** Language model for scripts (this.chat); the editor sets it, games have none. */
+    chatModel: ((req: ChatRequest) => Promise<string>) | null = null;
 
     private instances: Instance[] = [];
     private timers: Timer[] = [];
@@ -85,6 +98,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
     private pointerTarget: { obj: Object3D; x: number; y: number } | null = null;
     private gameCamera: Camera3D | null = null;
     private listeners: [EventTarget, string, EventListener][] = [];
+    private chats = new Set<AbortController>();
 
     constructor(
         private runtime: Runtime,
@@ -94,6 +108,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
         private compiler: ScriptCompiler,
     ) {
         super();
+        this.agents = new AgentSystem(this, () => this.aiServices());
     }
 
     get engine() {
@@ -130,6 +145,14 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
         this.sceneChildren = new Set(this.runtime.scene.entityChildren as Object3D[]);
         this.setupCamera();
         this.instantiate();
+        // Blackboards exist before awake() / start(), so scripts can write their first facts there.
+        try {
+            this.agents.start();
+        } catch (e: any) {
+            // The scripts still run: Play must not stop half way into the game camera.
+            console.error('[ai] the agents could not start', e);
+            this.warn(`The agents could not start: ${e?.message || e}`);
+        }
         this.bindInput();
         this.last = performance.now();
         this.offFrame = this.runtime.onBeforeFrame(() => this.tick());
@@ -149,6 +172,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
 
     stop() {
         if (this.state === 'stopped') return;
+        // Running tasks are aborted first (their scripts get onTaskAbort), then scripts get onDestroy.
+        this.agents.stop();
+        this.speech.cancelAll();
+        for (const c of this.chats) c.abort();
+        this.chats.clear();
         for (const inst of this.instances) {
             if (!inst.destroyed) this.call(inst, 'onDestroy');
         }
@@ -291,6 +319,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'update', dt);
         }
         this.runTimers();
+        this.agents.frame();
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'lateUpdate', dt);
         }
@@ -517,9 +546,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
             this.pendingDestroy.push({ obj, owner, at: this.time.elapsed + delay });
             return;
         }
-        // Scripts on the object and below it get onDestroy and stop running.
+        // Scripts on the object and below it get onDestroy and stop running; so do their trees.
         const doomed = new Set<Object3D>();
         obj.traverse((o: Object3D) => doomed.add(o));
+        this.agents.removeObjects(doomed);
         for (const inst of this.instances) {
             if (!inst.destroyed && doomed.has(inst.obj)) {
                 inst.destroyed = true;
@@ -574,6 +604,87 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi {
             for (const child of o.entityChildren as Object3D[]) if (child instanceof Object3D) visit(child);
         };
         visit(obj);
+    }
+
+    // ------------------------------------------------------------ agents
+
+    doc() {
+        return this.store.doc;
+    }
+
+    objectOf(nodeId: string): Object3D | null {
+        if (this.sync.detached.has(nodeId)) return null;
+        return this.sync.entries.get(nodeId)?.obj ?? null;
+    }
+
+    findObject(ref: string): Object3D | null {
+        return this.objectOf(ref) ?? this.find(ref);
+    }
+
+    scriptsOn(obj: Object3D): Script[] {
+        return this.instances.filter((i) => i.obj === obj && !i.destroyed && !i.broken).map((i) => i.script);
+    }
+
+    invoke(script: Script, method: string, args: unknown[]): { ok: true; value: unknown } | { ok: false } {
+        const inst = this.instances.find((i) => i.script === script);
+        const fn = (script as any)[method];
+        if (!inst || typeof fn !== 'function') return { ok: false };
+        try {
+            return { ok: true, value: fn.apply(script, args) };
+        } catch (e) {
+            this.fail(inst, method, e);
+            return { ok: false };
+        }
+    }
+
+    warn(text: string) {
+        console.warn(text);
+        this.pushLog('warn', text);
+    }
+
+    /** A line a Model task speaks (the same voice queue as this.say). */
+    speak(text: string) {
+        void this.speech.say(text).catch(() => {});
+    }
+
+    blackboard(target: Object3D | string): BlackboardApi | null {
+        return this.agents.blackboardApi(target);
+    }
+
+    setPlayer(obj: Object3D | null) {
+        this.agents.player = obj;
+    }
+
+    remember(text: string, tags: string[]): string | null {
+        return this.agents.remember(text, tags);
+    }
+
+    memory(id: string): { id: string; text: string; tags: string[] } | null {
+        const e = this.agents.memory?.get(String(id ?? ''));
+        return e ? { id: e.id, text: e.text, tags: e.tags.slice() } : null;
+    }
+
+    saveMemories() {
+        return this.agents.saveMemories();
+    }
+
+    loadMemories(items: unknown): number {
+        return this.agents.loadMemories(items);
+    }
+
+    say(owner: Script, text: string, opts: SayOptions = {}): Promise<void> {
+        return this.speech.say(String(text ?? ''), opts);
+    }
+
+    chat(owner: Script, req: ChatRequest): Promise<string> {
+        if (!this.chatModel) return Promise.reject(new Error('No language model is set up here: this.chat() works in the editor with an OpenRouter key.'));
+        // Stop cancels the requests still open, along with the signal a task passed.
+        const ctl = new AbortController();
+        const outer = req.signal;
+        if (outer?.aborted) ctl.abort();
+        else outer?.addEventListener('abort', () => ctl.abort(), { once: true });
+        this.chats.add(ctl);
+        return this.chatModel({ ...req, signal: ctl.signal }).finally(() => this.chats.delete(ctl));
     }
 
     timer(owner: Script, seconds: number, fn: () => void, repeat: boolean): () => void {

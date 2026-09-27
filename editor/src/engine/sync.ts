@@ -103,7 +103,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     // ---------------------------------------------------------------- sync
 
     sync(hint?: ChangeHint) {
-        if (hint?.meta || hint?.design) return;
+        if (hint?.meta || hint?.design || hint?.behavior) return;
         const doc = this.store.doc;
         this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.

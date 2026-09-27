@@ -16,6 +16,8 @@ export interface PlayerManifest {
     html: string;
     /** Every file the player page needs, relative to `base`, including `html`. */
     files: string[];
+    /** Files of `files` only agents with models use (inference worker, ONNX Runtime, WebAssembly). */
+    ai?: string[];
     /** Prefix of the files on this server ('' for a production build). */
     base?: string;
 }

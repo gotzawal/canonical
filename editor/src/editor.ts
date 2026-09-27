@@ -1,3 +1,4 @@
+import { applyBehaviorOps, writeBehaviorChanges, type OpsMode, type OpsResult } from './core/behavior/ops';
 import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
@@ -27,12 +28,13 @@ import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
 import type { Checkpoints } from './design/checkpoints';
+import type { ModelServices } from './play/ai/services';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
 import type { WalkController } from './viewport/walk';
 import type { ReferenceRoom } from './viewport/referenceRoom';
-import { exampleShowcase } from './examples';
+import { exampleGuard, exampleShowcase } from './examples';
 
 export interface EditorServices {
     shaders: ShaderManager;
@@ -42,8 +44,8 @@ export interface EditorServices {
 }
 
 interface EditorEvents {
-    /** Open a script or shader in the code dock. */
-    'open-code': { kind: 'script' | 'shader'; id: string };
+    /** Open a script, shader or behavior tree (as JSON) in the code dock. */
+    'open-code': { kind: 'script' | 'shader' | 'behavior'; id: string };
     /** A model part was picked in the viewport. */
     'focus-part': { node: string; path: string | null };
     /** Show the AI panel, optionally with a prompt to send or prefill. */
@@ -62,6 +64,8 @@ interface EditorEvents {
     isolate: string | null;
     /** The walk camera started or stopped. */
     walk: boolean;
+    /** Show a behavior tree (or schema) in the Behavior tab of the dock. */
+    'show-behavior': { tree?: string; schema?: string; node?: string };
 }
 
 /** Editor commands shared by menus, shortcuts, panels and the AI tools. */
@@ -83,6 +87,8 @@ export class Editor extends Emitter<EditorEvents> {
     walk: WalkController | null = null;
     /** Neutral room to check swatches in (set up by main.ts). */
     room: ReferenceRoom | null = null;
+    /** The models of the agents (set up by main.ts). */
+    models: ModelServices | null = null;
 
     constructor(
         readonly store: Store,
@@ -1134,6 +1140,71 @@ export class Editor extends Emitter<EditorEvents> {
         this.emit('focus-part', { node, path });
     }
 
+    // ------------------------------------------------------------- behavior
+
+    /**
+     * Applies a batch of behavior edit operations (core/behavior/ops.ts) as
+     * one undo step. The editor UI and the assistant both edit trees,
+     * schemas, agents and memory only through this. Edits are locked while
+     * playing: Stop puts the document back, so they would be lost.
+     */
+    applyBehaviorOps(ops: unknown, opts: { mode?: OpsMode; label?: string } = {}): OpsResult {
+        if (this.player.state !== 'stopped') {
+            return {
+                ok: false,
+                errors: [{ op: -1, name: 'play', message: 'Behavior trees cannot be edited while playing (Stop puts the scene back, which would undo the edits). Stop Play first.' }],
+                issues: [],
+                added: [],
+                created: [],
+                touched: { trees: [], schemas: [], objects: [], memory: false, models: false },
+                changes: null,
+                label: '',
+            };
+        }
+        const result = applyBehaviorOps(this.store.doc, ops, opts.mode ?? 'lenient');
+        const changes = result.changes;
+        if (result.ok && changes) {
+            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true });
+        }
+        return result;
+    }
+
+    /** Opens a tree or schema in the Behavior tab. */
+    showBehavior(target: { tree?: string; schema?: string; node?: string } = {}) {
+        this.emit('show-behavior', target);
+    }
+
+    /**
+     * Creates a behavior tree whose default branch waits (a blackboard schema
+     * too when the scene has none) and makes `assign` objects run it.
+     * Returns the id of the tree, or null when it was refused.
+     */
+    newBehaviorTree(opts: { schema?: string; assign?: string[] } = {}): string | null {
+        const doc = this.store.doc;
+        const free = (list: { name: string }[], base: string) => {
+            const taken = new Set(list.map((x) => x.name.toLowerCase()));
+            let n = list.length + 1;
+            while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+            return `${base} ${n}`;
+        };
+        const name = free(doc.behaviors, 'Behavior');
+        const ops: unknown[] = [];
+        let schema = opts.schema ?? doc.blackboards[0]?.id;
+        if (!schema) {
+            schema = free(doc.blackboards, 'Blackboard');
+            ops.push({ op: 'create_schema', name: schema });
+        }
+        ops.push({ op: 'create_tree', name, schema, root: { id: 'root', type: 'selector', children: [{ id: 'idle', type: 'wait', seconds: 1, note: 'Default behavior: replace me.' }] } });
+        for (const id of opts.assign ?? []) ops.push({ op: 'set_agent', object: id, tree: name, enabled: true });
+        const r = this.applyBehaviorOps(ops, { label: 'New Behavior Tree' });
+        if (!r.ok) {
+            const e = r.errors[0];
+            toast(e ? `${e.node ? `${e.node}: ` : ''}${e.message}` : 'Could not create the tree.', 'error', 6000);
+            return null;
+        }
+        return r.created.find((c) => c.kind === 'tree')?.id ?? null;
+    }
+
     // ----------------------------------------------------------------- play
 
     togglePlay() {
@@ -1209,12 +1280,14 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ---------------------------------------------------------------- files
 
-    async newScene(kind: 'default' | 'empty' | 'showcase' = 'default') {
+    async newScene(kind: 'default' | 'empty' | 'showcase' | 'guard' = 'default') {
         if (this.store.doc.nodes.length && !(await confirmDialog('New scene', 'Discard the current scene? It is only kept in this browser unless you saved a file.', 'Discard', true))) {
             return;
         }
-        const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : newScene();
-        this.loadDoc(doc, kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] } : defaultCamera());
+        const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : newScene();
+        const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
+        this.loadDoc(doc, camera);
+        if (kind === 'guard') this.showBehavior({ tree: doc.behaviors[0]?.id });
     }
 
     /**

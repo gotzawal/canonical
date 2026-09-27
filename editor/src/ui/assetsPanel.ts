@@ -15,6 +15,8 @@ export class AssetsPanel {
     readonly el: HTMLElement;
     private list: HTMLElement;
     private key = '';
+    private rendering = false;
+    private again = false;
 
     constructor(private editor: Editor) {
         this.list = h('div', { class: 'asset-list' });
@@ -46,6 +48,25 @@ export class AssetsPanel {
     }
 
     render(force = false) {
+        // Listing a script can compile it, which announces 'compiled' and
+        // comes back here: finish this pass, then list again.
+        if (this.rendering) {
+            this.again = true;
+            return;
+        }
+        this.rendering = true;
+        try {
+            this.renderList(force);
+        } finally {
+            this.rendering = false;
+        }
+        if (this.again) {
+            this.again = false;
+            this.render(true);
+        }
+    }
+
+    private renderList(force: boolean) {
         const doc = this.editor.store.doc;
         const assets = doc.assets.filter((a) => a.purpose !== 'design');
         const planning = doc.assets.length - assets.length;

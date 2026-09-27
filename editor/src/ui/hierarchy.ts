@@ -83,7 +83,7 @@ export class HierarchyPanel {
     private treeKey(): string {
         return (
             (this.editor.isolated ?? '') +
-            this.editor.store.doc.nodes.map((n) => `${n.id}:${n.parent}:${n.name}:${n.visible ? 1 : 0}:${nodeIcon(n)}:${n.prefabChild ? 1 : 0}`).join('|')
+            this.editor.store.doc.nodes.map((n) => `${n.id}:${n.parent}:${n.name}:${n.visible ? 1 : 0}:${nodeIcon(n)}:${n.prefabChild ? 1 : 0}:${n.agent ? `${n.agent.tree}${n.agent.enabled ? 1 : 0}` : ''}`).join('|')
         );
     }
 
@@ -159,6 +159,20 @@ export class HierarchyPanel {
         return Array.from(this.tree.querySelectorAll<HTMLElement>('.tree-row')).map((r) => r.dataset.id!);
     }
 
+    /** Objects that run a behavior tree; a click shows the tree. */
+    private agentMark(node: NodeDoc): HTMLElement {
+        const agent = node.agent!;
+        const tree = this.editor.store.doc.behaviors.find((t) => t.id === agent.tree);
+        const title = tree ? `Runs the behavior tree ${tree.name}${agent.enabled ? '' : ' (disabled)'}` : `Its behavior tree "${agent.tree}" is missing`;
+        const mark = h('span', { class: 'tree-agent' + (agent.enabled ? '' : ' off') + (tree ? '' : ' error'), title }, icon('agent', 13));
+        mark.addEventListener('pointerdown', (e) => e.stopPropagation());
+        mark.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this.editor.showBehavior({ tree: agent.tree });
+        });
+        return mark;
+    }
+
     private row(node: NodeDoc, depth: number, hasKids: boolean, open: boolean, selected: boolean): HTMLElement {
         const editor = this.editor;
         const store = editor.store;
@@ -201,6 +215,7 @@ export class HierarchyPanel {
             name,
             status === 'loading' ? h('span', { class: 'tree-badge', text: 'loading' }) : null,
             status === 'error' ? h('span', { class: 'tree-badge error', text: 'missing' }) : null,
+            node.agent ? this.agentMark(node) : null,
             eye,
         );
 

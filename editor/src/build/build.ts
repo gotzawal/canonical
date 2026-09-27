@@ -4,6 +4,7 @@
 // plus game.json with the scene and a media/ folder with its assets.
 
 import { getAssetBlob } from '../core/assets';
+import { sceneModelsNeeded } from '../core/behavior/format';
 import { usedAssetIds } from '../core/persistence';
 import type { AssetMeta, CameraState, SceneDoc } from '../core/types';
 import { GAME_FILE, PLAYER_MANIFEST, type GameFile, type PlayerManifest } from './gameFile';
@@ -48,8 +49,8 @@ export function assetPath(asset: AssetMeta): string {
     return `media/${asset.id}${stem ? '-' + stem : ''}${ext}`;
 }
 
-/** The player app of this editor: the files every game gets. */
-async function playerFiles(title: string): Promise<ZipEntry[]> {
+/** The player app of this editor: the files every game gets (the AI files only when its agents use models). */
+async function playerFiles(title: string, ai: boolean): Promise<ZipEntry[]> {
     const manifestUrl = new URL(PLAYER_MANIFEST, document.baseURI);
     let res: Response;
     try {
@@ -66,8 +67,10 @@ async function playerFiles(title: string): Promise<ZipEntry[]> {
     const manifest = (await res.json()) as PlayerManifest;
     if (!manifest?.html || !Array.isArray(manifest.files)) throw new Error(`${PLAYER_MANIFEST} is not valid.`);
     const root = new URL(manifest.base ?? '', manifestUrl);
+    const skip = new Set(ai ? [] : manifest.ai ?? []);
     const out: ZipEntry[] = [];
     for (const file of manifest.files) {
+        if (skip.has(file)) continue;
         const r = await fetch(new URL(file, root), { cache: 'no-cache' });
         if (!r.ok) throw new Error(`Could not read ${file} of the player app (${r.status}).`);
         if (file === manifest.html) {
@@ -108,10 +111,18 @@ export function gameScene(source: SceneDoc, scripts: boolean): SceneDoc {
 export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text: string) => void = () => {}): Promise<BuiltGame> {
     const title = opts.title.trim() || source.name || 'Game';
     const warnings: string[] = [];
-    log('Collecting the player app...');
-    const files = await playerFiles(title);
-
     const doc = gameScene(source, opts.scripts);
+    const models = sceneModelsNeeded(doc);
+    const ai = models.length > 0;
+    log('Collecting the player app...');
+    const files = await playerFiles(title, ai);
+    if (ai) {
+        log(
+            `The agents use ${models.join(', ')}: ` +
+                'the game includes ONNX Runtime and downloads the models into the player\'s browser on first play (they play with the defaults until then).',
+        );
+    }
+
     const paths: Record<string, string> = {};
     const kept: AssetMeta[] = [];
     for (const asset of doc.assets) {
