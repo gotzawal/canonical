@@ -110,7 +110,10 @@ export class Agent extends Emitter<AgentEvents> {
     private sessionKey = '';
     /** Sent as OpenRouter's session_id, so the requests of a conversation stay with the provider holding its prompt cache. */
     private conversation = uid('c');
-    private saveTimer = 0;
+    /** Pending saves, per conversation (a switch must not cancel the save of the one before). */
+    private saveTimers = new Map<string, number>();
+    /** A conversation being read: empty for a moment, which must not be saved (that deletes it). */
+    private loadingKey = '';
     private loading: Promise<void> = Promise.resolve();
     /** Counts conversation switches (New conversation, another project): a request of an earlier one stops writing. */
     private generation = 0;
@@ -148,7 +151,9 @@ export class Agent extends Emitter<AgentEvents> {
         this.usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
         this.conversation = uid('c');
         this.emit('update', null);
+        this.loadingKey = key;
         const data = await kvGet<SessionData>(key).catch(() => undefined);
+        if (this.loadingKey === key) this.loadingKey = '';
         if (this.sessionKey !== key || !data || data.version !== 1) return;
         if (typeof data.conversation === 'string' && data.conversation) this.conversation = data.conversation;
         this.turns = Array.isArray(data.turns) ? data.turns : [];
@@ -165,12 +170,14 @@ export class Agent extends Emitter<AgentEvents> {
 
     /** Stores the conversation of this project (debounced). */
     private saveSession() {
-        clearTimeout(this.saveTimer);
         // This conversation, even if another one is loaded before the timer fires.
         const key = this.sessionKey;
+        if (key === this.loadingKey) return;
+        clearTimeout(this.saveTimers.get(key));
         const { history, usage, conversation } = this;
         const all = this.turns;
-        this.saveTimer = window.setTimeout(() => {
+        this.saveTimers.set(key, window.setTimeout(() => {
+            this.saveTimers.delete(key);
             if (!all.length && !history.length) {
                 void kvDelete(key);
                 return;
@@ -189,7 +196,7 @@ export class Agent extends Emitter<AgentEvents> {
                 .map((t) => (t.tool?.result && t.tool.result.length > 6000 ? { ...t, tool: { ...t.tool, result: t.tool.result.slice(0, 6000) + '...' } } : t));
             const data: SessionData = { version: 1, turns, history, usage, savedAt: new Date().toISOString(), conversation };
             void kvSet(key, data);
-        }, 600);
+        }, 600));
     }
 
     /** Starts a new conversation (the scene memo stays). */
@@ -434,7 +441,7 @@ export class Agent extends Emitter<AgentEvents> {
             }
             this.emit('busy', false);
             this.emit('update', null);
-            this.saveSession();
+            if (live()) this.saveSession();
             this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
         }
         return true;
@@ -499,6 +506,8 @@ export class Agent extends Emitter<AgentEvents> {
         const older = this.history.slice(0, cut);
         const note = this.push({ role: 'note', text: auto ? 'The conversation is long: compacting the earlier messages...' : 'Compacting the earlier messages...' });
         const wasWorking = this.working;
+        // Another conversation can be opened while the model summarizes: this one is not about it.
+        const gen = this.generation;
         this.working = true;
         this.emit('busy', this.busy);
         try {
@@ -517,6 +526,7 @@ export class Agent extends Emitter<AgentEvents> {
                 },
                 { signal },
             );
+            if (this.generation !== gen) return false;
             this.addUsage(res.usage);
             const summary = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!summary) throw new Error('The model returned an empty summary.');
@@ -533,6 +543,7 @@ export class Agent extends Emitter<AgentEvents> {
             return true;
         } catch (e: any) {
             if (e?.name === 'AbortError') throw e;
+            if (this.generation !== gen) return false;
             note.text = `Compacting failed (${e?.message || e}); the oldest messages were dropped instead.`;
             note.error = true;
             this.emit('update', note);
@@ -580,6 +591,8 @@ export class Agent extends Emitter<AgentEvents> {
         if (!cred || !aiSettings.value.memo) return false;
         const store = this.editor.store;
         const doc = store.doc;
+        // The project the memo is for: another one can be opened while the model writes.
+        const session = this.sessionKey;
         const state = [
             `Scene "${doc.name}": ${doc.nodes.length} objects, ${doc.prefabs.length} prefabs, ${doc.scripts.length} scripts, ${doc.shaders.length} shaders.`,
             ...pipelineSummary(doc),
@@ -599,6 +612,7 @@ export class Agent extends Emitter<AgentEvents> {
                 ...this.cacheRequest,
                 cacheable: false,
             });
+            if (this.sessionKey !== session) return false;
             this.addUsage(res.usage);
             this.saveSession();
             const text = typeof res.message.content === 'string' ? res.message.content.trim() : '';
