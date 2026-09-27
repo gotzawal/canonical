@@ -3,8 +3,9 @@
 // schema that fit the field (type and owner); a value takes the type of the
 // key its field names (an enum value is picked from the list).
 
+import { allModels, DEFAULT_DECIDE_MODEL, modelTask } from '../../core/behavior/models';
 import { COMPARE_OPS, keyTypeInfo, type FieldDef } from '../../core/behavior/nodeTypes';
-import type { BlackboardKeyDoc, BlackboardSchemaDoc, BlackboardValue } from '../../core/types';
+import type { AiModelDoc, BlackboardKeyDoc, BlackboardSchemaDoc, BlackboardValue } from '../../core/types';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
 import { pretty } from '../paramFields';
@@ -14,6 +15,8 @@ export interface FieldContext {
     schema: BlackboardSchemaDoc | undefined;
     /** Scene objects, for object values. */
     objects: () => { id: string; name: string }[];
+    /** The scene's models, for model fields (the built-in ones are always offered). */
+    models?: () => readonly AiModelDoc[];
 }
 
 /** How a field writes: one-shot changes, or a begin / input / end bracket (scrubbing a number). */
@@ -125,7 +128,7 @@ export function fieldRow(f: FieldDef, get: () => any, ctx: FieldContext, edit: F
         case 'template': {
             const hint = f.kind === 'template' ? `e.g. rumors about {${ctx.schema?.keys[0]?.name ?? 'key'}}` : f.kind === 'method' ? 'methodName' : '';
             const w = new TextField(String(v ?? ''), (x) => edit.commit(f.kind === 'method' ? x.trim() : x), hint);
-            if (f.kind === 'template') w.el.title = `Keys: ${(ctx.schema?.keys ?? []).map((k) => `{${k.name}}`).join(' ')}`;
+            if (f.kind === 'template') w.el.title = `Keys: ${(ctx.schema?.keys ?? []).map((k) => `{${k.name}}`).join(' ')}\nContext pool: {context}, or one slot: {context:slot}`;
             return wrap(w.el, () => w.set(String(get()?.[f.name] ?? '')));
         }
         case 'bool': {
@@ -210,6 +213,16 @@ export function fieldRow(f: FieldDef, get: () => any, ctx: FieldContext, edit: F
         }
         case 'questions':
             return questionsRow(f, get, ctx, edit);
+        case 'model': {
+            // Models that do what the field needs; an empty value is the default one (Ask) or none.
+            const cur = String(v ?? '');
+            const fits = allModels(ctx.models?.() ?? []).filter((m) => !f.modelTasks || f.modelTasks.includes(modelTask(m)!));
+            const none = f.required ? '(pick a model)' : f.modelTasks?.includes('decide') ? `Default (${DEFAULT_DECIDE_MODEL})` : '(none)';
+            const opts = [{ value: '', label: none }, ...fits.map((m) => ({ value: m.id, label: `${m.name} (${m.id})` }))];
+            if (cur && !opts.some((o) => o.value === cur)) opts.push({ value: cur, label: `${cur} (not usable here)` });
+            const w = new SelectField<string>(opts, cur, (x) => edit.commit(x));
+            return wrap(w.el, () => w.set(String(get()?.[f.name] ?? '')));
+        }
     }
 }
 

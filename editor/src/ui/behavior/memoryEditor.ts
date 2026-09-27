@@ -1,14 +1,16 @@
 // The memory editor: what agents can recall (planning notes, lore, rumors).
 // Items have a readable id, tags and a text; Embed computes their vectors
-// with the embedding model in this browser and stores them in the scene
+// with the memory's embed model in this browser and stores them in the scene
 // (int8), so a built game does not need to embed them again.
 
+import { allModels, modelTask } from '../../core/behavior/models';
 import type { BehaviorOp } from '../../core/behavior/ops';
 import type { MemoryItemDoc } from '../../core/types';
 import type { Editor } from '../../editor';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
-import { TextAreaField, TextField, button, row } from '../widgets';
+import { confirmDialog } from '../overlays';
+import { SelectField, TextAreaField, TextField, button, row } from '../widgets';
 
 export interface MemoryHost {
     editor: Editor;
@@ -16,7 +18,7 @@ export interface MemoryHost {
     apply(ops: BehaviorOp[], label: string): string[] | null;
     /** Embeds the items without a vector; resolves with a message for the status line. */
     embed(onProgress: (text: string) => void): Promise<string>;
-    /** Short state of the embedding model for the status line. */
+    /** Short state of the embed model for the status line. */
     embedderStatus(): string;
 }
 
@@ -25,6 +27,7 @@ export class MemoryEditor {
     private list: HTMLElement;
     private detail: HTMLElement;
     private status: HTMLElement;
+    private embedderPick: HTMLElement;
     private filter = '';
     private selected: string | null = null;
     private key = '';
@@ -34,6 +37,7 @@ export class MemoryEditor {
         this.list = h('div', { class: 'bt-memory-list' });
         this.detail = h('div', { class: 'bt-props' });
         this.status = h('span', { class: 'muted small bt-memory-status' });
+        this.embedderPick = h('span', { class: 'bt-embedder' });
         const search = h('input', { class: 'search', attrs: { type: 'search', placeholder: 'Filter by text or tag', spellcheck: 'false' } });
         search.addEventListener('input', () => {
             this.filter = search.value.trim().toLowerCase();
@@ -51,7 +55,7 @@ export class MemoryEditor {
         this.el = h(
             'div',
             { class: 'bt-split' },
-            h('div', { class: 'bt-split-main' }, head, h('div', { class: 'bt-memory-meta' }, this.status), this.list),
+            h('div', { class: 'bt-split-main' }, head, h('div', { class: 'bt-memory-meta' }, this.embedderPick, this.status), this.list),
             h('div', { class: 'bt-split-side' }, this.detail),
         );
     }
@@ -62,10 +66,11 @@ export class MemoryEditor {
 
     render(force = false) {
         const mem = this.host.editor.store.doc.memory;
-        const key = JSON.stringify([mem, this.selected, this.filter, this.host.locked(), this.embedding]);
+        const key = JSON.stringify([mem, this.host.editor.store.doc.aiModels, this.selected, this.filter, this.host.locked(), this.embedding]);
         if (!force && key === this.key) return;
         this.key = key;
         const embedded = mem.items.filter((m) => m.vector).length;
+        this.renderEmbedder();
         if (!this.embedding) this.status.textContent = `${mem.items.length} item${mem.items.length === 1 ? '' : 's'}, ${embedded} embedded with ${mem.embedder}. ${this.host.embedderStatus()}`;
         clear(this.list);
         const shown = mem.items.filter((m) => !this.filter || m.text.toLowerCase().includes(this.filter) || m.id.toLowerCase().includes(this.filter) || m.tags.some((t) => t.toLowerCase().includes(this.filter)));
@@ -84,8 +89,28 @@ export class MemoryEditor {
             });
             this.list.appendChild(r);
         }
-        if (!mem.items.length) this.list.appendChild(h('div', { class: 'empty-hint', text: 'Memory is what agents can recall: notes, lore, rumors. Recall services put the best matches into an Ask\'s context, and an Ask can choose between memory items (the chosen id goes into a string key).' }));
+        if (!mem.items.length) this.list.appendChild(h('div', { class: 'empty-hint', text: 'Memory is what agents can recall: notes, lore, rumors. Recall services put the best matches into the agent\'s context pool, and an Ask can choose between memory items (the chosen id goes into a string key).' }));
         this.renderDetail();
+    }
+
+    /** The embed model the memory's vectors are made with (another one drops them). */
+    private renderEmbedder() {
+        const doc = this.host.editor.store.doc;
+        const models = allModels(doc.aiModels).filter((m) => modelTask(m) === 'embed');
+        const opts = models.map((m) => ({ value: m.id, label: `Embed with ${m.name}` }));
+        if (!opts.some((o) => o.value === doc.memory.embedder)) opts.push({ value: doc.memory.embedder, label: `${doc.memory.embedder} (missing)` });
+        const pick = new SelectField<string>(opts, doc.memory.embedder, async (id) => {
+            const vectors = doc.memory.items.some((m) => m.vector);
+            if (vectors && !(await confirmDialog('Change the embed model', 'Vectors of different models do not compare: the memory\'s vectors are dropped, and Embed makes them again with the new model.', 'Change'))) {
+                this.render(true);
+                return;
+            }
+            this.host.apply([{ op: 'set_memory_vectors', embedder: id, vectors: {} }], 'Embed Model');
+            this.render(true);
+        });
+        pick.el.disabled = this.host.locked();
+        pick.el.title = 'Recall and memory choices compare queries and items with this model (Models view).';
+        this.embedderPick.replaceChildren(pick.el);
     }
 
     private renderDetail() {

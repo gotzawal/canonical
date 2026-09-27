@@ -8,6 +8,7 @@
 import type {
     AskTrigger, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardValue, CompareOp, EnumValueDoc,
 } from '../types';
+import type { ModelTask } from './models';
 
 export type FieldKind =
     | 'number'
@@ -33,7 +34,9 @@ export type FieldKind =
     /** A method name of a script on the agent's object. */
     | 'method'
     /** Ask questions: target key and question text. */
-    | 'questions';
+    | 'questions'
+    /** A model id (scene or built-in), limited by modelTasks. */
+    | 'model';
 
 export interface FieldChoice {
     value: string;
@@ -54,6 +57,8 @@ export interface FieldDef {
     keyOwners?: BlackboardKeyOwner[];
     /** 'value' fields: the field that names the key. */
     keyField?: string;
+    /** 'model' fields: what the model must do. */
+    modelTasks?: ModelTask[];
     /** Must not be empty. */
     required?: boolean;
     /** The field applies only when this holds (it is hidden and not checked otherwise). */
@@ -115,7 +120,7 @@ export interface OwnerInfo {
 
 export const KEY_OWNERS: OwnerInfo[] = [
     { owner: 'fact', label: 'Fact (scripts)', description: 'Written by scripts only: what the agent perceives. Prefer categories (near / mid / far); Ask notices a change by the key\'s write version.' },
-    { owner: 'ai', label: 'AI (one Ask)', description: 'Written by exactly one Ask of the tree, with a confidence, source and time. Until the model answers, the key has its default.' },
+    { owner: 'ai', label: 'AI (one Ask or Model task)', description: 'Written by exactly one Ask or Model task of the tree, with a confidence, source and time. Until the model answers, the key has its default.' },
     { owner: 'tree', label: 'Tree (Set Key, script tasks)', description: 'Written by the tree: Set Key tasks and script tasks (task.set). Goals such as a move target, or the step of a sequence.' },
 ];
 
@@ -193,6 +198,7 @@ const memoryChoices = (item: any) => item?.choices === 'memory';
 
 /** Fields of the Ask task and the Ask service. */
 const ASK_FIELDS: FieldDef[] = [
+    { name: 'model', kind: 'model', label: 'Model', description: 'The decide model that answers: Laya, or any zero-shot NLI model added in the Models view. Empty uses laya-en-q4.', default: '', modelTasks: ['decide'] },
     {
         name: 'questions',
         kind: 'questions',
@@ -202,7 +208,7 @@ const ASK_FIELDS: FieldDef[] = [
         required: true,
     },
     { name: 'facts', kind: 'keys', label: 'Facts', description: 'Fact keys the model sees. Questions that look at the same facts belong in one Ask.', default: [], keyOwners: ['fact'] },
-    { name: 'context', kind: 'bool', label: 'Use Context', description: 'Also show the model the context a Recall service assembled.', default: false },
+    { name: 'context', kind: 'bool', label: 'Use Context', description: 'Also show the model the agent\'s context pool: what Recall services found, and what scripts and Model tasks added (dialogue lines).', default: false },
     { name: 'minConfidence', kind: 'unit', label: 'Min Confidence', description: 'Answers less confident than this keep the key\'s previous value.', default: 0 },
     { name: 'minHold', kind: 'seconds', label: 'Min Hold', description: 'Seconds a written value stays before another answer may change it.', default: 0, min: 0 },
     { name: 'priority', kind: 'choice', label: 'Priority', description: 'Rank in the request queue, after the distance to the player.', default: 'normal', choices: PRIORITIES },
@@ -235,6 +241,7 @@ function questionsBrief(item: any, keys: KeyLookup): string {
         return `${q?.key || '?'} (${fmt})`;
     });
     let s = `-> ${parts.join(', ') || 'no questions'}`;
+    if (item.model) s += ` model=${item.model}`;
     if (Array.isArray(item.facts) && item.facts.length) s += ` facts=[${item.facts.join(', ')}]`;
     if (item.context) s += ' +context';
     if (item.choices === 'memory') s += ` from memory "${item.memoryQuery || '(question)'}"${item.memoryTags?.length ? ` tags=[${item.memoryTags.join(', ')}]` : ''} k=${item.memoryCount}`;
@@ -317,6 +324,28 @@ export const NODE_TYPES: ItemTypeDef[] = [
         fields: ASK_FIELDS,
         brief: questionsBrief,
     },
+    {
+        type: 'infer',
+        category: 'task',
+        label: 'Model Task',
+        icon: 'sparkle',
+        summary: 'Runs a classify or generate model on a text made from blackboard values and the context pool, and writes the result to an AI key.',
+        details:
+            'The input is a template: {key} is replaced with a blackboard value, {context} with the agent\'s context pool (what Recall found, dialogue lines, what scripts added) and {context:slot} with one slot of it. A classifier writes its top label (string key, or enum key when the label names a value) or the probability of a label (probability key); a generator writes its text (string key). The task runs until the result is written, and fails when it is not (no model, less confident than the minimum, or too late). With History the written result is also added to that context slot as "Name: text", so a dialogue builds up turn by turn.',
+        fields: [
+            { name: 'model', kind: 'model', label: 'Model', description: 'A classify or generate model (Models view).', default: '', modelTasks: ['classify', 'generate'], required: true },
+            { name: 'input', kind: 'template', label: 'Input', description: 'The text the model gets; {key}, {context} and {context:slot} are filled in.', default: '', required: true },
+            { name: 'output', kind: 'key', label: 'Output', description: 'The AI key for the result: string (text or top label), enum (top label) or probability (P of the label).', default: '', keyOwners: ['ai'], keyTypes: ['string', 'enum', 'probability'], required: true },
+            { name: 'label', kind: 'text', label: 'Label', description: 'Classifiers with a probability output: the label whose probability is written (empty: the top label\'s).', default: '' },
+            { name: 'minConfidence', kind: 'unit', label: 'Min Confidence', description: 'Classifiers: results less confident than this keep the key\'s value.', default: 0 },
+            { name: 'maxTokens', kind: 'integer', label: 'Max Tokens', description: 'Generators: most new tokens.', default: 32, min: 1, max: 512 },
+            { name: 'temperature', kind: 'number', label: 'Temperature', description: 'Generators: 0 takes the likeliest token, higher values vary more.', default: 0.7, min: 0, max: 2 },
+            { name: 'history', kind: 'text', label: 'History', description: 'A context slot the written result is added to as "Name: text" (a dialogue); empty for none.', default: '' },
+            { name: 'speak', kind: 'bool', label: 'Speak', description: 'Speak the written text, one sentence at a time.', default: false },
+            { name: 'timeout', kind: 'seconds', label: 'Timeout', description: 'Seconds to wait for the result before the task fails (a generator on the CPU takes seconds).', default: 20, min: 0.5 },
+        ],
+        brief: (n) => `${n.model || '?'} -> ${n.output || '?'}${n.history ? ` history=${n.history}` : ''}${n.speak ? ' speak' : ''} "${String(n.input ?? '').replace(/\s+/g, ' ').slice(0, 48)}"`,
+    },
 ];
 
 export const DECORATOR_TYPES: ItemTypeDef[] = [
@@ -363,9 +392,9 @@ export const SERVICE_TYPES: ItemTypeDef[] = [
         category: 'service',
         label: 'Recall',
         icon: 'search',
-        summary: 'Looks up the memory items that match a query and keeps them as the agent\'s context.',
+        summary: 'Looks up the memory items that match a query and puts them into the agent\'s context pool.',
         details:
-            'The query is embedded and compared with the memory items: items with one of the tags, the best matches by cosine, put in id order and joined within the token budget. Asks with Use Context show this context to the model.',
+            'The query is embedded and compared with the memory items: items with one of the tags, the best matches by cosine, put in id order and joined within the token budget. They fill the context slot named after the service; Asks with Use Context and Model tasks with {context} show the pool to their model.',
         fields: [
             intervalField(2),
             jitterField,

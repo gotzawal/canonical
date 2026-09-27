@@ -1,39 +1,43 @@
 /// <reference lib="webworker" />
-// The inference worker: runs the decision model (Laya) and the embedding
-// model with ONNX Runtime Web, on a WebGPU device of its own (WASM when
-// WebGPU is missing or fails). ONNX Runtime is imported only when a model is
-// loaded, so pages without agents never fetch its 27 MB of WebAssembly.
+// The inference worker: runs the scene's models with ONNX Runtime Web, on a
+// WebGPU device of its own (WASM when WebGPU is missing or fails). ONNX
+// Runtime is imported only when a model is loaded, so pages without agents
+// never fetch its 27 MB of WebAssembly.
 //
-// Jobs run one at a time in priority order (answers first, then query
-// embeddings, then memory embeddings) and are kept short: embeddings go in
-// chunks. While the GPU runs a batch, the next batch is tokenized (prepare).
-// When the device is lost, every model stops and the page falls back to the
-// schema defaults.
+// A model is any folder with tokenizer.json (config.json and
+// tokenizer_config.json when it has them) and an ONNX file, or a
+// manifest.json of parts joined in order. It runs with the adapter of its
+// kind (adapters.ts). Jobs run one at a time in priority order (the
+// scheduler's batches, then query embeddings, then memory embeddings, which
+// the page sends in small chunks); while the GPU runs a batch, the next one
+// is tokenized (prepare). When the device is lost, every model stops and the
+// page falls back to the schema defaults.
 
 import { Tokenizer } from '@huggingface/tokenizers';
 import type * as Ort from 'onnxruntime-web';
-import { buildSequence, calibrate, QTYPE_INDEX, type LayaConfig, type LayaQuestion, type SpecialIds } from './laya';
-import type { ModelKind, ModelSource } from './models';
+import { modelFingerprint } from '../../core/behavior/models';
+import type { AiModelDoc } from '../../core/types';
+import { ADAPTERS, type Adapter } from './adapters';
 
 declare const self: DedicatedWorkerGlobalScope;
 
 export type WorkerIn =
     | { type: 'init'; wasm: string; backend: 'auto' | 'webgpu' | 'wasm' }
-    | { type: 'check'; id: number; source: ModelSource }
-    | { type: 'load'; id: number; source: ModelSource; download: boolean }
-    | { type: 'ask'; id: number; items: { state: string; questions: LayaQuestion[] }[] }
-    | { type: 'embed'; id: number; texts: string[]; kind: 'query' | 'passage' }
-    | { type: 'prepare'; items: { state: string; questions: LayaQuestion[] }[] }
-    | { type: 'forget'; id: number; source: ModelSource };
+    | { type: 'check'; id: number; model: AiModelDoc }
+    | { type: 'load'; id: number; model: AiModelDoc; download: boolean; size?: number }
+    | { type: 'run'; id: number; model: string; inputs: unknown[]; priority: number }
+    | { type: 'prepare'; model: string; inputs: unknown[] }
+    | { type: 'forget'; id: number; model: AiModelDoc };
 
 export type WorkerOut =
-    | { type: 'progress'; kind: ModelKind; loaded: number; total: number; file: string }
+    | { type: 'progress'; model: string; loaded: number; total: number; file: string }
     | { type: 'done'; id: number; result: any; ms: number }
     | { type: 'failed'; id: number; message: string; code?: 'not-cached' | 'lost' }
     | { type: 'lost'; message: string };
 
 const CACHE = 'canonical-models-v1';
-const EMBED_CHUNK = 16;
+/** Files a model folder may have; an empty {} is stored when it has not (so the cache knows). */
+const OPTIONAL = ['config.json', 'tokenizer_config.json'];
 
 let ort: typeof Ort | null = null;
 let wasmUrl = '';
@@ -43,34 +47,37 @@ let deviceTried = false;
 let lost = false;
 
 interface Loaded {
-    source: ModelSource;
+    fingerprint: string;
     session: Ort.InferenceSession;
-    tokenizer: Tokenizer;
+    adapter: Adapter;
     backend: 'webgpu' | 'wasm';
 }
 
-let decision: DecisionModel | null = null;
-let embedder: Loaded | null = null;
-const loading = new Map<ModelKind, Promise<void>>();
+const models = new Map<string, Loaded>();
+const loading = new Map<string, Promise<unknown>>();
 
 const post = (msg: WorkerOut, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
 // ------------------------------------------------------------------ files
 
 class NotCached extends Error {}
+class Missing extends Error {}
 
 /** A file from Cache Storage, or downloaded into it (when allowed). */
-async function file(url: string, download: boolean, onBytes: (n: number) => void, sha256?: string): Promise<ArrayBuffer> {
+async function file(url: string, download: boolean, onBytes: (n: number, total?: number) => void, sha256?: string): Promise<ArrayBuffer> {
     const cache = await caches.open(CACHE);
     const hit = await cache.match(url);
     if (hit) {
         const buf = await hit.arrayBuffer();
-        onBytes(buf.byteLength);
+        onBytes(buf.byteLength, buf.byteLength);
         return buf;
     }
     if (!download) throw new NotCached(url);
     const res = await fetch(url);
+    if (res.status === 404) throw new Missing(url);
     if (!res.ok || !res.body) throw new Error(`${url} could not be downloaded (${res.status} ${res.statusText}).`);
+    const length = Number(res.headers.get('content-length')) || undefined;
+    onBytes(0, length);
     const reader = res.body.getReader();
     const chunks: Uint8Array[] = [];
     for (;;) {
@@ -89,64 +96,79 @@ async function file(url: string, download: boolean, onBytes: (n: number) => void
     return buf;
 }
 
-async function json(url: string, download: boolean, onBytes: (n: number) => void): Promise<any> {
-    return JSON.parse(new TextDecoder().decode(await file(url, download, onBytes)));
-}
+const at = (m: AiModelDoc, name: string) => new URL(name, m.url).href;
+const isManifest = (m: AiModelDoc) => /\.json$/i.test(m.file);
 
-const at = (src: ModelSource, name: string) => new URL(name, src.base).href;
-
-/** Every file of a model, joined into the model bytes. */
-async function fetchModel(src: ModelSource, download: boolean): Promise<{ bytes: Uint8Array; config: any; tokenizer: any; tokenizerConfig: any }> {
+/** Every file of a model: the tokenizer, the configs ({} when missing) and the model bytes (parts joined). */
+async function fetchModel(m: AiModelDoc, download: boolean, size = 0) {
     let loaded = 0;
-    let total = src.size;
+    let total = size;
     let last = 0;
-    const onBytes = (n: number, name: string) => {
+    /** Progress of one file; `sized`: its length adds to the total (not for parts, the manifest has their sum). */
+    const onBytes = (name: string, sized = true) => (n: number, length?: number) => {
+        if (length !== undefined && sized && !size) total += length;
         loaded += n;
         const now = performance.now();
         if (now - last > 120) {
             last = now;
-            post({ type: 'progress', kind: src.kind, loaded, total: Math.max(total, loaded), file: name });
+            post({ type: 'progress', model: m.id, loaded, total: Math.max(total, loaded), file: name });
         }
     };
-    const small = (name: string) => json(at(src, name), download, (n) => onBytes(n, name));
-    const config = src.config ? await small(src.config) : null;
-    const tokenizer = await small(src.tokenizer);
-    const tokenizerConfig = src.tokenizerConfig ? await small(src.tokenizerConfig).catch(() => ({})) : {};
+    const json = async (name: string, optional = false) => {
+        try {
+            return JSON.parse(new TextDecoder().decode(await file(at(m, name), download, onBytes(name))));
+        } catch (e) {
+            if (!(optional && e instanceof Missing)) throw e;
+            (await caches.open(CACHE)).put(at(m, name), new Response('{}'));
+            return {};
+        }
+    };
+    const tokenizer = await json('tokenizer.json');
+    const [config, tokenizerConfig] = [await json(OPTIONAL[0], true), await json(OPTIONAL[1], true)];
     let bytes: Uint8Array;
-    if ('manifest' in src.model) {
-        const manifest = await small(src.model.manifest);
+    if (isManifest(m)) {
+        // Parts listed in order: { total_bytes, parts: [{ file, bytes, sha256 }] } (hosts that take files up to 100 MB).
+        const manifest = await json(m.file);
         const parts: { file: string; bytes: number; sha256?: string }[] = manifest.parts ?? [];
-        total = loaded + (manifest.total_bytes ?? parts.reduce((s, p) => s + p.bytes, 0));
-        bytes = new Uint8Array(parts.reduce((s, p) => s + p.bytes, 0));
+        const sum = parts.reduce((s, p) => s + p.bytes, 0);
+        total = Math.max(total, loaded + (manifest.total_bytes ?? sum));
+        bytes = new Uint8Array(sum);
         let offset = 0;
         for (const p of parts) {
-            const buf = new Uint8Array(await file(at(src, p.file), download, (n) => onBytes(n, p.file), p.sha256));
+            const buf = new Uint8Array(await file(new URL(p.file, at(m, m.file)).href, download, onBytes(p.file, false), p.sha256));
             bytes.set(buf, offset);
             offset += buf.byteLength;
         }
-    } else {
-        bytes = new Uint8Array(await file(at(src, src.model.file), download, (n) => onBytes(n, (src.model as { file: string }).file)));
-    }
-    post({ type: 'progress', kind: src.kind, loaded: total, total, file: '' });
-    return { bytes, config, tokenizer, tokenizerConfig };
+    } else bytes = new Uint8Array(await file(at(m, m.file), download, onBytes(m.file)));
+    post({ type: 'progress', model: m.id, loaded, total: loaded, file: '' });
+    return { bytes, tokenizer, config, tokenizerConfig };
 }
 
-async function isCached(src: ModelSource): Promise<boolean> {
+/** The URLs of a model's files (a manifest's parts when it is cached). */
+async function modelFiles(m: AiModelDoc): Promise<string[] | null> {
     const cache = await caches.open(CACHE);
-    const files = [src.tokenizer, ...(src.config ? [src.config] : [])];
-    if ('manifest' in src.model) {
-        const m = await cache.match(at(src, src.model.manifest));
-        if (!m) return false;
-        const manifest = await m.json();
-        files.push(...(manifest.parts ?? []).map((p: any) => p.file));
-    } else files.push(src.model.file);
-    for (const f of files) if (!(await cache.match(at(src, f)))) return false;
+    const urls = ['tokenizer.json', ...OPTIONAL, m.file].map((f) => at(m, f));
+    if (isManifest(m)) {
+        const hit = await cache.match(at(m, m.file));
+        if (!hit) return null;
+        const manifest = await hit.json();
+        urls.push(...(manifest.parts ?? []).map((p: { file: string }) => new URL(p.file, at(m, m.file)).href));
+    }
+    return urls;
+}
+
+async function isCached(m: AiModelDoc): Promise<boolean> {
+    const cache = await caches.open(CACHE);
+    const urls = await modelFiles(m);
+    if (!urls) return false;
+    for (const u of urls) if (!(await cache.match(u))) return false;
     return true;
 }
 
-async function forget(src: ModelSource) {
+async function forget(m: AiModelDoc) {
     const cache = await caches.open(CACHE);
-    for (const req of await cache.keys()) if (req.url.startsWith(src.base)) await cache.delete(req);
+    for (const u of (await modelFiles(m)) ?? []) await cache.delete(u);
+    if (models.get(m.id)?.fingerprint === modelFingerprint(m)) models.delete(m.id);
 }
 
 // ---------------------------------------------------------------- runtime
@@ -181,8 +203,7 @@ async function ownDevice(): Promise<GPUDevice | null> {
         void device.lost.then((info) => {
             if (info.reason === 'destroyed') return;
             lost = true;
-            decision = null;
-            embedder = null;
+            for (const [id, l] of models) if (l.backend === 'webgpu') models.delete(id);
             post({ type: 'lost', message: info.message || 'The GPU device was lost.' });
         });
         return device;
@@ -193,13 +214,22 @@ async function ownDevice(): Promise<GPUDevice | null> {
     }
 }
 
+/** Sessions are made one at a time: ONNX Runtime stalls when two are created at once. */
+let sessionLock: Promise<unknown> = Promise.resolve();
+
 /**
  * A session on the worker's WebGPU device, else on WebAssembly. Some models
  * only fail once they run (fp16 parts on a device without shader-f16), so a
  * WebGPU session must pass `warm` (one small run, which also compiles the
  * shaders before the first real request) or WASM is used.
  */
-async function session(bytes: Uint8Array, warm: (s: Ort.InferenceSession) => Promise<unknown>): Promise<{ session: Ort.InferenceSession; backend: 'webgpu' | 'wasm' }> {
+function session(bytes: Uint8Array, warm: (s: Ort.InferenceSession) => Promise<unknown>): Promise<{ session: Ort.InferenceSession; backend: 'webgpu' | 'wasm' }> {
+    const next = sessionLock.then(() => makeSession(bytes, warm));
+    sessionLock = next.catch(() => {});
+    return next;
+}
+
+async function makeSession(bytes: Uint8Array, warm: (s: Ort.InferenceSession) => Promise<unknown>): Promise<{ session: Ort.InferenceSession; backend: 'webgpu' | 'wasm' }> {
     const o = await runtime();
     const gpu = await ownDevice();
     if (gpu && !lost) {
@@ -214,201 +244,47 @@ async function session(bytes: Uint8Array, warm: (s: Ort.InferenceSession) => Pro
             await s?.release().catch(() => {});
         }
     }
-    return { session: await o.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 }), backend: 'wasm' };
+    const s = await o.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 });
+    await warm(s);
+    return { session: s, backend: 'wasm' };
 }
 
-function specialIds(config: any, tok: Tokenizer): SpecialIds {
-    const id = (name: string, fallback?: number) => {
-        const v = typeof fallback === 'number' ? fallback : tok.token_to_id(name);
-        if (v === undefined) throw new Error(`The tokenizer has no ${name} token.`);
-        return v;
-    };
-    return {
-        cls: id('[CLS]', config?.cls),
-        sep: id('[SEP]', config?.sep),
-        pad: id('[PAD]', config?.pad),
-        mask: id('[MASK]', config?.mask),
-        maskToken: config?.mask_token ?? '[MASK]',
-    };
-}
-
-async function load(src: ModelSource, download: boolean): Promise<{ backend: string }> {
-    const cur = src.kind === 'decision' ? decision : embedder;
-    if (cur && cur.source.id === src.id) return { backend: cur.backend };
-    const pending = loading.get(src.kind);
-    if (pending) await pending.catch(() => {});
+async function load(m: AiModelDoc, download: boolean, size?: number): Promise<{ backend: string; info?: Record<string, unknown> }> {
+    const fingerprint = modelFingerprint(m);
+    const key = `${m.id}|${fingerprint}`;
+    const cur = models.get(m.id);
+    if (cur?.fingerprint === fingerprint) return { backend: cur.backend, info: cur.adapter.info };
+    const pending = loading.get(key);
+    if (pending) {
+        await pending;
+        const now = models.get(m.id);
+        if (now) return { backend: now.backend, info: now.adapter.info };
+    }
+    const make = ADAPTERS[m.kind];
+    if (!make) throw new Error(`No adapter for models of kind "${m.kind}".`);
     const run = (async () => {
-        const files = await fetchModel(src, download);
-        const tokenizer = new Tokenizer(files.tokenizer, files.tokenizerConfig ?? {});
-        if (src.kind === 'decision') {
-            const c = files.config ?? {};
-            const config: LayaConfig = {
-                max_len: c.max_len ?? 512,
-                head_max_len: c.head_max_len ?? 192,
-                temperature: c.temperature ?? [1, 1, 1],
-                temperature_by_options: c.temperature_by_options ?? {},
-            };
-            const ids = specialIds(c, tokenizer);
-            const s = await session(files.bytes, (session) => runDecision({ source: src, session, tokenizer, config, ids, backend: 'webgpu' }, WARM_UP));
-            decision = { source: src, tokenizer, config, ids, ...s };
-        } else {
-            const s = await session(files.bytes, (session) => runEmbed({ source: src, session, tokenizer, backend: 'webgpu' }, ['warm up'], 'query'));
-            embedder = { source: src, tokenizer, ...s };
-        }
+        const files = await fetchModel(m, download, size);
+        const o = await runtime();
+        const adapter = make({ model: m, config: files.config, tokenizerConfig: files.tokenizerConfig, tokenizer: new Tokenizer(files.tokenizer, files.tokenizerConfig), ort: o });
+        const s = await session(files.bytes, (sess) => adapter.warm(sess));
+        const old = models.get(m.id);
+        models.set(m.id, { fingerprint, adapter, ...s });
+        if (old && old.session !== s.session) void old.session.release().catch(() => {});
     })();
-    loading.set(src.kind, run);
+    loading.set(key, run);
     try {
         await run;
     } finally {
-        loading.delete(src.kind);
+        loading.delete(key);
     }
-    const now = src.kind === 'decision' ? decision : embedder;
-    return { backend: now?.backend ?? 'none' };
+    const now = models.get(m.id)!;
+    return { backend: now.backend, info: now.adapter.info };
 }
 
-// ----------------------------------------------------------- tokenizing
-
-const tokenCache = new Map<string, number[]>();
-
-function encoder(tok: Tokenizer): (text: string) => number[] {
-    return (text) => {
-        let ids = tokenCache.get(text);
-        if (!ids) {
-            ids = tok.encode(text, { add_special_tokens: false }).ids;
-            tokenCache.set(text, ids);
-            if (tokenCache.size > 2048) tokenCache.delete(tokenCache.keys().next().value!);
-        } else {
-            // Most recently used last.
-            tokenCache.delete(text);
-            tokenCache.set(text, ids);
-        }
-        return ids;
-    };
-}
-
-type DecisionModel = Loaded & { config: LayaConfig; ids: SpecialIds };
-
-/** One small question, run once on a new WebGPU session. */
-const WARM_UP: { state: string; questions: LayaQuestion[] }[] = [{ state: '{"ready": true}', questions: [{ type: 'noul', instructions: 'Is it ready?' }] }];
-
-function sequences(d: DecisionModel, items: { state: string; questions: LayaQuestion[] }[]) {
-    const encode = encoder(d.tokenizer);
-    const rows: { ids: number[]; markers: number[]; q: LayaQuestion }[] = [];
-    for (const it of items) {
-        for (const q of it.questions) {
-            const seq = buildSequence(encode, d.ids, q, it.state, d.config.max_len, d.config.head_max_len);
-            rows.push({ ...seq, q });
-        }
-    }
-    return rows;
-}
-
-// ---------------------------------------------------------------- running
-
-async function ask(items: { state: string; questions: LayaQuestion[] }[]): Promise<number[][][]> {
-    const d = decision;
-    if (!d || lost) throw new Error(lost ? 'The GPU device was lost.' : 'The decision model is not loaded.');
-    return runDecision(d, items);
-}
-
-async function runDecision(d: DecisionModel, items: { state: string; questions: LayaQuestion[] }[]): Promise<number[][][]> {
-    const o = await runtime();
-    const rows = sequences(d, items);
-    const n = rows.length;
-    const L = Math.max(...rows.map((r) => r.ids.length));
-    const K = Math.max(2, ...rows.map((r) => r.markers.length));
-    const inputIds = new BigInt64Array(n * L).fill(BigInt(d.ids.pad));
-    const attention = new BigInt64Array(n * L);
-    const markerPos = new BigInt64Array(n * K);
-    const markerMask = new Uint8Array(n * K);
-    const qtype = new BigInt64Array(n);
-    rows.forEach((r, i) => {
-        r.ids.forEach((v, j) => {
-            inputIds[i * L + j] = BigInt(v);
-            attention[i * L + j] = 1n;
-        });
-        r.markers.forEach((m, j) => {
-            markerPos[i * K + j] = BigInt(m);
-            markerMask[i * K + j] = 1;
-        });
-        qtype[i] = BigInt(QTYPE_INDEX[r.q.type]);
-    });
-    const feeds: Record<string, Ort.Tensor> = {
-        input_ids: new o.Tensor('int64', inputIds, [n, L]),
-        attention_mask: new o.Tensor('int64', attention, [n, L]),
-        marker_pos: new o.Tensor('int64', markerPos, [n, K]),
-        marker_mask: new o.Tensor('bool', markerMask, [n, K]),
-        qtype: new o.Tensor('int64', qtype, [n]),
-    };
-    const out = await d.session.run(feeds, ['logits']);
-    const data = out.logits.data as Float32Array;
-    const probs: number[][] = rows.map((r, i) => calibrate(Array.from(data.subarray(i * K, i * K + r.markers.length)), r.q.type, d.config));
-    for (const t of Object.values(out)) t.dispose?.();
-    // Back to one list per item.
-    const res: number[][][] = [];
-    let k = 0;
-    for (const it of items) res.push(it.questions.map(() => probs[k++]));
-    return res;
-}
-
-async function embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
-    const e = embedder;
-    if (!e || lost) throw new Error(lost ? 'The GPU device was lost.' : 'The embedding model is not loaded.');
-    return runEmbed(e, texts, kind);
-}
-
-async function runEmbed(e: Loaded, texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
-    const o = await runtime();
-    const src = e.source;
-    const prefix = (kind === 'query' ? src.queryPrefix : src.passagePrefix) ?? '';
-    const max = src.maxLength ?? 512;
-    const encoded = texts.map((t) => e.tokenizer.encode(prefix + t).ids.slice(0, max));
-    const pad = e.tokenizer.token_to_id('<pad>') ?? e.tokenizer.token_to_id('[PAD]') ?? 0;
-    const n = encoded.length;
-    const L = Math.max(1, ...encoded.map((x) => x.length));
-    const ids = new BigInt64Array(n * L).fill(BigInt(pad));
-    const mask = new BigInt64Array(n * L);
-    encoded.forEach((x, i) => x.forEach((v, j) => {
-        ids[i * L + j] = BigInt(v);
-        mask[i * L + j] = 1n;
-    }));
-    const feeds: Record<string, Ort.Tensor> = { input_ids: new o.Tensor('int64', ids, [n, L]), attention_mask: new o.Tensor('int64', mask, [n, L]) };
-    if (e.session.inputNames.includes('token_type_ids')) feeds.token_type_ids = new o.Tensor('int64', new BigInt64Array(n * L), [n, L]);
-    const out = await e.session.run(feeds);
-    const name = src.pooling === 'output' && out.sentence_embedding ? 'sentence_embedding' : out.last_hidden_state ? 'last_hidden_state' : e.session.outputNames[0];
-    const t = out[name];
-    const data = t.data as Float32Array;
-    const vectors: Float32Array[] = [];
-    if (t.dims.length === 2) {
-        const H = t.dims[1];
-        for (let i = 0; i < n; i++) vectors.push(data.slice(i * H, (i + 1) * H));
-    } else {
-        const H = t.dims[2];
-        for (let i = 0; i < n; i++) {
-            const v = new Float32Array(H);
-            if (src.pooling === 'cls') v.set(data.subarray(i * L * H, i * L * H + H));
-            else {
-                let count = 0;
-                for (let j = 0; j < L; j++) {
-                    if (!mask[i * L + j]) continue;
-                    count++;
-                    const off = (i * L + j) * H;
-                    for (let k = 0; k < H; k++) v[k] += data[off + k];
-                }
-                for (let k = 0; k < H; k++) v[k] /= Math.max(1, count);
-            }
-            vectors.push(v);
-        }
-    }
-    for (const x of Object.values(out)) x.dispose?.();
-    return vectors.map((v) => {
-        const cut = src.dims && src.dims < v.length ? v.slice(0, src.dims) : v;
-        let s = 0;
-        for (let k = 0; k < cut.length; k++) s += cut[k] * cut[k];
-        const norm = Math.sqrt(s) || 1;
-        for (let k = 0; k < cut.length; k++) cut[k] /= norm;
-        return cut;
-    });
+async function runModel(id: string, inputs: unknown[]): Promise<unknown[]> {
+    const l = models.get(id);
+    if (!l || lost && l.backend === 'webgpu') throw new Error(lost ? 'The GPU device was lost.' : `The model "${id}" is not loaded.`);
+    return l.adapter.run(l.session, inputs);
 }
 
 // ------------------------------------------------------------------ queue
@@ -416,7 +292,7 @@ async function runEmbed(e: Loaded, texts: string[], kind: 'query' | 'passage'): 
 interface Job {
     id: number;
     priority: number;
-    run: () => Promise<{ result: any; transfer?: Transferable[] }>;
+    run: () => Promise<unknown>;
 }
 
 const queue: Job[] = [];
@@ -428,6 +304,11 @@ function enqueue(job: Job) {
     void pump();
 }
 
+/** Float32Array results go back without a copy. */
+function transfers(result: unknown): Transferable[] {
+    return Array.isArray(result) ? result.filter((r): r is Float32Array => r instanceof Float32Array).map((r) => r.buffer) : [];
+}
+
 async function pump() {
     if (busy) return;
     busy = true;
@@ -436,15 +317,23 @@ async function pump() {
             const job = queue.shift()!;
             const t0 = performance.now();
             try {
-                const { result, transfer } = await job.run();
-                post({ type: 'done', id: job.id, result, ms: performance.now() - t0 }, transfer ?? []);
+                const result = await job.run();
+                post({ type: 'done', id: job.id, result, ms: performance.now() - t0 }, transfers(result));
             } catch (e: any) {
-                post({ type: 'failed', id: job.id, message: e?.message || String(e), code: e instanceof NotCached ? 'not-cached' : lost ? 'lost' : undefined });
+                post({ type: 'failed', id: job.id, message: e?.message || String(e), code: lost ? 'lost' : undefined });
             }
         }
     } finally {
         busy = false;
     }
+}
+
+function reply(id: number, work: Promise<unknown>) {
+    const t0 = performance.now();
+    work.then(
+        (result) => post({ type: 'done', id, result, ms: performance.now() - t0 }),
+        (e: any) => post({ type: 'failed', id, message: e?.message || String(e), code: e instanceof NotCached ? 'not-cached' : undefined }),
+    );
 }
 
 self.onmessage = (ev: MessageEvent<WorkerIn>) => {
@@ -455,70 +344,24 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
             wantBackend = m.backend;
             return;
         case 'check':
-            void isCached(m.source).then(
-                (cached) => post({ type: 'done', id: m.id, result: cached, ms: 0 }),
-                (e) => post({ type: 'failed', id: m.id, message: e?.message || String(e) }),
-            );
+            reply(m.id, isCached(m.model));
             return;
         case 'forget':
-            if (decision?.source.base === m.source.base) decision = null;
-            if (embedder?.source.base === m.source.base) embedder = null;
-            void forget(m.source).then(() => post({ type: 'done', id: m.id, result: true, ms: 0 }));
+            reply(m.id, forget(m.model).then(() => true));
             return;
         case 'load':
-            // Loading is not queued behind answers: it runs next to them.
-            void (async () => {
-                const t0 = performance.now();
-                try {
-                    const r = await load(m.source, m.download);
-                    post({ type: 'done', id: m.id, result: r, ms: performance.now() - t0 });
-                } catch (e: any) {
-                    post({ type: 'failed', id: m.id, message: e?.message || String(e), code: e instanceof NotCached ? 'not-cached' : undefined });
-                }
-            })();
+            // Loading is not queued behind the jobs: it runs next to them.
+            reply(m.id, load(m.model, m.download, m.size));
             return;
-        case 'prepare':
-            if (decision) {
-                try {
-                    sequences(decision, m.items);
-                } catch { /* tokenized again when asked */ }
-            }
-            return;
-        case 'ask':
-            enqueue({ id: m.id, priority: 0, run: async () => ({ result: await ask(m.items) }) });
-            return;
-        case 'embed': {
-            // Short jobs: a long list is embedded in chunks, queries before memory items.
-            const priority = m.kind === 'query' ? 1 : 2;
-            enqueue({
-                id: m.id,
-                priority,
-                run: async () => {
-                    const out: Float32Array[] = [];
-                    for (let i = 0; i < m.texts.length; i += EMBED_CHUNK) {
-                        out.push(...(await embed(m.texts.slice(i, i + EMBED_CHUNK), m.kind)));
-                        // Let answers waiting in the queue go between chunks.
-                        if (queue.some((j) => j.priority === 0) && i + EMBED_CHUNK < m.texts.length) await runWaiting(0);
-                    }
-                    return { result: out, transfer: out.map((v) => v.buffer) };
-                },
-            });
+        case 'prepare': {
+            const l = models.get(m.model);
+            try {
+                l?.adapter.prepare?.(m.inputs);
+            } catch { /* done again when it runs */ }
             return;
         }
+        case 'run':
+            enqueue({ id: m.id, priority: m.priority, run: () => runModel(m.model, m.inputs) });
+            return;
     }
 };
-
-/** Runs the queued jobs of a priority now (called between the chunks of a long job). */
-async function runWaiting(priority: number) {
-    const jobs = queue.filter((j) => j.priority <= priority);
-    for (const job of jobs) {
-        queue.splice(queue.indexOf(job), 1);
-        const t0 = performance.now();
-        try {
-            const { result, transfer } = await job.run();
-            post({ type: 'done', id: job.id, result, ms: performance.now() - t0 }, transfer ?? []);
-        } catch (e: any) {
-            post({ type: 'failed', id: job.id, message: e?.message || String(e), code: lost ? 'lost' : undefined });
-        }
-    }
-}

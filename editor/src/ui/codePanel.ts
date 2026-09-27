@@ -335,7 +335,7 @@ export class CodePanel {
             const t = d.behaviors.find((x) => x.id === this.id);
             if (!t) return [];
             const text = this.code.value;
-            return validateTree(t, d.blackboards, d.memory).map((i) => ({ line: idLine(text, i.node), column: 1, message: `${i.node ? `${i.node}: ` : ''}${i.field ? `${i.field}: ` : ''}${i.message}`, severity: i.severity }));
+            return validateTree(t, d.blackboards, d.memory, d.aiModels).map((i) => ({ line: idLine(text, i.node), column: 1, message: `${i.node ? `${i.node}: ` : ''}${i.field ? `${i.field}: ` : ''}${i.message}`, severity: i.severity }));
         }
         const c = this.editor.compiler.get(this.id);
         const list: Diagnostic[] = [];

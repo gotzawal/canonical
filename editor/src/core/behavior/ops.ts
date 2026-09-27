@@ -6,16 +6,17 @@
 
 import { uid } from '../ids';
 import type {
-    AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc,
+    AgentDoc, AiModelDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc,
     BlackboardValue, BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc, NodeDoc,
     PrefabDoc, SceneDoc,
 } from '../types';
 import { findNode, findService, isCompositeDoc, memoryChoiceKeys, newItemId, toReadableId, treeIds, uniqueId, walkNodes } from './format';
+import { BUILTIN_MODELS, MODEL_KINDS, modelKind } from './models';
 import {
     COMMON_FIELDS, decoratorType, DECORATOR_TYPES, fieldDefault, isReadableId, KEY_OWNERS, KEY_TYPES, NODE_TYPES, nodeType,
     serviceType, SERVICE_TYPES, typeDefault, valueFits, type FieldDef, type ItemTypeDef,
 } from './nodeTypes';
-import { issueKey, validateAgent, validateSchema, validateTree, type Issue } from './validate';
+import { isFolderUrl, issueKey, validateAgent, validateModels, validateSchema, validateTree, type Issue } from './validate';
 
 /** One operation: { op: 'add_node', tree: 'Guard', parent: 'root', node: {...} }. See OP_DOCS for the list. */
 export type BehaviorOp = { op: string; [field: string]: unknown };
@@ -33,18 +34,21 @@ export interface OpError {
     field?: string;
     /** Scene object (node id) for agent problems. */
     object?: string;
+    /** Model id for model problems. */
+    model?: string;
 }
 
 export interface BehaviorChanges {
     blackboards: BlackboardSchemaDoc[];
     behaviors: BehaviorTreeDoc[];
     memory: MemoryDoc;
+    aiModels: AiModelDoc[];
     /** Objects whose agent changed: the new settings, or null to remove them. */
     agents: Map<string, AgentDoc | null>;
 }
 
 export interface Created {
-    kind: 'schema' | 'tree' | 'node' | 'service' | 'memory';
+    kind: 'schema' | 'tree' | 'node' | 'service' | 'memory' | 'model';
     id: string;
     tree?: string;
     name?: string;
@@ -58,7 +62,7 @@ export interface OpsResult {
     /** Errors the batch would add; strict batches are refused when there are any. */
     added: Issue[];
     created: Created[];
-    touched: { trees: string[]; schemas: string[]; objects: string[]; memory: boolean };
+    touched: { trees: string[]; schemas: string[]; objects: string[]; memory: boolean; models: boolean };
     /** The new behavior data, when the batch is ok and changed something. */
     changes: BehaviorChanges | null;
     /** Undo label, e.g. "Add Node" or "5 Behavior Edits". */
@@ -113,6 +117,13 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'update_memory', fields: 'item, set: {id?, text?, tags?}', description: 'Change a memory item; a new text drops its embedding.' },
     { op: 'delete_memory', fields: 'item', description: 'Delete a memory item.' },
     { op: 'set_memory_vectors', fields: 'embedder, vectors: {id: {text, vector: base64}}', description: 'Store embeddings (the editor does this when it embeds memory); a vector is kept only while its item still has that text.' },
+    {
+        op: 'add_model',
+        fields: 'model: {id?, name?, kind, url, file?, options?}',
+        description: `Add an AI model the scene loads: kind is ${MODEL_KINDS.map((k) => k.kind).join(', ')}; url is the folder with tokenizer.json (and config.json), file the ONNX file in it (default by kind); options are the kind's settings.`,
+    },
+    { op: 'update_model', fields: 'model, set: {id?, name?, kind?, url?, file?, options?}', description: 'Change a scene model; a new id is written into every Ask, Model task and the memory that use it.' },
+    { op: 'delete_model', fields: 'model', description: 'Delete a scene model that no node and not the memory uses (the error lists them).' },
 ];
 
 // ---------------------------------------------------------------- draft
@@ -143,11 +154,13 @@ class Draft {
     blackboards: BlackboardSchemaDoc[];
     behaviors: BehaviorTreeDoc[];
     memory: MemoryDoc;
+    aiModels: AiModelDoc[];
     agents = new Map<string, AgentDoc | null>();
     trees = new Set<string>();
     schemas = new Set<string>();
     objects = new Set<string>();
     memoryTouched = false;
+    modelsTouched = false;
     created: Created[] = [];
     /** Renamed nodes and services ("t:" tree id) and keys ("s:" schema id): old name -> new name. */
     renames = new Map<string, Map<string, string>>();
@@ -156,6 +169,7 @@ class Draft {
         this.blackboards = JSON.parse(JSON.stringify(doc.blackboards));
         this.behaviors = JSON.parse(JSON.stringify(doc.behaviors));
         this.memory = JSON.parse(JSON.stringify(doc.memory));
+        this.aiModels = JSON.parse(JSON.stringify(doc.aiModels ?? []));
     }
 
     agentOf(id: string): AgentDoc | undefined {
@@ -256,6 +270,7 @@ function coerceField(f: FieldDef, v: unknown, at: Partial<OpError>): unknown {
             return v.slice(0, 2000);
         case 'method':
         case 'key':
+        case 'model':
             if (typeof v !== 'string') return fail(`${f.name} must be a string.`);
             return v.trim().slice(0, 2000);
         case 'bool':
@@ -548,6 +563,90 @@ function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string
             d.agents.set(node.id, { ...agent, values });
             d.objects.add(node.id);
         }
+    }
+}
+
+// ----------------------------------------------------------------- models
+
+const MODEL_FIELDS = ['id', 'name', 'kind', 'url', 'file', 'options'];
+
+/** A model's settings from operation input (unknown settings are refused). */
+function modelOptions(kindName: string, v: unknown, at: Partial<OpError>): Record<string, BlackboardValue> {
+    const kind = modelKind(kindName)!;
+    if (v === undefined || v === null) return {};
+    if (!isObj(v)) throw new OpFail('options must be an object of setting: value.', { ...at, field: 'options' });
+    const out: Record<string, BlackboardValue> = {};
+    for (const [k, x] of Object.entries(v)) {
+        const f = kind.options.find((o) => o.name === k);
+        if (!f) throw new OpFail(`${kind.label} models have no setting "${k}"; they have ${kind.options.map((o) => o.name).join(', ') || 'none'}.`, { ...at, field: `options.${k}` });
+        out[k] = coerceField(f, x, at) as BlackboardValue;
+    }
+    return out;
+}
+
+function modelUrl(v: unknown, at: Partial<OpError>): string {
+    const raw = typeof v === 'string' ? v.trim() : '';
+    const url = raw && !raw.endsWith('/') ? raw + '/' : raw;
+    if (!isFolderUrl(url) || url.length > 1000) throw new OpFail('url must be the web address of the folder with tokenizer.json and the ONNX file, e.g. "https://huggingface.co/Xenova/distilbert-base-uncased-finetuned-sst-2-english/resolve/main/".', { ...at, field: 'url' });
+    return url;
+}
+
+function modelFile(v: unknown, at: Partial<OpError>): string {
+    const file = typeof v === 'string' ? v.trim().replace(/^\/+/, '') : '';
+    if (!file || file.length > 500) throw new OpFail('file must be the path of the ONNX file (or of a manifest.json of parts) in the folder.', { ...at, field: 'file' });
+    return file;
+}
+
+function modelKindOf(v: unknown, at: Partial<OpError>): string {
+    const kind = modelKind(String(v));
+    if (!kind) throw new OpFail(`Unknown model kind ${JSON.stringify(v)}; use ${MODEL_KINDS.map((k) => `${k.kind} (${k.task})`).join(', ')}.`, { ...at, field: 'kind' });
+    return kind.kind;
+}
+
+function buildModel(input: unknown, taken: Set<string>): AiModelDoc {
+    if (!isObj(input)) throw new OpFail('model must be an object like { "kind": "classifier", "url": "https://.../", "file": "onnx/model_quantized.onnx" }.', { field: 'model' });
+    for (const k of Object.keys(input)) if (!MODEL_FIELDS.includes(k)) throw new OpFail(`A model has no field "${k}"; use ${MODEL_FIELDS.join(', ')}.`, { field: k });
+    const kind = modelKindOf(input.kind, {});
+    const url = modelUrl(input.url, {});
+    const file = input.file === undefined ? modelKind(kind)!.file : modelFile(input.file, {});
+    // The name defaults to the folder's repository name (…/<owner>/<name>/resolve/main/).
+    const parts = new URL(url, 'https://base.invalid/').pathname.split('/').filter(Boolean);
+    const stem = parts[parts.indexOf('resolve') - 1] ?? parts[parts.length - 1] ?? kind;
+    const name = typeof input.name === 'string' && input.name.trim() ? input.name.trim().slice(0, 200) : stem;
+    let id: string;
+    if (input.id === undefined) id = uniqueId(toReadableId(stem.toLowerCase(), 'model'), taken);
+    else if (!isReadableId(input.id)) throw new OpFail(`${JSON.stringify(input.id)} is not a valid model id: use letters, digits, _ and -.`, { field: 'id' });
+    else if (taken.has(input.id)) throw new OpFail(`The model id "${input.id}" is taken.`, { field: 'id' });
+    else id = input.id;
+    return { id, name, kind, url, file, options: modelOptions(kind, input.options, { model: id } as Partial<OpError>) };
+}
+
+/** Nodes and services that use a model, per tree, and whether the memory is embedded with it. */
+function modelUsers(d: Draft, id: string): { trees: { tree: BehaviorTreeDoc; nodes: string[] }[]; memory: boolean } {
+    const trees: { tree: BehaviorTreeDoc; nodes: string[] }[] = [];
+    for (const tree of d.behaviors) {
+        const nodes: string[] = [];
+        walkNodes(tree.root, (n) => {
+            for (const item of [n, ...(n.services ?? [])]) if ((item.type === 'ask' || item.type === 'infer') && item.model === id) nodes.push(item.id);
+        });
+        if (nodes.length) trees.push({ tree, nodes });
+    }
+    return { trees, memory: d.memory.embedder === id };
+}
+
+function renameModel(d: Draft, from: string, to: string) {
+    for (const tree of d.behaviors) {
+        walkNodes(tree.root, (n) => {
+            for (const item of [n, ...(n.services ?? [])]) {
+                if ((item.type !== 'ask' && item.type !== 'infer') || item.model !== from) continue;
+                item.model = to;
+                d.touchTree(tree);
+            }
+        });
+    }
+    if (d.memory.embedder === from) {
+        d.memory.embedder = to;
+        d.memoryTouched = true;
     }
 }
 
@@ -1103,6 +1202,61 @@ function apply(d: Draft, op: BehaviorOp) {
             d.memoryTouched = true;
             return;
         }
+        // ------------------------------------------------------- models
+        case 'add_model': {
+            allowOnly(op, ['model']);
+            const m = buildModel(need(op, 'model'), new Set([...d.aiModels, ...BUILTIN_MODELS].map((x) => x.id)));
+            d.aiModels.push(m);
+            d.modelsTouched = true;
+            d.created.push({ kind: 'model', id: m.id, name: m.name });
+            return;
+        }
+        case 'update_model': {
+            allowOnly(op, ['model', 'set']);
+            const ref = String(need(op, 'model'));
+            const m = d.aiModels.find((x) => x.id === ref);
+            if (!m) {
+                const builtin = BUILTIN_MODELS.some((x) => x.id === ref);
+                throw new OpFail(builtin ? `"${ref}" is built in and cannot be changed; add a model instead.` : `No scene model "${ref}". Models: ${d.aiModels.map((x) => x.id).join(', ') || 'none'}.`, { field: 'model' });
+            }
+            const set = need<Record<string, unknown>>(op, 'set');
+            if (!isObj(set)) throw new OpFail('set must be an object.', { field: 'set' });
+            for (const k of Object.keys(set)) if (!MODEL_FIELDS.includes(k)) throw new OpFail(`A model has no field "${k}"; use ${MODEL_FIELDS.join(', ')}.`, { field: k });
+            const at = { model: m.id } as Partial<OpError>;
+            if (set.kind !== undefined && set.kind !== m.kind) {
+                m.kind = modelKindOf(set.kind, at);
+                // Settings the new kind does not have go.
+                const names = modelKind(m.kind)!.options.map((o) => o.name);
+                m.options = Object.fromEntries(Object.entries(m.options).filter(([k]) => names.includes(k)));
+            }
+            if (set.name !== undefined) m.name = String(set.name).trim().slice(0, 200) || m.name;
+            if (set.url !== undefined) m.url = modelUrl(set.url, at);
+            if (set.file !== undefined) m.file = modelFile(set.file, at);
+            if (set.options !== undefined) m.options = modelOptions(m.kind, set.options, at);
+            if (set.id !== undefined && set.id !== m.id) {
+                if (!isReadableId(set.id)) throw new OpFail(`${JSON.stringify(set.id)} is not a valid model id.`, { ...at, field: 'id' });
+                if ([...d.aiModels, ...BUILTIN_MODELS].some((x) => x.id === set.id)) throw new OpFail(`The model id "${set.id}" is taken.`, { ...at, field: 'id' });
+                const from = m.id;
+                m.id = set.id;
+                renameModel(d, from, set.id);
+            }
+            d.modelsTouched = true;
+            return;
+        }
+        case 'delete_model': {
+            allowOnly(op, ['model']);
+            const ref = String(need(op, 'model'));
+            const m = d.aiModels.find((x) => x.id === ref);
+            if (!m) throw new OpFail(BUILTIN_MODELS.some((x) => x.id === ref) ? `"${ref}" is built in and cannot be deleted.` : `No scene model "${ref}".`, { field: 'model' });
+            const users = modelUsers(d, m.id);
+            if (users.trees.length || users.memory) {
+                const list = [...users.trees.map((u) => `tree "${u.tree.name}": ${u.nodes.join(', ')}`), ...(users.memory ? ['the memory (embedded with it)'] : [])];
+                throw new OpFail(`"${m.id}" is in use and cannot be deleted. Used by ${list.join('; ')}.`, { field: 'model' });
+            }
+            d.aiModels = d.aiModels.filter((x) => x !== m);
+            d.modelsTouched = true;
+            return;
+        }
     }
     throw new OpFail(`Unknown operation ${JSON.stringify(op.op)}. Use one of: ${OP_DOCS.map((o) => o.op).join(', ')}.`, { field: 'op' });
 }
@@ -1117,15 +1271,23 @@ function label(ops: BehaviorOp[]): string {
         .join(' ');
 }
 
-/** Validation problems of the given trees, schemas and objects in a document state. */
-function issuesOf(state: Pick<SceneDoc, 'behaviors' | 'blackboards' | 'memory'>, agentOf: (id: string) => AgentDoc | undefined, trees: Set<string>, schemas: Set<string>, objects: Set<string>): Issue[] {
+/** Validation problems of the given trees, schemas and objects (and the models) in a document state. */
+function issuesOf(
+    state: Pick<SceneDoc, 'behaviors' | 'blackboards' | 'memory' | 'aiModels'>,
+    agentOf: (id: string) => AgentDoc | undefined,
+    trees: Set<string>,
+    schemas: Set<string>,
+    objects: Set<string>,
+    models: boolean,
+): Issue[] {
     const out: Issue[] = [];
     for (const s of state.blackboards) if (schemas.has(s.id)) out.push(...validateSchema(s));
-    for (const t of state.behaviors) if (trees.has(t.id)) out.push(...validateTree(t, state.blackboards, state.memory));
+    for (const t of state.behaviors) if (trees.has(t.id)) out.push(...validateTree(t, state.blackboards, state.memory, state.aiModels ?? []));
     for (const id of objects) {
         const a = agentOf(id);
         if (a) out.push(...validateAgent(id, a, state));
     }
+    if (models) out.push(...validateModels(state.aiModels ?? [], state.memory));
     return out;
 }
 
@@ -1136,7 +1298,7 @@ function issuesOf(state: Pick<SceneDoc, 'behaviors' | 'blackboards' | 'memory'>,
  */
 export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): OpsResult {
     const ops: BehaviorOp[] = Array.isArray(input) ? input : [];
-    const result: OpsResult = { ok: false, errors: [], issues: [], added: [], created: [], touched: { trees: [], schemas: [], objects: [], memory: false }, changes: null, label: label(ops) };
+    const result: OpsResult = { ok: false, errors: [], issues: [], added: [], created: [], touched: { trees: [], schemas: [], objects: [], memory: false, models: false }, changes: null, label: label(ops) };
     if (!Array.isArray(input) || !ops.length) {
         result.errors.push({ op: -1, name: 'batch', message: 'ops must be a non-empty list of operations.' });
         return result;
@@ -1154,9 +1316,10 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
             return result;
         }
     }
-    // Trees that use a changed schema, and objects that run a changed tree, are checked too.
+    // Trees that use a changed schema (or any model, when models changed), and objects that run a changed tree, are checked too.
     const trees = new Set(d.trees);
-    for (const t of d.behaviors) if (d.schemas.has(t.schema)) trees.add(t.id);
+    for (const t of d.behaviors) if (d.schemas.has(t.schema) || d.modelsTouched) trees.add(t.id);
+    const models = d.modelsTouched || d.memoryTouched;
     const objects = new Set(d.objects);
     for (const { node, agent } of d.objectsWithAgents()) if (trees.has(agent.tree) || d.schemas.size) objects.add(node.id);
     const liveAgent = (id: string) => holderNode(doc, id)?.agent;
@@ -1168,12 +1331,12 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
         return (i.node && m?.get(i.node)) || i.node;
     };
     const before = new Map<string, number>();
-    for (const i of issuesOf(doc, liveAgent, trees, d.schemas, objects)) {
+    for (const i of issuesOf(doc, liveAgent, trees, d.schemas, objects, models)) {
         if (i.severity !== 'error') continue;
         const k = issueKey(i, renamed(i));
         before.set(k, (before.get(k) ?? 0) + 1);
     }
-    const after = issuesOf({ behaviors: d.behaviors, blackboards: d.blackboards, memory: d.memory }, (id) => d.agentOf(id), trees, d.schemas, objects);
+    const after = issuesOf({ behaviors: d.behaviors, blackboards: d.blackboards, memory: d.memory, aiModels: d.aiModels }, (id) => d.agentOf(id), trees, d.schemas, objects, models);
     result.issues = after;
     result.added = after.filter((i) => {
         if (i.severity !== 'error') return false;
@@ -1184,8 +1347,8 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     });
     result.created = d.created;
     if (mode === 'strict' && result.added.length) {
-        result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
-        result.errors = result.added.map((i) => ({ op: -1, name: 'validate', message: i.message, tree: i.tree, schema: i.schema, node: i.node, decorator: i.decorator, field: i.field, object: i.object }));
+        result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched, models: d.modelsTouched };
+        result.errors = result.added.map((i) => ({ op: -1, name: 'validate', message: i.message, tree: i.tree, schema: i.schema, node: i.node, decorator: i.decorator, field: i.field, object: i.object, model: i.model }));
         return result;
     }
     // Every tree and schema whose content changed gets a new revision (new
@@ -1212,10 +1375,11 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
         d.objects.delete(id);
     }
     if (d.memoryTouched && same(d.memory, doc.memory)) d.memoryTouched = false;
-    result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
+    if (d.modelsTouched && same(d.aiModels, doc.aiModels ?? [])) d.modelsTouched = false;
+    result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched, models: d.modelsTouched };
     result.ok = true;
-    const changed = d.trees.size || d.schemas.size || d.objects.size || d.memoryTouched;
-    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, agents: d.agents } : null;
+    const changed = d.trees.size || d.schemas.size || d.objects.size || d.memoryTouched || d.modelsTouched;
+    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, aiModels: d.aiModels, agents: d.agents } : null;
     return result;
 }
 
@@ -1229,6 +1393,7 @@ export function writeBehaviorChanges(doc: SceneDoc, changes: BehaviorChanges) {
     doc.blackboards = changes.blackboards;
     doc.behaviors = changes.behaviors;
     doc.memory = changes.memory;
+    doc.aiModels = changes.aiModels;
     for (const [id, agent] of changes.agents) {
         // A scene object, or a part of a prefab template.
         const node = holderNode(doc, id);

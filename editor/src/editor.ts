@@ -87,7 +87,7 @@ export class Editor extends Emitter<EditorEvents> {
     walk: WalkController | null = null;
     /** Neutral room to check swatches in (set up by main.ts). */
     room: ReferenceRoom | null = null;
-    /** The decision and embedding models of the agents (set up by main.ts). */
+    /** The models of the agents (set up by main.ts). */
     models: ModelServices | null = null;
 
     constructor(
@@ -1156,7 +1156,7 @@ export class Editor extends Emitter<EditorEvents> {
                 issues: [],
                 added: [],
                 created: [],
-                touched: { trees: [], schemas: [], objects: [], memory: false },
+                touched: { trees: [], schemas: [], objects: [], memory: false, models: false },
                 changes: null,
                 label: '',
             };

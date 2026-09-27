@@ -14,7 +14,6 @@ import { createMenu, menuDefinitions, showShortcuts } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
 import { ModelServices, savedBackend } from './play/ai/services';
-import type { ModelKind } from './play/ai/models';
 import { scriptChat } from './ai/scriptChat';
 import { formatBytes } from './core/assets';
 import { AIPanel } from './ui/aiPanel';
@@ -134,7 +133,7 @@ async function main() {
     const graph = new RenderGraphController(runtime, store, shaders, sync);
     const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
     // Agent models: the editor loads cached copies by itself and asks before downloading.
-    const models = new ModelServices(runtime, player.speech, { policy: 'ask', backend: savedBackend() });
+    const models = new ModelServices(runtime, player.speech, () => store.doc.aiModels, { policy: 'ask', backend: savedBackend() });
     editor.models = models;
     player.aiServices = () => models;
     player.chatModel = scriptChat;
@@ -334,18 +333,19 @@ async function main() {
     });
     // A Play session needed a model this browser does not have: agents keep
     // their defaults meanwhile. Asked once per page; the Behavior tab keeps a chip.
-    const asked = new Set<ModelKind>();
-    models.on('needed', (kind) => {
-        if (asked.has(kind)) return;
-        asked.add(kind);
-        const src = models.status(kind).source;
-        const decision = kind === 'decision';
+    const asked = new Set<string>();
+    models.on('needed', (id) => {
+        if (asked.has(id)) return;
+        asked.add(id);
+        const m = models.model(id);
+        if (!m) return;
+        const size = 'size' in m ? ` (${formatBytes(m.size)})` : '';
         notices.show({
             kind: 'model',
-            key: `model-${kind}`,
+            key: `model-${id}`,
             icon: 'sparkle',
-            title: decision ? 'Agents are answering with defaults' : 'Recall is matching by tags only',
-            body: `${decision ? 'Ask nodes keep their keys at the default values' : 'Recall and memory questions skip similarity search'} until ${src.label} (${formatBytes(src.size)}) is downloaded once from ${new URL(src.base).host} into this browser. It runs here; nothing is sent anywhere.`,
+            title: 'Agents are playing without a model',
+            body: `Nodes that use ${m.name} keep their keys at the defaults until it is downloaded once${size} from ${new URL(m.url, location.href).host} into this browser. It runs here; nothing is sent anywhere.`,
             timeout: 0,
             actions: [
                 {
@@ -353,8 +353,8 @@ async function main() {
                     primary: true,
                     run: async () => {
                         dock.show('behavior');
-                        const ok = await models.download(kind);
-                        toast(ok ? `${src.label} is ready.` : `${src.label} could not be loaded: ${models.status(kind).message ?? 'unknown error'}`, ok ? 'success' : 'error', 6000);
+                        const ok = await models.download(id);
+                        toast(ok ? `${m.name} is ready.` : `${m.name} could not be loaded: ${models.status(id).message ?? 'unknown error'}`, ok ? 'success' : 'error', 6000);
                     },
                 },
                 { label: 'Not now', run: () => {} },

@@ -20,10 +20,11 @@
 
 import { valueFits } from '../../core/behavior/nodeTypes';
 import type {
-    AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, ConditionDecoratorDoc,
+    AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, ConditionDecoratorDoc, InferTaskDoc,
     RecallServiceDoc, ScriptTaskDoc,
 } from '../../core/types';
 import type { Blackboard } from './blackboard';
+import type { InferHandle } from './infer';
 
 export type Status = 'running' | 'success' | 'failure';
 
@@ -68,9 +69,11 @@ export interface TreeHost {
     abortTask(doc: ScriptTaskDoc, task: TaskHandle): void;
     /** Starts an Ask request. */
     ask(doc: AskTaskDoc | AskServiceDoc, isTask: boolean): AskHandle;
+    /** Starts a Model task's request. */
+    infer(doc: InferTaskDoc): InferHandle;
     /** Runs a Recall service once. */
     recall(doc: RecallServiceDoc): void;
-    /** Raised when Recall brings other memory items (an Ask with context treats it like a fact change). */
+    /** Raised when the context pool changes (an Ask with Use Context treats it like a fact change). */
     readonly contextVersion: number;
     /** A problem worth a warning in the console (reported once per node). */
     warn(node: string, message: string): void;
@@ -202,6 +205,25 @@ class AskTask implements TaskRt {
     }
 }
 
+class InferTask implements TaskRt {
+    private handle: InferHandle | null = null;
+    constructor(private doc: InferTaskDoc, private host: TreeHost) {}
+    start(now: number): Status {
+        this.handle = this.host.infer(this.doc);
+        return this.update(now);
+    }
+    update(now: number): Status {
+        const h = this.handle;
+        if (!h) return 'failure';
+        if (h.done) return h.ok ? 'success' : 'failure';
+        return now >= h.deadline ? 'failure' : 'running';
+    }
+    abort() {
+        // The request goes on: its result is still written when it is the newest and in time.
+        this.handle = null;
+    }
+}
+
 function makeTask(doc: BtNodeDoc, host: TreeHost): TaskRt | null {
     switch (doc.type) {
         case 'wait':
@@ -212,6 +234,8 @@ function makeTask(doc: BtNodeDoc, host: TreeHost): TaskRt | null {
             return new ScriptTask(doc, host);
         case 'ask':
             return new AskTask(doc, host);
+        case 'infer':
+            return new InferTask(doc, host);
         default:
             return null;
     }

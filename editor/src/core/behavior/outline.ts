@@ -9,6 +9,7 @@ import {
     COMPARE_OPS, DECORATOR_TYPES, decoratorType, formatValue, KEY_OWNERS, KEY_TYPES, NODE_TYPES, nodeType, SERVICE_TYPES,
     serviceType, type FieldDef, type ItemTypeDef, type KeyLookup,
 } from './nodeTypes';
+import { allModels, BUILTIN_MODELS, MODEL_KINDS, modelTask } from './models';
 import { OP_DOCS } from './ops';
 import type { Issue } from './validate';
 
@@ -69,6 +70,7 @@ export function behaviorOverview(doc: SceneDoc): string {
         walk(t.root);
         lines.push(`tree ${t.name} (id ${t.id}, schema ${doc.blackboards.find((s) => s.id === t.schema)?.name ?? t.schema}): ${count} nodes, runs on ${agents.map((n) => `${n.name} (${n.id})${n.agent!.enabled ? '' : ' disabled'}`).join(', ') || 'no object'}`);
     }
+    lines.push(`models: ${allModels(doc.aiModels ?? []).map((m) => `${m.id} (${m.kind}, ${modelTask(m) ?? '?'}${BUILTIN_MODELS.some((b) => b === m) ? ', built in' : ''})`).join(', ')}`);
     const embedded = doc.memory.items.filter((m) => m.vector).length;
     lines.push(`memory: ${doc.memory.items.length} items (${embedded} embedded with ${doc.memory.embedder})${doc.memory.items.length ? `, tags: ${Array.from(new Set(doc.memory.items.flatMap((m) => m.tags))).join(', ') || 'none'}` : ''}`);
     if (!doc.blackboards.length && !doc.behaviors.length) lines.unshift('No blackboard schemas or behavior trees yet.');
@@ -109,6 +111,7 @@ export function nodeTypesSummary(): string {
         `Condition tests: ${COMPARE_OPS.map((o) => `${o.op} (${o.description})`).join(' ')}`,
         `Key types: ${KEY_TYPES.map((k) => `${k.type} (${k.description.replace(/\.$/, '')})`).join('; ')}.`,
         `Key owners: ${KEY_OWNERS.map((o) => `${o.owner}: ${o.description}`).join(' ')}`,
+        `Model kinds (add_model; Ask uses decide models, Model tasks classify and generate models, memory an embed model): ${MODEL_KINDS.map((k) => `${k.kind} (${k.task}${k.options.length ? `; options ${k.options.map((o) => o.name).join(', ')}` : ''})`).join('; ')}. Built in: ${BUILTIN_MODELS.map((m) => `${m.id} (${m.kind})`).join(', ')}.`,
         `Operations for apply_behavior_ops: ${OP_DOCS.map((o) => `${o.op}(${o.fields})`).join('; ')}.`,
     ].join('\n');
 }

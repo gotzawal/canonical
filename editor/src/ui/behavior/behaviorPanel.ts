@@ -1,10 +1,11 @@
 // The Behavior tab of the dock: behavior trees as an outliner with the
-// selected node's properties, the blackboard schema, the memory, and while
-// playing a debug view (the chosen agent's active path, blackboard and the
-// latest answers). Every edit goes through the edit operation layer.
+// selected node's properties, the blackboard schema, the memory, the models,
+// and while playing a debug view (the chosen agent's active path,
+// blackboard, context pool and the latest answers). Every edit goes through
+// the edit operation layer.
 
 import { formatBytes } from '../../core/assets';
-import { findNode } from '../../core/behavior/format';
+import { findNode, modelsNeeded } from '../../core/behavior/format';
 import { formatValue } from '../../core/behavior/nodeTypes';
 import type { BehaviorOp } from '../../core/behavior/ops';
 import { describeIssue, validateSchema, validateTree, type Issue } from '../../core/behavior/validate';
@@ -12,18 +13,18 @@ import type { BehaviorTreeDoc, BlackboardSchemaDoc } from '../../core/types';
 import type { Editor } from '../../editor';
 import type { Agent } from '../../play/ai/agents';
 import { encodeVector } from '../../play/ai/memory';
-import { modelSource } from '../../play/ai/models';
 import { answerText } from '../decisionLogPanel';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
 import { confirmDialog, showMenu, toast, type MenuItem } from '../overlays';
 import { SelectField, TextField, button, iconButton } from '../widgets';
 import { MemoryEditor } from './memoryEditor';
+import { ModelsEditor, modelStateText } from './modelsEditor';
 import { Outliner, type FocusPart } from './outliner';
 import { PropertiesPanel } from './properties';
 import { SchemaEditor } from './schemaEditor';
 
-type Mode = 'tree' | 'schema' | 'memory';
+type Mode = 'tree' | 'schema' | 'memory' | 'models';
 
 const STATE_KEY = 'canonical-editor/behavior';
 
@@ -36,6 +37,7 @@ export class BehaviorPanel {
     private props: PropertiesPanel;
     private schemaEditor: SchemaEditor;
     private memoryEditor: MemoryEditor;
+    private modelsEditor: ModelsEditor;
     private body: HTMLElement;
     private side: HTMLElement;
     private debugEl: HTMLElement;
@@ -91,11 +93,16 @@ export class BehaviorPanel {
             embed: (onProgress) => this.embedMemory(onProgress),
             embedderStatus: () => this.embedderText(),
         });
+        this.modelsEditor = new ModelsEditor({ editor, locked: () => this.locked(), apply: (ops, label) => this.apply(ops, label) });
         this.debugEl = h('div', { class: 'bt-debug' });
         this.side = h('div', { class: 'bt-split-side' });
         this.body = h('div', { class: 'bt-body' });
         this.modelChip = h('button', { class: 'bt-model-chip', attrs: { type: 'button' } });
-        this.modelChip.addEventListener('click', (e) => this.modelMenu(e));
+        this.modelChip.addEventListener('click', () => {
+            this.mode = 'models';
+            this.save();
+            this.render();
+        });
         this.toolbar = h('div', { class: 'graph-toolbar bt-toolbar' });
         this.el = h('div', { class: 'bt-panel' }, this.toolbar, this.body);
 
@@ -151,9 +158,9 @@ export class BehaviorPanel {
         const doc = this.editor.store.doc;
         const t = this.tree();
         const s = this.schema();
-        const key = JSON.stringify([t, s, doc.memory.items.length]);
+        const key = JSON.stringify([t, s, doc.memory.items.length, doc.aiModels]);
         if (key !== this.issueCache.key) {
-            this.issueCache = { key, issues: [...(t ? validateTree(t, doc.blackboards, doc.memory) : []), ...(s ? validateSchema(s) : [])] };
+            this.issueCache = { key, issues: [...(t ? validateTree(t, doc.blackboards, doc.memory, doc.aiModels) : []), ...(s ? validateSchema(s) : [])] };
         }
         return this.issueCache.issues;
     }
@@ -178,7 +185,7 @@ export class BehaviorPanel {
         try {
             const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
             if (typeof s.tree === 'string') this.treeId = s.tree;
-            if (s.mode === 'tree' || s.mode === 'schema' || s.mode === 'memory') this.mode = s.mode;
+            if (s.mode === 'tree' || s.mode === 'schema' || s.mode === 'memory' || s.mode === 'models') this.mode = s.mode;
         } catch { /* ignore */ }
     }
 
@@ -192,7 +199,8 @@ export class BehaviorPanel {
             this.outliner.render();
             this.props.refresh();
         } else if (this.mode === 'schema') this.schemaEditor.render();
-        else this.memoryEditor.render();
+        else if (this.mode === 'memory') this.memoryEditor.render();
+        else this.modelsEditor.render();
     }
 
     render() {
@@ -209,9 +217,12 @@ export class BehaviorPanel {
         } else if (this.mode === 'schema') {
             this.body.appendChild(this.schemaEditor.el);
             this.schemaEditor.render(true);
-        } else {
+        } else if (this.mode === 'memory') {
             this.body.appendChild(this.memoryEditor.el);
             this.memoryEditor.render(true);
+        } else {
+            this.body.appendChild(this.modelsEditor.el);
+            this.modelsEditor.render(true);
         }
     }
 
@@ -227,6 +238,7 @@ export class BehaviorPanel {
                     ['tree', 'Tree', 'behavior'],
                     ['schema', 'Blackboard', 'key'],
                     ['memory', 'Memory', 'book'],
+                    ['models', 'Models', 'sparkle'],
                 ] as [Mode, string, string][]
             ).map(([m, label, ic]) => {
                 const b = h('button', { class: 'bt-mode' + (this.mode === m ? ' active' : ''), attrs: { type: 'button', role: 'tab' } }, icon(ic, 13), h('span', { text: label }));
@@ -239,7 +251,8 @@ export class BehaviorPanel {
             }),
         );
         this.toolbar.append(tabs);
-        if (this.mode !== 'memory') {
+        const treeMode = this.mode === 'tree' || this.mode === 'schema';
+        if (treeMode) {
             if (doc.behaviors.length) {
                 const pick = new SelectField(doc.behaviors.map((x) => ({ value: x.id, label: x.name })), t?.id ?? '', (id) => {
                     this.treeId = id;
@@ -260,10 +273,10 @@ export class BehaviorPanel {
                 this.toolbar.append(schema.el);
             }
         }
-        const issues = this.mode === 'memory' ? [] : this.issues();
+        const issues = treeMode ? this.issues() : [];
         const errors = issues.filter((i) => i.severity === 'error').length;
         const warnings = issues.length - errors;
-        if (t && this.mode !== 'memory') {
+        if (t && treeMode) {
             const chip = h('span', { class: 'bt-valid ' + (errors ? 'error' : warnings ? 'warning' : 'ok'), title: issues.map((i) => describeIssue(i)).join('\n') || 'No problems' }, icon(errors || warnings ? 'alert' : 'check', 12), h('span', { text: errors || warnings ? `${errors} error${errors === 1 ? '' : 's'}, ${warnings} warning${warnings === 1 ? '' : 's'}` : 'Valid' }));
             this.toolbar.append(chip);
         }
@@ -283,72 +296,30 @@ export class BehaviorPanel {
         this.toolbar.append(add, more);
     }
 
+    /** The state of the models the current tree (and the memory it searches) uses; a click opens the Models view. */
     private renderModelChip() {
         const m = this.editor.models;
-        if (!m) {
+        const t = this.tree();
+        const doc = this.editor.store.doc;
+        const ids = t ? modelsNeeded([t], doc.memory.items.some((x) => x.vector), doc.memory.embedder) : [];
+        if (!m || !ids.length) {
             this.modelChip.hidden = true;
             return;
         }
-        const s = m.status('decision');
-        let text = '';
-        let cls = '';
-        switch (s.state) {
-            case 'ready':
-                text = `Laya ready (${s.backend === 'webgpu' ? 'WebGPU' : 'WASM'})`;
-                cls = 'ok';
-                break;
-            case 'downloading':
-                text = `Laya ${Math.round(((s.loaded ?? 0) / Math.max(1, s.total ?? 1)) * 100)}%`;
-                cls = 'busy';
-                break;
-            case 'loading':
-            case 'checking':
-                text = 'Laya loading...';
-                cls = 'busy';
-                break;
-            case 'missing':
-                text = `Laya not downloaded (${formatBytes(s.source.size)})`;
-                cls = 'warn';
-                break;
-            case 'error':
-            case 'lost':
-                text = s.state === 'lost' ? 'Laya: GPU lost' : 'Laya: error';
-                cls = 'error';
-                break;
-            default:
-                text = 'Laya not loaded';
-        }
+        const states = ids.map((id) => ({ id, s: m.status(id) }));
+        const busy = states.find((x) => x.s.state === 'downloading' || x.s.state === 'loading' || x.s.state === 'checking');
+        const bad = states.filter((x) => x.s.state === 'error' || x.s.state === 'lost');
+        const ready = states.filter((x) => x.s.state === 'ready').length;
+        let text: string;
+        let cls: string;
+        if (busy) [text, cls] = [`${busy.id} ${modelStateText(busy.s)}`, 'busy'];
+        else if (bad.length) [text, cls] = [`${bad[0].id}: ${modelStateText(bad[0].s)}`, 'error'];
+        else if (ready === ids.length) [text, cls] = [ids.length === 1 ? `${ids[0]} ready` : `${ids.length} models ready`, 'ok'];
+        else [text, cls] = [`${ids.length - ready} of ${ids.length} models not loaded`, 'warn'];
         this.modelChip.hidden = false;
         this.modelChip.className = 'bt-model-chip ' + cls;
         this.modelChip.replaceChildren(icon('sparkle', 12), h('span', { text }));
-        this.modelChip.title = [s.source.label, s.source.license, s.message ?? ''].filter(Boolean).join('\n');
-    }
-
-    private modelMenu(e: MouseEvent) {
-        const m = this.editor.models;
-        if (!m) return;
-        const s = m.status('decision');
-        const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-        const items: MenuItem[] = [
-            { label: `${s.source.label}`, enabled: () => false },
-            { label: `Download (${formatBytes(s.source.size)})`, icon: 'save', enabled: () => s.state !== 'ready' && s.state !== 'downloading' && s.state !== 'loading', action: () => void this.downloadDecision() },
-            { label: 'Check this Browser\'s Copy', icon: 'refresh', enabled: () => s.state !== 'downloading' && s.state !== 'loading', action: () => void m.client.load('decision', false) },
-            { separator: true },
-            { label: 'Run on the GPU when possible', checked: () => m.backend === 'auto', action: () => m.setBackend('auto') },
-            { label: 'Run on the CPU (WebAssembly)', checked: () => m.backend === 'wasm', action: () => m.setBackend('wasm') },
-            { separator: true },
-            { label: 'Remove from this Browser', icon: 'trash', enabled: () => s.state === 'ready' || s.state === 'missing' || s.state === 'error', action: () => void m.client.forget('decision') },
-        ];
-        showMenu(items, r.right - 260, r.bottom + 4);
-    }
-
-    async downloadDecision() {
-        const m = this.editor.models;
-        if (!m) return;
-        const s = m.status('decision');
-        if (!(await confirmDialog('Download the decision model', `Agents ask ${s.source.label} (${formatBytes(s.source.size)}, ${s.source.license}). It is downloaded once from ${new URL(s.source.base).host} into this browser and runs here; nothing is sent anywhere. Download it now?`, 'Download'))) return;
-        const ok = await m.download('decision');
-        toast(ok ? 'The decision model is ready.' : `The decision model could not be loaded: ${m.status('decision').message ?? 'unknown error'}`, ok ? 'success' : 'error', 6000);
+        this.modelChip.title = states.map((x) => `${x.id}: ${modelStateText(x.s)}${x.s.message ? ` (${x.s.message})` : ''}`).join('\n') + '\nClick to open the Models view.';
     }
 
     private embedderText(): string {
@@ -356,15 +327,11 @@ export class BehaviorPanel {
         if (!m) return '';
         // The scene's memory decides the model (vectors of different models do not compare).
         const id = this.editor.store.doc.memory.embedder;
-        const src = modelSource(id, 'embedder');
-        if (!src) return `Unknown embedding model "${id}".`;
-        const s = m.status('embedder');
-        if (s.source.id === src.id) {
-            if (s.state === 'ready') return `Embedding model ready (${s.backend === 'webgpu' ? 'WebGPU' : 'WASM'}).`;
-            if (s.state === 'downloading') return `Downloading the embedding model: ${Math.round(((s.loaded ?? 0) / Math.max(1, s.total ?? 1)) * 100)}%.`;
-            if (s.state === 'error') return `Embedding model: ${s.message ?? 'error'}.`;
-        }
-        return `Embed downloads ${src.label} (${formatBytes(src.size)}) once.`;
+        const model = m.model(id);
+        if (!model) return `Unknown embed model "${id}".`;
+        const s = m.status(id);
+        if (s.state === 'ready' || s.state === 'downloading' || s.state === 'error') return `${model.name}: ${modelStateText(s)}${s.message ? ` (${s.message})` : ''}.`;
+        return `Embed downloads ${model.name}${'size' in model ? ` (${formatBytes(model.size)})` : ''} once.`;
     }
 
     // ------------------------------------------------------------- actions
@@ -467,31 +434,32 @@ export class BehaviorPanel {
         }
     }
 
-    /** Embeds the memory items that have no vector yet (downloads the embedding model the first time). */
+    /** Embeds the memory items that have no vector yet (downloads the embed model the first time). */
     private async embedMemory(onProgress: (text: string) => void): Promise<string> {
         const m = this.editor.models;
         if (!m) return 'Models are not available here.';
         const doc = this.editor.store.doc;
-        const src = m.use('embedder', doc.memory.embedder);
-        if (!src) return `Unknown embedding model "${doc.memory.embedder}".`;
+        const id = doc.memory.embedder;
+        const model = m.model(id);
+        if (!model) return `Unknown embed model "${id}".`;
         const todo = doc.memory.items.filter((x) => !x.vector);
         if (!todo.length) return 'Every item is embedded.';
-        if (!m.embedderReady) {
-            const cached = await m.client.cached('embedder');
-            if (!cached && !(await confirmDialog('Download the embedding model', `Embedding needs ${src.label} (${formatBytes(src.size)}, ${src.license}), downloaded once from ${new URL(src.base).host} into this browser. Download it now?`, 'Download'))) return 'Not embedded: the embedding model was not downloaded.';
-            onProgress('Loading the embedding model...');
-            if (!(await m.download('embedder'))) return `The embedding model could not be loaded: ${m.status('embedder').message ?? 'unknown error'}`;
+        if (!m.ready(id)) {
+            const size = 'size' in model ? `, ${formatBytes(model.size)}` : '';
+            if (!(await m.cached(id)) && !(await confirmDialog('Download the embed model', `Embedding needs ${model.name}${size}, downloaded once from ${new URL(model.url, location.href).host} into this browser. Download it now?`, 'Download'))) return 'Not embedded: the embed model was not downloaded.';
+            onProgress('Loading the embed model...');
+            if (!(await m.download(id))) return `The embed model could not be loaded: ${m.status(id).message ?? 'unknown error'}`;
         }
         // Each vector goes with the text it was made from: an item edited meanwhile keeps no stale vector.
         const vectors: Record<string, { text: string; vector: string }> = {};
         const chunk = 32;
         for (let i = 0; i < todo.length; i += chunk) {
             const part = todo.slice(i, i + chunk);
-            const vs = await m.client.embed(part.map((x) => x.text), 'passage');
+            const vs = await m.client.embed(id, part.map((x) => x.text), 'passage');
             part.forEach((x, j) => (vectors[x.id] = { text: x.text, vector: encodeVector(vs[j]) }));
             onProgress(`Embedded ${Math.min(i + chunk, todo.length)} of ${todo.length}...`);
         }
-        const r = this.editor.applyBehaviorOps([{ op: 'set_memory_vectors', embedder: src.id, vectors }], { label: 'Embed Memory' });
+        const r = this.editor.applyBehaviorOps([{ op: 'set_memory_vectors', embedder: id, vectors }], { label: 'Embed Memory' });
         return r.ok ? `Embedded ${todo.length} item${todo.length === 1 ? '' : 's'}.` : r.errors[0]?.message ?? 'Could not store the vectors.';
     }
 
@@ -555,7 +523,9 @@ export class BehaviorPanel {
             );
         });
         el.appendChild(h('table', { class: 'bt-bb-table' }, h('tr', null, h('th', null, ''), h('th', { text: 'Key' }), h('th', { text: 'Value' }), h('th', { text: 'Ver' }), h('th', { text: 'Answer' })), rows));
-        if (dbg.context) el.appendChild(h('div', { class: 'muted small pad', text: `Context from ${dbg.context.by}: ${dbg.context.ids.join(', ') || 'nothing matched'}` }));
+        for (const c of dbg.context) {
+            el.appendChild(h('div', { class: 'bt-context', title: c.text }, h('span', { class: 'mono', text: c.slot }), h('span', { class: 'muted', text: c.ids.length ? c.ids.join(', ') : c.text.split('\n').slice(-2).join(' / ') || '(empty)' })));
+        }
         const stats = this.editor.models?.scheduler.stats();
         const log = this.editor.player.agents.log;
         const mine = log.entries.filter((e) => e.agent === agent.id);
@@ -566,6 +536,6 @@ export class BehaviorPanel {
                 el.appendChild(h('div', { class: 'bt-answer' }, h('span', { class: 'mono', text: `${e.node}#${e.seq}` }), h('span', { text: e.questions.map((q) => `${answerText(q)} ${q.outcome.replace('_', ' ')}`).join(', ') }), h('span', { class: 'muted', text: `${e.time.toFixed(1)}s` })));
             }
         }
-        if (stats) el.appendChild(h('div', { class: 'muted small pad', text: `Scheduler: ${stats.queued} waiting (${stats.questions} questions), ${stats.inFlight ? 'a batch running' : 'idle'}, budget ${stats.budget} ms/s, ${stats.batches} batches, ${stats.cacheHits} cache hits` }));
+        if (stats) el.appendChild(h('div', { class: 'muted small pad', text: `Scheduler: ${stats.queued} waiting (${stats.units} units), ${stats.inFlight ? 'a batch running' : 'idle'}, budget ${stats.budget} ms/s, ${stats.batches} batches, ${stats.cacheHits} cache hits` }));
     }
 }

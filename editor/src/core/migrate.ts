@@ -13,6 +13,10 @@ const STEPS: Record<number, (doc: Raw) => void> = {
         doc.behaviors ??= [];
         doc.memory ??= { items: [] };
     },
+    // 2 -> 3: AI models the scene loads (Laya and e5 are built in).
+    2: (doc) => {
+        doc.aiModels ??= [];
+    },
 };
 
 /**

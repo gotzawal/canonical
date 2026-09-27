@@ -7,24 +7,27 @@
 //
 // The agent phase first applies what arrived since the last frame (model
 // answers, recall results), in the order it arrived, then ticks the agents
-// that are due. Each agent ticks 10 times a second; the agents are spread
+// that are due. Each agent has a context pool (context.ts) its Recall
+// services, Model tasks and scripts write and its models read. Each agent ticks 10 times a second; the agents are spread
 // over the frames (each gets its own phase in the 100 ms period), so a
 // crowd does not tick in the same frame. Time is play time: pausing stops
 // the trees, and a paused game applies nothing until it runs again. The
 // request scheduler runs separately, right after the engine drew a frame.
 
 import type { Camera3D, Object3D } from '@orillusion/core';
-import { modelsNeeded, schemaOf, type ModelNeeds } from '../../core/behavior/format';
+import { modelsNeeded, schemaOf } from '../../core/behavior/format';
 import { Emitter } from '../../core/events';
 import type {
-    AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, MemoryItemDoc,
-    RecallServiceDoc, SceneDoc, ScriptTaskDoc,
+    AiModelDoc, AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, InferTaskDoc,
+    MemoryItemDoc, RecallServiceDoc, SceneDoc, ScriptTaskDoc,
 } from '../../core/types';
 import type { Script } from '../script';
 import { AskRunner, fillTemplate } from './ask';
 import { Blackboard, BlackboardError, type AnswerMeta, type RuntimeValue } from './blackboard';
+import { ContextPool } from './context';
+import { InferRunner, type InferHandle } from './infer';
 import { DecisionLog } from './log';
-import { decodeVector, MemoryIndex, norm, type MemoryEntry, type RecallContext } from './memory';
+import { decodeVector, MemoryIndex, norm, type MemoryEntry } from './memory';
 import type { Scheduler } from './scheduler';
 import { TreeInstance, type AskHandle, type TaskHandle, type TreeDebug, type TreeHost } from './tree';
 
@@ -46,20 +49,34 @@ export interface AgentHost {
     camera(): Camera3D;
     /** A warning in the console and the play log. */
     warn(text: string): void;
+    /** Speaks a line for an object (a Model task with Speak). */
+    speak?(text: string, obj: Object3D): void;
 }
 
-/** The decision model and the embedding model (they outlive Play sessions). */
+/** The models of the scene (they outlive Play sessions). */
 export interface AIServices {
     readonly scheduler: Scheduler;
-    readonly embedderReady: boolean;
-    embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null>;
-    /**
-     * Starts loading what the scene needs: the decision model for Ask nodes,
-     * the embedding model its memory was embedded with (`embedder`, a model id).
-     */
-    prepare(needs: ModelNeeds, embedder: string): void;
-    /** The decision model was running and stopped (its GPU device was lost). */
-    readonly decisionLost?: boolean;
+    /** A model by id: the scene's, then the built-in ones. */
+    model(id: string): AiModelDoc | undefined;
+    ready(id: string): boolean;
+    embed(model: string, texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null>;
+    /** Starts loading the models a Play session needs (ids). */
+    prepare(ids: string[]): void;
+    /** A model stopped while running (its GPU device was lost). */
+    readonly lost?: boolean;
+}
+
+/** An agent's context pool as scripts see it (context.ts). */
+export interface ContextApi {
+    readonly slots: string[];
+    /** The whole pool, or one slot. */
+    get(slot?: string): string;
+    /** Adds a line to a slot, e.g. add('dialogue', 'Player: Hello'). */
+    add(slot: string, line: string): void;
+    /** Replaces a slot's text. */
+    set(slot: string, text: string): void;
+    /** Empties a slot, or the whole pool. */
+    clear(slot?: string): void;
 }
 
 /** The blackboard as scripts see it: every key can be read, fact keys written. */
@@ -72,6 +89,8 @@ export interface BlackboardApi {
     version(key: string): number;
     /** The answer behind an AI key's value: confidence, source, time; null while it has its default. */
     answer(key: string): (AnswerMeta & { value: BlackboardValue }) | null;
+    /** The agent's context pool: what its models see besides the facts. */
+    readonly context: ContextApi;
 }
 
 export interface AgentDebug {
@@ -85,7 +104,8 @@ export interface AgentDebug {
     values: Record<string, BlackboardValue>;
     versions: Record<string, number>;
     answers: Record<string, AnswerMeta>;
-    context: { ids: string[]; at: number; by: string } | null;
+    /** The context pool by slot. */
+    context: { slot: string; text: string; by: string; at: number; ids: string[] }[];
 }
 
 const PRIORITY_FACTOR: Record<AskPriority, number> = { high: 0.25, normal: 1, low: 4 };
@@ -96,10 +116,8 @@ export class Agent implements TreeHost {
     nextTick = 0;
     /** Its object was destroyed or Play stopped: results for it are dropped. */
     removed = false;
-    /** The context the last Recall assembled. */
-    context: RecallContext | null = null;
-    /** Raised when a Recall brings other items than before. */
-    contextVersion = 0;
+    /** What its models see besides the facts: Recall results, dialogue lines, script notes. */
+    readonly context = new ContextPool();
     private seqs = new Map<string, number>();
     private warned = new Set<string>();
 
@@ -144,6 +162,14 @@ export class Agent implements TreeHost {
         return this.sys.asks.request(this, doc, isTask);
     }
 
+    infer(doc: InferTaskDoc): InferHandle {
+        return this.sys.infers.request(this, doc);
+    }
+
+    get contextVersion(): number {
+        return this.context.version;
+    }
+
     recall(doc: RecallServiceDoc) {
         this.sys.recall(this, doc);
     }
@@ -180,6 +206,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     readonly agents: Agent[] = [];
     readonly log = new DecisionLog();
     readonly asks = new AskRunner(this);
+    readonly infers = new InferRunner(this);
     /** Scene memory plus what scripts remember while playing. */
     memory: MemoryIndex | null = null;
     /** Distances for request priority are measured from this object (the camera when null). */
@@ -188,7 +215,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     private running = false;
     /** Raised by start and stop: results of an earlier session are dropped. */
     private session = 0;
-    /** The decision model was lost when the last frame looked. */
+    /** A model was lost when the last frame looked. */
     modelLost = false;
     /** The agents' tick offsets are set in the first frame of a session. */
     private spreadPending = false;
@@ -215,9 +242,14 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         return this.running;
     }
 
-    /** The request scheduler, when a decision model is set up. */
+    /** The request scheduler, when the models are set up. */
     get scheduler(): Scheduler | null {
         return this.running ? this.services()?.scheduler ?? null : null;
+    }
+
+    /** A model by id (the scene's or a built-in one), when the models are set up. */
+    modelDoc(id: string): AiModelDoc | undefined {
+        return this.services()?.model(id);
     }
 
     // -------------------------------------------------------------- control
@@ -230,13 +262,13 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.stop();
         const doc = this.host.doc();
         this.log.clear();
-        // Query vectors belong to the embedding model of the last session.
+        // Query vectors belong to the embed model of the last session.
         this.queryCache.clear();
         this.queryVectors.clear();
         this.running = true;
         this.session++;
         // A model lost before this session: the keys start at their defaults anyway.
-        this.modelLost = !!this.services()?.decisionLost;
+        this.modelLost = !!this.services()?.lost;
         this.memory = new MemoryIndex(doc.memory);
         this.player = null;
         const list: { id: string; name: string; obj: Object3D; tree: BehaviorTreeDoc; schema: BlackboardSchemaDoc; values: Record<string, BlackboardValue> }[] = [];
@@ -270,8 +302,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.spreadPending = true;
         if (this.agents.length) {
             try {
-                const needs = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded);
-                if (needs.decision || needs.embedder) this.services()?.prepare(needs, this.host.doc().memory.embedder);
+                const ids = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded, doc.memory.embedder);
+                if (ids.length) this.services()?.prepare(ids);
             } catch (e) {
                 console.error('[ai] loading the models failed', e);
             }
@@ -348,15 +380,15 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     }
 
     /**
-     * When the decision model stops in the middle of a session (device
-     * lost), the AI keys go back to their schema defaults, as if there had
-     * never been a model: old answers must not steer the trees forever.
+     * When a model stops in the middle of a session (device lost), the AI
+     * keys go back to their schema defaults, as if there had never been a
+     * model: old answers must not steer the trees forever.
      */
     private checkModelLost() {
-        const lost = !!this.services()?.decisionLost;
+        const lost = !!this.services()?.lost;
         if (lost && !this.modelLost) {
             for (const a of this.agents) for (const k of a.blackboard.keys) if (k.owner === 'ai') a.blackboard.reset(k.name);
-            if (this.agents.length) this.host.warn('The decision model stopped (its GPU device was lost): AI keys are back to their defaults.');
+            if (this.agents.length) this.host.warn('A model stopped (its GPU device was lost): AI keys are back to their defaults.');
         }
         this.modelLost = lost;
     }
@@ -399,6 +431,25 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
                 const a = bb.answer(key);
                 return a ? { ...a, value: bb.plain(key) } : null;
             },
+            context: this.contextApi(agent),
+        };
+    }
+
+    private contextApi(agent: Agent): ContextApi {
+        const pool = agent.context;
+        const slot = (name: unknown) => {
+            const s = String(name ?? '').trim();
+            if (!/^[\p{L}\p{N}_-]{1,64}$/u.test(s)) throw new BlackboardError(`"${s}" is not a context slot name: use letters, digits, _ and -.`);
+            return s;
+        };
+        return {
+            get slots() {
+                return pool.names;
+            },
+            get: (name) => (name === undefined ? pool.text() : pool.text(slot(name))),
+            add: (name, line) => pool.add(slot(name), String(line ?? ''), 'script', this.time),
+            set: (name, text) => void pool.set(slot(name), String(text ?? '').slice(0, 4000), 'script', this.time),
+            clear: (name) => pool.clear(name === undefined ? undefined : slot(name)),
         };
     }
 
@@ -431,14 +482,15 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
 
     // --------------------------------------------------------------- recall
 
-    /** Embeds a text with the embedding model (cached), or null when there is none. */
+    /** Embeds a text with the memory's embed model (cached), or null when it is not ready. */
     embed(text: string, kind: 'query' | 'passage'): Promise<Float32Array | null> {
         const services = this.services();
-        if (!services?.embedderReady || !text.trim()) return Promise.resolve(null);
+        const model = this.host.doc().memory.embedder;
+        if (!services?.ready(model) || !text.trim()) return Promise.resolve(null);
         const key = `${kind}:${text}`;
         let p = this.queryCache.get(key);
         if (!p) {
-            p = services.embed([text], kind).then(
+            p = services.embed(model, [text], kind).then(
                 (v) => {
                     const vector = v?.[0] ?? null;
                     if (vector) this.queryVectors.set(key, vector);
@@ -459,12 +511,12 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     recall(agent: Agent, doc: RecallServiceDoc) {
         const memory = this.memory;
         if (!memory || !memory.entries.length) return;
-        const text = fillTemplate(doc.query, (k) => agent.blackboard.get(k));
+        const text = fillTemplate(doc.query, (k) => agent.blackboard.get(k), agent.context);
+        // The items go into the context slot named after the service.
         const run = (vector: Float32Array | null) => {
             const hits = memory.search({ vector, text }, doc.tags, doc.count);
             const next = memory.assemble(hits, doc.tokenBudget, this.time, doc.id);
-            if (!agent.context || agent.context.ids.join('\u0000') !== next.ids.join('\u0000')) agent.contextVersion++;
-            agent.context = next;
+            agent.context.set(doc.id, next.text, doc.id, this.time, { ids: next.ids, vector: next.vector });
         };
         if (!memory.embedded) {
             run(null);
@@ -557,7 +609,10 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             values: bb.snapshot(),
             versions,
             answers,
-            context: agent.context ? { ids: agent.context.ids, at: agent.context.at, by: agent.context.by } : null,
+            context: agent.context.names.map((slot) => {
+                const c = agent.context.get(slot)!;
+                return { slot, text: c.text, by: c.by, at: c.at, ids: c.ids };
+            }),
         };
     }
 }

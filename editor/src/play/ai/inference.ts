@@ -1,23 +1,34 @@
 // The page side of the inference worker: starts it when a model is first
-// needed, loads models (from Cache Storage, or downloaded when allowed) and
-// reports their state, and forwards answer and embedding jobs.
+// needed, loads models (from Cache Storage, or downloaded when allowed),
+// keeps each model's state by id and forwards jobs.
 
 import wasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
+import { modelFingerprint } from '../../core/behavior/models';
 import { Emitter } from '../../core/events';
-import type { LayaQuestion } from './laya';
-import type { ModelKind, ModelSource } from './models';
+import type { AiModelDoc } from '../../core/types';
 import type { WorkerIn, WorkerOut } from './inference.worker';
 
 export type ModelState = 'unknown' | 'checking' | 'missing' | 'downloading' | 'loading' | 'ready' | 'error' | 'lost';
 
 export interface ModelStatus {
     state: ModelState;
-    source: ModelSource;
     backend?: 'webgpu' | 'wasm';
     /** Download progress, bytes. */
     loaded?: number;
     total?: number;
     message?: string;
+    /** What the model reported when it loaded, e.g. a classifier's labels. */
+    info?: Record<string, unknown>;
+}
+
+/** Order of jobs in the worker: the scheduler's batches, then query embeddings, then memory embeddings. */
+export const PRIORITY = { batch: 0, query: 1, passage: 2 } as const;
+/** Long embedding lists go in chunks, so a batch can run between them. */
+const CHUNK = 16;
+
+interface Entry extends ModelStatus {
+    fingerprint: string;
+    model: AiModelDoc;
 }
 
 interface Pending {
@@ -25,25 +36,43 @@ interface Pending {
     reject: (e: Error & { code?: string }) => void;
 }
 
-export class InferenceClient extends Emitter<{ status: ModelKind }> {
-    readonly status: Record<ModelKind, ModelStatus>;
+export class InferenceClient extends Emitter<{ status: string }> {
+    private entries = new Map<string, Entry>();
     private worker: Worker | null = null;
     private pending = new Map<number, Pending>();
     private serial = 0;
 
-    constructor(decision: ModelSource, embedder: ModelSource, private backend: 'auto' | 'webgpu' | 'wasm' = 'auto') {
+    constructor(private backend: 'auto' | 'webgpu' | 'wasm' = 'auto') {
         super();
-        this.status = { decision: { state: 'unknown', source: decision }, embedder: { state: 'unknown', source: embedder } };
     }
 
-    ready(kind: ModelKind): boolean {
-        return this.status[kind].state === 'ready';
+    /** A model's state; a model whose files changed (another URL or file) starts over. */
+    status(m: AiModelDoc): ModelStatus {
+        return this.entry(m);
     }
 
-    /** Switches a kind to another model (it has to be loaded again). */
-    setSource(kind: ModelKind, source: ModelSource) {
-        if (this.status[kind].source.id === source.id) return;
-        this.set(kind, { state: 'unknown', source });
+    private entry(m: AiModelDoc): Entry {
+        const fingerprint = modelFingerprint(m);
+        let e = this.entries.get(m.id);
+        if (!e || e.fingerprint !== fingerprint) {
+            e = { state: 'unknown', fingerprint, model: m };
+            this.entries.set(m.id, e);
+        }
+        return e;
+    }
+
+    ready(id: string): boolean {
+        return this.entries.get(id)?.state === 'ready';
+    }
+
+    backendOf(id: string): 'webgpu' | 'wasm' | undefined {
+        return this.entries.get(id)?.backend;
+    }
+
+    /** Some model stopped while running (its GPU device was lost). */
+    get anyLost(): boolean {
+        for (const e of this.entries.values()) if (e.state === 'lost') return true;
+        return false;
     }
 
     get computeBackend(): 'auto' | 'webgpu' | 'wasm' {
@@ -54,19 +83,20 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
     setBackend(backend: 'auto' | 'webgpu' | 'wasm') {
         if (backend === this.backend) return;
         this.backend = backend;
-        const kinds: ModelKind[] = ['decision', 'embedder'];
-        const reload = kinds.filter((k) => this.status[k].state === 'ready');
+        const reload = Array.from(this.entries.values()).filter((e) => e.state === 'ready').map((e) => e.model);
         this.worker?.terminate();
         this.worker = null;
         for (const p of this.pending.values()) p.reject(Object.assign(new Error('The inference worker was restarted.'), { code: 'restart' }));
         this.pending.clear();
-        for (const k of kinds) this.set(k, { state: 'unknown', backend: undefined, loaded: undefined, total: undefined, message: undefined });
-        for (const k of reload) void this.load(k, false);
+        for (const e of this.entries.values()) this.set(e.model.id, { state: 'unknown', backend: undefined, loaded: undefined, total: undefined, message: undefined });
+        for (const m of reload) void this.load(m, false);
     }
 
-    private set(kind: ModelKind, s: Partial<ModelStatus>) {
-        this.status[kind] = { ...this.status[kind], ...s };
-        this.emit('status', kind);
+    private set(id: string, s: Partial<ModelStatus>) {
+        const e = this.entries.get(id);
+        if (!e) return;
+        Object.assign(e, s);
+        this.emit('status', id);
     }
 
     private ensureWorker(): Worker {
@@ -75,8 +105,8 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
         w.onmessage = (ev: MessageEvent<WorkerOut>) => this.onMessage(ev.data);
         w.onerror = (ev) => {
             console.error('[ai] the inference worker failed', ev.message);
-            for (const kind of ['decision', 'embedder'] as ModelKind[]) {
-                if (this.status[kind].state === 'loading' || this.status[kind].state === 'downloading') this.set(kind, { state: 'error', message: ev.message || 'The inference worker failed.' });
+            for (const e of this.entries.values()) {
+                if (e.state === 'loading' || e.state === 'downloading') this.set(e.model.id, { state: 'error', message: ev.message || 'The inference worker failed.' });
             }
         };
         this.post(w, { type: 'init', wasm: new URL(wasmUrl, location.href).href, backend: this.backend });
@@ -98,12 +128,13 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
 
     private onMessage(m: WorkerOut) {
         if (m.type === 'progress') {
-            const s = this.status[m.kind];
-            if (s.state === 'downloading' || s.state === 'loading') this.set(m.kind, { state: m.loaded < m.total ? 'downloading' : 'loading', loaded: m.loaded, total: m.total });
+            const e = this.entries.get(m.model);
+            if (e && (e.state === 'downloading' || e.state === 'loading')) this.set(m.model, { state: m.loaded < m.total ? 'downloading' : 'loading', loaded: m.loaded, total: m.total });
             return;
         }
         if (m.type === 'lost') {
-            for (const kind of ['decision', 'embedder'] as ModelKind[]) if (this.status[kind].state === 'ready') this.set(kind, { state: 'lost', message: m.message });
+            // Models on the CPU go on; the ones on the lost device stop.
+            for (const e of this.entries.values()) if (e.state === 'ready' && e.backend === 'webgpu') this.set(e.model.id, { state: 'lost', message: m.message });
             return;
         }
         const p = this.pending.get(m.id);
@@ -113,10 +144,15 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
         else p.reject(Object.assign(new Error(m.message), { code: m.code }));
     }
 
+    /** The model as the worker gets it: its folder as an absolute URL. */
+    private resolved(m: AiModelDoc): AiModelDoc {
+        return { ...m, url: new URL(m.url, location.href).href };
+    }
+
     /** True when every file of the model is in this browser's cache. */
-    async cached(kind: ModelKind): Promise<boolean> {
+    async cached(m: AiModelDoc): Promise<boolean> {
         try {
-            return !!(await this.call({ type: 'check', id: ++this.serial, source: this.status[kind].source })).result;
+            return !!(await this.call({ type: 'check', id: ++this.serial, model: this.resolved(m) })).result;
         } catch {
             return false;
         }
@@ -124,54 +160,62 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
 
     /**
      * Loads a model. Without `download` only a cached copy is used; the
-     * status becomes 'missing' when there is none.
+     * state becomes 'missing' when there is none. `size`: the download size
+     * when it is known ahead (built-in models), for the progress.
      */
-    async load(kind: ModelKind, download: boolean): Promise<boolean> {
-        const s = this.status[kind];
-        if (s.state === 'ready') return true;
-        if (s.state === 'downloading' || s.state === 'loading' || s.state === 'checking') return false;
-        this.set(kind, { state: download ? 'downloading' : 'checking', loaded: 0, total: s.source.size, message: undefined });
+    async load(m: AiModelDoc, download: boolean, size?: number): Promise<boolean> {
+        const e = this.entry(m);
+        if (e.state === 'ready') return true;
+        if (e.state === 'downloading' || e.state === 'loading' || e.state === 'checking') return false;
+        this.set(m.id, { state: download ? 'downloading' : 'checking', loaded: 0, total: size, message: undefined });
         if (!download) {
-            const cached = await this.cached(kind);
-            if (!cached) {
-                this.set(kind, { state: 'missing' });
+            if (!(await this.cached(m))) {
+                this.set(m.id, { state: 'missing' });
                 return false;
             }
-            this.set(kind, { state: 'loading' });
+            this.set(m.id, { state: 'loading' });
         }
         try {
-            const { result } = await this.call({ type: 'load', id: ++this.serial, source: s.source, download });
-            this.set(kind, { state: 'ready', backend: result.backend });
+            const { result } = await this.call({ type: 'load', id: ++this.serial, model: this.resolved(m), download, size });
+            // The model may have been changed while it loaded: the result belongs to the old files.
+            if (this.entries.get(m.id) !== e) return false;
+            this.set(m.id, { state: 'ready', backend: result.backend, info: result.info });
             return true;
-        } catch (e: any) {
+        } catch (err: any) {
             // A restart (another backend) set the state already.
-            if (e?.code === 'restart') return false;
-            this.set(kind, { state: e?.code === 'not-cached' ? 'missing' : 'error', message: e?.message || String(e) });
+            if (err?.code === 'restart' || this.entries.get(m.id) !== e) return false;
+            this.set(m.id, { state: err?.code === 'not-cached' ? 'missing' : 'error', message: err?.message || String(err) });
             return false;
         }
     }
 
     /** Removes a model from this browser's cache. */
-    async forget(kind: ModelKind) {
-        await this.call({ type: 'forget', id: ++this.serial, source: this.status[kind].source }).catch(() => {});
-        this.set(kind, { state: 'missing', backend: undefined });
+    async forget(m: AiModelDoc) {
+        await this.call({ type: 'forget', id: ++this.serial, model: this.resolved(m) }).catch(() => {});
+        this.entry(m);
+        this.set(m.id, { state: 'missing', backend: undefined, info: undefined });
     }
 
-    ask(items: { state: string; questions: LayaQuestion[] }[]): Promise<{ probabilities: number[][][]; ms: number }> {
-        return this.call({ type: 'ask', id: ++this.serial, items }).then(
-            (r) => ({ probabilities: r.result, ms: r.ms }),
-            (e) => {
-                if (e.code === 'lost') this.set('decision', { state: 'lost', message: e.message });
-                throw e;
+    /** Runs a loaded model on some inputs (their format depends on the model's kind, see adapters.ts). */
+    run(id: string, inputs: unknown[], priority: number = PRIORITY.batch): Promise<{ outputs: unknown[]; ms: number }> {
+        return this.call({ type: 'run', id: ++this.serial, model: id, inputs, priority }).then(
+            (r) => ({ outputs: r.result as unknown[], ms: r.ms }),
+            (err) => {
+                if (err.code === 'lost') this.set(id, { state: 'lost', message: err.message });
+                throw err;
             },
         );
     }
 
-    embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
-        return this.call({ type: 'embed', id: ++this.serial, texts, kind }).then((r) => r.result as Float32Array[]);
+    /** Embeds texts with an embed model (in chunks, so batches can run between them). */
+    async embed(id: string, texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
+        const chunks: Promise<{ outputs: unknown[] }>[] = [];
+        for (let i = 0; i < texts.length; i += CHUNK) chunks.push(this.run(id, texts.slice(i, i + CHUNK).map((text) => ({ text, kind })), PRIORITY[kind]));
+        return (await Promise.all(chunks)).flatMap((c) => c.outputs as Float32Array[]);
     }
 
-    prepare(items: { state: string; questions: LayaQuestion[] }[]) {
-        if (this.worker && this.ready('decision')) this.post(this.worker, { type: 'prepare', items });
+    /** Tokenizes the inputs of a coming run ahead (while the GPU runs the batch before). */
+    prepare(id: string, inputs: unknown[]) {
+        if (this.worker && this.ready(id)) this.post(this.worker, { type: 'prepare', model: id, inputs });
     }
 }

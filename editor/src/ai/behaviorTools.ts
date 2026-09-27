@@ -79,8 +79,10 @@ function entryText(e: DecisionLogEntry): string {
     const qs = e.questions
         .map((q) => {
             const probs = q.probabilities ? (q.format === 'noul' ? '' : ` [${(q.options ?? []).map((o, i) => `${o.value} ${q.probabilities![i]}`).join(', ')}]`) : '';
-            const answer = q.probabilities ? `${q.key}=${formatValue(q.value)}` : `${q.key} (no answer)`;
-            return `${answer}${q.confidence !== null ? ` conf ${q.confidence}` : ''} ${q.outcome}${probs}`;
+            // Model tasks: classify has labels as options, generate has its text as the value (and the input as the text).
+            const answer = q.probabilities || (q.format === 'generate' && q.value !== null) ? `${q.key}=${formatValue(q.value)}` : `${q.key} (no answer)`;
+            const input = q.format === 'classify' || q.format === 'generate' ? ` input ${JSON.stringify(q.text.slice(-200))}` : '';
+            return `${answer}${q.confidence !== null ? ` conf ${q.confidence}` : ''} ${q.outcome}${probs}${input}`;
         })
         .join('; ');
     return `${e.time}s ${e.agentName} ${e.node}#${e.seq}: facts {${facts}}${e.context.length ? ` context [${e.context.join(', ')}]` : ''} -> ${qs} (${e.provider}${e.cache !== 'none' ? `, ${e.cache} cache` : ''}, ${e.latency} ms)`;
@@ -106,7 +108,7 @@ export async function runBehaviorTool(env: ToolEnv, name: string, args: Json): P
             }
             const tree = resolveTree(env, args.tree);
             if (tree) {
-                const issues = validateTree(tree, d.blackboards, d.memory);
+                const issues = validateTree(tree, d.blackboards, d.memory, d.aiModels);
                 const schema = d.blackboards.find((s) => s.id === tree.schema);
                 const users = d.nodes.filter((n) => n.agent?.tree === tree.id).map((n) => `${n.name} (${n.id})${n.agent!.enabled ? '' : ' disabled'}`);
                 return {
@@ -146,7 +148,7 @@ export async function runBehaviorTool(env: ToolEnv, name: string, args: Json): P
         case 'validate_behavior': {
             const d = doc();
             const tree = resolveTree(env, args.tree);
-            const issues = tree ? validateTree(tree, d.blackboards, d.memory) : validateScene(d);
+            const issues = tree ? validateTree(tree, d.blackboards, d.memory, d.aiModels) : validateScene(d);
             const errors = issues.filter((i) => i.severity === 'error').length;
             return {
                 data: { errors, warnings: issues.length - errors, issues: issueLines(env, issues), ...(issues.length ? {} : { note: 'No problems.' }) },

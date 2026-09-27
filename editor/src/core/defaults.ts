@@ -206,6 +206,7 @@ export function newScene(): SceneDoc {
         blackboards: [],
         behaviors: [],
         memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
 }
@@ -227,6 +228,7 @@ export function emptyScene(): SceneDoc {
         blackboards: [],
         behaviors: [],
         memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
 }

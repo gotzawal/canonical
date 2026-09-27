@@ -126,6 +126,7 @@ export function exampleShowcase(): SceneDoc {
         blackboards: [],
         behaviors: [],
         memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
 }
@@ -378,6 +379,7 @@ export function exampleGuard(): SceneDoc {
         blackboards: [],
         behaviors: [],
         memory: defaultMemory(),
+        aiModels: [],
         design: defaultDesign(),
     };
     // The behavior data goes through the edit operations like any edit, so the example is valid by construction.

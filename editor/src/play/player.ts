@@ -79,7 +79,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     readonly agents: AgentSystem;
     /** Voice lines of scripts (this.say), one sentence at a time. */
     readonly speech = new SpeechQueue();
-    /** The decision and embedding models; set by the editor or the game player. */
+    /** The agents' models; set by the editor or the game player. */
     aiServices: () => AIServices | null = () => null;
     /** Language model for scripts (this.chat); the editor sets it, games have none. */
     chatModel: ((req: ChatRequest) => Promise<string>) | null = null;
@@ -640,6 +640,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     warn(text: string) {
         console.warn(text);
         this.pushLog('warn', text);
+    }
+
+    /** A line a Model task speaks (the same voice queue as this.say). */
+    speak(text: string) {
+        void this.speech.say(text).catch(() => {});
     }
 
     blackboard(target: Object3D | string): BlackboardApi | null {

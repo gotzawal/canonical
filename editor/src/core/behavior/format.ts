@@ -6,14 +6,15 @@
 import { uid } from '../ids';
 import type {
     AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc, BlackboardValue,
-    BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc,
+    BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc, AiModelDoc,
 } from '../types';
+import { BUILTIN_MODELS, DEFAULT_DECIDE_MODEL, modelKind } from './models';
 import {
     DECORATOR_TYPES, fieldDefault, isReadableId, KEY_OWNERS, KEY_TYPES, NODE_TYPES, SERVICE_TYPES, typeDefault, valueFits,
     type FieldDef, type ItemTypeDef,
 } from './nodeTypes';
 
-/** The embedding model new scenes use (see play/ai/models.ts). */
+/** The embed model new scenes use (core/behavior/models.ts). */
 export const DEFAULT_EMBEDDER = 'e5-small';
 
 export function defaultMemory(): MemoryDoc {
@@ -112,22 +113,22 @@ export function memoryChoiceKeys(tree: BehaviorTreeDoc): Set<string> {
     return out;
 }
 
-export interface ModelNeeds {
-    /** Ask nodes: the decision model. */
-    decision: boolean;
-    /** Recall and choices from memory, when the memory has embeddings: the embedding model. */
-    embedder: boolean;
-}
-
-/** The models some trees use (without embedded memory, search matches shared words and needs no model). */
-export function modelsNeeded(trees: BehaviorTreeDoc[], memoryEmbedded: boolean): ModelNeeds {
-    const needs: ModelNeeds = { decision: false, embedder: false };
+/**
+ * The models some trees use (ids): the decide model of every Ask, the model
+ * of every Model task, and the memory's embed model for Recall and choices
+ * from memory when the memory has embeddings (without, search matches
+ * shared words and needs no model).
+ */
+export function modelsNeeded(trees: BehaviorTreeDoc[], memoryEmbedded: boolean, embedder: string): string[] {
+    const ids = new Set<string>();
+    let search = false;
     const visit = (item: BtNodeDoc | BtServiceDoc) => {
         if (item.type === 'ask') {
-            needs.decision = true;
-            if (item.choices === 'memory') needs.embedder = true;
+            ids.add(item.model || DEFAULT_DECIDE_MODEL);
+            if (item.choices === 'memory') search = true;
         }
-        if (item.type === 'recall') needs.embedder = true;
+        if (item.type === 'infer' && item.model) ids.add(item.model);
+        if (item.type === 'recall') search = true;
     };
     for (const t of trees) {
         walkNodes(t.root, (n) => {
@@ -135,14 +136,14 @@ export function modelsNeeded(trees: BehaviorTreeDoc[], memoryEmbedded: boolean):
             for (const s of n.services ?? []) visit(s);
         });
     }
-    if (!memoryEmbedded) needs.embedder = false;
-    return needs;
+    if (search && memoryEmbedded && embedder) ids.add(embedder);
+    return Array.from(ids);
 }
 
 /** The models the enabled agents of a scene use. */
-export function sceneModelsNeeded(doc: { nodes: { agent?: AgentDoc }[]; behaviors: BehaviorTreeDoc[]; memory: MemoryDoc }): ModelNeeds {
+export function sceneModelsNeeded(doc: { nodes: { agent?: AgentDoc }[]; behaviors: BehaviorTreeDoc[]; memory: MemoryDoc }): string[] {
     const used = new Set(doc.nodes.filter((n) => n.agent?.enabled).map((n) => n.agent!.tree));
-    return modelsNeeded(doc.behaviors.filter((t) => used.has(t.id)), doc.memory.items.some((m) => !!m.vector));
+    return modelsNeeded(doc.behaviors.filter((t) => used.has(t.id)), doc.memory.items.some((m) => !!m.vector), doc.memory.embedder);
 }
 
 // ---------------------------------------------------------------- factories
@@ -194,6 +195,7 @@ export function repairField(f: FieldDef, v: any): any {
         case 'template':
         case 'method':
         case 'key':
+        case 'model':
             return typeof v === 'string' ? v.slice(0, 2000) : fieldDefault(f);
         case 'bool':
             return typeof v === 'boolean' ? v : fieldDefault(f);
@@ -342,6 +344,31 @@ export function sanitizeMemory(raw: any): MemoryDoc {
         const item: MemoryItemDoc = { id, text, tags: stringList(it.tags, 32) };
         if (typeof it.vector === 'string' && /^[A-Za-z0-9+/=]+$/.test(it.vector)) item.vector = it.vector;
         out.items.push(item);
+    }
+    return out;
+}
+
+/** Scene models: readable ids unique among them and the built-in ones, scalar options. Unknown kinds stay for validation to name. */
+export function sanitizeAiModels(raw: any): AiModelDoc[] {
+    const out: AiModelDoc[] = [];
+    const taken = new Set(BUILTIN_MODELS.map((m) => m.id));
+    for (const m of Array.isArray(raw) ? raw : []) {
+        if (!isObj(m)) continue;
+        const id = isReadableId(m.id) && !taken.has(m.id) ? m.id : uniqueId(typeof m.id === 'string' && m.id ? m.id : 'model', taken);
+        taken.add(id);
+        const kind = str(m.kind, '', 64);
+        const options: Record<string, BlackboardValue> = {};
+        // Settings of the kind get their field's type; others are kept as they are (validation warns).
+        const defs = modelKind(kind)?.options ?? [];
+        if (isObj(m.options)) {
+            for (const [k, v] of Object.entries(m.options)) {
+                if (!isReadableId(k)) continue;
+                const f = defs.find((o) => o.name === k);
+                options[k] = f ? repairField(f, v) : value(v);
+            }
+        }
+        out.push({ id, name: str(m.name, '', 200).trim() || id, kind, url: str(m.url, '', 2000).trim(), file: str(m.file, '', 500).trim() || modelKind(kind)?.file || 'onnx/model_quantized.onnx', options });
+        if (out.length >= 64) break;
     }
     return out;
 }

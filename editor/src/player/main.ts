@@ -118,8 +118,7 @@ async function main() {
     if (debug) showIssues(root, player, !game.trusted && game.doc.scripts.length > 0);
     // Agents that ask or recall get their models in the background; they
     // play with the blackboard defaults until the models are ready.
-    const needs = sceneModelsNeeded(store.doc);
-    if (needs.decision || needs.embedder) await startModels(root, runtime, player, store.doc.memory.embedder);
+    if (sceneModelsNeeded(store.doc).length) await startModels(root, runtime, player, store);
     player.play();
     bindInput(canvas, player, view);
     addFullscreenButton(root);
@@ -130,12 +129,12 @@ async function main() {
 }
 
 /**
- * The decision and embedding models of the scene's agents: ONNX Runtime
- * and the inference worker load only here, and the models download into
- * the browser's cache on first play (with Save-Data on, a button offers the
- * download instead). A chip in the corner shows the progress.
+ * The models of the scene's agents: ONNX Runtime and the inference worker
+ * load only here, and the models download into the browser's cache on
+ * first play (with Save-Data on, a button offers the download instead). A
+ * chip in the corner shows the progress.
  */
-async function startModels(root: HTMLElement, runtime: Runtime, player: Player, embedder: string) {
+async function startModels(root: HTMLElement, runtime: Runtime, player: Player, store: Store) {
     let services: typeof import('../play/ai/services');
     try {
         services = await import('../play/ai/services');
@@ -144,26 +143,29 @@ async function startModels(root: HTMLElement, runtime: Runtime, player: Player, 
         return;
     }
     const saveData = !!(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
-    const models = new services.ModelServices(runtime, player.speech, { policy: saveData ? 'ask' : 'auto', embedder });
+    const models = new services.ModelServices(runtime, player.speech, () => store.doc.aiModels, { policy: saveData ? 'ask' : 'auto' });
     player.aiServices = () => models;
     const chip = h('button', { class: 'player-models', attrs: { type: 'button', hidden: true } });
     chip.addEventListener('click', () => {
-        for (const kind of Array.from(models.needed)) void models.download(kind);
+        for (const id of Array.from(models.needed)) void models.download(id);
     });
+    const ids = sceneModelsNeeded(store.doc);
     const update = () => {
-        const statuses = (['decision', 'embedder'] as const).map((k) => models.status(k));
-        const busy = statuses.find((s) => s.state === 'downloading' || s.state === 'loading');
+        const busy = ids.map((id) => ({ id, s: models.status(id) })).find((x) => x.s.state === 'downloading' || x.s.state === 'loading');
         if (busy) {
-            const pct = busy.total ? Math.min(100, Math.round(((busy.loaded ?? 0) / busy.total) * 100)) : 0;
-            chip.textContent = busy.state === 'downloading' ? `AI model ${pct}%` : 'Starting AI...';
-            chip.title = `${busy.source.label}. The characters use their default behavior until it is ready.`;
+            const pct = busy.s.total ? Math.min(100, Math.round(((busy.s.loaded ?? 0) / busy.s.total) * 100)) : 0;
+            chip.textContent = busy.s.state === 'downloading' ? `AI model ${pct}%` : 'Starting AI...';
+            chip.title = `${models.model(busy.id)?.name ?? busy.id}. The characters use their default behavior until it is ready.`;
             chip.disabled = true;
             chip.hidden = false;
             return;
         }
         if (models.needed.size) {
-            const size = Array.from(models.needed).reduce((n, k) => n + models.status(k).source.size, 0);
-            chip.textContent = `Download AI (${Math.round(size / 1e6)} MB)`;
+            const size = Array.from(models.needed).reduce((n, id) => {
+                const m = models.model(id);
+                return n + (m && 'size' in m ? m.size : 0);
+            }, 0);
+            chip.textContent = size ? `Download AI (${Math.round(size / 1e6)} MB)` : 'Download AI';
             chip.title = 'The characters use their default behavior without it. It is downloaded once into this browser.';
             chip.disabled = false;
             chip.hidden = false;

@@ -4,10 +4,11 @@
 // returns them. Warnings never block.
 
 import type {
-    AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardSchemaDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, MemoryDoc,
-    SceneDoc,
+    AgentDoc, AiModelDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardSchemaDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, InferTaskDoc,
+    MemoryDoc, SceneDoc,
 } from '../types';
 import { isCompositeDoc, memoryChoiceKeys, schemaOf, walkNodes } from './format';
+import { BUILTIN_MODELS, findModel, MODEL_KINDS, MODEL_TASKS, modelKind, modelTask, type ModelTask } from './models';
 import {
     activeFields, decoratorType, isReadableId, keyTypeInfo, nodeType, serviceType, valueFits, type FieldDef, type ItemTypeDef,
 } from './nodeTypes';
@@ -30,7 +31,12 @@ export interface Issue {
     field?: string;
     /** Scene object (node id) for agent issues. */
     object?: string;
+    /** Model id for model issues. */
+    model?: string;
 }
+
+/** Placeholders a template may use besides {key}: the context pool, or one slot of it. */
+export const CONTEXT_PLACEHOLDER = /^context(?::([\p{L}\p{N}_-]+))?$/u;
 
 /** Ask questions: the format a key type is asked in, or why it cannot be. */
 export function questionFormat(key: BlackboardKeyDoc, choices: string): { format: 'noul' | 'choice' } | { error: string } {
@@ -55,6 +61,7 @@ function canFail(n: BtNodeDoc): boolean {
             return false;
         case 'script':
         case 'ask':
+        case 'infer':
             return true;
         case 'selector':
             return n.children.length === 0 || n.children.every(canFail);
@@ -67,8 +74,12 @@ interface Ctx {
     tree: BehaviorTreeDoc;
     schema: BlackboardSchemaDoc | undefined;
     memory: MemoryDoc | undefined;
+    /** The scene's models (the built-in ones are always there). */
+    models: readonly AiModelDoc[];
     out: Issue[];
 }
+
+const taskLabel = (t: ModelTask | undefined) => MODEL_TASKS.find((x) => x.task === t)?.label.toLowerCase() ?? 'unknown';
 
 function push(ctx: Ctx, severity: Severity, code: string, message: string, at: Partial<Issue> = {}) {
     ctx.out.push({ severity, code, message, tree: ctx.tree.id, ...at });
@@ -160,15 +171,27 @@ function checkFields(ctx: Ctx, def: ItemTypeDef, item: any, at: Partial<Issue>) 
             case 'questions':
                 checkQuestions(ctx, item, at);
                 break;
+            case 'model': {
+                if (typeof v !== 'string' || !v) break;
+                const m = findModel(v, ctx.models);
+                const task = modelTask(m);
+                if (!m) push(ctx, 'error', 'model-missing', `No model "${v}". Models: ${[...ctx.models, ...BUILTIN_MODELS].map((x) => x.id).join(', ')}.`, where);
+                else if (f.modelTasks && (!task || !f.modelTasks.includes(task))) {
+                    push(ctx, 'error', 'model-task', `"${v}" is a ${taskLabel(task)} model; ${f.label} needs a ${f.modelTasks.map(taskLabel).join(' or ')} model.`, where);
+                }
+                break;
+            }
         }
     }
 }
 
-/** {key} placeholders of a text: each names a key of the schema. */
+/** Placeholders of a text: {key} names a key of the schema; {context} and {context:slot} the context pool. */
 function checkTemplate(ctx: Ctx, v: unknown, label: string, where: Partial<Issue>) {
     if (typeof v !== 'string' || !ctx.schema) return;
     for (const m of v.matchAll(/\{([^{}]+)\}/g)) {
-        if (!keyOf(ctx, m[1].trim())) push(ctx, 'error', 'key-missing', `{${m[1]}} in ${label}: no key "${m[1].trim()}" in schema "${ctx.schema.name}".`, where);
+        const name = m[1].trim();
+        if (CONTEXT_PLACEHOLDER.test(name)) continue;
+        if (!keyOf(ctx, name)) push(ctx, 'error', 'key-missing', `{${m[1]}} in ${label}: no key "${name}" in schema "${ctx.schema.name}" ({context} and {context:slot} name the context pool).`, where);
     }
 }
 
@@ -232,13 +255,29 @@ function checkService(ctx: Ctx, node: BtNodeDoc, s: BtServiceDoc) {
     checkFields(ctx, def, s, at);
 }
 
+/** A Model task's output key must take what its model gives. */
+function checkInfer(ctx: Ctx, n: InferTaskDoc) {
+    if (n.history && !isReadableId(n.history)) push(ctx, 'error', 'bad-id', `"${n.history}" is not a context slot name: use letters, digits, _ and -.`, { node: n.id, field: 'history' });
+    const key = keyOf(ctx, n.output);
+    const task = modelTask(findModel(n.model, ctx.models));
+    if (!key || !task) return;
+    if (task === 'generate' && key.type !== 'string') push(ctx, 'error', 'output-type', `A text generator writes text: "${key.name}" is a ${key.type} key; use a string key.`, { node: n.id, field: 'output' });
+    if (n.label && (task !== 'classify' || key.type !== 'probability')) push(ctx, 'warning', 'label-unused', 'Label only applies to a classifier with a probability output.', { node: n.id, field: 'label' });
+}
+
 /** Every problem of one tree. */
-export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc[], memory?: MemoryDoc): Issue[] {
-    const ctx: Ctx = { tree, schema: schemaOf(schemas, tree), memory, out: [] };
+export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc[], memory?: MemoryDoc, models: readonly AiModelDoc[] = []): Issue[] {
+    const ctx: Ctx = { tree, schema: schemaOf(schemas, tree), memory, models, out: [] };
     if (!ctx.schema) push(ctx, 'error', 'schema-missing', tree.schema ? `Schema "${tree.schema}" does not exist.` : 'The tree has no blackboard schema.', { field: 'schema' });
 
     const ids = new Map<string, number>();
     const asks: { id: string; keys: string[]; facts: string[] }[] = [];
+    /** Who writes which AI key, in tree order: Ask questions and Model task outputs. */
+    const writes: { id: string; key: string; field: string }[] = [];
+    const addAsk = (id: string, a: { questions: { key: string }[]; facts: string[] }) => {
+        asks.push({ id, keys: a.questions.map((q) => q.key), facts: a.facts });
+        for (const k of new Set(a.questions.map((q) => q.key))) if (k) writes.push({ id, key: k, field: 'questions' });
+    };
     let recall = false;
     walkNodes(tree.root, (node, parent) => {
         const isRoot = parent === null;
@@ -255,9 +294,13 @@ export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc
             if (!isReadableId(s.id)) push(ctx, 'error', 'bad-id', `"${s.id}" is not a valid id: use letters, digits, _ and -.`, { node: s.id, field: 'id' });
             checkService(ctx, node, s);
             if (s.type === 'recall') recall = true;
-            if (s.type === 'ask') asks.push({ id: s.id, keys: s.questions.map((q) => q.key), facts: s.facts });
+            if (s.type === 'ask') addAsk(s.id, s);
         }
-        if (node.type === 'ask') asks.push({ id: node.id, keys: node.questions.map((q) => q.key), facts: node.facts });
+        if (node.type === 'ask') addAsk(node.id, node);
+        if (node.type === 'infer') {
+            if (node.output) writes.push({ id: node.id, key: node.output, field: 'output' });
+            checkInfer(ctx, node);
+        }
         if (isCompositeDoc(node)) {
             if (!node.children.length) push(ctx, 'warning', 'empty', `This ${def.label} has no children; it always ${node.type === 'selector' ? 'fails' : 'succeeds'}.`, { node: node.id });
             if (node.type === 'selector') {
@@ -274,11 +317,11 @@ export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc
     });
     for (const [id, n] of ids) if (n > 1) push(ctx, 'error', 'duplicate-id', `The id "${id}" is used ${n} times; ids are unique in the tree.`, { node: id, field: 'id' });
 
-    // Ownership: every AI key has exactly one Ask.
-    const writers = new Map<string, string[]>();
-    for (const a of asks) for (const k of a.keys) writers.set(k, [...(writers.get(k) ?? []), a.id]);
+    // Ownership: every AI key has exactly one writer, an Ask or a Model task.
+    const writers = new Map<string, { id: string; field: string }[]>();
+    for (const w of writes) writers.set(w.key, [...(writers.get(w.key) ?? []), w]);
     for (const [key, list] of writers) {
-        if (list.length > 1) for (const id of list.slice(1)) push(ctx, 'error', 'owner-conflict', `"${key}" is also written by "${list[0]}"; an AI key is written by exactly one Ask.`, { node: id, field: 'questions' });
+        for (const w of list.slice(1)) push(ctx, 'error', 'owner-conflict', `"${key}" is also written by "${list[0].id}"; an AI key is written by exactly one Ask or Model task.`, { node: w.id, field: w.field });
     }
     if (ctx.schema) {
         const read = new Set<string>();
@@ -286,7 +329,7 @@ export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc
             for (const d of n.decorators ?? []) if (d.type === 'condition') read.add(d.key);
         });
         for (const k of ctx.schema.keys) {
-            if (k.owner === 'ai' && read.has(k.name) && !writers.has(k.name)) push(ctx, 'warning', 'ai-unwritten', `The AI key "${k.name}" is tested but no Ask of this tree writes it; it keeps its default.`, { field: 'schema' });
+            if (k.owner === 'ai' && read.has(k.name) && !writers.has(k.name)) push(ctx, 'warning', 'ai-unwritten', `The AI key "${k.name}" is tested but no Ask or Model task of this tree writes it; it keeps its default.`, { field: 'schema' });
         }
     }
     // Questions about the same facts belong in one Ask.
@@ -328,6 +371,7 @@ export function validateSchema(schema: BlackboardSchemaDoc): Issue[] {
     for (const k of schema.keys) {
         if (!isReadableId(k.name)) out.push({ severity: 'error', code: 'bad-id', message: `"${k.name}" is not a valid key name: use letters, digits, _ and -.`, ...at(k.name, 'name') });
         if (seen.has(k.name)) out.push({ severity: 'error', code: 'duplicate-id', message: `Key "${k.name}" exists twice.`, ...at(k.name, 'name') });
+        if (k.name === 'context') out.push({ severity: 'error', code: 'reserved', message: '"context" is reserved: {context} in templates is the context pool.', ...at(k.name, 'name') });
         seen.add(k.name);
         if (k.type === 'enum') {
             if (!k.values?.length) out.push({ severity: 'error', code: 'enum-empty', message: `The enum key "${k.name}" has no values.`, ...at(k.name, 'values') });
@@ -364,9 +408,47 @@ export function validateAgent(objectId: string, agent: AgentDoc, doc: Pick<Scene
 export function validateScene(doc: SceneDoc): Issue[] {
     const out: Issue[] = [];
     for (const s of doc.blackboards) out.push(...validateSchema(s));
-    for (const t of doc.behaviors) out.push(...validateTree(t, doc.blackboards, doc.memory));
+    for (const t of doc.behaviors) out.push(...validateTree(t, doc.blackboards, doc.memory, doc.aiModels));
     for (const n of doc.nodes) if (n.agent) out.push(...validateAgent(n.id, n.agent, doc));
+    out.push(...validateModels(doc.aiModels, doc.memory));
     return out;
+}
+
+/** Problems of the scene's models, and of the model the memory is embedded with. */
+export function validateModels(models: readonly AiModelDoc[], memory?: MemoryDoc): Issue[] {
+    const out: Issue[] = [];
+    const bad = (model: string, code: string, field: string, message: string, severity: Severity = 'error') => out.push({ severity, code, message, model, field });
+    const seen = new Set<string>();
+    for (const m of models) {
+        if (!isReadableId(m.id)) bad(m.id, 'bad-id', 'id', `"${m.id}" is not a valid model id: use letters, digits, _ and -.`);
+        else if (seen.has(m.id) || BUILTIN_MODELS.some((b) => b.id === m.id)) bad(m.id, 'duplicate-id', 'id', `The model id "${m.id}" is taken${BUILTIN_MODELS.some((b) => b.id === m.id) ? ' by a built-in model' : ''}.`);
+        seen.add(m.id);
+        const kind = modelKind(m.kind);
+        if (!kind) bad(m.id, 'model-kind', 'kind', `Unknown model kind "${m.kind}"; use ${MODEL_KINDS.map((k) => k.kind).join(', ')}.`);
+        if (!isFolderUrl(m.url)) bad(m.id, 'model-url', 'url', 'The folder URL must be a web address ending with / (it holds tokenizer.json and the ONNX file).');
+        if (!m.file.trim()) bad(m.id, 'required', 'file', 'The model file is required.');
+        for (const name of Object.keys(m.options)) {
+            if (kind && !kind.options.some((o) => o.name === name)) bad(m.id, 'model-option', `options.${name}`, `"${name}" is not a setting of ${kind.label} models; it is ignored.`, 'warning');
+        }
+    }
+    if (memory) {
+        const e = findModel(memory.embedder, models);
+        if (!e) bad(memory.embedder, 'model-missing', 'memory.embedder', `The memory's embed model "${memory.embedder}" does not exist.`);
+        else if (modelTask(e) !== 'embed') bad(memory.embedder, 'model-task', 'memory.embedder', `"${memory.embedder}" is a ${taskLabel(modelTask(e))} model; memory needs an embed model.`);
+    }
+    return out;
+}
+
+/** The web address of a folder (ending with /): absolute, or from the page (/..., ./..., ../...) for models hosted with the game. */
+export function isFolderUrl(url: string): boolean {
+    if (!url.endsWith('/') || /\s/.test(url)) return false;
+    if (/^\.{0,2}\//.test(url)) return true;
+    try {
+        const u = new URL(url);
+        return u.protocol === 'https:' || u.protocol === 'http:';
+    } catch {
+        return false;
+    }
 }
 
 /** "tree guard / node threat_gate / field key: message", for tool results and toasts. */
@@ -375,6 +457,7 @@ export function describeIssue(i: Issue, names?: { tree?: (id: string) => string;
     if (i.tree) parts.push(`tree ${names?.tree?.(i.tree) ?? i.tree}`);
     if (i.schema) parts.push(`schema ${names?.schema?.(i.schema) ?? i.schema}`);
     if (i.object) parts.push(`object ${i.object}`);
+    if (i.model) parts.push(`model ${i.model}`);
     if (i.node) parts.push(`${i.schema ? 'key' : 'node'} ${i.node}`);
     if (i.decorator !== undefined) parts.push(`decorator ${i.decorator}`);
     if (i.field) parts.push(`field ${i.field}`);
@@ -389,5 +472,5 @@ export function describeIssue(i: Issue, names?: { tree?: (id: string) => string;
  * mapped through the edit's renames. Equal keys are counted, not merged.
  */
 export function issueKey(i: Issue, node = i.node): string {
-    return [i.severity, i.code, i.tree ?? '', i.schema ?? '', i.object ?? '', node ?? '', (i.field ?? '').replace(/\[\d+\]/g, '[]')].join('|');
+    return [i.severity, i.code, i.tree ?? '', i.schema ?? '', i.object ?? '', i.model ?? '', node ?? '', (i.field ?? '').replace(/\[\d+\]/g, '[]')].join('|');
 }

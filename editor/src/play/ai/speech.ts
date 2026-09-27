@@ -1,6 +1,6 @@
 // Voice lines for scripts (this.say). A line is split into sentences and
 // spoken one sentence at a time, in the order lines were asked for; a task's
-// AbortSignal stops a line. While a line waits or plays, the decision model
+// AbortSignal stops a line. While a line waits or plays, the models
 // gets smaller batches (Scheduler.speechPending), so a voice line is not
 // held up behind a long batch.
 //

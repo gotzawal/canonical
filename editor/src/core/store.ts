@@ -3,7 +3,7 @@ import { sanitizeParticles } from './particles';
 import {
     defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
 } from './defaults';
-import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory } from './behavior/format';
+import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, sanitizeAiModels } from './behavior/format';
 import { sanitizeDesign } from './design';
 import { clampGIGrid } from './giLimits';
 import { migrateScene } from './migrate';
@@ -588,6 +588,7 @@ export function sanitize(input: any): SceneDoc {
         blackboards: sanitizeBlackboards(input?.blackboards),
         behaviors: sanitizeBehaviors(input?.behaviors),
         memory: sanitizeMemory(input?.memory),
+        aiModels: sanitizeAiModels(input?.aiModels),
         build: sanitizeBuild(input?.build),
         design: sanitizeDesign(input?.design),
     };

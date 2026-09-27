@@ -14,6 +14,7 @@ const OUTCOMES: AskOutcome[] = ['written', 'low_confidence', 'superseded', 'held
 
 /** "key=value", or just the key when the model gave no answer. */
 export function answerText(q: DecisionQuestion): string {
+    if (q.format === 'generate' && typeof q.value === 'string') return `${q.key}=${formatValue(q.value.length > 60 ? q.value.slice(0, 57) + '...' : q.value)}`;
     return q.probabilities ? `${q.key}=${formatValue(q.value)}` : q.key;
 }
 
@@ -150,7 +151,9 @@ export class DecisionLogPanel {
                                   ),
                               ),
                           )
-                        : h('div', { class: 'muted', text: 'No answer.' }),
+                        : q.format === 'generate' && typeof q.value === 'string'
+                          ? h('div', null, h('b', { text: 'Output: ' }), h('span', { text: q.value }))
+                          : h('div', { class: 'muted', text: 'No answer.' }),
                 ),
             ),
             h('div', { class: 'muted small', text: `${e.provider} · ${e.model || 'no model'} · tree ${e.tree} v${e.treeVersion} · frame ${e.frame} · ${e.at}` }),

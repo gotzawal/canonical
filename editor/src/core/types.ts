@@ -400,8 +400,8 @@ export interface RenderGraphDoc {
     posts: PostDoc[];
 }
 
-/** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents). */
-export const SCENE_VERSION = 2;
+/** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents), 3 the scene's AI models. */
+export const SCENE_VERSION = 3;
 
 export interface SceneDoc {
     format: 'canonical-scene';
@@ -421,6 +421,8 @@ export interface SceneDoc {
     behaviors: BehaviorTreeDoc[];
     /** What agents can recall: planning notes and lore, embedded in the editor. */
     memory: MemoryDoc;
+    /** AI models the scene loads besides the built-in ones (core/behavior/models.ts). */
+    aiModels: AiModelDoc[];
     build?: BuildDoc;
     /** The planning pipeline: brief, structure, shots and stage state. Not part of built games. */
     design: DesignDoc;
@@ -480,7 +482,7 @@ export interface BlackboardSchemaDoc {
 }
 
 export type BtCompositeType = 'selector' | 'sequence';
-export type BtTaskType = 'script' | 'wait' | 'set_key' | 'ask';
+export type BtTaskType = 'script' | 'wait' | 'set_key' | 'ask' | 'infer';
 export type BtNodeType = BtCompositeType | BtTaskType;
 export type BtDecoratorType = 'condition' | 'cooldown';
 export type BtServiceType = 'recall' | 'ask';
@@ -517,10 +519,12 @@ export interface AskQuestionDoc {
 
 /** Settings shared by the Ask task and the Ask service. */
 export interface AskSettingsDoc {
+    /** A decide model (scene or built-in); empty for the default one. */
+    model: string;
     questions: AskQuestionDoc[];
     /** Fact keys the model sees; a change of their write version triggers the Ask service. */
     facts: string[];
-    /** Also show the model the context Recall assembled. */
+    /** Also show the model the agent's context pool (what Recall found, dialogue lines...). */
     context: boolean;
     /** Answers less confident than this keep the key's previous value. */
     minConfidence: number;
@@ -578,7 +582,34 @@ export interface AskTaskDoc extends BtNodeBase, AskSettingsDoc {
     type: 'ask';
 }
 
-export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | AskTaskDoc;
+/**
+ * Runs a classify or generate model on a text made from a template (blackboard
+ * values and the context pool) and writes the result to an AI key.
+ */
+export interface InferTaskDoc extends BtNodeBase {
+    type: 'infer';
+    /** A classify or generate model (scene or built-in). */
+    model: string;
+    /** The model's input: {key} is a blackboard value, {context} the context pool, {context:slot} one slot. */
+    input: string;
+    /** AI key for the result: string (the text or the top label), enum (the top label) or probability (P of `label`). */
+    output: string;
+    /** Classifiers with a probability output: the label whose probability is written (empty: the top label's). */
+    label: string;
+    /** Classifier results less confident than this keep the key's value. */
+    minConfidence: number;
+    /** Text generators: most new tokens, and the sampling temperature (0 takes the likeliest token). */
+    maxTokens: number;
+    temperature: number;
+    /** A context slot the written result is added to as "Name: text" (a dialogue); empty for none. */
+    history: string;
+    /** Speak the written text. */
+    speak: boolean;
+    /** Seconds the task waits for the result before it fails. */
+    timeout: number;
+}
+
+export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | AskTaskDoc | InferTaskDoc;
 export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc;
 
 interface BtServiceBase {
@@ -639,9 +670,28 @@ export interface MemoryItemDoc {
 }
 
 export interface MemoryDoc {
-    /** Embedding model the vectors were made with (see play/ai/models.ts). */
+    /** Embed model the vectors were made with (a scene or built-in model id). */
     embedder: string;
     items: MemoryItemDoc[];
+}
+
+/**
+ * An AI model a scene loads: any small ONNX model with a tokenizer.json, run
+ * by one of the model kinds (core/behavior/models.ts). Laya and
+ * multilingual-e5 are built in and need no entry.
+ */
+export interface AiModelDoc {
+    /** Readable id, unique among the scene's and the built-in models; nodes use it. */
+    id: string;
+    name: string;
+    /** How it runs: laya, nli, embedding, classifier or causal-lm. */
+    kind: string;
+    /** Folder with tokenizer.json, config.json and the ONNX file, ending with /. */
+    url: string;
+    /** The ONNX file in the folder, or a manifest.json of parts. */
+    file: string;
+    /** Settings of the kind (pooling, labels, stop strings...). */
+    options: Record<string, BlackboardValue>;
 }
 
 /**
@@ -654,7 +704,8 @@ export type AskOutcome = 'written' | 'low_confidence' | 'superseded' | 'held' | 
 
 export interface DecisionQuestion {
     key: string;
-    format: 'noul' | 'choice';
+    /** noul and choice: Ask questions; classify and generate: Model tasks (text: their input). */
+    format: 'noul' | 'choice' | 'classify' | 'generate';
     text: string;
     /** Choice options: the value written to the key and the text the model saw. */
     options?: { value: string; text: string }[];
@@ -680,7 +731,7 @@ export interface DecisionLogEntry {
     treeVersion: number;
     node: string;
     seq: number;
-    /** Fact values the model saw, and the ids of the memory items in the context. */
+    /** Fact values the model saw, and what the context held (memory item ids, other slots by name). */
     facts: Record<string, BlackboardValue>;
     context: string[];
     questions: DecisionQuestion[];

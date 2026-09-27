@@ -127,6 +127,7 @@ export class PropertiesPanel {
         return {
             schema: this.host.schema(),
             objects: () => this.host.editor.store.doc.nodes.filter((n) => !n.prefabChild).map((n) => ({ id: n.id, name: n.name })),
+            models: () => this.host.editor.store.doc.aiModels,
         };
     }
 

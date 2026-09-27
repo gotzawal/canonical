@@ -1,17 +1,18 @@
 // The models behind the agents, shared by every Play session of a page: the
-// inference worker (decision model and embedding model), the request
-// scheduler that runs right after the engine drew each frame, and the rule
-// for downloading. The editor asks before the first download; a built game
-// downloads what its scene needs.
+// inference worker (every model the scene uses: built-in ones and the
+// scene's own, core/behavior/models.ts), the request scheduler that runs
+// right after the engine drew each frame, and the rule for downloading. The
+// editor asks before the first download; a built game downloads what its
+// scene needs.
 
+import { findModel, type BuiltinModel } from '../../core/behavior/models';
 import { Emitter } from '../../core/events';
+import type { AiModelDoc } from '../../core/types';
 import type { Runtime } from '../../engine/runtime';
 import type { AIServices } from './agents';
-import { InferenceClient, type ModelStatus } from './inference';
-import { DEFAULT_DECISION_MODEL, modelSource, type ModelKind, type ModelSource } from './models';
-import { Scheduler, type DecisionProvider } from './scheduler';
+import { InferenceClient, PRIORITY, type ModelStatus } from './inference';
+import { Scheduler, type ModelProvider } from './scheduler';
 import type { SpeechQueue } from './speech';
-import { DEFAULT_EMBEDDER, type ModelNeeds } from '../../core/behavior/format';
 
 export type DownloadPolicy = 'auto' | 'ask';
 
@@ -29,96 +30,98 @@ export function savedBackend(): ComputeBackend {
     return 'auto';
 }
 
-export class ModelServices extends Emitter<{ status: ModelKind; needed: ModelKind }> implements AIServices {
+export class ModelServices extends Emitter<{ status: string; needed: string }> implements AIServices {
     readonly client: InferenceClient;
     readonly scheduler: Scheduler;
     /** 'auto' downloads what a scene needs; 'ask' only loads cached models until download() is called. */
     policy: DownloadPolicy;
-    /** Kinds a Play session needed but could not load (the editor shows a download prompt). */
-    readonly needed = new Set<ModelKind>();
+    /** Models a Play session needed but could not load (the editor shows a download prompt). */
+    readonly needed = new Set<string>();
 
-    constructor(runtime: Runtime, speech: SpeechQueue, opts: { policy: DownloadPolicy; decision?: string; embedder?: string; backend?: ComputeBackend }) {
+    /** `sceneModels`: the models of the scene that plays (the built-in ones are always there). */
+    constructor(runtime: Runtime, speech: SpeechQueue, private sceneModels: () => readonly AiModelDoc[], opts: { policy: DownloadPolicy; backend?: ComputeBackend }) {
         super();
         this.policy = opts.policy;
-        const decision = modelSource(opts.decision ?? DEFAULT_DECISION_MODEL, 'decision') ?? modelSource(DEFAULT_DECISION_MODEL, 'decision')!;
-        const embedder = modelSource(opts.embedder ?? DEFAULT_EMBEDDER, 'embedder') ?? modelSource(DEFAULT_EMBEDDER, 'embedder')!;
-        this.client = new InferenceClient(decision, embedder, opts.backend ?? 'auto');
-        const client = this.client;
-        const provider: DecisionProvider = {
-            get ready() {
-                return client.ready('decision');
-            },
-            get name() {
-                return `laya/${client.status.decision.backend ?? 'none'}`;
-            },
-            get model() {
-                return `${client.status.decision.source.id} (calibrated with its config.json temperatures)`;
-            },
-            get gpu() {
-                return client.status.decision.backend !== 'wasm';
-            },
-            run: (items) => client.ask(items),
-            prepare: (items) => client.prepare(items),
+        const client = (this.client = new InferenceClient(opts.backend ?? 'auto'));
+        const provider: ModelProvider = {
+            ready: (id) => client.ready(id),
+            name: (id) => `${this.model(id)?.kind ?? id}/${client.backendOf(id) ?? 'none'}`,
+            gpu: (id) => client.backendOf(id) !== 'wasm',
+            run: (id, inputs) => client.run(id, inputs, PRIORITY.batch),
+            prepare: (id, inputs) => client.prepare(id, inputs),
         };
         this.scheduler = new Scheduler(provider, () => runtime.fps);
         this.scheduler.speechPending = () => speech.pending > 0;
         // The scheduler sends its batches right after the engine drew a frame.
         runtime.onFrame(() => this.scheduler.frame());
-        client.on('status', (kind) => {
-            if (client.ready(kind)) this.needed.delete(kind);
-            this.emit('status', kind);
+        client.on('status', (id) => {
+            if (client.ready(id)) this.needed.delete(id);
+            this.emit('status', id);
         });
     }
 
-    status(kind: ModelKind): ModelStatus {
-        return this.client.status[kind];
+    /** A model by id: the scene's, then the built-in ones. */
+    model(id: string): AiModelDoc | BuiltinModel | undefined {
+        return findModel(id, this.sceneModels());
     }
 
-    get embedderReady(): boolean {
-        return this.client.ready('embedder');
+    status(id: string): ModelStatus {
+        const m = this.model(id);
+        return m ? this.client.status(m) : { state: 'error', message: `No model "${id}".` };
     }
 
-    get decisionLost(): boolean {
-        return this.client.status.decision.state === 'lost';
+    ready(id: string): boolean {
+        return this.client.ready(id);
     }
 
-    embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null> {
-        if (!this.embedderReady) return Promise.resolve(null);
-        return this.client.embed(texts, kind).catch((e) => {
+    /** A model stopped while running (its GPU device was lost). */
+    get lost(): boolean {
+        return this.client.anyLost;
+    }
+
+    embed(model: string, texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null> {
+        if (!this.ready(model)) return Promise.resolve(null);
+        return this.client.embed(model, texts, kind).catch((e) => {
             console.warn('[ai] embedding failed', e);
             return null;
         });
     }
 
-    /** Uses another model for a kind (a scene's memory embedder, a custom decision model URL). */
-    use(kind: ModelKind, id: string): ModelSource | null {
-        const src = modelSource(id, kind);
-        if (src) this.client.setSource(kind, src);
-        return src ?? null;
-    }
-
-    /** A Play session starts with agents that need these models (`embedder`: the model the scene's memory was embedded with). */
-    prepare(needs: ModelNeeds, embedder: string) {
-        if (needs.embedder && !this.use('embedder', embedder)) {
-            console.warn(`[ai] unknown embedding model "${embedder}": memory is searched by shared words`);
-            needs = { ...needs, embedder: false };
-        }
-        for (const kind of ['decision', 'embedder'] as ModelKind[]) {
-            if (!needs[kind]) continue;
-            const s = this.client.status[kind].state;
+    /** A Play session starts with agents that use these models. */
+    prepare(ids: string[]) {
+        for (const id of ids) {
+            const m = this.model(id);
+            if (!m) {
+                console.warn(`[ai] unknown model "${id}": its nodes keep their keys at the defaults`);
+                continue;
+            }
+            const s = this.client.status(m).state;
             if (s === 'ready' || s === 'downloading' || s === 'loading' || s === 'checking') continue;
-            void this.client.load(kind, this.policy === 'auto').then((ok) => {
-                if (!ok && this.client.status[kind].state === 'missing') {
-                    this.needed.add(kind);
-                    this.emit('needed', kind);
+            void this.client.load(m, this.policy === 'auto', sizeOf(m)).then((ok) => {
+                if (!ok && this.client.status(m).state === 'missing') {
+                    this.needed.add(id);
+                    this.emit('needed', id);
                 }
             });
         }
     }
 
     /** Downloads (or loads from the cache) a model now. */
-    download(kind: ModelKind): Promise<boolean> {
-        return this.client.load(kind, true);
+    download(id: string): Promise<boolean> {
+        const m = this.model(id);
+        return m ? this.client.load(m, true, sizeOf(m)) : Promise.resolve(false);
+    }
+
+    /** True when every file of the model is in this browser's cache. */
+    cached(id: string): Promise<boolean> {
+        const m = this.model(id);
+        return m ? this.client.cached(m) : Promise.resolve(false);
+    }
+
+    /** Removes a model from this browser's cache. */
+    async forget(id: string) {
+        const m = this.model(id);
+        if (m) await this.client.forget(m);
     }
 
     get backend(): ComputeBackend {
@@ -133,4 +136,9 @@ export class ModelServices extends Emitter<{ status: ModelKind; needed: ModelKin
         } catch { /* ignore */ }
         this.client.setBackend(backend);
     }
+}
+
+/** The download size of a built-in model, for the progress (others report theirs as they come). */
+function sizeOf(m: AiModelDoc | BuiltinModel): number | undefined {
+    return 'size' in m ? m.size : undefined;
 }

@@ -112,13 +112,13 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     const title = opts.title.trim() || source.name || 'Game';
     const warnings: string[] = [];
     const doc = gameScene(source, opts.scripts);
-    const needs = sceneModelsNeeded(doc);
-    const ai = needs.decision || needs.embedder;
+    const models = sceneModelsNeeded(doc);
+    const ai = models.length > 0;
     log('Collecting the player app...');
     const files = await playerFiles(title, ai);
     if (ai) {
         log(
-            `The agents use ${[needs.decision ? 'the decision model' : '', needs.embedder ? 'the embedding model' : ''].filter(Boolean).join(' and ')}: ` +
+            `The agents use ${models.join(', ')}: ` +
                 'the game includes ONNX Runtime and downloads the models into the player\'s browser on first play (they play with the defaults until then).',
         );
     }
