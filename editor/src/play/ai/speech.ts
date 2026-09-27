@@ -30,20 +30,31 @@ export interface SpeechEngine {
     stop(): void;
 }
 
-/** Splits text into sentences (., !, ?, and the CJK full stops), keeping short pieces together. */
+/** Words whose period does not end a sentence. */
+const ABBREVIATIONS = new Set(['mr', 'mrs', 'ms', 'dr', 'st', 'sr', 'jr', 'prof', 'mt', 'vs', 'etc', 'e.g', 'i.e', 'lt', 'sgt', 'capt', 'gen', 'col', 'no']);
+
+/**
+ * Splits text into sentences. A sentence ends at ., ! or ? followed by a
+ * space or the end (so 5.30 stays whole), or at a CJK full stop; "Mr." and
+ * other abbreviations and initials do not end one.
+ */
 export function splitSentences(text: string): string[] {
-    const parts = text
-        .replace(/\s+/g, ' ')
-        .trim()
-        .match(/[^.!?。！？]+[.!?。！？]*["'”’)]*\s*/g);
+    const s = text.replace(/\s+/g, ' ').trim();
     const out: string[] = [];
-    for (const p of parts ?? []) {
-        const s = p.trim();
-        if (!s) continue;
-        // "Mr." or a lone number: join with the previous piece.
-        if (out.length && (s.length < 4 || /^\d/.test(s))) out[out.length - 1] += ' ' + s;
-        else out.push(s);
+    const re = /([.!?]+)["'”’)\]]*(?= |$)|[。！？]+["'”’)\]」』]*/g;
+    let start = 0;
+    for (let m = re.exec(s); m; m = re.exec(s)) {
+        if (m[1] === '.') {
+            const word = /(\S+)$/.exec(s.slice(start, m.index))?.[1] ?? '';
+            if (ABBREVIATIONS.has(word.toLowerCase()) || /^\p{Lu}$/u.test(word)) continue;
+        }
+        const end = m.index + m[0].length;
+        const piece = s.slice(start, end).trim();
+        if (piece) out.push(piece);
+        start = end;
     }
+    const rest = s.slice(start).trim();
+    if (rest) out.push(rest);
     return out;
 }
 
