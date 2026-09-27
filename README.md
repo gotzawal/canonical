@@ -63,6 +63,12 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 - Lights, sky, exposure, bloom, ambient occlusion, fog and global illumination (DDGI: light bounces between surfaces)
 - Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (the file's material, Unlit, Lambert or a custom shader; color, PBR values, alpha, texture). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
 
+**AI behavior**
+
+- Behavior trees for scene objects (Selector, Sequence, script tasks, conditions, cooldowns) over typed blackboards, edited as an outliner, as JSON or by the assistant, with validation that names the node and field
+- A decision model (Laya) answers the trees' questions in the browser and only writes blackboard values; without it every scene plays with the defaults
+- Recall of lore and notes (memory embedded in the editor), a request scheduler shared by all agents, and a decision log of every answer
+
 **Code**
 
 - JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was
@@ -76,7 +82,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 - `Ctrl+Shift+S` saves the whole project as a `.zip`, planning files included; **Open Scene or Project** opens either
 - **File > Build & Deploy** (`Ctrl+B`) turns the scene into a standalone web game: run it in a new tab, download it as a `.zip` for any static host, or publish it to GitHub Pages
 
-**File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions.
+**File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions. **File > Open Example: Guard** shows a behavior tree, and **Help > Behavior Tree Reference** lists every node type, field and edit operation.
 
 ## The AI assistant
 Open the AI tab and use **Connect with OpenRouter**, or paste an API key in its settings. Any OpenRouter model that supports tool calls works.
@@ -116,10 +122,23 @@ export default class Spinner extends Script {
 }
 ```
 
-The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)` and `onPointerDown` / `onPointerUp` / `onClick(e)`. Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes, mouse) and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the scene's main camera, or the editor view when the scene has none. Script errors in the console link to their line.
+The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)`, `onPointerDown` / `onPointerUp` / `onClick(e)` and `onTaskAbort(task)` (a behavior tree aborted a script task). Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes, mouse) and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the scene's main camera, or the editor view when the scene has none. Script errors in the console link to their line.
 
 ### Scripts from scene files
 Scripts run JavaScript in the editor page, which also holds your OpenRouter key. When you open a scene file, its scripts stay paused (they are not even compiled) until you choose **Enable Scripts**, so you can read them first. Scenes you make yourself and the built-in example are not affected.
+
+## Behavior trees and AI agents
+An object runs a behavior tree once it has an **Agent** (Inspector > Add Component, or **Assign** in the Behavior tab). The tree reads a blackboard of typed keys (bool, number, probability, enum, string, object), and every key has one owner: fact keys are written by scripts (what the agent perceives, best as categories such as near / mid / far), AI keys by exactly one Ask node, and tree keys by Set Key and script tasks. The decision model only ever writes AI keys and the tree decides by the standard rules, so a scene plays completely with the schema defaults when there is no model.
+
+- Composites are Selector and Sequence; tasks are Script Task (calls a method of a script on the object, which returns true, false, `'running'` or a Promise and gets an AbortSignal and `onTaskAbort`), Wait, Set Key and Ask; decorators are Condition (also on an answer's confidence) and Cooldown; services are Ask and Recall.
+- Each agent ticks 10 times a second, spread over the frames, between the scripts' `update` and `lateUpdate`. A tick checks the conditions again and never starts a running task again. Aborts go both ways: a running branch whose conditions fail is aborted, and a higher branch of a Selector whose conditions start to pass takes over.
+- **Ask** turns AI keys into questions for [Laya](https://huggingface.co/convaiinnovations/laya) (ModernBERT-large with a decision head, Apache-2.0), which scores typed questions in one encoder pass: probability keys are asked yes or no, enum keys as a choice between their values (the value descriptions are the options) and string keys as a choice between memory items. An Ask asks when its node becomes active, when one of its facts changes, or every interval. Only the newest request of an Ask is written, an answer below its minimum confidence keeps the old value, and a minimum hold keeps a value for a while.
+- **Recall** finds memory items (lore, rumors, planning notes) by tag and then by embedding similarity, joins the best ones in id order within a token budget, and an Ask with **Use Context** shows them to the model. The Memory view embeds the items in the editor with multilingual-e5-small and stores the vectors (int8) in the scene. Scripts add memories while playing with `this.remember()` and keep them in a game save with `this.saveMemories()` and `this.loadMemories()`.
+- The requests of all agents go through one scheduler right after the engine drew a frame: an exact cache, a semantic cache (the same facts and a context at least 0.97 similar), identical requests joined, the agents nearest the player first, batches of at most 10 questions (4 while a voice line waits), one batch at a time, a GPU time budget of 150 ms per second that follows the frame rate between 50 and 400, and no answer after 1.5 s of waiting.
+- The models run in a worker with ONNX Runtime Web, on a WebGPU device of its own, or on WebAssembly when WebGPU is missing, fails or lacks fp16 (the model menu in the Behavior tab can also choose the CPU). They are downloaded once into the browser's cache, and the editor asks first: Laya is 340 MB (the 4-bit build of [dockndevai/laya-models](https://github.com/dockndevai/laya-models)). ONNX Runtime and the worker load only when a scene with Ask or Recall plays.
+- Scripts can talk: `this.say(text)` speaks with the browser's speech synthesis, one sentence at a time (a task's signal stops it), and `this.chat(prompt)` asks an OpenRouter model with the assistant's key (in the editor only).
+
+The **Behavior** tab of the bottom dock shows a tree as an outliner, like the hierarchy: drag and drop, a context menu to add, wrap, duplicate and delete, decorators and services as tags on their node, and problems marked in red. The panel next to it edits the selected node with fields that come from the node type definitions, which also drive the validation, the assistant's tool descriptions and the reference. **Edit as JSON** opens the tree in the code dock. Every edit, from the panels, the JSON view or the assistant, goes through the same edit operations: a batch is applied whole or not at all, it is one undo step, and a validation error names the node and the field. While playing, the tree is locked and shows the chosen agent's active path, its blackboard and the latest answers, and the **Decisions** tab lists every Ask request of the session with the facts and context the model saw, the probabilities and what became of the answer. The assistant reads the outline, applies batches of edit operations, validates and reads the decision log by node id.
 
 ## Shaders and the render graph
 Shaders are WGSL. Properties are declared with comments, such as `// @property speed float 1 0 10` (types `float`, `color`, `vec4` and `texture`), and read as `materialUniform.speed`. A material shader implements `fn frag()`, and optionally `fn vert(...)`. It is either lit (it fills `ORI_ShadingInput` and uses the engine's PBR lighting and shadows) or unlit. A post shader implements `fn post(uv: vec2f) -> vec4f`, reads the image with `sceneColor(uv)` and runs before anti-aliasing and tone mapping. Compile errors show on their line, and the last version that compiled keeps rendering.
@@ -141,6 +160,8 @@ Each material slot of an imported model keeps the file's material or switches to
 - **Run in New Tab** plays the scene the way the built game runs, with script errors shown on screen
 - **Download .zip** gives the folder for any static host: itch.io (as an HTML game), Netlify, Cloudflare Pages or your own server. It has to be served over HTTP; opening `index.html` from disk does not work
 - **GitHub Pages** pushes the game to a branch (`gh-pages` by default, which then holds only the game) of a repository, which it can create, and publishes it at `https://<owner>.github.io/<repository>/`. It needs a [personal access token](https://github.com/settings/tokens/new?scopes=public_repo&description=Canonical%20Editor) with the `public_repo` scope (`repo` for private repositories, where Pages needs a paid plan), or a fine-grained token with Contents, Pages and Administration (to create repositories) set to Read and write. Deploying again uploads only the files that changed. Before it replaces a branch that holds anything else than a game, or changes an existing Pages setup, it asks
+
+A game whose agents ask or recall also gets ONNX Runtime and the inference worker (about 27 MB) and downloads the models into the player's browser the first time it runs, playing with the defaults meanwhile; other games leave these files out.
 
 The title, repository and branch are saved with the scene. The token is sent only to `api.github.com`; it is kept for the current tab, or in this browser's storage when "Remember on this device" is on, where scripts you run in the editor could read it. Builds leave out the scripts of an opened scene file until you enable them.
 
@@ -172,6 +193,8 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 |---|---|
 | `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
 | `editor/player.html`, `editor/src/player/` | The game player that Build & Deploy puts into every game |
+| `editor/src/core/behavior/` | Behavior formats: node type definitions, edit operations, validation, outlines |
+| `editor/src/play/ai/` | Agents while playing: tree runtime, blackboards, Ask, scheduler, memory, inference worker, speech |
 | `editor/public/` | Favicons and the logo |
 | `src/` | Orillusion engine core |
 | `packages/` | Orillusion plugins (physics, particles, atmosphere, post effects and more) |

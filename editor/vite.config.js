@@ -107,11 +107,23 @@ function playerManifest() {
                 visit(entry.fileName)
                 return seen
             }
+            // The chunk the player imports dynamically for the models (play/ai/services.ts;
+            // Rollup gives it no facade when it holds more modules). Only when nothing
+            // imports it statically from the player page are its files optional.
             const aiChunk = Object.values(bundle).find(
-                (c) => c.type === 'chunk' && (c.facadeModuleId || '').replace(/\\/g, '/').endsWith('/play/ai/services.ts'),
+                (c) => c.type === 'chunk' && c.moduleIds.some((m) => m.replace(/\\/g, '/').endsWith('/play/ai/services.ts')),
             )
+            const statics = new Set()
+            const visitStatic = (name) => {
+                const item = bundle[name]
+                if (!item || item.type !== 'chunk' || statics.has(name)) return
+                statics.add(name)
+                for (const n of item.imports) visitStatic(n)
+            }
+            visitStatic(entry.fileName)
+            const split = aiChunk && !statics.has(aiChunk.fileName)
             const all = reach(null)
-            const core = aiChunk ? reach(aiChunk.fileName) : all
+            const core = split ? reach(aiChunk.fileName) : all
             const files = new Set(['player.html', ...all])
             if (fs.existsSync(path.join(options.dir, 'favicon.svg'))) files.add('favicon.svg')
             const manifest = {
