@@ -29,6 +29,7 @@ import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
 import type { Checkpoints } from './design/checkpoints';
 import type { Commands } from './commands';
+import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
@@ -854,15 +855,11 @@ export class Editor extends Emitter<EditorEvents> {
     async deleteScript(id: string, confirm = true) {
         const doc = this.store.doc.scripts.find((s) => s.id === id);
         if (!doc) return;
-        const users = this.store.doc.nodes.filter((n) => n.scripts?.some((r) => r.script === id));
-        if (confirm && users.length && !(await confirmDialog('Delete script', `${doc.name} is attached to ${users.length} object(s). Delete it anyway?`, 'Delete', true))) return;
+        const users = uses(this.store.doc, 'script', id);
+        if (confirm && users && !(await confirmDialog('Delete script', `${doc.name} is attached to ${users} object(s). Delete it anyway?`, 'Delete', true))) return;
         this.store.commit('Delete Script', (d) => {
             d.scripts = d.scripts.filter((s) => s.id !== id);
-            for (const n of d.nodes) {
-                if (!n.scripts) continue;
-                n.scripts = n.scripts.filter((r) => r.script !== id);
-                if (!n.scripts.length) delete n.scripts;
-            }
+            dropRefs(d, 'script', id);
         });
     }
 
@@ -932,39 +929,18 @@ export class Editor extends Emitter<EditorEvents> {
             if (patch.kind && patch.kind !== s.kind) {
                 s.kind = patch.kind;
                 // A shader cannot be both; drop the uses of the other kind.
-                if (s.kind === 'post') this.unuseMaterialShader(d, id);
-                else d.renderGraph.posts = d.renderGraph.posts.filter((p) => p.shader !== id);
+                dropRefs(d, 'shader', id, s.kind === 'post' ? 'object' : 'post');
             }
         });
-    }
-
-    private unuseMaterialShader(d: SceneDoc, id: string) {
-        for (const n of d.nodes) {
-            if (n.mesh?.material.shader === id) {
-                n.mesh.material.type = 'lit';
-                n.mesh.material.shader = null;
-                delete n.mesh.material.params;
-            }
-            for (const o of Object.values(n.model?.materials ?? {})) {
-                if (o.shader === id) {
-                    delete o.shader;
-                    delete o.params;
-                }
-            }
-        }
     }
 
     async deleteShader(id: string, confirm = true) {
         const doc = this.store.doc.shaders.find((s) => s.id === id);
         if (!doc) return;
-        const used =
-            this.store.doc.renderGraph.posts.some((p) => p.shader === id) ||
-            this.store.doc.nodes.some((n) => n.mesh?.material.shader === id || Object.values(n.model?.materials ?? {}).some((o) => o.shader === id));
-        if (confirm && used && !(await confirmDialog('Delete shader', `${doc.name} is in use. Materials using it go back to Lit. Delete it anyway?`, 'Delete', true))) return;
+        if (confirm && uses(this.store.doc, 'shader', id) && !(await confirmDialog('Delete shader', `${doc.name} is in use. Materials using it go back to Lit. Delete it anyway?`, 'Delete', true))) return;
         this.store.commit('Delete Shader', (d) => {
             d.shaders = d.shaders.filter((s) => s.id !== id);
-            d.renderGraph.posts = d.renderGraph.posts.filter((p) => p.shader !== id);
-            this.unuseMaterialShader(d, id);
+            dropRefs(d, 'shader', id);
         });
     }
 

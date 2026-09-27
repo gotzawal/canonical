@@ -1,8 +1,9 @@
 import { createZip, readZip, type ZipEntry } from '../build/zip';
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
 import { designAssetIds } from './design';
+import { usedIds } from './refs';
 import { sanitize, Store } from './store';
-import type { AssetMeta, CameraState, NodeDoc, ParamValue, SceneDoc, SceneFile } from './types';
+import type { AssetMeta, CameraState, SceneDoc, SceneFile } from './types';
 
 const AUTOSAVE_KEY = 'canonical-editor/autosave';
 
@@ -233,40 +234,11 @@ export async function importSceneFile(text: string): Promise<{ doc: SceneDoc; ca
     return { doc: sanitize(parsed), camera };
 }
 
+/** Assets the game uses (core/refs.ts). */
 export function usedAssetIds(doc: SceneDoc): Set<string> {
-    const ids = new Set<string>();
-    const known = new Set(doc.assets.map((a) => a.id));
-    // Texture properties of custom shaders hold asset ids as values.
-    const params = (values?: Record<string, ParamValue>) => {
-        for (const v of Object.values(values ?? {})) if (typeof v === 'string' && known.has(v)) ids.add(v);
-    };
-    const visit = (n: NodeDoc) => {
-        if (n.model?.asset) ids.add(n.model.asset);
-        const m = n.mesh?.material;
-        for (const id of [m?.map, m?.normalMap, m?.metalRoughMap, m?.aoMap, m?.emissiveMap]) if (id) ids.add(id);
-        params(n.mesh?.material.params);
-        for (const o of Object.values(n.model?.materials ?? {})) {
-            if (o.map) ids.add(o.map);
-            params(o.params);
-        }
-        if (n.particles?.texture) ids.add(n.particles.texture);
-    };
-    for (const n of doc.nodes) visit(n);
-    // Prefab templates are placed again later, and a prefab keeps its model
-    // while its instances show the template.
-    for (const p of doc.prefabs) {
-        for (const n of p.nodes) visit(n);
-        if (known.has(p.asset)) ids.add(p.asset);
-    }
-    for (const p of doc.renderGraph.posts) params(p.params);
-    // ... and a property's default may name one in the shader code.
-    for (const s of doc.shaders) {
-        for (const id of known) if (s.code.includes(id)) ids.add(id);
-    }
-    return ids;
+    return usedIds(doc, 'asset');
 }
 
-/** Drops IndexedDB blobs the current project no longer lists (keeping what its snapshots use). */
 const TAB_LOCK = 'canonical-editor/tab';
 
 /**
@@ -288,6 +260,7 @@ export async function otherTabsOpen(): Promise<boolean> {
     }
 }
 
+/** Drops IndexedDB blobs the current project no longer lists (keeping what its snapshots use). */
 export function collectGarbage(doc: SceneDoc) {
     const keep = new Set(doc.assets.map((a) => a.id));
     for (const id of designAssetIds(doc.design)) keep.add(id);
