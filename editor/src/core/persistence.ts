@@ -1,5 +1,5 @@
 import { createZip, readZip, type ZipEntry } from '../build/zip';
-import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset } from './assets';
+import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
 import { designAssetIds } from './design';
 import { sanitize, Store } from './store';
 import type { AssetMeta, CameraState, NodeDoc, ParamValue, SceneDoc, SceneFile } from './types';
@@ -39,11 +39,14 @@ export function readAutosave(): Autosave | null {
     }
 }
 
+/** How safe the project is in this browser after a save: when it was saved, or what would be lost. */
+export type SaveStatus = { saved: Date; problem?: undefined } | { saved?: Date; problem: string };
+
 /** Keeps the current scene in localStorage (assets are already in IndexedDB). */
 export class AutoSaver {
     private timer = 0;
     lastSaved = '';
-    onSaved: (time: Date) => void = () => {};
+    onStatus: (status: SaveStatus) => void = () => {};
     /** Saved with the scene so a reload keeps untrusted scripts paused. */
     scriptsPaused = false;
 
@@ -78,10 +81,17 @@ export class AutoSaver {
         try {
             localStorage.setItem(AUTOSAVE_KEY, `${content.slice(0, -1)},"savedAt":${JSON.stringify(new Date().toISOString())}}`);
             this.lastSaved = content;
-            this.onSaved(new Date());
-        } catch (e) {
+        } catch (e: any) {
             console.warn('[editor] autosave failed', e);
+            this.onStatus({ problem: `Not saved in this browser (${e?.name === 'QuotaExceededError' ? 'its storage is full' : e?.message || e}): save a project file to keep your work.` });
+            return;
         }
+        const lost = unstoredCount(usedAssetIds(this.store.doc));
+        this.onStatus(
+            lost
+                ? { saved: new Date(), problem: `${lost} imported file${lost === 1 ? ' is' : 's are'} only in memory (the browser refused to store ${lost === 1 ? 'it' : 'them'}) and would be lost on reload: save a project file.` }
+                : { saved: new Date() },
+        );
     }
 }
 

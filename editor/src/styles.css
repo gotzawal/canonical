@@ -1393,6 +1393,11 @@ input.text:focus,
     color: var(--muted);
 }
 
+.status-item.warn {
+    color: var(--warn);
+    font-weight: 600;
+}
+
 .status-item.mono {
     font-family: var(--mono);
     font-size: 11px;

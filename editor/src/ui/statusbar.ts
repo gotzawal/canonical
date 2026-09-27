@@ -1,6 +1,7 @@
 import type { Editor } from '../editor';
 import { clear, h } from './dom';
 import { icon } from './icons';
+import { toast } from './overlays';
 
 interface LogEntry {
     level: 'error' | 'warn' | 'info';
@@ -146,8 +147,14 @@ export function statusbar(editor: Editor): HTMLElement {
     store.on('change', updateSelection);
     updateSelection();
 
-    editor.autosave.onSaved = (t) => {
-        saved.textContent = `Saved in browser ${t.toLocaleTimeString()}`;
+    let warned = '';
+    editor.autosave.onStatus = (s) => {
+        saved.textContent = s.problem ? 'Not safe in this browser' : `Saved in browser ${s.saved.toLocaleTimeString()}`;
+        saved.title = s.problem ?? '';
+        saved.classList.toggle('warn', !!s.problem);
+        // Told once per problem; the status bar keeps showing it.
+        if (s.problem && s.problem !== warned) toast(s.problem, 'error', 10000);
+        warned = s.problem ?? '';
     };
     setInterval(() => {
         fps.textContent = `${editor.runtime.fps.toFixed(0)} fps`;
