@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { refs } from '../core/refs';
 import { formatBytes } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
@@ -70,10 +71,12 @@ export class AssetsPanel {
         const doc = this.editor.store.doc;
         const assets = doc.assets.filter((a) => a.purpose !== 'design');
         const planning = doc.assets.length - assets.length;
+        const scriptUses = new Map<string, number>();
+        for (const r of refs(doc)) if (r.kind === 'script') scriptUses.set(r.id, (scriptUses.get(r.id) ?? 0) + 1);
         const key = [
             doc.prefabs.map((p) => p.id + p.name + (p.useModel ? 'm' : '') + doc.nodes.filter((n) => n.prefab === p.id).length).join('|'),
             doc.assets.map((a) => a.id + a.name).join('|'),
-            doc.scripts.map((s) => s.id + s.name).join('|'),
+            doc.scripts.map((s) => s.id + s.name + (scriptUses.get(s.id) ?? 0)).join('|'),
             doc.shaders.map((s) => s.id + s.name + s.kind).join('|'),
         ].join('#');
         if (!force && key === this.key) return;
@@ -106,7 +109,7 @@ export class AssetsPanel {
         }
         for (const s of doc.scripts) {
             const c = this.editor.compiler.get(s.id);
-            const users = doc.nodes.filter((n) => n.scripts?.some((r) => r.script === s.id)).length;
+            const users = scriptUses.get(s.id) ?? 0;
             this.list.appendChild(
                 this.item(`script:${s.id}`, 'script', s.name, c?.paused ? 'paused' : users ? `${users} use${users > 1 ? 's' : ''}` : 'script', c?.error && !c.paused ? 'error' : '', 'Double-click to edit, drag onto an object to attach', () => this.editor.emit('open-code', { kind: 'script', id: s.id }), [
                     { label: 'Edit', icon: 'code', action: () => this.editor.emit('open-code', { kind: 'script', id: s.id }) },
