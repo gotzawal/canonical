@@ -15,6 +15,7 @@ import type {
 import type { Editor } from '../editor';
 import { confirmDialog, toast } from '../ui/overlays';
 import { notices } from '../ui/notify';
+import { syncSlots } from './materialSlots';
 import { cameraFov, FRAME_MARGIN, frameFov, frameRect } from './shotCamera';
 import { nextStage, stageDef, stageProgress, type CheckState } from './stages';
 
@@ -355,13 +356,19 @@ export class Pipeline extends Emitter<PipelineEvents> {
             d.renderGraph = s.renderGraph;
             d.nodes = s.nodes;
             d.prefabs = s.prefabs ?? [];
-            // The objects' agents need the trees, schemas and memory of the same time.
+            // The objects' agents need the trees, schemas, memory and models of the same time.
             d.blackboards = s.blackboards;
             d.behaviors = s.behaviors;
             d.memory = s.memory;
-            const designAssets = d.assets.filter((a) => a.purpose === 'design');
+            d.aiModels = s.aiModels;
+            // The design section stays, so do the files it uses: planning images,
+            // and the swatches of its material slots (plain textures).
+            const swatches = new Set(d.design.materials.map((m) => m.swatch).filter(Boolean));
+            const designAssets = d.assets.filter((a) => a.purpose === 'design' || swatches.has(a.id));
             const ids = new Set(designAssets.map((a) => a.id));
             d.assets = [...s.assets.filter((a) => !ids.has(a.id)), ...designAssets];
+            // Linked surfaces follow the slots as they are now.
+            syncSlots(d);
         });
         this.store.select([]);
         return true;
