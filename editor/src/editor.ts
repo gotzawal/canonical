@@ -340,14 +340,12 @@ export class Editor extends Emitter<EditorEvents> {
         }
 
         store.commit(label, (doc) => {
-            const moved: NodeDoc[] = [];
-            for (const id of moving) {
-                const n = doc.nodes.find((x) => x.id === id);
-                if (!n) continue;
-                const t = transforms.get(id);
+            // In the order they had, not the order they were selected in.
+            const moved = doc.nodes.filter((n) => moving.includes(n.id));
+            for (const n of moved) {
+                const t = transforms.get(n.id);
                 if (t) Object.assign(n, t);
                 n.parent = parent;
-                moved.push(n);
             }
             doc.nodes = doc.nodes.filter((n) => !moving.includes(n.id));
             let index = beforeId ? doc.nodes.findIndex((n) => n.id === beforeId) : -1;
