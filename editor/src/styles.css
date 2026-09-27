@@ -335,12 +335,19 @@ a {
     flex-direction: column;
 }
 
+/* Long menus scroll instead of running off the screen: the list, not the
+   glass box, which holds the submenus (see overlays.ts). */
+.menu-list {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow-y: auto;
+}
+
 .menu.floating {
     position: fixed;
     z-index: 1000;
-    /* Long menus scroll instead of running off the screen. */
     max-height: calc(100vh - 12px);
-    overflow-y: auto;
 }
 
 .menu-item {
@@ -406,7 +413,6 @@ a {
     position: fixed;
     z-index: 1001;
     max-height: calc(100vh - 12px);
-    overflow-y: auto;
 }
 
 .menu-item.has-sub:hover > .submenu {

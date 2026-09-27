@@ -100,7 +100,7 @@ window.addEventListener('blur', () => closeMenus());
 window.addEventListener('resize', () => closeMenus());
 
 /** Arrow keys move through a menu's items; right and left open and leave a submenu. */
-function menuKeys(list: HTMLElement) {
+function menuKeys(box: HTMLElement, list: HTMLElement) {
     list.addEventListener('keydown', (e) => {
         const items = Array.from(list.children).filter((c): c is HTMLButtonElement => c instanceof HTMLButtonElement && !c.disabled);
         const at = items.indexOf(document.activeElement as HTMLButtonElement);
@@ -109,18 +109,24 @@ function menuKeys(list: HTMLElement) {
         else if (e.key === 'ArrowRight' && sub) {
             (document.activeElement as HTMLElement).dispatchEvent(new PointerEvent('pointerenter'));
             sub.querySelector<HTMLElement>('button:not([disabled])')?.focus();
-        } else if (e.key === 'ArrowLeft' && list.classList.contains('submenu')) {
-            list.style.display = '';
-            (list.parentElement as HTMLElement).focus();
+        } else if (e.key === 'ArrowLeft' && box.classList.contains('submenu')) {
+            box.style.display = '';
+            (box.parentElement as HTMLElement).focus();
         } else return;
         e.preventDefault();
         e.stopPropagation();
     });
 }
 
+/**
+ * A menu: a (glass) box around a list that scrolls. A box that blurs what is
+ * behind it is the containing block of its fixed submenus, so it must not
+ * scroll too, or it would clip them.
+ */
 function renderItems(items: MenuItem[], close: () => void): HTMLElement {
-    const list = h('div', { class: 'menu', attrs: { role: 'menu' } });
-    menuKeys(list);
+    const list = h('div', { class: 'menu-list', attrs: { role: 'menu' } });
+    const box = h('div', { class: 'menu' }, list);
+    menuKeys(box, list);
     for (const item of items) {
         if (item.separator) {
             list.appendChild(h('div', { class: 'menu-sep' }));
@@ -146,13 +152,18 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
             el.appendChild(sub);
             // Next to its item, flipped or shifted to stay on screen. It is
             // fixed, so the menu around it can scroll without clipping it.
-            el.addEventListener('pointerenter', () => {
+            const open = () => {
                 sub.style.display = 'flex';
+                // Measured at 0, 0 of its containing block: the window, or the glass menu around it.
+                sub.style.left = sub.style.top = '0px';
+                const o = sub.getBoundingClientRect();
                 const r = el.getBoundingClientRect();
-                const s = sub.getBoundingClientRect();
-                sub.style.left = (r.right + s.width + 6 <= window.innerWidth ? r.right : Math.max(6, r.left - s.width)) + 'px';
-                sub.style.top = Math.max(6, Math.min(r.top - 6, window.innerHeight - s.height - 6)) + 'px';
-            });
+                const x = r.right + o.width + 6 <= window.innerWidth ? r.right : Math.max(6, r.left - o.width);
+                const y = Math.max(6, Math.min(r.top - 6, window.innerHeight - o.height - 6));
+                sub.style.left = x - o.left + 'px';
+                sub.style.top = y - o.top + 'px';
+            };
+            el.addEventListener('pointerenter', open);
             el.addEventListener('pointerleave', () => (sub.style.display = ''));
         } else if (enabled) {
             el.addEventListener('click', () => {
@@ -162,7 +173,7 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
         }
         list.appendChild(el);
     }
-    return list;
+    return box;
 }
 
 /** Shows a floating menu at a screen position (context menus). */
