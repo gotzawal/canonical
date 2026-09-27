@@ -53,7 +53,7 @@ export interface AgentDone {
 }
 
 interface AgentEvents {
-    /** Turns changed (new turn, streamed text, tool state). */
+    /** A turn came, changed (streamed text, tool state) or went (it is no longer in turns); null: the whole conversation. */
     update: AgentTurn | null;
     busy: boolean;
     done: AgentDone;
@@ -345,7 +345,7 @@ export class Agent extends Emitter<AgentEvents> {
                     // Only tool calls: drop the empty bubble.
                     this.turns.splice(this.turns.indexOf(turn), 1);
                     last = null;
-                    this.emit('update', null);
+                    this.emit('update', turn);
                 }
                 const calls = res.message.tool_calls ?? [];
                 if (!calls.length) {
@@ -426,17 +426,20 @@ export class Agent extends Emitter<AgentEvents> {
                 else if (t.tool?.state === 'running') {
                     t.tool.state = 'error';
                     t.tool.summary = stopped ? 'stopped' : 'did not finish';
-                }
+                } else continue;
+                this.emit('update', t);
             }
             this.retireImages();
             this.busy = false;
             this.abort = null;
             if (committed && live()) {
                 const turn = [...this.turns].reverse().find((t) => t.role === 'assistant' || t.role === 'note') ?? last;
-                if (turn) turn.undoLabel = label;
+                if (turn) {
+                    turn.undoLabel = label;
+                    this.emit('update', turn);
+                }
             }
             this.emit('busy', false);
-            this.emit('update', null);
             if (live()) this.saveSession();
             this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
         }
