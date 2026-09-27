@@ -1,5 +1,6 @@
 import './styles.css';
 import { newScene } from './core/defaults';
+import { readLocal, writeLocal } from './core/local';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
@@ -499,10 +500,7 @@ function isNarrow() {
 }
 
 function restoreLayout(app: HTMLElement) {
-    try {
-        const layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
-        for (const [k, v] of Object.entries(layout)) app.style.setProperty(k, String(v));
-    } catch { /* ignore */ }
+    for (const [k, v] of Object.entries(readLocal<Record<string, string>>(LAYOUT_KEY, {}) ?? {})) app.style.setProperty(k, String(v));
 }
 
 type Split = 'left' | 'right' | 'assets' | 'dock';
@@ -536,9 +534,7 @@ function saveLayout(app: HTMLElement) {
         const v = app.style.getPropertyValue(k);
         if (v) out[k] = v;
     }
-    try {
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify(out));
-    } catch { /* ignore */ }
+    writeLocal(LAYOUT_KEY, out);
 }
 
 function installSplitters(app: HTMLElement) {

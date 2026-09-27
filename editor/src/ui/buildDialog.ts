@@ -9,6 +9,7 @@ import { h } from './dom';
 import { icon } from './icons';
 import { confirmDialog, dialog, toast } from './overlays';
 import { button, CheckboxField, iconButton, row } from './widgets';
+import { readLocal, writeLocal } from '../core/local';
 
 // File > Build & Deploy: test the scene as a standalone game, download it
 // as a .zip for any static host, or publish it to GitHub Pages.
@@ -28,18 +29,11 @@ interface DeploySettings {
 let sessionToken = '';
 
 function loadSettings(): DeploySettings {
-    const defaults: DeploySettings = { create: true, remember: false };
-    try {
-        return { ...defaults, ...JSON.parse(localStorage.getItem(DEPLOY_KEY) || '{}') };
-    } catch {
-        return defaults;
-    }
+    return { create: true, remember: false, ...readLocal<Partial<DeploySettings>>(DEPLOY_KEY, {}) };
 }
 
 function saveSettings(s: DeploySettings) {
-    try {
-        localStorage.setItem(DEPLOY_KEY, JSON.stringify(s));
-    } catch { /* ignore */ }
+    writeLocal(DEPLOY_KEY, s);
 }
 
 function loadToken(): string {

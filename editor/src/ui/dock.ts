@@ -6,6 +6,7 @@ import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
 import { confirmDialog } from './overlays';
 import { RenderGraphPanel } from './renderGraphPanel';
+import { readLocal, writeLocal } from '../core/local';
 
 interface OpenDoc {
     key: string;
@@ -175,19 +176,11 @@ export class Dock {
     }
 
     private save() {
-        try {
-            localStorage.setItem(
-                DOCK_KEY,
-                JSON.stringify({ open: this.docs.map((d) => ({ kind: d.kind, id: d.id })), active: this.active, collapsed: this.collapsed }),
-            );
-        } catch { /* ignore */ }
+        writeLocal(DOCK_KEY, { open: this.docs.map((d) => ({ kind: d.kind, id: d.id })), active: this.active, collapsed: this.collapsed });
     }
 
     private restore() {
-        let state: any = null;
-        try {
-            state = JSON.parse(localStorage.getItem(DOCK_KEY) || 'null');
-        } catch { /* ignore */ }
+        const state = readLocal<any>(DOCK_KEY, null);
         this.app.classList.toggle('dock-collapsed', state ? !!state.collapsed : true);
         for (const d of Array.isArray(state?.open) ? state.open : []) {
             if (d && (d.kind === 'script' || d.kind === 'shader' || d.kind === 'behavior') && typeof d.id === 'string') this.open(d.kind, d.id, false);

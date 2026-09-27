@@ -23,6 +23,7 @@ import { ModelsEditor, modelStateText } from './modelsEditor';
 import { Outliner, type FocusPart } from './outliner';
 import { PropertiesPanel } from './properties';
 import { SchemaEditor } from './schemaEditor';
+import { readLocal, writeLocal } from '../../core/local';
 
 type Mode = 'tree' | 'schema' | 'memory' | 'models';
 
@@ -173,17 +174,13 @@ export class BehaviorPanel {
     }
 
     private save() {
-        try {
-            localStorage.setItem(STATE_KEY, JSON.stringify({ tree: this.treeId, mode: this.mode }));
-        } catch { /* ignore */ }
+        writeLocal(STATE_KEY, { tree: this.treeId, mode: this.mode });
     }
 
     private restore() {
-        try {
-            const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
-            if (typeof s.tree === 'string') this.treeId = s.tree;
-            if (s.mode === 'tree' || s.mode === 'schema' || s.mode === 'memory' || s.mode === 'models') this.mode = s.mode;
-        } catch { /* ignore */ }
+        const s = readLocal<any>(STATE_KEY, {});
+        if (typeof s?.tree === 'string') this.treeId = s.tree;
+        if (s?.mode === 'tree' || s?.mode === 'schema' || s?.mode === 'memory' || s?.mode === 'models') this.mode = s.mode;
     }
 
     // ---------------------------------------------------------- rendering

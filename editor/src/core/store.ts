@@ -1,4 +1,5 @@
 import { Emitter } from './events';
+import { readLocal, writeLocal } from './local';
 import { sanitizeParticles } from './particles';
 import {
     defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
@@ -97,11 +98,7 @@ function defaultPrefs(): Prefs {
 }
 
 function loadPrefs(): Prefs {
-    try {
-        const raw = localStorage.getItem(PREFS_KEY);
-        if (raw) return { ...defaultPrefs(), ...JSON.parse(raw) };
-    } catch { /* storage unavailable */ }
-    return defaultPrefs();
+    return { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
 }
 
 /**
@@ -368,9 +365,7 @@ export class Store extends Emitter<StoreEvents> {
 
     setPrefs(patch: Partial<Prefs>) {
         this.prefs = { ...this.prefs, ...patch };
-        try {
-            localStorage.setItem(PREFS_KEY, JSON.stringify(this.prefs));
-        } catch { /* storage unavailable */ }
+        writeLocal(PREFS_KEY, this.prefs);
         this.emit('prefs', this.prefs);
     }
 

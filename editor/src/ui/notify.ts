@@ -8,6 +8,7 @@ import { Emitter } from '../core/events';
 import { h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
+import { readLocal, writeLocal } from '../core/local';
 
 export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'model';
 
@@ -52,12 +53,8 @@ interface NotifyPrefs {
 const PREFS_KEY = 'canonical-editor/notifications';
 
 function loadPrefs(): NotifyPrefs {
-    try {
-        const raw = JSON.parse(localStorage.getItem(PREFS_KEY) || '{}');
-        return { disabled: raw && typeof raw.disabled === 'object' ? raw.disabled : {}, system: raw?.system === true };
-    } catch {
-        return { disabled: {}, system: false };
-    }
+    const raw = readLocal<any>(PREFS_KEY, {});
+    return { disabled: raw && typeof raw.disabled === 'object' ? raw.disabled : {}, system: raw?.system === true };
 }
 
 class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
@@ -101,9 +98,7 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
 
     private save(prefs: NotifyPrefs) {
         this.prefs = prefs;
-        try {
-            localStorage.setItem(PREFS_KEY, JSON.stringify(prefs));
-        } catch { /* ignore */ }
+        writeLocal(PREFS_KEY, prefs);
         this.emit('prefs', prefs);
     }
 

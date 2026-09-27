@@ -2,6 +2,7 @@ import { h, pressable } from './dom';
 import { icon } from './icons';
 import { normalizeHex } from '../engine/color';
 import type { Store } from '../core/store';
+import { readLocal, writeLocal } from '../core/local';
 
 export function formatNumber(v: number, precision = 3): string {
     if (!Number.isFinite(v)) return '0';
@@ -585,10 +586,7 @@ export function row(label: string, control: Node, hint?: string): HTMLElement {
 }
 
 const COLLAPSE_KEY = 'canonical-editor/collapsed';
-let collapsed: Record<string, boolean> = {};
-try {
-    collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}');
-} catch { /* ignore */ }
+const collapsed = readLocal<Record<string, boolean>>(COLLAPSE_KEY, {});
 
 /** Collapsible inspector section; remembers its open state. */
 export function section(key: string, title: string, iconName: string | null, body: Node[], actions: Node[] = []): HTMLElement {
@@ -605,9 +603,7 @@ export function section(key: string, title: string, iconName: string | null, bod
                         el.classList.toggle('collapsed');
                         collapsed[key] = el.classList.contains('collapsed');
                         header.setAttribute('aria-expanded', String(!collapsed[key]));
-                        try {
-                            localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
-                        } catch { /* ignore */ }
+                        writeLocal(COLLAPSE_KEY, collapsed);
                     },
                 },
             },
