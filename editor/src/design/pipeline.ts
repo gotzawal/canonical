@@ -299,8 +299,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
             dd.stages[id].proposal = null;
             delete dd.unlocked;
             if (target <= stageIndex('level')) for (const s of dd.shots) if (s.target) s.stale = true;
-            // Matches judged in the reopened stage and after it are judged again.
+            // Matches judged in the reopened stage and after it are judged again,
+            // and so is the final approval.
             for (const s of dd.shots) {
+                delete s.approved;
                 if (!s.matched) continue;
                 s.matched = s.matched.filter((m) => stageIndex(m) < target);
                 if (!s.matched.length) delete s.matched;
@@ -455,15 +457,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
         return shot;
     }
 
-    updateShot(id: string, patch: Partial<Pick<ShotDoc, 'name' | 'area' | 'concept' | 'aspect' | 'target' | 'approved' | 'stale'>>, label = 'Edit Shot') {
+    updateShot(id: string, patch: ShotPatch, label = 'Edit Shot') {
         this.store.commit(label, (d) => {
             const s = d.design.shots.find((x) => x.id === id);
-            if (!s) return;
-            if (patch.target !== undefined && patch.target !== s.target) delete s.matched;
-            Object.assign(s, patch);
-            if (patch.target !== undefined) delete s.stale;
-            if (s.stale === false) delete s.stale;
-            if (s.approved === false) delete s.approved;
+            if (s) patchShot(s, patch);
         }, { design: true });
     }
 
@@ -477,10 +474,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const s = d.design.shots.find((x) => x.id === shotId);
             if (!s) return;
             s.paintovers = s.paintovers.filter((p) => p.asset !== asset);
-            if (s.target === asset) {
-                s.target = null;
-                delete s.stale;
-            }
+            if (s.target === asset) patchShot(s, { target: null });
             // The file goes too unless something else uses it.
             if (!designAssetIds(d.design).has(asset)) d.assets = d.assets.filter((a) => a.id !== asset);
         }, { design: true });
@@ -489,12 +483,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** Stores the current view as the shot's camera (while the shot is shown). */
     updateShotFromView(id: string) {
         const shot = this.shot(id);
-        if (!shot) return;
-        const camera = this.viewAsShot(shot.aspect);
-        this.store.commit('Update Shot', (d) => {
-            const s = d.design.shots.find((x) => x.id === id);
-            if (s) s.camera = camera;
-        }, { design: true });
+        if (shot) this.updateShot(id, { camera: this.viewAsShot(shot.aspect) }, 'Update Shot');
     }
 
     deleteShot(id: string) {
@@ -637,6 +626,34 @@ export class Pipeline extends Emitter<PipelineEvents> {
             if (meta && evidence) addToHistory(d, id, meta, { stage, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
         }, { design: true });
     }
+}
+
+export type ShotPatch = Partial<Pick<ShotDoc, 'name' | 'area' | 'concept' | 'camera' | 'aspect' | 'target' | 'approved' | 'stale'>>;
+
+/**
+ * Changes a shot inside a commit. Its matches and approval were judged
+ * against its target as it is framed: a new target or framing drops them,
+ * and a new framing marks the target as needing an update (it was painted
+ * over the old one).
+ */
+export function patchShot(s: ShotDoc, patch: ShotPatch) {
+    const reframed = (!!patch.camera && !sameView(patch.camera, s.camera)) || (patch.aspect !== undefined && patch.aspect !== s.aspect);
+    if (reframed || (patch.target !== undefined && patch.target !== s.target)) {
+        delete s.matched;
+        delete s.approved;
+    }
+    Object.assign(s, patch);
+    if (reframed && s.target) s.stale = true;
+    if (patch.target !== undefined) delete s.stale;
+    if (s.stale === false) delete s.stale;
+    if (s.approved === false) delete s.approved;
+}
+
+/** The same view but for rounding (a view goes through the frame's field of view and back). */
+function sameView(a: CameraState, b: CameraState): boolean {
+    const x = [...a.target, a.yaw, a.pitch, a.distance, a.fov];
+    const y = [...b.target, b.yaw, b.pitch, b.distance, b.fov];
+    return x.every((v, i) => Math.abs(v - y[i]) < 1e-4);
 }
 
 /** Manual captures (by hand or by the assistant) a shot keeps; the captures of stage completions all stay. */

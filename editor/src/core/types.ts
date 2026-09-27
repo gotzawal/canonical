@@ -911,7 +911,7 @@ export interface ShotDoc {
     paintovers: PaintoverDoc[];
     /** Chosen paintover: the target every later comparison uses. */
     target?: string | null;
-    /** The level changed after the target was chosen. */
+    /** The level or the framing changed after the target was chosen. */
     stale?: boolean;
     history: ShotCaptureDoc[];
     /** Accepted in the final comparison. */

@@ -19,7 +19,7 @@ export class ShotCompare {
     private modeSel: HTMLSelectElement;
     private shotId: string | null = null;
     private mode: CompareMode = 'gray';
-    private last: { blob: Blob; url: string; result: CompareResult; against: 'target' | 'concept'; ref: string; at: number } | null = null;
+    private last: { blob: Blob; url: string; result: CompareResult; against: 'target' | 'concept'; ref: string; at: number; basis: string } | null = null;
     private busy = false;
 
     constructor(private editor: Editor) {
@@ -45,8 +45,17 @@ export class ShotCompare {
             if (id !== this.shotId) this.close();
         });
         editor.store.on('change', () => {
-            if (!this.el.hidden && this.last) this.renderFooter();
+            if (this.el.hidden || !this.last) return;
+            // A comparison of another framing or target does not hold: compare again.
+            if (this.last.basis !== this.basis()) void this.run();
+            else this.renderFooter();
         });
+    }
+
+    /** What a comparison of the shot depends on: its framing and the image it is compared with. */
+    private basis(): string {
+        const shot = this.editor.pipeline.shot(this.shotId);
+        return shot ? JSON.stringify([shot.camera, shot.aspect, shot.target ?? shot.concept]) : '';
     }
 
     get open(): boolean {
@@ -84,10 +93,11 @@ export class ShotCompare {
         clear(this.body);
         this.body.appendChild(h('div', { class: 'muted small pad', text: 'Capturing and comparing...' }));
         try {
+            const basis = this.basis();
             const res = await this.editor.pipeline.compareShot(id, this.mode);
             if (this.shotId !== id || this.el.hidden) return;
             this.forget();
-            this.last = { ...res, url: URL.createObjectURL(res.blob), at: Date.now() };
+            this.last = { ...res, url: URL.createObjectURL(res.blob), at: Date.now(), basis };
             this.render();
         } catch (e: any) {
             clear(this.body);

@@ -333,7 +333,7 @@ class PaintoverDialog {
         const notes: string[] = [];
         const open = this.editor.pipeline.progress('level').items.filter((i) => ['level.route', 'level.sightlines', 'level.play'].includes(i.id) && !i.done);
         if (open.length && d.stage === 'level') notes.push('Play checks are still open. Paintovers are best made once the blockout passes them.');
-        if (shot.stale) notes.push('The level changed after the target was chosen. Make a new paintover or choose the target again.');
+        if (shot.stale) notes.push('The level or the framing changed after the target was chosen. Make a new paintover or choose the target again.');
         if (!shot.target && shot.paintovers.length) notes.push('Choose the paintover that becomes the target of this shot.');
         for (const n of notes) this.resultsEl.appendChild(h('div', { class: 'design-note' }, icon('info', 14), h('span', { text: n })));
         const grid = h('div', { class: 'po-grid' });

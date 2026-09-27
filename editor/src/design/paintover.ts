@@ -13,6 +13,7 @@ import {
     type ImageModel,
 } from '../ai/images';
 import { aiSettings } from '../ai/settings';
+import { patchShot } from './pipeline';
 
 export interface PaintoverSettings {
     model: string;
@@ -207,10 +208,7 @@ export async function uploadPaintover(editor: Editor, shotId: string, file: Blob
         const s = d.design.shots.find((x) => x.id === shotId);
         if (!s) return;
         s.paintovers.push(po);
-        if (!s.target) {
-            s.target = meta.id;
-            delete s.stale;
-        }
+        if (!s.target) patchShot(s, { target: meta.id });
     }, { design: true });
     return po;
 }
