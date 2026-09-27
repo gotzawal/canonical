@@ -395,10 +395,11 @@ export class Editor extends Emitter<EditorEvents> {
             }
         }
         const meta = await putAsset(file, file.name, 'model');
-        this.store.commit('Import Model', (doc) => {
-            doc.assets.push(meta);
+        // One undo step takes both back: the file and the object showing it.
+        this.store.transact('Import Model', () => {
+            this.store.update((doc) => doc.assets.push(meta));
+            this.addModel(meta.id, at, true);
         });
-        this.addModel(meta.id, at, true);
         toast(`Imported ${file.name}`, 'success');
     }
 
@@ -1402,8 +1403,15 @@ export class Editor extends Emitter<EditorEvents> {
         this.store.setPrefs({ space: this.store.prefs.space === 'world' ? 'local' : 'world' });
     }
 
+    /** Selects what a click could: shown objects, prefab parts as their instance, and only the prefab being edited while one is. */
     selectAll() {
-        this.store.select(this.store.doc.nodes.map((n) => n.id));
+        const ids = new Set<string>();
+        for (const n of this.store.doc.nodes) {
+            if (!this.sync.entries.get(n.id)?.visible) continue;
+            if (this.isolated && n.id !== this.isolated && !this.store.isAncestor(this.isolated, n.id)) continue;
+            ids.add(this.selectable(n.id));
+        }
+        this.store.select([...ids]);
     }
 }
 
