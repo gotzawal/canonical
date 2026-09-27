@@ -10,7 +10,7 @@ import { Emitter } from './core/events';
 import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
-    projectFileNameFor, usedAssetIds,
+    keptAssets, projectFileNameFor, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
@@ -1319,7 +1319,7 @@ export class Editor extends Emitter<EditorEvents> {
         // Pause before loading so no untrusted code is evaluated, and trust
         // only once the previous document's scripts are gone.
         this.compiler.setTrusted(false);
-        this.store.load(doc, camera);
+        this.store.load({ ...doc, assets: keptAssets(doc) }, camera);
         this.compiler.setTrusted(trusted || !this.store.doc.scripts.length);
         collectGarbage(this.store.doc);
     }

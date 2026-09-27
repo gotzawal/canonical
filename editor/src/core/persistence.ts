@@ -155,6 +155,7 @@ function assetFileName(meta: AssetMeta): string {
  */
 export async function exportProject(store: Store): Promise<{ blob: Blob; missing: string[] }> {
     const doc = JSON.parse(JSON.stringify(store.doc)) as SceneDoc;
+    doc.assets = keptAssets(doc);
     const metas = new Map<string, AssetMeta>(doc.assets.map((a) => [a.id, a]));
     // Snapshots can use assets the project no longer lists: take their metas from the snapshots.
     for (const snap of doc.design.snapshots) {
@@ -260,9 +261,19 @@ export async function otherTabsOpen(): Promise<boolean> {
     }
 }
 
-/** Drops IndexedDB blobs the current project no longer lists (keeping what its snapshots use). */
+/**
+ * The assets a project keeps: every file the user imported (placed or
+ * not), and the planning images the design still shows; those of deleted
+ * shots and replaced paintovers go.
+ */
+export function keptAssets(doc: SceneDoc): AssetMeta[] {
+    const design = designAssetIds(doc.design);
+    return doc.assets.filter((a) => a.purpose !== 'design' || design.has(a.id));
+}
+
+/** Drops IndexedDB blobs the project no longer keeps (keeping what its snapshots use). */
 export function collectGarbage(doc: SceneDoc) {
-    const keep = new Set(doc.assets.map((a) => a.id));
+    const keep = new Set(keptAssets(doc).map((a) => a.id));
     for (const id of designAssetIds(doc.design)) keep.add(id);
     // The scene of another tab uses files this one does not list: clean up only when alone.
     void otherTabsOpen().then((others) => {
