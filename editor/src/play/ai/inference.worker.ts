@@ -119,7 +119,7 @@ async function fetchModel(m: AiModelDoc, download: boolean, size = 0) {
             return JSON.parse(new TextDecoder().decode(await file(at(m, name), download, onBytes(name))));
         } catch (e) {
             if (!(optional && e instanceof Missing)) throw e;
-            (await caches.open(CACHE)).put(at(m, name), new Response('{}'));
+            await (await caches.open(CACHE)).put(at(m, name), new Response('{}'));
             return {};
         }
     };
