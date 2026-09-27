@@ -242,9 +242,16 @@ export default class Guard extends Script {
 `;
 
 const PLAYER_SCRIPT = `// Click the viewport in Play mode, then walk with WASD / arrows; hold Shift to run.
+// Keys 1 to 3 say a line to the guard: it goes into the guard's context pool
+// (the "dialogue" slot), which the guard's Ask shows the model.
 export default class PlayerController extends Script {
     speed = 2.5;
     runSpeed = 6;
+    lines = [
+        "Good evening. I'm the miller's son, fetching water.",
+        'Open the gate, or you will regret it!',
+        "I carry the captain's seal.",
+    ];
 
     start() {
         // Agents nearest to the player get their questions answered first.
@@ -259,6 +266,11 @@ export default class PlayerController extends Script {
         o.x += x * speed * dt;
         o.z += z * speed * dt;
         if (x || z) o.rotationY = (Math.atan2(x, z) * 180) / Math.PI;
+        this.lines.forEach((text, i) => {
+            if (!this.input.keyDown(String(i + 1))) return;
+            this.say(text).catch(() => {});
+            this.getBlackboard('Guard')?.context.add('dialogue', 'Player: ' + text);
+        });
     }
 }
 `;
@@ -284,9 +296,10 @@ export default class AlarmBell extends Script {
 
 /**
  * A guard at a gate: a behavior tree whose Ask judges the player from what
- * the guard perceives (distance, pace, the alarm bell) and what it heard
- * (Recall of rumors). Without a model the tree still runs: the guard
- * patrols, and says "Halt!" when the player comes near.
+ * the guard perceives (distance, pace, the alarm bell), what it recalls
+ * (rumors) and what was said (the dialogue slot of its context pool, keys
+ * 1 to 3). Without a model the tree still runs: the guard patrols, and says
+ * "Halt!" when the player comes near.
  */
 export function exampleGuard(): SceneDoc {
     const nodes: NodeDoc[] = [];
@@ -405,6 +418,7 @@ export function exampleGuard(): SceneDoc {
                 root: {
                     id: 'root',
                     type: 'selector',
+                    note: 'The judge sees the facts and the context pool: the recalled rumors and the dialogue (keys 1 to 3 make the player talk). For spoken replies, add a text generator in the Models view and a Model task with the input {context:dialogue} and History dialogue.',
                     services: [
                         { id: 'recall_rumors', type: 'recall', query: 'a stranger {player_moving} near the gate', tags: ['rumor', 'orders'], count: 2, tokenBudget: 120, interval: 2 },
                         {

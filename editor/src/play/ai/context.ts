@@ -17,8 +17,9 @@ export interface ContextSlot {
     at: number;
 }
 
-/** Characters a slot keeps: lines added beyond it push the oldest ones out. */
-const SLOT_CHARS = 2000;
+/** What a slot keeps: lines added beyond it push the oldest ones out (models see a few hundred tokens). */
+const SLOT_CHARS = 1200;
+const SLOT_LINES = 12;
 const MAX_SLOTS = 32;
 
 export class ContextPool {
@@ -44,10 +45,9 @@ export class ContextPool {
     add(slot: string, line: string, by: string, at: number) {
         const clean = line.replace(/\s+/g, ' ').trim();
         if (!clean) return;
-        let text = this.slots.get(slot)?.text ?? '';
-        text = text ? `${text}\n${clean}` : clean;
-        while (text.length > SLOT_CHARS && text.includes('\n')) text = text.slice(text.indexOf('\n') + 1);
-        this.set(slot, text.slice(-SLOT_CHARS), by, at);
+        const lines = [...(this.slots.get(slot)?.text.split('\n').filter(Boolean) ?? []), clean].slice(-SLOT_LINES);
+        while (lines.length > 1 && lines.join('\n').length > SLOT_CHARS) lines.shift();
+        this.set(slot, lines.join('\n').slice(-SLOT_CHARS), by, at);
     }
 
     /** Empties one slot, or every slot. */
@@ -66,10 +66,12 @@ export class ContextPool {
         return Array.from(this.slots.keys());
     }
 
-    /** The whole pool, or one slot, as the models see it. */
-    text(slot?: string): string {
-        if (slot !== undefined) return this.slots.get(slot)?.text ?? '';
-        return Array.from(this.slots.values(), (s) => s.text).filter(Boolean).join('\n');
+    /** The whole pool, or one slot, as the models see it; `max`: only its newest characters (whole lines). */
+    text(slot?: string, max = Infinity): string {
+        const text = slot !== undefined ? this.slots.get(slot)?.text ?? '' : Array.from(this.slots.values(), (s) => s.text).filter(Boolean).join('\n');
+        if (text.length <= max) return text;
+        const cut = text.indexOf('\n', text.length - max);
+        return cut < 0 ? text.slice(-max) : text.slice(cut + 1);
     }
 
     /** What the pool (or some slots of it) held, for the decision log: memory item ids, and the names of other slots. */

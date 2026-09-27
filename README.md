@@ -82,7 +82,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 - `Ctrl+Shift+S` saves the whole project as a `.zip`, planning files included; **Open Scene or Project** opens either
 - **File > Build & Deploy** (`Ctrl+B`) turns the scene into a standalone web game: run it in a new tab, download it as a `.zip` for any static host, or publish it to GitHub Pages
 
-**File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions. **File > Open Example: Guard** shows a behavior tree, and **Help > Behavior Tree Reference** lists every node type, field and edit operation.
+**File > Open Example: Showcase** loads a scene that uses most of this, and **Help > Scripting & Shader Reference** documents the script API and the shader conventions. **File > Open Example: Guard** shows a behavior tree (in Play, keys 1 to 3 make the player talk to the guard, and what was said changes the guard's judgment), and **Help > Behavior Tree Reference** lists every node type, field and edit operation.
 
 ## The AI assistant
 Open the AI tab and use **Connect with OpenRouter**, or paste an API key in its settings. Any OpenRouter model that supports tool calls works.

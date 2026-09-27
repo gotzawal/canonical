@@ -37,6 +37,9 @@ interface Plan {
 
 export const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
 
+/** Characters of the context pool an Ask shows its model (about 400 tokens, within Laya's 512). */
+const CONTEXT_CHARS = 1500;
+
 /** "{key}" replaced with the blackboard value (objects by name), "{context}" with the context pool, "{context:slot}" with one slot. */
 export function fillTemplate(text: string, get: (key: string) => RuntimeValue | undefined, pool?: ContextPool | null): string {
     return text.replace(/\{([^{}]+)\}/g, (_m, raw: string) => {
@@ -100,7 +103,8 @@ export class AskRunner {
         const model = doc.model || DEFAULT_DECIDE_MODEL;
         const facts = bb.snapshot(doc.facts);
         const pool = doc.context ? agent.context : null;
-        const context = { text: pool?.text() ?? '', sources: pool?.sources() ?? [], vector: pool?.vector() ?? null };
+        // The newest part of the pool: a long dialogue must not push its last lines out of the model's window.
+        const context = { text: pool?.text(undefined, CONTEXT_CHARS) ?? '', sources: pool?.sources() ?? [], vector: pool?.vector() ?? null };
         // Results come back in a later frame; a result for an agent that is gone is dropped.
         const post = this.sys.poster();
         const finish = (result: JobResult) => {
