@@ -83,6 +83,8 @@ export class Editor extends Emitter<EditorEvents> {
     readonly pipeline: Pipeline;
     /** Root of the prefab instance being edited on its own (everything else hidden). */
     isolated: string | null = null;
+    /** Objects under the edited instance that were not generated parts when the edit started. */
+    private isolatedKept = new Set<string>();
     /** First person walk camera (set up by main.ts). */
     walk: WalkController | null = null;
     /** Neutral room to check swatches in (set up by main.ts). */
@@ -566,6 +568,7 @@ export class Editor extends Emitter<EditorEvents> {
         }
         if (!this.pipeline.canPlace([rootId])) return;
         this.isolated = rootId;
+        this.isolatedKept = new Set(this.store.descendants(rootId).filter((n) => !n.prefabChild).map((n) => n.id));
         const ids = new Set([rootId, ...this.store.descendants(rootId).map((n) => n.id)]);
         this.sync.setIsolation(ids);
         this.store.select([rootId]);
@@ -602,7 +605,24 @@ export class Editor extends Emitter<EditorEvents> {
             });
             toast(others.length ? `Updated ${others.length + 1} instances.` : 'Prefab updated.', 'success');
         } else {
-            this.store.commit('Discard Prefab Edit', (doc) => regenerate(doc, prefabId, [rootId]));
+            const kept = this.isolatedKept;
+            const added = this.store.descendants(rootId).filter((n) => !n.prefabChild && !kept.has(n.id));
+            this.store.commit('Discard Prefab Edit', (doc) => {
+                // Parts added during the edit go with everything below them;
+                // regenerating keeps the objects that were under the instance before.
+                const doomed = new Set(added.map((n) => n.id));
+                for (let grew = true; grew; ) {
+                    grew = false;
+                    for (const n of doc.nodes) {
+                        if (n.parent && doomed.has(n.parent) && !doomed.has(n.id)) {
+                            doomed.add(n.id);
+                            grew = true;
+                        }
+                    }
+                }
+                doc.nodes = doc.nodes.filter((n) => !doomed.has(n.id));
+                regenerate(doc, prefabId, [rootId]);
+            });
         }
         this.store.select([rootId]);
     }

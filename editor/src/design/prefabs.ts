@@ -6,7 +6,7 @@
 // instance. Once the final mesh exists, a .glb stored under the prefab's
 // reserved asset id replaces the template in every instance.
 
-import { decompose, eulerFromQuat, invert, mat4, mul, tidy3 } from '../core/math';
+import { decompose, eulerFromQuat, invert, localMatrix, mat4, mul, tidy3 } from '../core/math';
 import { uid } from '../core/ids';
 import type { NodeDoc, PrefabDoc, SceneDoc, Vec3 } from '../core/types';
 
@@ -50,18 +50,38 @@ export function instanceChildren(prefab: PrefabDoc, rootId: string): NodeDoc[] {
     });
 }
 
-/** Removes the generated nodes of an instance (everything below it that is prefabChild). */
+/**
+ * Removes the generated nodes of an instance (everything below it that is
+ * prefabChild). Other objects placed under the instance stay; one whose
+ * parent was a generated part moves up to the instance root and keeps its
+ * place.
+ */
 function dropGenerated(doc: SceneDoc, rootId: string) {
     const doomed = new Set<string>();
+    // Only through generated parts: an object placed under the instance keeps
+    // its own subtree (another prefab instance keeps its parts).
     const walk = (pid: string) => {
         for (const n of doc.nodes) {
-            if (n.parent === pid && !doomed.has(n.id)) {
-                doomed.add(n.id);
-                walk(n.id);
-            }
+            if (n.parent !== pid || !n.prefabChild || doomed.has(n.id)) continue;
+            doomed.add(n.id);
+            walk(n.id);
         }
     };
     walk(rootId);
+    const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+    for (const n of doc.nodes) {
+        if (doomed.has(n.id) || !n.parent || !doomed.has(n.parent)) continue;
+        // Generated parts sit between it and the root: fold their transforms in.
+        let m = localMatrix(n.position, n.rotation, n.scale);
+        for (let p = byId.get(n.parent); p && p.id !== rootId; p = p.parent ? byId.get(p.parent) : undefined) {
+            m = mul(localMatrix(p.position, p.rotation, p.scale), m);
+        }
+        const d = decompose(m);
+        n.parent = rootId;
+        n.position = tidy3(d.position, 4);
+        n.rotation = tidy3(eulerFromQuat(d.rotation), 4);
+        n.scale = tidy3(d.scale, 4);
+    }
     doc.nodes = doc.nodes.filter((n) => !doomed.has(n.id));
 }
 
