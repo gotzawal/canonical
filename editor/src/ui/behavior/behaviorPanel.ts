@@ -12,6 +12,7 @@ import type { BehaviorTreeDoc, BlackboardSchemaDoc } from '../../core/types';
 import type { Editor } from '../../editor';
 import type { Agent } from '../../play/ai/agents';
 import { encodeVector } from '../../play/ai/memory';
+import { modelSource } from '../../play/ai/models';
 import { answerText } from '../decisionLogPanel';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
@@ -353,11 +354,17 @@ export class BehaviorPanel {
     private embedderText(): string {
         const m = this.editor.models;
         if (!m) return '';
+        // The scene's memory decides the model (vectors of different models do not compare).
+        const id = this.editor.store.doc.memory.embedder;
+        const src = modelSource(id, 'embedder');
+        if (!src) return `Unknown embedding model "${id}".`;
         const s = m.status('embedder');
-        if (s.state === 'ready') return `Embedding model ready (${s.backend === 'webgpu' ? 'WebGPU' : 'WASM'}).`;
-        if (s.state === 'downloading') return `Downloading the embedding model: ${Math.round(((s.loaded ?? 0) / Math.max(1, s.total ?? 1)) * 100)}%.`;
-        if (s.state === 'error') return `Embedding model: ${s.message ?? 'error'}.`;
-        return `Embed downloads ${s.source.label} (${formatBytes(s.source.size)}) once.`;
+        if (s.source.id === src.id) {
+            if (s.state === 'ready') return `Embedding model ready (${s.backend === 'webgpu' ? 'WebGPU' : 'WASM'}).`;
+            if (s.state === 'downloading') return `Downloading the embedding model: ${Math.round(((s.loaded ?? 0) / Math.max(1, s.total ?? 1)) * 100)}%.`;
+            if (s.state === 'error') return `Embedding model: ${s.message ?? 'error'}.`;
+        }
+        return `Embed downloads ${src.label} (${formatBytes(src.size)}) once.`;
     }
 
     // ------------------------------------------------------------- actions

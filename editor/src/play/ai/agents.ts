@@ -94,6 +94,8 @@ export class Agent implements TreeHost {
     nextTick = 0;
     /** The context the last Recall assembled. */
     context: RecallContext | null = null;
+    /** Raised when a Recall brings other items than before. */
+    contextVersion = 0;
     private seqs = new Map<string, number>();
     private warned = new Set<string>();
 
@@ -181,6 +183,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     private inbox: (() => void)[] = [];
     private running = false;
     private queryCache = new Map<string, Promise<Float32Array | null>>();
+    /** Vectors of the queries embedded so far (by the same keys). */
+    private queryVectors = new Map<string, Float32Array>();
 
     constructor(
         readonly host: AgentHost,
@@ -216,6 +220,9 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.stop();
         const doc = this.host.doc();
         this.log.clear();
+        // Query vectors belong to the embedding model of the last session.
+        this.queryCache.clear();
+        this.queryVectors.clear();
         this.running = true;
         this.memory = new MemoryIndex(doc.memory);
         this.player = null;
@@ -374,9 +381,20 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         const key = `${kind}:${text}`;
         let p = this.queryCache.get(key);
         if (!p) {
-            p = services.embed([text], kind).then((v) => v?.[0] ?? null, () => null);
+            p = services.embed([text], kind).then(
+                (v) => {
+                    const vector = v?.[0] ?? null;
+                    if (vector) this.queryVectors.set(key, vector);
+                    return vector;
+                },
+                () => null,
+            );
             this.queryCache.set(key, p);
-            if (this.queryCache.size > 512) this.queryCache.delete(this.queryCache.keys().next().value!);
+            if (this.queryCache.size > 512) {
+                const old = this.queryCache.keys().next().value!;
+                this.queryCache.delete(old);
+                this.queryVectors.delete(old);
+            }
         }
         return p;
     }
@@ -387,10 +405,18 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         const text = fillTemplate(doc.query, (k) => agent.blackboard.get(k));
         const run = (vector: Float32Array | null) => {
             const hits = memory.search({ vector, text }, doc.tags, doc.count);
-            agent.context = memory.assemble(hits, doc.tokenBudget, this.time, doc.id);
+            const next = memory.assemble(hits, doc.tokenBudget, this.time, doc.id);
+            if (!agent.context || agent.context.ids.join('\u0000') !== next.ids.join('\u0000')) agent.contextVersion++;
+            agent.context = next;
         };
         if (!memory.embedded) {
             run(null);
+            return;
+        }
+        // A query embedded before is used right away (an Ask later in this tick sees the context).
+        const known = this.queryVectors.get(`query:${text}`);
+        if (known) {
+            run(known);
             return;
         }
         void this.embed(text, 'query').then((v) => this.post(() => run(v)));

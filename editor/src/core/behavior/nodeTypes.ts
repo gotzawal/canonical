@@ -185,7 +185,7 @@ const PRIORITIES: FieldChoice[] = [
 
 const TRIGGERS: { value: AskTrigger; label: string; description: string }[] = [
     { value: 'activate', label: 'On activate', description: 'when the node it is attached to becomes active' },
-    { value: 'facts', label: 'On fact change', description: 'when the write version of one of its facts changes' },
+    { value: 'facts', label: 'On fact change', description: 'when the write version of one of its facts changes (with Use Context, also when Recall brings other items)' },
     { value: 'interval', label: 'Every interval', description: 'every interval (with the jitter)' },
 ];
 

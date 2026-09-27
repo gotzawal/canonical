@@ -70,6 +70,8 @@ export interface TreeHost {
     ask(doc: AskTaskDoc | AskServiceDoc, isTask: boolean): AskHandle;
     /** Runs a Recall service once. */
     recall(doc: RecallServiceDoc): void;
+    /** Raised when Recall brings other memory items (an Ask with context treats it like a fact change). */
+    readonly contextVersion: number;
     /** A problem worth a warning in the console (reported once per node). */
     warn(node: string, message: string): void;
 }
@@ -261,9 +263,12 @@ class ServiceRt {
         this.active = false;
     }
 
+    /** Write versions of the Ask's facts (and of the recalled context when the Ask sends it). */
     private versions(): number[] {
         const d = this.doc as AskServiceDoc;
-        return d.facts.map((f) => this.host.blackboard.version(f));
+        const v = d.facts.map((f) => this.host.blackboard.version(f));
+        if (d.context) v.push(this.host.contextVersion);
+        return v;
     }
 
     private factsChanged(): boolean {

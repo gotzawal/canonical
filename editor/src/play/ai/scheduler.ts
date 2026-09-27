@@ -15,7 +15,9 @@
 //    waited less than 50 ms, up to 2 more frames are collected;
 // 7. at most 10 questions go out at a time, and only one batch is in flight;
 // 8. a request that waited more than 1.5 s ends without an answer (the key
-//    keeps its value).
+//    keeps its value). Time behind the running batch does not count (on a
+//    slow CPU a batch takes seconds); a batch that has not answered after
+//    30 s is given up.
 
 import type { LayaQuestion } from './laya';
 import { cosine } from './memory';
@@ -76,9 +78,13 @@ interface Pending {
     job: AskJob;
     waiters: Waiter[];
     queuedAt: number;
+    /** Milliseconds waited while no batch was running (what the queue timeout counts). */
+    waited: number;
 }
 
 export const QUEUE_TIMEOUT = 1500;
+/** A batch that has not answered after this long is given up (the model stopped answering). */
+export const BATCH_WATCHDOG = 30000;
 export const MAX_QUESTIONS = 10;
 const SPEECH_QUESTIONS = 4;
 const FILL_WAIT = 50;
@@ -122,6 +128,12 @@ export class Scheduler {
     private lastAdapt = 0;
     private batches = 0;
     private hits = 0;
+    private lastFrame = -1;
+    /** A batch was running when the last frame ended (the time until this frame is not counted as waiting). */
+    private busy = false;
+    private inFlightSince = 0;
+    /** Raised per batch: an answer that comes after the watchdog gave up on its batch is dropped. */
+    private batchSerial = 0;
 
     constructor(private provider: DecisionProvider, private fps: () => number) {}
 
@@ -171,7 +183,7 @@ export class Scheduler {
                 same.waiters.push(waiter);
                 return;
             }
-            this.queue.push({ job, waiters: [waiter], queuedAt: since });
+            this.queue.push({ job, waiters: [waiter], queuedAt: since, waited: 0 });
             this.provider.prepare?.([{ state: job.state, questions: job.questions }]);
         });
     }
@@ -195,9 +207,27 @@ export class Scheduler {
 
     /** Called right after the engine drew a frame. */
     frame(now = performance.now()) {
+        const dt = this.lastFrame >= 0 ? Math.max(0, now - this.lastFrame) : 0;
+        this.lastFrame = now;
+        // Waiting while the one batch at a time runs does not make a request
+        // stale (the newest request of an Ask wins anyway); waiting for the
+        // GPU budget or behind nearer agents does.
+        if (!this.busy) for (const p of this.queue) p.waited += dt;
+        if (this.inFlight && now - this.inFlightSince > BATCH_WATCHDOG) {
+            // The model stopped answering: give up on the batch (a late answer is dropped).
+            const batch = this.inFlight;
+            this.inFlight = null;
+            this.batchSerial++;
+            for (const p of batch) for (const w of p.waiters) w.resolve(this.result(null, w.since, 'none', 'timeout'));
+        }
+        this.step(now);
+        this.busy = !!this.inFlight;
+    }
+
+    private step(now: number) {
         // Waited too long: finish without an answer.
         for (const p of this.queue.slice()) {
-            if (now - p.queuedAt <= QUEUE_TIMEOUT) continue;
+            if (p.waited <= QUEUE_TIMEOUT) continue;
             this.queue.splice(this.queue.indexOf(p), 1);
             for (const w of p.waiters) w.resolve(this.result(null, w.since, 'none', 'timeout'));
         }
@@ -247,8 +277,11 @@ export class Scheduler {
     private dispatch(batch: Pending[], questions: number) {
         this.queue = this.queue.filter((p) => !batch.includes(p));
         this.inFlight = batch;
+        this.inFlightSince = performance.now();
         this.batches++;
+        const serial = ++this.batchSerial;
         const done = (probabilities: number[][][] | null, ms: number) => {
+            if (serial !== this.batchSerial) return;
             this.inFlight = null;
             const end = performance.now();
             if (ms > 0) {
