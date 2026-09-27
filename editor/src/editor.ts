@@ -7,7 +7,7 @@ import {
     defaultCamera, defaultMaterial, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
-import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
+import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
     keptAssets, projectFileNameFor, usedAssetIds,
@@ -310,8 +310,7 @@ export class Editor extends Emitter<EditorEvents> {
                 if (!n) continue;
                 // Convert the world-space offset into the parent's space.
                 const parentWorld = n.parent ? this.picker.worldMatrix(n.parent) : null;
-                const scaleY = parentWorld ? Math.hypot(parentWorld[4], parentWorld[5], parentWorld[6]) || 1 : 1;
-                n.position = tidy3([n.position[0], n.position[1] + m.dy / scaleY, n.position[2]]);
+                n.position = tidy3(add(n.position, transformDir((parentWorld && invert(parentWorld)) || mat4(), [0, m.dy, 0])));
             }
         }, { nodes: moves.map((m) => m.id) });
     }
