@@ -4,10 +4,10 @@ import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
-    defaultCamera, defaultMaterial, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
+    defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
-import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformDir, transformPoint } from './core/math';
+import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
     keptAssets, projectFileNameFor, usedAssetIds,

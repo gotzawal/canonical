@@ -5,7 +5,7 @@ import {
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import type {
-    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
+    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc,
 } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
 import { recentLogs } from '../ui/statusbar';

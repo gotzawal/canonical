@@ -390,7 +390,7 @@ export class ColorField {
     private text: HTMLInputElement;
     private live = false;
 
-    constructor(private opts: ColorOpts) {
+    constructor(opts: ColorOpts) {
         this.picker = h('input', { class: 'color-swatch', attrs: { type: 'color' } });
         this.text = h('input', { class: 'color-hex', attrs: { type: 'text', spellcheck: 'false', maxlength: 7 } });
         this.el = h('div', { class: 'color-field' }, this.picker, this.text);

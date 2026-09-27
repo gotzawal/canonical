@@ -10,7 +10,6 @@ import {
     deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
 } from '../design/swatches';
 import { clear, h } from './dom';
-import { icon } from './icons';
 import { optionField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, toast, type Modal } from './overlays';
