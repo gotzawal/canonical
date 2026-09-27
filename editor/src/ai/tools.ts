@@ -186,7 +186,10 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
 /** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
 export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
     if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
-    return new Set(stageDef(env.editor.pipeline.design.stage).tools);
+    const design = env.editor.pipeline.design;
+    // Working without a brief: the pipeline has not started, so the Brief stage limits nothing.
+    if (design.stage === 'brief' && design.brief.skipped) return new Set(ALL_TOOL_GROUPS);
+    return new Set(stageDef(design.stage).tools);
 }
 
 function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
@@ -435,6 +438,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     if (spec.parent !== undefined) {
         const p = resolveParent(doc, spec.parent, batch);
         if (p === n.id) throw new ToolError('An object cannot be its own parent.');
+        // Nor go under one of its own descendants: the hierarchy would loop.
+        const lookup = (id: string) => batch.find((b) => b.id === id) ?? doc.nodes.find((x) => x.id === id);
+        for (let cur = p, steps = 0; cur && steps <= doc.nodes.length + batch.length; cur = lookup(cur)?.parent ?? null, steps++) {
+            if (cur === n.id) throw new ToolError(`"${n.name}" cannot go under "${lookup(p!)?.name ?? p}", which is inside it.`);
+        }
         n.parent = p;
     }
     if (spec.position !== undefined) n.position = v3(spec.position, 'position');
@@ -658,10 +666,11 @@ class StagePolicy {
 
     update(n: NodeDoc, spec: Json): string {
         if (n.prefabChild) return `"${n.name}" is part of a prefab instance and follows its prefab; change the instance (its root) instead.`;
-        const mover = !!n.light || !!n.camera;
+        // Lights, cameras and effects move while placement is locked (as Pipeline.isPinned says).
+        const mover = !!n.light || !!n.camera || !!n.particles;
         if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
             if (mover) {
-                if (!this.any('lights', 'objects', 'shots')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
+                if (!this.any('lights', 'objects', 'shots', 'effects')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
             } else {
                 const err = this.placement();
                 if (err) return `"${n.name}": ${err}`;
@@ -680,7 +689,7 @@ class StagePolicy {
     }
 
     remove(n: NodeDoc): string {
-        if (n.light || n.camera) return this.any('lights', 'objects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
+        if (n.light || n.camera || n.particles) return this.any('lights', 'objects', 'effects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
         const err = this.placement();
         return err ? `"${n.name}": ${err}` : '';
     }
@@ -1019,12 +1028,13 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 return { data: { ok: true }, summary: s.name };
             }
             case 'write_shader': {
-                const kind = args.kind === 'post' ? 'post' : 'material';
-                const lighting = args.lighting === 'unlit' ? 'unlit' : 'lit';
                 const code = String(args.code ?? '');
                 if (!code.trim()) throw new ToolError('code is empty.');
                 const name = String(args.name ?? 'Shader.wgsl');
                 const existing = args.id ? shader(doc(), args.id) : doc().shaders.find((s) => s.name.toLowerCase() === name.toLowerCase() || s.name.toLowerCase() === (name + '.wgsl').toLowerCase());
+                // A rewrite keeps the kind and lighting the call leaves out.
+                const kind = args.kind === 'post' || args.kind === 'material' ? args.kind : existing?.kind ?? 'material';
+                const lighting = args.lighting === 'unlit' || args.lighting === 'lit' ? args.lighting : existing?.lighting ?? 'lit';
                 let id: string;
                 if (existing) {
                     id = existing.id;

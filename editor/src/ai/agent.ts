@@ -327,7 +327,11 @@ export class Agent extends Emitter<AgentEvents> {
                 }
                 const calls = res.message.tool_calls ?? [];
                 if (!calls.length) {
+                    const empty = !res.message.content;
+                    // Providers refuse an assistant message without content in later requests.
+                    if (empty) res.message.content = '(empty answer)';
                     if (res.finishReason === 'length') this.push({ role: 'note', text: 'The answer was cut off by the length limit.' });
+                    else if (empty) this.push({ role: 'note', text: 'The model sent an empty answer. Send the request again, or try another model.' });
                     break;
                 }
                 const images: string[] = [];

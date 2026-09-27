@@ -21,6 +21,7 @@ export function pipelineSummary(doc: SceneDoc, fps?: number): string[] {
     lines.push(`Pipeline stage ${stageIndex(design.stage) + 1}/${STAGE_IDS.length}: ${def.long}${st.status === 'done' ? ' (complete)' : ''}. Checklist ${prog.done}/${prog.total} done.`);
     if (prog.open.length) lines.push(`Open items: ${prog.open.map((i) => `[${i.id}] ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('; ')}`);
     if (st.proposal) lines.push(`You proposed completing this stage; waiting for the user to approve.`);
+    if (design.stage === 'brief' && design.brief.skipped) lines.push('The user works without a brief, so this stage does not limit the tools: work on what the user asks for.');
     const others = STAGE_IDS.filter((id) => id !== design.stage && design.stages[id].status !== 'todo').map((id) => `${stageDef(id).title} ${design.stages[id].status}${design.stages[id].recheck ? ` (${clip(design.stages[id].recheck!, 80)})` : ''}`);
     if (others.length) lines.push(`Other stages: ${others.join(', ')}`);
     if (def.locksPlacement && !design.unlocked) lines.push('Placement is locked in this stage: only lights, cameras and effects may move.');
