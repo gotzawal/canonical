@@ -19,7 +19,7 @@ import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
-    CheckboxField, ColorField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
+    CheckboxField, ColorField, EditHooks, FieldGuard, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
     iconButton, row, section,
 } from './widgets';
 
@@ -77,6 +77,11 @@ export class InspectorPanel {
     private syncs: (() => void)[] = [];
     private shape = '';
     private steps: FieldSteps;
+    /** For fields that move objects: refused while the stage locks placement (the fields then show the values again). */
+    private placement: FieldGuard = {
+        allow: () => this.editor.pipeline.canPlace(this.store.selection),
+        after: () => this.refresh(),
+    };
     private openSlots = new Set<string>();
     private openParts = new Set<string>();
     private partFilter = '';
@@ -231,7 +236,7 @@ export class InspectorPanel {
      * With `read`, a vector field changes only the component that was edited
      * on each node: the other components of a multi-selection stay their own.
      */
-    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined): EditHooks<T> {
+    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined, guard?: FieldGuard): EditHooks<T> {
         const store = this.store;
         const write = (v: T, part?: number) => {
             const ids = store.selection.filter((id) => {
@@ -250,7 +255,7 @@ export class InspectorPanel {
                 }
             }, { nodes: ids });
         };
-        return this.steps.hooks(label, write);
+        return this.steps.hooks(label, write, guard);
     }
 
     private watch(fn: () => void) {
@@ -298,19 +303,19 @@ export class InspectorPanel {
             value: this.node.position,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position),
+            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position, this.placement),
         });
         const rot = new Vec3Field({
             value: this.node.rotation,
             step: 0.5,
             precision: 2,
-            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation),
+            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation, this.placement),
         });
         const scl = new Vec3Field({
             value: this.node.scale,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale),
+            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale, this.placement),
         });
         this.watch(() => {
             pos.set(this.node.position);
@@ -922,9 +927,10 @@ export class InspectorPanel {
         label: string,
         apply: (model: NonNullable<NodeDoc['model']>, v: T) => void,
         read?: (model: NonNullable<NodeDoc['model']>) => T | undefined,
+        guard?: FieldGuard,
     ): EditHooks<T> {
         const asset = this.node.model?.asset;
-        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v), read && ((n) => read(n.model!)));
+        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v), read && ((n) => read(n.model!)), guard);
     }
 
     private modelSections(node: NodeDoc): HTMLElement[] {
@@ -1218,6 +1224,7 @@ export class InspectorPanel {
                     model.parts = parts;
                 },
                 (model) => model.parts?.[part.path]?.[key] ?? part.base[key],
+                this.placement,
             );
         const pos = new Vec3Field({ value: po.position ?? part.base.position, step: 0.01, precision: 3, ...setT('position', 'Move Mesh') });
         const rot = new Vec3Field({ value: po.rotation ?? part.base.rotation, step: 0.5, precision: 2, ...setT('rotation', 'Rotate Mesh') });

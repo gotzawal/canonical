@@ -641,43 +641,40 @@ const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 's
  */
 class StagePolicy {
     readonly allowed: Set<ToolGroup>;
-    readonly locked: boolean;
     readonly stage: string;
+    private pipeline: ToolEnv['editor']['pipeline'];
     warnings = new Set<string>();
 
     constructor(env: ToolEnv) {
         this.allowed = allowedGroups(env);
-        this.locked = env.editor.pipeline.placementLocked;
-        this.stage = stageDef(env.editor.pipeline.design.stage).title;
+        this.pipeline = env.editor.pipeline;
+        this.stage = stageDef(this.pipeline.design.stage).title;
     }
 
     private any(...groups: ToolGroup[]): boolean {
         return groups.some((g) => this.allowed.has(g));
     }
 
-    private placement(): string {
-        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
-        if (this.locked) return `Placement is locked in the ${this.stage} stage; only lights, cameras and effects move. The user can unlock it in the pipeline bar.`;
-        return '';
+    /** The stage's tools allow moving or deleting `n`, and the placement lock does (Pipeline.placementBlock). */
+    private placement(n: NodeDoc, verb: string): string {
+        const mover = !!n.light || !!n.camera || !!n.particles;
+        if (!(mover ? this.any('lights', 'objects', 'shots', 'effects') : this.allowed.has('objects'))) return `"${n.name}" cannot be ${verb} in the ${this.stage} stage.`;
+        const why = this.pipeline.placementBlock([n.id]);
+        return why ? `"${n.name}": ${why}` : '';
     }
 
     create(type: string): string {
         if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added in the ${this.stage} stage.`;
         if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added in the ${this.stage} stage.`;
-        return this.placement();
+        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
+        return this.pipeline.placementLocked ? `Placement is locked in the ${this.stage} stage: new objects would change the level. It can be unlocked in the pipeline bar.` : '';
     }
 
     update(n: NodeDoc, spec: Json): string {
         if (n.prefabChild) return `"${n.name}" is part of a prefab instance and follows its prefab; change the instance (its root) instead.`;
-        // Lights, cameras and effects move while placement is locked (as Pipeline.isPinned says).
-        const mover = !!n.light || !!n.camera || !!n.particles;
         if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
-            if (mover) {
-                if (!this.any('lights', 'objects', 'shots', 'effects')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
-            } else {
-                const err = this.placement();
-                if (err) return `"${n.name}": ${err}`;
-            }
+            const err = this.placement(n, 'moved');
+            if (err) return err;
         }
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
@@ -692,9 +689,7 @@ class StagePolicy {
     }
 
     remove(n: NodeDoc): string {
-        if (n.light || n.camera || n.particles) return this.any('lights', 'objects', 'effects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
-        const err = this.placement();
-        return err ? `"${n.name}": ${err}` : '';
+        return this.placement(n, 'deleted');
     }
 }
 

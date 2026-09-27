@@ -20,6 +20,12 @@ export interface EditHooks<T> {
     commit?(v: T, part?: number): void;
 }
 
+/** When a field may write (checked as a change or a drag starts), and what runs after it. */
+export interface FieldGuard {
+    allow?(): boolean;
+    after?(): void;
+}
+
 /**
  * The undo steps of a panel's fields: dragging or typing in a field is one
  * step, a one-off change one commit. close() ends the steps of fields a
@@ -30,22 +36,32 @@ export class FieldSteps {
 
     constructor(private store: Store) {}
 
-    /** Hooks writing each value with `write`; `after` runs when a change or a drag ends. */
-    hooks<T>(label: string, write: (v: T, part?: number) => void, after?: () => void): Required<EditHooks<T>> {
+    /** Hooks writing each value with `write`; a refused change writes nothing and still runs `after`. */
+    hooks<T>(label: string, write: (v: T, part?: number) => void, { allow, after }: FieldGuard = {}): Required<EditHooks<T>> {
+        const allowed = () => !allow || allow();
+        // Whether the drag in progress may write (null: no drag).
+        let held: boolean | null = null;
         return {
             begin: () => {
+                held = allowed();
+                if (!held) return;
                 this.open++;
                 this.store.begin(label);
             },
-            input: write,
+            input: (v, part) => {
+                if (held ?? allowed()) write(v, part);
+            },
             end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                this.store.end();
+                const wrote = held;
+                held = null;
+                if (wrote && this.open > 0) {
+                    this.open--;
+                    this.store.end();
+                }
                 after?.();
             },
             commit: (v, part) => {
-                this.store.transact(label, () => write(v, part));
+                if (allowed()) this.store.transact(label, () => write(v, part));
                 after?.();
             },
         };

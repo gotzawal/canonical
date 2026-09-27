@@ -82,15 +82,22 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     /**
-     * True when the nodes may be moved, created or deleted; otherwise tells
-     * the user why not.
+     * Why the nodes may not be moved or deleted now, or '' when they may:
+     * the lock holds pinned nodes, also those under a light or camera,
+     * which would go with it. The one check for every way of editing.
      */
+    placementBlock(ids: string[]): string {
+        if (!this.placementLocked) return '';
+        const moved = ids.flatMap((id) => [this.store.node(id), ...this.store.descendants(id)]);
+        if (!moved.some((n) => this.isPinned(n))) return '';
+        return `Placement is locked in the ${stageDef(this.design.stage).title} stage: only lights, cameras and effects move, without objects under them. It can be unlocked in the pipeline bar.`;
+    }
+
+    /** True when the nodes may be moved or deleted; otherwise tells the user why not. */
     canPlace(ids: string[], quiet = false): boolean {
-        if (!this.placementLocked) return true;
-        const pinned = ids.map((id) => this.store.node(id)).filter((n) => this.isPinned(n));
-        if (!pinned.length) return true;
-        if (!quiet) toast(`Placement is locked in the ${stageDef(this.design.stage).title} stage. Unlock it in the pipeline bar to move objects.`, 'info', 4500);
-        return false;
+        const why = this.placementBlock(ids);
+        if (why && !quiet) toast(why, 'info', 5000);
+        return !why;
     }
 
     setUnlocked(v: boolean) {

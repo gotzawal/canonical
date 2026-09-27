@@ -125,7 +125,7 @@ export class SchemaEditor {
             k,
             k.default,
             { schema: s, objects: () => this.host.editor.store.doc.nodes.map((n) => ({ id: n.id, name: n.name })) },
-            this.steps.hooks('Behavior: Key Default', (v) => this.host.apply([{ op: 'update_key', schema: s.id, key: k.name, set: { default: v } }], 'Key Default'), () => this.render(true)),
+            this.steps.hooks('Behavior: Key Default', (v) => this.host.apply([{ op: 'update_key', schema: s.id, key: k.name, set: { default: v } }], 'Key Default'), { after: () => this.render(true) }),
         );
         const desc = new TextAreaField(k.description, (v) => set({ description: v }, 'Key Description'), 'What the key means', 2);
         const remove = button('Delete Key', () => {

@@ -103,7 +103,7 @@ export class PropertiesPanel {
     }
 
     private editHooks(send: (value: unknown) => void, label: string): FieldEdit {
-        return this.steps.hooks(`Behavior: ${label}`, send, () => this.refresh());
+        return this.steps.hooks(`Behavior: ${label}`, send, { after: () => this.refresh() });
     }
 
     private context(): FieldContext {
