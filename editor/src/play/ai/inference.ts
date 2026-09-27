@@ -98,12 +98,17 @@ export class InferenceClient extends Emitter<{ status: string }> {
         if (backend === this.backend) return;
         this.backend = backend;
         const reload = Array.from(this.entries.values()).filter((e) => e.state === 'ready').map((e) => e.model);
-        this.worker?.terminate();
-        this.worker = null;
-        for (const p of this.pending.values()) p.reject(Object.assign(new Error('The inference worker was restarted.'), { code: 'restart' }));
-        this.pending.clear();
+        this.stop('The inference worker was restarted.', 'restart');
         for (const e of this.entries.values()) this.set(e.model.id, { state: 'unknown', backend: undefined, loaded: undefined, total: undefined, message: undefined });
         for (const m of reload) void this.load(m, false);
+    }
+
+    /** Ends the worker (the next call starts a new one); the calls waiting for it fail. */
+    private stop(message: string, code: string) {
+        this.worker?.terminate();
+        this.worker = null;
+        for (const p of this.pending.values()) p.reject(Object.assign(new Error(message), { code }));
+        this.pending.clear();
     }
 
     private set(id: string, s: Partial<ModelStatus>) {
@@ -118,10 +123,13 @@ export class InferenceClient extends Emitter<{ status: string }> {
         const w = new Worker(new URL('./inference.worker.ts', import.meta.url), { type: 'module', name: 'canonical-inference' });
         w.onmessage = (ev: MessageEvent<WorkerOut>) => this.onMessage(ev.data);
         w.onerror = (ev) => {
-            console.error('[ai] the inference worker failed', ev.message);
-            for (const e of this.entries.values()) {
-                if (e.state === 'loading' || e.state === 'downloading') this.set(e.model.id, { state: 'error', message: ev.message || 'The inference worker failed.' });
-            }
+            // A late error of a worker that was ended already does not end the new one.
+            if (w !== this.worker) return;
+            const message = ev.message || 'The inference worker failed.';
+            console.error('[ai] the inference worker failed', message);
+            // Its models go with it; a new worker loads them when they are needed again.
+            for (const e of this.entries.values()) if (e.state === 'ready') this.set(e.model.id, { state: 'error', message });
+            this.stop(message, 'failed');
         };
         this.post(w, { type: 'init', wasm: new URL(wasmUrl, location.href).href, backend: this.backend });
         this.worker = w;
@@ -182,14 +190,14 @@ export class InferenceClient extends Emitter<{ status: string }> {
         if (e.state === 'ready') return true;
         if (e.state === 'downloading' || e.state === 'loading' || e.state === 'checking') return false;
         this.set(m.id, { state: download ? 'downloading' : 'checking', loaded: 0, total: size, message: undefined });
-        if (!download) {
-            if (!(await this.cached(m))) {
-                this.set(m.id, { state: 'missing' });
-                return false;
-            }
-            this.set(m.id, { state: 'loading' });
-        }
         try {
+            if (!download) {
+                if (!(await this.call({ type: 'check', id: ++this.serial, model: this.resolved(m) })).result) {
+                    this.set(m.id, { state: 'missing' });
+                    return false;
+                }
+                this.set(m.id, { state: 'loading' });
+            }
             const { result } = await this.call({ type: 'load', id: ++this.serial, model: this.resolved(m), download, size });
             // The model may have been changed while it loaded: the result belongs to the old files.
             if (this.entries.get(m.id) !== e) return false;
