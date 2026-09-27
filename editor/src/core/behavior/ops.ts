@@ -109,7 +109,7 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'update_decorator', fields: 'tree, node, index, set', description: 'Change a decorator (by its index on the node).' },
     { op: 'remove_decorator', fields: 'tree, node, index', description: 'Remove a decorator.' },
     { op: 'add_service', fields: 'tree, node, service: {type, id?, ...fields}', description: 'Attach a service.' },
-    { op: 'update_service', fields: 'tree, service, set', description: 'Change a service (by its id); set.id renames it.' },
+    { op: 'update_service', fields: 'tree, service, set', description: 'Change a service (by its id); set.id renames it (and the {context:slot} placeholders of a Recall\'s slot).' },
     { op: 'remove_service', fields: 'tree, service', description: 'Remove a service.' },
     { op: 'set_agent', fields: 'object, tree?, enabled?, values?: {key: value}', description: 'Make a scene object run a tree, or change its agent settings (values replace the initial value overrides).' },
     { op: 'remove_agent', fields: 'object', description: 'The object no longer runs a tree.' },
@@ -1103,6 +1103,8 @@ function apply(d: Draft, op: BehaviorOp) {
                     const from = s.id;
                     s.id = readableId(set.id, taken, at);
                     d.rename(`t:${t.id}`, from, s.id);
+                    // A Recall fills the context slot named after it.
+                    if (s.type === 'recall') mapRefs(t, (n) => (n === `context:${from}` ? `context:${s.id}` : n));
                 }
                 if (set.note !== undefined) {
                     const n = note(set.note, at);
