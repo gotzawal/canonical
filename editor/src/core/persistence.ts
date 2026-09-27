@@ -14,14 +14,27 @@ export interface Autosave {
     scriptsPaused?: boolean;
 }
 
+const UNREADABLE_KEY = 'canonical-editor/autosave-unreadable';
+
+/** The autosave that could not be read at startup (saved by a newer version, damaged), kept for the user. */
+export let unreadableAutosave: { raw: string; reason: string } | null = null;
+
 export function readAutosave(): Autosave | null {
+    let raw: string | null = null;
     try {
-        const raw = localStorage.getItem(AUTOSAVE_KEY);
+        raw = localStorage.getItem(AUTOSAVE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!parsed || !parsed.doc) return null;
         return { doc: sanitize(parsed.doc), camera: parsed.camera, savedAt: parsed.savedAt, scriptsPaused: parsed.scriptsPaused === true };
-    } catch {
+    } catch (e: any) {
+        // The next autosave would overwrite it: keep a copy and tell the user (main.ts).
+        if (raw) {
+            unreadableAutosave = { raw, reason: e?.message || String(e) };
+            try {
+                localStorage.setItem(UNREADABLE_KEY, raw);
+            } catch { /* no room for a second copy: the download is left */ }
+        }
         return null;
     }
 }
@@ -244,10 +257,34 @@ export function usedAssetIds(doc: SceneDoc): Set<string> {
 }
 
 /** Drops IndexedDB blobs the current project no longer lists (keeping what its snapshots use). */
+const TAB_LOCK = 'canonical-editor/tab';
+
+/**
+ * Every editor tab of this site holds or waits for one lock, so the open
+ * tabs can be counted: they share the autosave and the stored files.
+ */
+export function registerTab() {
+    (navigator as any).locks?.request?.(TAB_LOCK, () => new Promise(() => {}));
+}
+
+/** True when the editor is open in another tab of this browser too. */
+export async function otherTabsOpen(): Promise<boolean> {
+    try {
+        const state = await (navigator as any).locks?.query?.();
+        if (!state) return false;
+        return [...(state.held ?? []), ...(state.pending ?? [])].filter((l: { name: string }) => l.name === TAB_LOCK).length > 1;
+    } catch {
+        return false;
+    }
+}
+
 export function collectGarbage(doc: SceneDoc) {
     const keep = new Set(doc.assets.map((a) => a.id));
     for (const id of designAssetIds(doc.design)) keep.add(id);
-    void deleteAssets(keep);
+    // The scene of another tab uses files this one does not list: clean up only when alone.
+    void otherTabsOpen().then((others) => {
+        if (!others) void deleteAssets(keep);
+    });
 }
 
 export function download(blob: Blob, name: string) {

@@ -1,6 +1,6 @@
 import './styles.css';
 import { newScene } from './core/defaults';
-import { AutoSaver, readAutosave } from './core/persistence';
+import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
 import { Picker } from './engine/picking';
@@ -29,7 +29,7 @@ import { HierarchyPanel } from './ui/hierarchy';
 import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
 import { logo } from './ui/logo';
-import { closeMenus, menubar, showMenu, toast } from './ui/overlays';
+import { closeMenus, dialog, menubar, showMenu, toast } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
@@ -55,6 +55,7 @@ async function main() {
         return;
     }
 
+    registerTab();
     const saved = readAutosave();
     const store = new Store(saved?.doc ?? newScene());
     if (saved?.camera) store.camera = { ...store.camera, ...saved.camera };
@@ -446,7 +447,19 @@ async function main() {
     installShortcuts(editor, rename, dock);
     installDropGuard();
     autosave.schedule();
-    if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
+    if (unreadableAutosave) {
+        const lost = unreadableAutosave;
+        void dialog(
+            'The saved scene could not be opened',
+            `The scene this browser kept could not be read (${lost.reason}), so a new scene was started. Download the saved scene to keep it, for example to open it in a newer version of the editor.`,
+            [{ label: 'Close' }, { label: 'Download It', value: 'download', primary: true }],
+        ).then((v) => {
+            if (v === 'download') download(new Blob([lost.raw], { type: 'application/json' }), 'saved-scene.scene.json');
+        });
+    } else if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
+    void otherTabsOpen().then((others) => {
+        if (others) toast('The editor is also open in another tab. Both keep their scene in this browser, so the tab that saves last replaces the other one. Use one tab, or save a project file first.', 'info', 12000);
+    });
 
     (window as any).__editor = editor;
 }
