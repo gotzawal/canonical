@@ -92,7 +92,7 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'update_schema', fields: 'schema, name', description: 'Rename a schema.' },
     { op: 'delete_schema', fields: 'schema', description: 'Delete a schema no tree uses.' },
     { op: 'add_key', fields: 'schema, key: {name, type, owner, default?, description?, values?: [{value, description}]}, index?', description: 'Add a key.' },
-    { op: 'update_key', fields: 'schema, key, set: {name?, type?, owner?, default?, description?, values?}', description: 'Change a key. A new name is also written into every tree and object that uses the key.' },
+    { op: 'update_key', fields: 'schema, key, set: {name?, type?, owner?, default?, description?, values?}', description: 'Change a key. A new name is also written into every tree and object that uses the key, and so is an enum value renamed at its place in values.' },
     { op: 'move_key', fields: 'schema, key, index', description: 'Reorder a key.' },
     { op: 'delete_key', fields: 'schema, key', description: 'Delete a key; refused while nodes use it (the error lists them).' },
     { op: 'create_tree', fields: 'name, schema, root?: node, id?', description: 'New behavior tree; the root defaults to an empty Selector "root".' },
@@ -519,35 +519,37 @@ function keyUsers(d: Draft, schemaId: string, name: string): { trees: { tree: Be
 const MEMORY_TAGS: FieldDef = { name: 'tags', kind: 'tags', label: 'Tags', description: '', default: [], max: 32 };
 
 /**
- * A memory item got another id: the values that hold the old one follow it
- * (conditions, defaults and starting values of keys an Ask chooses from
- * memory, since those keys hold item ids).
+ * A value of some keys got another name (an enum value, a memory item id):
+ * what holds the old one follows it (value fields of the tree such as
+ * conditions and Set Key, the keys' defaults, and the starting values of
+ * objects that run the tree).
  */
-function renameMemoryItem(d: Draft, from: string, to: string) {
-    for (const tree of d.behaviors) {
-        const keys = memoryChoiceKeys(tree);
-        if (!keys.size) continue;
-        walkNodes(tree.root, (n) => {
-            for (const dec of n.decorators ?? []) {
-                if (dec.type !== 'condition' || !keys.has(dec.key) || dec.value !== from) continue;
-                dec.value = to;
-                d.touchTree(tree);
-            }
-        });
-        const schema = d.blackboards.find((s) => s.id === tree.schema);
-        for (const k of schema?.keys ?? []) {
-            if (!keys.has(k.name) || k.default !== from) continue;
-            k.default = to;
-            d.schemas.add(schema!.id);
+function renameValue(d: Draft, tree: BehaviorTreeDoc, keys: Set<string>, from: string, to: string) {
+    walkItems(tree, (item, def) => {
+        for (const f of def.fields) {
+            if (f.kind !== 'value' || !keys.has(item[f.keyField ?? 'key']) || item[f.name] !== from) continue;
+            item[f.name] = to;
+            d.touchTree(tree);
         }
-        for (const { node, agent } of d.objectsWithAgents()) {
-            if (agent.tree !== tree.id) continue;
-            const names = Object.keys(agent.values).filter((k) => keys.has(k) && agent.values[k] === from);
-            if (!names.length) continue;
-            d.agents.set(node.id, { ...agent, values: { ...agent.values, ...Object.fromEntries(names.map((k) => [k, to])) } });
-            d.objects.add(node.id);
-        }
+    });
+    const schema = d.blackboards.find((s) => s.id === tree.schema);
+    for (const k of schema?.keys ?? []) {
+        if (!keys.has(k.name) || k.default !== from) continue;
+        k.default = to;
+        d.schemas.add(schema!.id);
     }
+    for (const { node, agent } of d.objectsWithAgents()) {
+        if (agent.tree !== tree.id) continue;
+        const names = Object.keys(agent.values).filter((k) => keys.has(k) && agent.values[k] === from);
+        if (!names.length) continue;
+        d.agents.set(node.id, { ...agent, values: { ...agent.values, ...Object.fromEntries(names.map((k) => [k, to])) } });
+        d.objects.add(node.id);
+    }
+}
+
+/** A memory item got another id: the keys an Ask chooses from memory hold item ids. */
+function renameMemoryItem(d: Draft, from: string, to: string) {
+    for (const tree of d.behaviors) renameValue(d, tree, memoryChoiceKeys(tree), from, to);
 }
 
 function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string, to: string) {
@@ -794,7 +796,18 @@ function apply(d: Draft, op: BehaviorOp) {
             }
             if (set.values !== undefined) {
                 if (key.type !== 'enum') throw new OpFail('Only enum keys have values.', { ...at, field: 'values' });
-                key.values = buildValues(set.values, at);
+                const before = key.values ?? [];
+                const values = buildValues(set.values, at);
+                // A value given another name at its place is renamed where it is held.
+                if (values.length === before.length) {
+                    before.forEach(({ value: from }, i) => {
+                        const to = values[i].value;
+                        if (values.some((v) => v.value === from) || before.some((v) => v.value === to)) return;
+                        if (key.default === from) key.default = to;
+                        for (const t of d.behaviors) if (t.schema === s.id) renameValue(d, t, new Set([key.name]), from, to);
+                    });
+                }
+                key.values = values;
             }
             if (set.default !== undefined) {
                 if (!valueFits(key, set.default)) throw new OpFail(`The default ${JSON.stringify(set.default)} does not fit a ${key.type} key.`, { ...at, field: 'default' });
