@@ -34,7 +34,7 @@ import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInsta
 import type { Viewport } from './viewport/viewport';
 import type { WalkController } from './viewport/walk';
 import type { ReferenceRoom } from './viewport/referenceRoom';
-import { exampleShowcase } from './examples';
+import { exampleGuard, exampleShowcase } from './examples';
 
 export interface EditorServices {
     shaders: ShaderManager;
@@ -1280,12 +1280,14 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ---------------------------------------------------------------- files
 
-    async newScene(kind: 'default' | 'empty' | 'showcase' = 'default') {
+    async newScene(kind: 'default' | 'empty' | 'showcase' | 'guard' = 'default') {
         if (this.store.doc.nodes.length && !(await confirmDialog('New scene', 'Discard the current scene? It is only kept in this browser unless you saved a file.', 'Discard', true))) {
             return;
         }
-        const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : newScene();
-        this.loadDoc(doc, kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] } : defaultCamera());
+        const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : newScene();
+        const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
+        this.loadDoc(doc, camera);
+        if (kind === 'guard') this.showBehavior({ tree: doc.behaviors[0]?.id });
     }
 
     /**

@@ -207,7 +207,8 @@ export class Scheduler {
 
     /** Called right after the engine drew a frame. */
     frame(now = performance.now()) {
-        const dt = this.lastFrame >= 0 ? Math.max(0, now - this.lastFrame) : 0;
+        // A gap between frames (a background tab, a paused engine) is not waiting: at most 250 ms count per frame.
+        const dt = this.lastFrame >= 0 ? Math.min(250, Math.max(0, now - this.lastFrame)) : 0;
         this.lastFrame = now;
         // Waiting while the one batch at a time runs does not make a request
         // stale (the newest request of an Ask wins anyway); waiting for the

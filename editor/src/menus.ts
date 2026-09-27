@@ -65,6 +65,7 @@ export function menuDefinitions(
                 { label: 'New Scene', icon: 'plus', action: () => void editor.newScene('default') },
                 { label: 'New Empty Scene', action: () => void editor.newScene('empty') },
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
+                { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
                 { separator: true },
                 { label: 'Open Scene or Project...', icon: 'open', shortcut: 'Mod+O', action: () => void editor.openSceneFile() },
                 { label: 'Save Scene File', icon: 'save', shortcut: 'Mod+S', action: () => void editor.saveSceneFile() },
