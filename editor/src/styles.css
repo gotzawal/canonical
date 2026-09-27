@@ -1525,6 +1525,8 @@ a.status-item:hover {
 
 .dialog-body p {
     margin: 0 0 10px;
+    /* Messages can list items on their own lines. */
+    white-space: pre-line;
 }
 
 .dialog-footer {
@@ -2617,7 +2619,9 @@ kbd {
 }
 
 .ai-model {
-    min-width: 0;
+    flex: 0 1 auto;
+    /* Enough of the name to recognize it when the usage text needs room. */
+    min-width: 80px;
     max-width: 55%;
     padding: 3px 7px;
     border: 1px solid var(--border);
@@ -2635,9 +2639,12 @@ kbd {
 }
 
 .ai-usage {
+    min-width: 0;
     color: var(--faint);
     font-size: 11px;
     white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
 }
 
 .ai-list {
@@ -4004,6 +4011,7 @@ kbd {
 
 .brief-actions {
     display: flex;
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
 }

@@ -21,6 +21,13 @@ function attach(node: NodeDoc, s: ScriptDoc, props: Record<string, ParamValue> =
     node.scripts = [...(node.scripts ?? []), { script: s.id, enabled: true, props }];
 }
 
+/** The examples are finished scenes: they skip the planning brief (and its start screen). */
+function exampleDesign() {
+    const design = defaultDesign();
+    design.brief.skipped = true;
+    return design;
+}
+
 /**
  * A small scene that shows off primitives, materials and light types, plus
  * scripts (press Play), a custom shader material, a post effect and a game
@@ -127,7 +134,7 @@ export function exampleShowcase(): SceneDoc {
         behaviors: [],
         memory: defaultMemory(),
         aiModels: [],
-        design: defaultDesign(),
+        design: exampleDesign(),
     };
 }
 
@@ -393,7 +400,7 @@ export function exampleGuard(): SceneDoc {
         behaviors: [],
         memory: defaultMemory(),
         aiModels: [],
-        design: defaultDesign(),
+        design: exampleDesign(),
     };
     // The behavior data goes through the edit operations like any edit, so the example is valid by construction.
     const r = applyBehaviorOps(
