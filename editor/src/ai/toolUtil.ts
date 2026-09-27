@@ -1,10 +1,16 @@
 // Argument parsing shared by the assistant's tools.
 
 import { tidy } from '../core/math';
+import type { ToolDef } from './openrouter';
 import type { NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/types';
 import { normalizeHex } from '../engine/color';
 
 export type Json = Record<string, any>;
+
+/** A tool the model can call: its name, what it does and its arguments (a JSON schema). */
+export function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
+    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
+}
 
 /** An error the model caused (bad arguments); its message goes back to the model. */
 export class ToolError extends Error {}

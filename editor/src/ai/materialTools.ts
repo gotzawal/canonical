@@ -12,11 +12,7 @@ import { MAX_IMAGES } from './images';
 import type { ToolDef } from './openrouter';
 import { allowedGroups, type ToolEnv, type ToolResult } from './tools';
 import { stageDef } from '../design/stages';
-import { hex, node, num, optStr, r3, str, ToolError, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, hex, node, num, optStr, r3, str, ToolError, type Json } from './toolUtil';
 
 /** Tools that spend credits; left out when image generation is off. */
 export const PAID_MATERIAL_TOOLS = new Set(['generate_swatch']);

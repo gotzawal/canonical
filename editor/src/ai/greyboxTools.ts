@@ -9,11 +9,7 @@ import { blobToDataUrl } from '../core/images';
 import { assetImageDataUrl } from '../core/images';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { node, num, optStr, r3, rv, str, ToolError, v3, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, node, num, optStr, r3, rv, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const place = { type: ['array', 'string'], description: '[x, y, z], or the name / id of an object or route point.' };

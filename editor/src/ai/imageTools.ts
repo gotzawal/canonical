@@ -8,11 +8,7 @@ import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, 
 import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from './images';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { num, optStr, ToolError, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, num, optStr, ToolError, type Json } from './toolUtil';
 
 /** Tools that spend credits on images; left out when the settings forbid it. */
 export const PAID_IMAGE_TOOLS = new Set(['generate_paintover']);

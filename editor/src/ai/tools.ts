@@ -10,7 +10,7 @@ import type {
 import { assetImageDataUrl } from '../core/images';
 import { recentLogs } from '../ui/statusbar';
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
-import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
+import { def, hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
 import { designToolDefs, runDesignTool } from './designTools';
 import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
 import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
@@ -126,15 +126,16 @@ const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_lig
 /** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
 const SCENE_RESULT_CHARS = 28_000;
 
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+/** Tools that only read or look: every stage has them. */
+const READ_TOOLS = ['get_scene', 'get_object', 'list_model_parts', 'read_script', 'read_shader', 'get_render_graph', 'get_console', 'capture_viewport', 'view_images', 'select_objects', 'read_design', 'get_behavior_outline', 'validate_behavior', 'get_decision_log'];
 
 /**
  * Tool groups: a tool is offered when the current pipeline stage allows one
- * of its groups (see design/stages.ts). Tools missing here are always there.
+ * of its groups (see design/stages.ts). A tool missing here is never
+ * offered, so a new one cannot slip past the stages.
  */
 const TOOL_GROUPS: Record<string, ToolGroup[]> = {
+    ...Object.fromEntries(READ_TOOLS.map((t) => [t, ['read']])),
     create_objects: ['objects', 'lights', 'effects'],
     update_objects: ['objects', 'lights', 'materials', 'effects'],
     delete_objects: ['objects', 'lights', 'effects'],
@@ -196,8 +197,7 @@ export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
 }
 
 function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
-    const groups = TOOL_GROUPS[name];
-    return !groups || groups.some((g) => allowed.has(g));
+    return !!TOOL_GROUPS[name]?.some((g) => allowed.has(g));
 }
 
 export function toolDefs(env: ToolEnv): ToolDef[] {
