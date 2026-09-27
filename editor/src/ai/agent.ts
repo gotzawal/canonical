@@ -125,7 +125,13 @@ export class Agent extends Emitter<AgentEvents> {
         this.loading = this.loadSession();
         editor.store.on('load', () => {
             if (SESSION_PREFIX + editor.store.doc.design.id === this.sessionKey) return;
-            if (this.busy) this.stop();
+            if (this.busy) {
+                // The request stops as if by hand, and the project left behind keeps it in its conversation.
+                this.stop();
+                this.push({ role: 'note', text: 'Stopped.' });
+                this.settle(true);
+                this.saveSession();
+            }
             this.loading = this.loadSession();
         });
     }
@@ -413,23 +419,10 @@ export class Agent extends Emitter<AgentEvents> {
                 if (live()) this.push({ role: 'note', text: error, error: true });
                 console.warn('[ai] request failed', e);
             }
-            // Leave the history consistent: every tool call needs a result.
-            if (live()) this.repairHistory();
         } finally {
             committed = store.squash(batch, label);
-            // A step stopped or failed before its first word leaves an empty
-            // bubble (it would show the typing dots for good), and a tool cut
-            // off leaves its row spinning.
-            for (let i = this.turns.length - 1; i >= 0; i--) {
-                const t = this.turns[i];
-                if (t.role === 'assistant' && !t.text.trim()) this.turns.splice(i, 1);
-                else if (t.tool?.state === 'running') {
-                    t.tool.state = 'error';
-                    t.tool.summary = stopped ? 'stopped' : 'did not finish';
-                } else continue;
-                this.emit('update', t);
-            }
-            this.retireImages();
+            // A conversation left for another project was settled when it was left (see the constructor).
+            if (live()) this.settle(stopped);
             this.busy = false;
             this.abort = null;
             if (committed && live()) {
@@ -444,6 +437,26 @@ export class Agent extends Emitter<AgentEvents> {
             this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
         }
         return true;
+    }
+
+    /**
+     * Tidies up after a request: a step stopped or failed before its first
+     * word leaves an empty bubble (it would show the typing dots for good),
+     * a tool cut off leaves its row spinning, every tool call needs a result
+     * in the history, and images the model has seen are not sent again.
+     */
+    private settle(stopped: boolean) {
+        for (let i = this.turns.length - 1; i >= 0; i--) {
+            const t = this.turns[i];
+            if (t.role === 'assistant' && !t.text.trim()) this.turns.splice(i, 1);
+            else if (t.tool?.state === 'running') {
+                t.tool.state = 'error';
+                t.tool.summary = stopped ? 'stopped' : 'did not finish';
+            } else continue;
+            this.emit('update', t);
+        }
+        this.repairHistory();
+        this.retireImages();
     }
 
     /** The request message, with the attached images for models that see them. */
