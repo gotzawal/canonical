@@ -57,9 +57,11 @@ export class WalkController {
         }
         ed.pipeline.showShot(null);
         const cam = ed.store.camera;
-        // Start on the ground under the orbit target, facing the way the view faces.
+        // Start on the floor under the orbit target (up to a step above it), not on a roof
+        // or ceiling over it, facing the way the view faces. A target below every surface
+        // starts on the one above it.
         const target = cam.target;
-        const ground = this.groundAt([target[0], target[1] + 50, target[2]], 200);
+        const ground = this.groundAt([target[0], target[1] + this.specs.stepHeight, target[2]], 200) ?? this.groundAt([target[0], target[1] + 50, target[2]], 200);
         this.feet = [target[0], ground ?? 0, target[2]];
         this.start = [...this.feet] as Vec3;
         this.lookYaw = cam.yaw + 180;
