@@ -4,7 +4,7 @@
 // or proposed by the assistant.
 
 import { STAGE_IDS, stageIndex } from '../core/design';
-import type { CheckItemDoc, DesignDoc, SceneDoc, StageId } from '../core/types';
+import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId } from '../core/types';
 
 /** Groups of assistant tools; each stage allows some of them (see ai/tools.ts). */
 export type ToolGroup =
@@ -79,18 +79,34 @@ export interface CheckState {
     hint?: string;
 }
 
-const norm = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+/** A name to match objects by: words in lower case, without the number of a copy ("Bench (2)" is a bench). */
+const baseName = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim().replace(/ \d+$/, '');
 
-/** Objects of the brief that are placed: ticked, or a scene object carries their name. */
+/**
+ * Objects of the brief that are placed: ticked, or as many shown scene
+ * objects as it asks for carry its name. Each scene object counts once.
+ */
 export function placedObjects(doc: SceneDoc, design: DesignDoc): { total: number; placed: number } {
-    const names = doc.nodes.map((n) => norm(n.name));
+    const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+    const shown = (n: NodeDoc | undefined): boolean => !n || (n.visible && shown(byId.get(n.parent ?? '')));
+    const left = new Map<string, number>();
+    for (const n of doc.nodes) {
+        const key = baseName(n.name);
+        if (shown(n)) left.set(key, (left.get(key) ?? 0) + 1);
+    }
     let total = 0;
     let placed = 0;
     for (const area of design.areas) {
         for (const o of area.objects) {
             total++;
-            const key = norm(o.name);
-            if (o.placed || (key && names.some((n) => n === key || n.startsWith(key + ' ') || n.includes(key)))) placed++;
+            const key = baseName(o.name);
+            const want = Math.max(1, o.count ?? 1);
+            const have = left.get(key) ?? 0;
+            if (o.placed) placed++;
+            else if (key && have >= want) {
+                placed++;
+                left.set(key, have - want);
+            }
         }
     }
     return { total, placed };
