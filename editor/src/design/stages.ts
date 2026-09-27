@@ -5,6 +5,7 @@
 
 import { STAGE_IDS, stageIndex } from '../core/design';
 import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId } from '../core/types';
+import { hasColorGrade } from './effects';
 
 /** Groups of assistant tools; each stage allows some of them (see ai/tools.ts). */
 export type ToolGroup =
@@ -337,10 +338,7 @@ export const STAGES: StageDef[] = [
             {
                 id: 'finish.grade',
                 text: 'Color grading is set up',
-                auto: ({ doc }) => {
-                    const graded = doc.renderGraph.posts.some((p) => p.enabled && /grad/i.test(doc.shaders.find((s) => s.id === p.shader)?.name ?? ''));
-                    return { done: graded };
-                },
+                auto: ({ doc }) => ({ done: hasColorGrade(doc) }),
             },
             {
                 id: 'finish.shots',
