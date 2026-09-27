@@ -18,6 +18,8 @@ import { button, iconButton } from './widgets';
 import type { RoomSample } from '../viewport/referenceRoom';
 
 let current: SwatchDialog | null = null;
+/** A generation in progress; it keeps running when the dialog closes. */
+let job: { abort: AbortController; status: string } | null = null;
 
 /** Opens the swatch library, for a material slot (to use a swatch on it) or on its own. */
 export function openSwatchDialog(editor: Editor, slotId: string | null) {
@@ -50,7 +52,6 @@ class SwatchDialog {
     private status: HTMLElement;
     private genBtn: HTMLButtonElement;
     private cancelBtn: HTMLButtonElement;
-    private abort: AbortController | null = null;
     private urls: string[] = [];
     private searchTimer = 0;
     private fresh = new Set<string>();
@@ -121,13 +122,13 @@ class SwatchDialog {
         this.modal = modal(title, h('div', { class: 'po-dialog sw-dialog' }, form, library), { cls: 'po-modal', onClose: () => this.dispose() });
         const importBtn = button('Import Images...', () => void this.importFiles(), 'subtle', 'open');
         this.status = h('span', { class: 'muted small po-status' });
-        this.cancelBtn = button('Cancel', () => this.abort?.abort(), '', 'close');
+        this.cancelBtn = button('Cancel', () => job?.abort.abort(), '', 'close');
         this.genBtn = button('Generate', () => void this.generate(), 'primary', 'wand');
         this.modal.footer.append(importBtn, h('div', { class: 'spacer' }), this.status, this.cancelBtn, this.genBtn);
 
         this.renderRefs();
         this.renderOptions();
-        this.updateButtons();
+        this.jobChanged();
         void this.renderLibrary();
         void listImageModels()
             .then((list) => {
@@ -147,7 +148,6 @@ class SwatchDialog {
     }
 
     private dispose() {
-        this.abort?.abort();
         for (const u of this.urls) URL.revokeObjectURL(u);
         this.urls = [];
         if (current === this) current = null;
@@ -204,8 +204,15 @@ class SwatchDialog {
         }
     }
 
+    /** Shows the running generation, also in a dialog opened again meanwhile. */
+    private jobChanged() {
+        if (this.modal.closed) return;
+        this.status.textContent = job?.status ?? '';
+        this.updateButtons();
+    }
+
     private updateButtons() {
-        const running = !!this.abort;
+        const running = !!job;
         this.cancelBtn.hidden = !running;
         this.genBtn.disabled = running;
         const n = Math.max(1, Math.min(MAX_IMAGES, Math.round(Number(this.count.value) || 1)));
@@ -323,16 +330,16 @@ class SwatchDialog {
     }
 
     private async generate() {
-        if (this.abort) return;
+        if (job) return;
         if (!aiSettings.apiKey) return toast('Add an OpenRouter key in the AI settings first.', 'error');
         const model = this.modelInput.value.trim();
         const prompt = this.prompt.value.trim();
         if (!model || !prompt) return toast('Pick a model and write the instruction.', 'info');
         const slot = this.slot;
-        this.abort = new AbortController();
-        this.updateButtons();
         const count = Math.max(1, Math.min(MAX_IMAGES, Math.round(Number(this.count.value) || 1)));
-        this.status.textContent = `Generating 0/${count}...`;
+        const run = { abort: new AbortController(), status: `Generating 0/${count}...` };
+        job = run;
+        current?.jobChanged();
         try {
             const res = await generateSwatches(
                 {
@@ -347,26 +354,34 @@ class SwatchDialog {
                     tile: Math.max(0.05, Number(this.tileInput.value) || 2),
                     ...(slot ? { roughness: slot.roughness, metallic: slot.metallic } : {}),
                 },
-                { signal: this.abort.signal, onProgress: (done, total) => (this.status.textContent = `Generating ${done}/${total}...`) },
+                {
+                    signal: run.abort.signal,
+                    onProgress: (done, total) => {
+                        run.status = `Generating ${done}/${total}...`;
+                        current?.jobChanged();
+                    },
+                },
             );
-            for (const r of res.swatches) this.fresh.add(r.id);
             const cost = res.cost != null ? ` ($${res.cost.toFixed(3)})` : '';
-            toast(`${res.swatches.length} swatch${res.swatches.length === 1 ? '' : 'es'} added to the library${cost}.`, 'success');
+            const kept = run.abort.signal.aborted ? 'Cancelled; kept ' : '';
+            toast(`${kept}${res.swatches.length} swatch${res.swatches.length === 1 ? '' : 'es'} added to the library${cost}.`, 'success');
             if (res.errors.length) toast(`${res.errors.length} request${res.errors.length === 1 ? '' : 's'} failed: ${res.errors[0]}`, 'error');
-            if (document.hidden || !document.hasFocus()) {
+            // The dialog may have been closed, or opened again, meanwhile.
+            const open = current;
+            if (document.hidden || !document.hasFocus() || !open) {
                 notices.show({ kind: 'ai-done', key: 'swatches', icon: 'wand', title: 'Swatches are ready', body: `${res.swatches.length} new in the library.`, actions: this.slotId ? [{ label: 'Open', primary: true, run: () => openSwatchDialog(this.editor, this.slotId) }] : [] });
             }
-            if (!this.modal.closed) {
-                this.search.value = '';
-                await this.renderLibrary();
+            if (open) {
+                for (const r of res.swatches) open.fresh.add(r.id);
+                open.search.value = '';
+                await open.renderLibrary();
             }
         } catch (e: any) {
             if (e?.name === 'AbortError') toast('Generation cancelled (not charged).', 'info');
             else toast(`Generation failed: ${e?.message || e}`, 'error');
         } finally {
-            this.abort = null;
-            this.status.textContent = '';
-            if (!this.modal.closed) this.updateButtons();
+            job = null;
+            current?.jobChanged();
         }
     }
 }

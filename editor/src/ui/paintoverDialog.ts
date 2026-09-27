@@ -491,7 +491,8 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
         });
         const n = res.paintovers.length;
         const cost = res.cost != null ? ` ($${res.cost.toFixed(3)})` : '';
-        toast(`${n} paintover${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
+        const kept = job.abort.signal.aborted ? 'Cancelled; kept ' : '';
+        toast(`${kept}${n} paintover${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
         if (res.errors.length) toast(`${res.errors.length} request${res.errors.length === 1 ? '' : 's'} failed: ${res.errors[0]}`, 'error');
         if (res.dropped.length) toast(`Left out options the model does not take: ${res.dropped.join(', ')}`, 'info', 6000);
         const away = document.hidden || !document.hasFocus() || !current || current.closed || current.shotId !== shotId;
