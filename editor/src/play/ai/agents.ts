@@ -94,6 +94,8 @@ export class Agent implements TreeHost {
     readonly tree: TreeInstance;
     /** Play time of the next tick. */
     nextTick = 0;
+    /** Its object was destroyed or Play stopped: results for it are dropped. */
+    removed = false;
     /** The context the last Recall assembled. */
     context: RecallContext | null = null;
     /** Raised when a Recall brings other items than before. */
@@ -184,8 +186,10 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     player: Object3D | null = null;
     private inbox: (() => void)[] = [];
     private running = false;
+    /** Raised by start and stop: results of an earlier session are dropped. */
+    private session = 0;
     /** The decision model was lost when the last frame looked. */
-    private modelLost = false;
+    modelLost = false;
     /** The agents' tick offsets are set in the first frame of a session. */
     private spreadPending = false;
     private queryCache = new Map<string, Promise<Float32Array | null>>();
@@ -230,6 +234,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.queryCache.clear();
         this.queryVectors.clear();
         this.running = true;
+        this.session++;
         // A model lost before this session: the keys start at their defaults anyway.
         this.modelLost = !!this.services()?.decisionLost;
         this.memory = new MemoryIndex(doc.memory);
@@ -252,16 +257,24 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             list.push({ id: node.id, name: node.name, obj, tree, schema, values: a.values });
         }
         const resolve = (ref: string) => this.host.findObject(ref);
-        list.forEach((a, i) => {
-            const agent = new Agent(this, a.id, a.name, a.obj, a.tree, new Blackboard(a.schema, a.values, resolve));
-            // Spread the agents over the tick period.
-            agent.nextTick = this.time + (i / Math.max(1, list.length)) * TICK_INTERVAL;
-            this.agents.push(agent);
-        });
+        for (const a of list) {
+            try {
+                this.agents.push(new Agent(this, a.id, a.name, a.obj, a.tree, new Blackboard(a.schema, a.values, resolve)));
+            } catch (e: any) {
+                // One broken agent must not stop Play for the others.
+                this.host.warn(`[${a.tree.name} on ${a.name}] The agent could not start: ${e?.message || e}`);
+            }
+        }
+        // Spread the agents over the tick period (again in their first frame, see frame()).
+        this.agents.forEach((agent, i) => (agent.nextTick = this.time + (i / Math.max(1, this.agents.length)) * TICK_INTERVAL));
         this.spreadPending = true;
         if (this.agents.length) {
-            const needs = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded);
-            if (needs.decision || needs.embedder) this.services()?.prepare(needs, this.host.doc().memory.embedder);
+            try {
+                const needs = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded);
+                if (needs.decision || needs.embedder) this.services()?.prepare(needs, this.host.doc().memory.embedder);
+            } catch (e) {
+                console.error('[ai] loading the models failed', e);
+            }
         }
         this.emit('started', undefined);
     }
@@ -270,6 +283,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     stop() {
         if (!this.running && !this.agents.length) return;
         for (const a of this.agents) {
+            a.removed = true;
             try {
                 a.tree.stop();
             } catch (e) {
@@ -279,19 +293,26 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.agents.length = 0;
         this.inbox = [];
         this.running = false;
+        this.session++;
         this.services()?.scheduler.clear();
         this.emit('stopped', undefined);
     }
 
-    /** Queues work for the next agent phase (answers and results that arrive between frames). */
-    post(fn: () => void) {
-        if (this.running) this.inbox.push(fn);
+    /**
+     * A poster for work that starts now and finishes later (a model answer,
+     * a recall): it queues its result for the next agent phase, and drops it
+     * when this Play session ended in the meantime.
+     */
+    poster(): (fn: () => void) => void {
+        const session = this.session;
+        return (fn) => {
+            if (this.running && session === this.session) this.inbox.push(fn);
+        };
     }
 
     /** The agent phase of a frame (Player.tick, between timers and lateUpdate). */
     frame() {
         if (!this.running) return;
-        this.checkModelLost();
         const due = this.inbox;
         this.inbox = [];
         for (const fn of due) {
@@ -301,6 +322,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
                 console.error('[ai] applying a result failed', e);
             }
         }
+        // After the inbox: answers of the last batch before the loss go too.
+        this.checkModelLost();
         const now = this.time;
         if (this.spreadPending) {
             // The offsets count from the first agent frame: a long first frame
@@ -309,7 +332,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             this.agents.forEach((a, i) => (a.nextTick = now + (i / Math.max(1, this.agents.length)) * TICK_INTERVAL));
         }
         for (const a of this.agents.slice()) {
-            if (now < a.nextTick) continue;
+            // An agent destroyed by another one earlier in this frame does not tick.
+            if (a.removed || now < a.nextTick) continue;
             try {
                 a.tree.tick();
             } catch (e) {
@@ -341,8 +365,9 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     removeObjects(objects: Set<Object3D>) {
         for (const a of this.agents.slice()) {
             if (!objects.has(a.obj)) continue;
-            a.tree.stop();
+            a.removed = true;
             this.agents.splice(this.agents.indexOf(a), 1);
+            a.tree.stop();
         }
     }
 
@@ -451,7 +476,10 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             run(known);
             return;
         }
-        void this.embed(text, 'query').then((v) => this.post(() => run(v)));
+        const post = this.poster();
+        void this.embed(text, 'query').then((v) => post(() => {
+            if (!agent.removed) run(v);
+        }));
     }
 
     /** Adds a memory while playing (saveMemories() puts it into a game save). */
@@ -466,7 +494,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     /** Embeds a play memory when the scene's memory is embedded and the model is there. */
     private embedLater(entry: MemoryEntry) {
         if (!this.memory?.embedded) return;
-        void this.embed(entry.text, 'passage').then((v) => this.post(() => {
+        const post = this.poster();
+        void this.embed(entry.text, 'passage').then((v) => post(() => {
             if (!v) return;
             entry.vector = v;
             entry.norm = norm(v);

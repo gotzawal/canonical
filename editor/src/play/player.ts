@@ -146,7 +146,13 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.setupCamera();
         this.instantiate();
         // Blackboards exist before awake() / start(), so scripts can write their first facts there.
-        this.agents.start();
+        try {
+            this.agents.start();
+        } catch (e: any) {
+            // The scripts still run: Play must not stop half way into the game camera.
+            console.error('[ai] the agents could not start', e);
+            this.warn(`The agents could not start: ${e?.message || e}`);
+        }
         this.bindInput();
         this.last = performance.now();
         this.offFrame = this.runtime.onBeforeFrame(() => this.tick());

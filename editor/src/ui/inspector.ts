@@ -1355,7 +1355,7 @@ export class InspectorPanel {
                 const label = `Agent Value ${key.name}`;
                 const write = (v: unknown) =>
                     this.applyAgent(sameTree().map((n) => ({ op: 'set_agent', object: n.id, values: { ...n.agent!.values, [key.name]: v } })), label);
-                const control = valueControl(key, key.name in agent.values ? agent.values[key.name] : key.default, ctx, {
+                const control = valueControl(key, Object.hasOwn(agent.values, key.name) ? agent.values[key.name] : key.default, ctx, {
                     commit: write,
                     begin: () => {
                         this.open++;
@@ -1371,7 +1371,7 @@ export class InspectorPanel {
                 const reset = iconButton('undo', `Back to the schema default (${formatValue(key.default)})`, () =>
                     this.applyAgent(
                         sameTree()
-                            .filter((n) => key.name in n.agent!.values)
+                            .filter((n) => Object.hasOwn(n.agent!.values, key.name))
                             .map((n) => {
                                 const values = { ...n.agent!.values };
                                 delete values[key.name];
@@ -1384,7 +1384,7 @@ export class InspectorPanel {
                 const sync = () => {
                     const a = this.node.agent;
                     if (!a) return;
-                    const set = key.name in a.values;
+                    const set = Object.hasOwn(a.values, key.name);
                     control.set(set ? a.values[key.name] : key.default);
                     reset.hidden = !set;
                     el.classList.toggle('overridden', set);

@@ -51,6 +51,7 @@ export class AskRunner {
         const seq = agent.nextSeq(doc.id);
         const started = { time: this.sys.time, frame: this.sys.frameNumber, at: new Date().toISOString() };
         const bb = agent.blackboard;
+        const get = (k: string) => bb.get(k);
         const plans: Plan[] = [];
         for (const q of doc.questions) {
             const key = bb.key(q.key);
@@ -58,9 +59,10 @@ export class AskRunner {
                 agent.warn(doc.id, `Ask "${doc.id}": "${q.key}" is not an AI key of the blackboard, so it is not asked.`);
                 continue;
             }
-            if (key.type === 'probability') plans.push({ key, format: 'noul', text: q.text, options: null });
-            else if (key.type === 'enum' && doc.choices !== 'memory') plans.push({ key, format: 'choice', text: q.text, options: (key.values ?? []).map((v) => ({ value: v.value, text: v.description })) });
-            else if (key.type === 'string' && doc.choices === 'memory') plans.push({ key, format: 'choice', text: q.text, options: null });
+            const text = fillTemplate(q.text, get);
+            if (key.type === 'probability') plans.push({ key, format: 'noul', text, options: null });
+            else if (key.type === 'enum' && doc.choices !== 'memory') plans.push({ key, format: 'choice', text, options: (key.values ?? []).map((v) => ({ value: v.value, text: v.description })) });
+            else if (key.type === 'string' && doc.choices === 'memory') plans.push({ key, format: 'choice', text, options: null });
             else agent.warn(doc.id, `Ask "${doc.id}": the ${key.type} key "${key.name}" cannot be asked${key.type === 'string' ? ' without memory choices' : ''}.`);
         }
         if (!plans.length) {
@@ -69,7 +71,11 @@ export class AskRunner {
         }
         const facts = bb.snapshot(doc.facts);
         const context = doc.context ? agent.context : null;
-        const finish = (result: AskResult) => this.apply(agent, doc, isTask, seq, plans, facts, context, started, result, handle);
+        // Results come back in a later frame; a result for an agent that is gone is dropped.
+        const post = this.sys.poster();
+        const finish = (result: AskResult) => {
+            if (!agent.removed) this.apply(agent, doc, isTask, seq, plans, facts, context, started, result, handle);
+        };
         const scheduler = this.sys.scheduler;
         if (!scheduler || !scheduler.ready) {
             finish({ probabilities: null, outcome: 'unavailable', cache: 'none', provider: scheduler?.providerName ?? 'none', model: '', latency: 0 });
@@ -100,13 +106,14 @@ export class AskRunner {
                     questions,
                     priority: () => agent.priority(doc.priority),
                 })
-                .then((result) => this.sys.post(() => finish(result)));
+                .then((result) => post(() => finish(result)));
         };
         // Choices from memory get their options (the best matching items) first.
         const fromMemory = plans.filter((p) => p.format === 'choice' && !p.options);
         if (fromMemory.length) {
             void this.memoryOptions(agent, doc).then((options) => {
-                this.sys.post(() => {
+                post(() => {
+                    if (agent.removed) return;
                     for (const p of fromMemory) p.options = options;
                     submit();
                 });
@@ -157,12 +164,15 @@ export class AskRunner {
             }
             let outcome: AskOutcome;
             if (!probs || value === null || confidence === null) outcome = result.outcome ?? 'unavailable';
+            // The model stopped (device lost): its keys stay at their defaults for the rest of the session.
+            else if (this.sys.modelLost) outcome = 'unavailable';
             else if (seq < newest) outcome = 'superseded';
             else if (confidence < doc.minConfidence) outcome = 'low_confidence';
             else {
                 const meta = bb.answer(p.key.name);
                 const current = bb.plain(p.key.name);
-                if (meta && doc.minHold > 0 && now - meta.at < doc.minHold && current !== value) outcome = 'held';
+                // The hold counts from the last change of the value, not from the last answer.
+                if (meta && doc.minHold > 0 && now - meta.since < doc.minHold && current !== value) outcome = 'held';
                 else {
                     try {
                         bb.write(p.key.name, value, 'ai', { confidence, source, at: now, node: doc.id, seq });

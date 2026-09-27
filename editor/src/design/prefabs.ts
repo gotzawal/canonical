@@ -18,19 +18,25 @@ function copy<T>(v: T): T {
 /** Nodes generated for one instance of `prefab` under `rootId`. */
 export function instanceChildren(prefab: PrefabDoc, rootId: string): NodeDoc[] {
     if (prefab.useModel) {
-        return [
-            {
-                id: uid(),
-                name: prefab.name,
-                parent: rootId,
-                visible: true,
-                position: [...(prefab.modelOffset ?? [0, 0, 0])] as Vec3,
-                rotation: [0, 0, 0],
-                scale: [1, 1, 1],
-                model: { asset: prefab.asset },
-                prefabChild: true,
-            },
-        ];
+        const node: NodeDoc = {
+            id: uid(),
+            name: prefab.name,
+            parent: rootId,
+            visible: true,
+            position: [...(prefab.modelOffset ?? [0, 0, 0])] as Vec3,
+            rotation: [0, 0, 0],
+            scale: [1, 1, 1],
+            model: { asset: prefab.asset },
+            prefabChild: true,
+        };
+        // The model replaces the template's look, not its behavior: the
+        // scripts and agent of a template with one root stay on the model.
+        const roots = prefab.nodes.filter((n) => !n.parent);
+        if (roots.length === 1) {
+            if (roots[0].scripts?.length) node.scripts = copy(roots[0].scripts);
+            if (roots[0].agent) node.agent = copy(roots[0].agent);
+        }
+        return [node];
     }
     const ids = new Map<string, string>();
     for (const n of prefab.nodes) ids.set(n.id, uid());

@@ -99,6 +99,19 @@ export function schemaOf(schemas: BlackboardSchemaDoc[], tree: BehaviorTreeDoc |
     return tree ? schemas.find((s) => s.id === tree.schema) : undefined;
 }
 
+/** Keys that hold memory item ids: the keys an Ask of the tree chooses from memory. */
+export function memoryChoiceKeys(tree: BehaviorTreeDoc): Set<string> {
+    const out = new Set<string>();
+    const visit = (item: BtNodeDoc | BtServiceDoc) => {
+        if (item.type === 'ask' && item.choices === 'memory') for (const q of item.questions) out.add(q.key);
+    };
+    walkNodes(tree.root, (n) => {
+        visit(n);
+        for (const s of n.services ?? []) visit(s);
+    });
+    return out;
+}
+
 export interface ModelNeeds {
     /** Ask nodes: the decision model. */
     decision: boolean;
@@ -337,5 +350,6 @@ export function sanitizeAgent(raw: any): AgentDoc | undefined {
     if (!isObj(raw) || typeof raw.tree !== 'string' || !raw.tree) return undefined;
     const values: Record<string, BlackboardValue> = {};
     if (isObj(raw.values)) for (const [k, v] of Object.entries(raw.values)) if (isReadableId(k)) values[k] = value(v);
-    return { tree: raw.tree, enabled: raw.enabled !== false, values };
+    // Tree ids are kept to 100 characters (repairTree): the agent must still find its tree.
+    return { tree: raw.tree.slice(0, 100), enabled: raw.enabled !== false, values };
 }

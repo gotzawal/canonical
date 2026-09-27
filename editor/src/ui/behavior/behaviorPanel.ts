@@ -454,8 +454,12 @@ export class BehaviorPanel {
     }
 
     private async deleteTree(t: BehaviorTreeDoc) {
-        const users = this.editor.store.doc.nodes.filter((n) => n.agent?.tree === t.id);
-        if (users.length && !(await confirmDialog('Delete behavior tree', `${t.name} runs on ${users.map((n) => n.name).join(', ')}. Delete it and remove their agents?`, 'Delete', true))) return;
+        const doc = this.editor.store.doc;
+        const users = [
+            ...doc.nodes.filter((n) => n.agent?.tree === t.id).map((n) => n.name),
+            ...doc.prefabs.flatMap((p) => p.nodes.filter((n) => n.agent?.tree === t.id).map((n) => `${n.name} (in prefab ${p.name})`)),
+        ];
+        if (users.length && !(await confirmDialog('Delete behavior tree', `${t.name} runs on ${users.join(', ')}. Delete it and remove their agents?`, 'Delete', true))) return;
         if (this.apply([{ op: 'delete_tree', tree: t.id, force: true }], 'Delete Tree')) {
             this.treeId = null;
             this.outliner.select([]);
@@ -478,12 +482,13 @@ export class BehaviorPanel {
             onProgress('Loading the embedding model...');
             if (!(await m.download('embedder'))) return `The embedding model could not be loaded: ${m.status('embedder').message ?? 'unknown error'}`;
         }
-        const vectors: Record<string, string> = {};
+        // Each vector goes with the text it was made from: an item edited meanwhile keeps no stale vector.
+        const vectors: Record<string, { text: string; vector: string }> = {};
         const chunk = 32;
         for (let i = 0; i < todo.length; i += chunk) {
             const part = todo.slice(i, i + chunk);
             const vs = await m.client.embed(part.map((x) => x.text), 'passage');
-            part.forEach((x, j) => (vectors[x.id] = encodeVector(vs[j])));
+            part.forEach((x, j) => (vectors[x.id] = { text: x.text, vector: encodeVector(vs[j]) }));
             onProgress(`Embedded ${Math.min(i + chunk, todo.length)} of ${todo.length}...`);
         }
         const r = this.editor.applyBehaviorOps([{ op: 'set_memory_vectors', embedder: src.id, vectors }], { label: 'Embed Memory' });

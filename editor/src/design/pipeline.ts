@@ -341,6 +341,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
             d.renderGraph = s.renderGraph;
             d.nodes = s.nodes;
             d.prefabs = s.prefabs ?? [];
+            // The objects' agents need the trees, schemas and memory of the same time.
+            d.blackboards = s.blackboards;
+            d.behaviors = s.behaviors;
+            d.memory = s.memory;
             const designAssets = d.assets.filter((a) => a.purpose === 'design');
             const ids = new Set(designAssets.map((a) => a.id));
             d.assets = [...s.assets.filter((a) => !ids.has(a.id)), ...designAssets];

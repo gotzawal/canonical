@@ -49,8 +49,9 @@ export function treeOutline(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc[
         if (n.type === 'selector' || n.type === 'sequence') for (const c of n.children) visit(c, depth + 1);
     };
     visit(tree.root, 0);
+    // Tree problems without a node, and problems of the objects running the tree (their starting values).
     const general = issues.filter((i) => i.tree === tree.id && !i.node);
-    for (const i of general) lines.push(`!! ${i.severity}${i.field ? ` ${i.field}` : ''}: ${i.message}`);
+    for (const i of general) lines.push(`!! ${i.severity}${i.object ? ` object ${i.object}` : ''}${i.field ? ` ${i.field}` : ''}: ${i.message}`);
     return lines.join('\n');
 }
 

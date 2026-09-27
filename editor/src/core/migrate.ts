@@ -15,9 +15,16 @@ const STEPS: Record<number, (doc: Raw) => void> = {
     },
 };
 
-/** Brings a scene document of any older version up to SCENE_VERSION (in place). */
+/**
+ * Brings a scene document of any older version up to SCENE_VERSION (in
+ * place). A newer one is refused: repairing it would drop what this editor
+ * does not know, and the next save would lose it.
+ */
 export function migrateScene(doc: Raw): Raw {
     if (!doc || typeof doc !== 'object') return doc;
+    if (Number.isInteger(doc.version) && doc.version > SCENE_VERSION) {
+        throw new Error(`This scene was saved by a newer version of the editor (scene format ${doc.version}; this one reads up to ${SCENE_VERSION}). Update the editor to open it.`);
+    }
     let version = Number.isInteger(doc.version) && doc.version > 0 ? doc.version : 1;
     while (version < SCENE_VERSION) {
         STEPS[version]?.(doc);

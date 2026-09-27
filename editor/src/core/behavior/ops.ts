@@ -8,9 +8,9 @@ import { uid } from '../ids';
 import type {
     AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc,
     BlackboardValue, BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc, NodeDoc,
-    SceneDoc,
+    PrefabDoc, SceneDoc,
 } from '../types';
-import { findNode, findService, isCompositeDoc, newItemId, toReadableId, treeIds, uniqueId, walkNodes } from './format';
+import { findNode, findService, isCompositeDoc, memoryChoiceKeys, newItemId, toReadableId, treeIds, uniqueId, walkNodes } from './format';
 import {
     COMMON_FIELDS, decoratorType, DECORATOR_TYPES, fieldDefault, isReadableId, KEY_OWNERS, KEY_TYPES, NODE_TYPES, nodeType,
     serviceType, SERVICE_TYPES, typeDefault, valueFits, type FieldDef, type ItemTypeDef,
@@ -28,7 +28,11 @@ export interface OpError {
     tree?: string;
     schema?: string;
     node?: string;
+    /** Decorator index on the node. */
+    decorator?: number;
     field?: string;
+    /** Scene object (node id) for agent problems. */
+    object?: string;
 }
 
 export interface BehaviorChanges {
@@ -108,10 +112,32 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'add_memory', fields: 'item: {id?, text, tags?}', description: 'Add a memory item (embed it afterwards).' },
     { op: 'update_memory', fields: 'item, set: {id?, text?, tags?}', description: 'Change a memory item; a new text drops its embedding.' },
     { op: 'delete_memory', fields: 'item', description: 'Delete a memory item.' },
-    { op: 'set_memory_vectors', fields: 'embedder, vectors: {id: base64}', description: 'Store embeddings (the editor does this when it embeds memory).' },
+    { op: 'set_memory_vectors', fields: 'embedder, vectors: {id: {text, vector: base64}}', description: 'Store embeddings (the editor does this when it embeds memory); a vector is kept only while its item still has that text.' },
 ];
 
 // ---------------------------------------------------------------- draft
+
+/** A node with an agent: a scene object, or a part of a prefab's template (every instance copies it). */
+interface AgentHolder {
+    node: NodeDoc;
+    agent: AgentDoc;
+    prefab?: PrefabDoc;
+}
+
+/** A node by id among the scene objects and the parts of prefab templates. */
+function holderNode(doc: Pick<SceneDoc, 'nodes' | 'prefabs'>, id: string): NodeDoc | undefined {
+    const node = doc.nodes.find((n) => n.id === id);
+    if (node) return node;
+    for (const p of doc.prefabs ?? []) {
+        const part = p.nodes.find((n) => n.id === id);
+        if (part) return part;
+    }
+    return undefined;
+}
+
+function holderName(h: { node: NodeDoc; prefab?: PrefabDoc }): string {
+    return h.prefab ? `${h.node.name} (in prefab ${h.prefab.name})` : h.node.name;
+}
 
 class Draft {
     blackboards: BlackboardSchemaDoc[];
@@ -123,8 +149,10 @@ class Draft {
     objects = new Set<string>();
     memoryTouched = false;
     created: Created[] = [];
+    /** Renamed nodes and services ("t:" tree id) and keys ("s:" schema id): old name -> new name. */
+    renames = new Map<string, Map<string, string>>();
 
-    constructor(readonly doc: SceneDoc) {
+    constructor(readonly doc: SceneDoc, readonly mode: OpsMode) {
         this.blackboards = JSON.parse(JSON.stringify(doc.blackboards));
         this.behaviors = JSON.parse(JSON.stringify(doc.behaviors));
         this.memory = JSON.parse(JSON.stringify(doc.memory));
@@ -132,16 +160,26 @@ class Draft {
 
     agentOf(id: string): AgentDoc | undefined {
         if (this.agents.has(id)) return this.agents.get(id) ?? undefined;
-        return this.doc.nodes.find((n) => n.id === id)?.agent;
+        return holderNode(this.doc, id)?.agent;
     }
 
-    objectsWithAgents(): { node: NodeDoc; agent: AgentDoc }[] {
-        const out: { node: NodeDoc; agent: AgentDoc }[] = [];
-        for (const node of this.doc.nodes) {
+    /** Scene objects with agents, then prefab template parts with agents (renames and deletes reach both). */
+    objectsWithAgents(): AgentHolder[] {
+        const out: AgentHolder[] = [];
+        const add = (node: NodeDoc, prefab?: PrefabDoc) => {
             const agent = this.agentOf(node.id);
-            if (agent) out.push({ node, agent });
-        }
+            if (agent) out.push({ node, agent, prefab });
+        };
+        for (const node of this.doc.nodes) add(node);
+        for (const p of this.doc.prefabs ?? []) for (const node of p.nodes) add(node, p);
         return out;
+    }
+
+    rename(scope: string, from: string, to: string) {
+        let m = this.renames.get(scope);
+        if (!m) this.renames.set(scope, (m = new Map()));
+        for (const [k, v] of m) if (v === from) m.set(k, to);
+        if (!m.has(from)) m.set(from, to);
     }
 
     tree(ref: unknown, field = 'tree'): BehaviorTreeDoc {
@@ -161,11 +199,16 @@ class Draft {
     object(ref: unknown): NodeDoc {
         if (typeof ref !== 'string' || !ref) throw new OpFail('object is missing: give an object id or name.', { field: 'object' });
         const byId = this.doc.nodes.find((n) => n.id === ref);
-        if (byId) return byId;
-        const named = this.doc.nodes.filter((n) => n.name === ref);
+        const named = byId ? [byId] : this.doc.nodes.filter((n) => n.name === ref);
         if (named.length > 1) throw new OpFail(`${named.length} objects are named "${ref}"; use the id (${named.map((n) => n.id).join(', ')}).`, { field: 'object' });
         if (!named.length) throw new OpFail(`No object "${ref}".`, { field: 'object' });
-        return named[0];
+        const obj = named[0];
+        // The assistant changes prefab instances at their root, like the scene tools do.
+        // (The editor edits parts while editing the prefab; Apply puts them into the template.)
+        if (obj.prefabChild && this.mode === 'strict') {
+            throw new OpFail(`"${obj.name}" is part of a prefab instance and follows its prefab; give the agent to the instance (its root) instead.`, { field: 'object', object: obj.id });
+        }
+        return obj;
     }
 
     touchTree(t: BehaviorTreeDoc) {
@@ -214,7 +257,7 @@ function coerceField(f: FieldDef, v: unknown, at: Partial<OpError>): unknown {
         case 'method':
         case 'key':
             if (typeof v !== 'string') return fail(`${f.name} must be a string.`);
-            return v.trim();
+            return v.trim().slice(0, 2000);
         case 'bool':
             if (typeof v !== 'boolean') return fail(`${f.name} must be true or false.`);
             return v;
@@ -236,9 +279,12 @@ function coerceField(f: FieldDef, v: unknown, at: Partial<OpError>): unknown {
             if (!Array.isArray(list) || !list.every((x) => typeof x === 'string')) return fail(`${f.name} must be a list of strings.`);
             const out: string[] = [];
             for (const x of list) {
-                const s = x.trim();
+                const s = x.trim().slice(0, 200);
                 if (s && !out.includes(s)) out.push(s);
             }
+            // The limit a saved scene keeps (format.ts, stringList).
+            const max = f.max ?? 64;
+            if (out.length > max) return fail(`${f.name} can list at most ${max} entries.`);
             return out;
         }
         case 'value':
@@ -251,7 +297,7 @@ function coerceField(f: FieldDef, v: unknown, at: Partial<OpError>): unknown {
                     throw new OpFail(`questions[${i}] must be { key, text } with strings.`, { ...at, field: `questions[${i}]` });
                 }
                 for (const k of Object.keys(q)) if (k !== 'key' && k !== 'text') throw new OpFail(`questions[${i}] has no field "${k}" (only key and text).`, { ...at, field: `questions[${i}]` });
-                return { key: q.key.trim(), text: q.text.slice(0, 1000) };
+                return { key: q.key.trim().slice(0, 200), text: q.text.slice(0, 1000) };
             });
         }
     }
@@ -296,14 +342,17 @@ function buildDecorator(input: unknown, at: Partial<OpError>): BtDecoratorDoc {
 
 function buildService(input: unknown, taken: Set<string>, at: Partial<OpError>): BtServiceDoc {
     if (!isObj(input)) throw new OpFail('A service must be an object like { "type": "ask", ... }.', at);
+    // Errors before the id is checked still name the service it claims to be.
+    const named = typeof input.id === 'string' && input.id ? { ...at, node: input.id } : at;
     const def = serviceType(String(input.type));
-    if (!def) throw new OpFail(`Unknown service type ${JSON.stringify(input.type)}; use ${SERVICE_TYPES.map((d) => d.type).join(' or ')}.`, { ...at, field: 'type' });
-    const id = input.id === undefined ? newItemId(def.type, taken) : readableId(input.id, taken, at);
+    if (!def) throw new OpFail(`Unknown service type ${JSON.stringify(input.type)}; use ${SERVICE_TYPES.map((d) => d.type).join(' or ')}.`, { ...named, field: 'type' });
+    const id = input.id === undefined ? newItemId(def.type, taken) : readableId(input.id, taken, named);
     taken.add(id);
+    // The same key order as a loaded scene (format.ts): id, type, note, fields.
     const out: Record<string, any> = { id, type: def.type };
-    for (const f of def.fields) out[f.name] = fieldDefault(f);
     const n = note(input.note, { ...at, node: id });
     if (n) out.note = n;
+    for (const f of def.fields) out[f.name] = fieldDefault(f);
     const { type: _t, id: _i, note: _n, ...rest } = input;
     setFields(def, out, rest, { ...at, node: id }, []);
     return out as BtServiceDoc;
@@ -322,14 +371,15 @@ function buildNode(input: unknown, taken: Set<string>, at: Partial<OpError>, isR
         if (!allowed.has(k)) throw new OpFail(`${def.label} has no field "${k}"; its fields are ${fieldNames(def)} (plus id, note, decorators, services${def.category === 'composite' ? ', children' : ''}).`, { ...named, field: k });
     }
     if (def.category !== 'composite' && input.children !== undefined) throw new OpFail(`A ${def.label} has no children; only Selector and Sequence do.`, { ...named, field: 'children' });
-    const id = input.id === undefined ? newItemId(def.type, taken) : readableId(input.id, taken, at);
+    const id = input.id === undefined ? newItemId(def.type, taken) : readableId(input.id, taken, named);
     taken.add(id);
     const here = { ...at, node: id };
+    // The same key order as a loaded scene (format.ts): id, type, note, fields.
     const node: Record<string, any> = { id, type: def.type };
-    for (const f of def.fields) node[f.name] = fieldDefault(f);
-    setFields(def, node, Object.fromEntries(def.fields.filter((f) => f.name in input).map((f) => [f.name, input[f.name]])), here, []);
     const n = note(input.note, here);
     if (n) node.note = n;
+    for (const f of def.fields) node[f.name] = fieldDefault(f);
+    setFields(def, node, Object.fromEntries(def.fields.filter((f) => Object.hasOwn(input, f.name)).map((f) => [f.name, input[f.name]])), here, []);
     if (input.decorators !== undefined) {
         if (!Array.isArray(input.decorators)) throw new OpFail('decorators must be a list.', { ...here, field: 'decorators' });
         if (isRoot && input.decorators.length) throw new OpFail('The root cannot have decorators; wrap it in a Selector or Sequence and decorate that.', { ...here, field: 'decorators' });
@@ -393,41 +443,91 @@ function buildKey(input: unknown, schema: BlackboardSchemaDoc, at: Partial<OpErr
     return key;
 }
 
-/** Where a key is used: node ids per tree, and objects with an initial value for it. */
-export function keyUsers(doc: Pick<SceneDoc, 'behaviors' | 'nodes'>, schemaId: string, name: string, agentOf?: (id: string) => AgentDoc | undefined): { trees: { tree: BehaviorTreeDoc; nodes: string[] }[]; objects: NodeDoc[] } {
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+/** Texts of an item that can hold {key} placeholders: templates and question texts. */
+function templateTexts(item: any): string[] {
+    const out: string[] = [];
+    for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') out.push(item[f]);
+    if (Array.isArray(item.questions)) for (const q of item.questions) if (typeof q?.text === 'string') out.push(q.text);
+    return out;
+}
+
+/** Fields of the node and service types that are templates. */
+const TEMPLATE_FIELDS = Array.from(new Set([...NODE_TYPES, ...SERVICE_TYPES].flatMap((t) => t.fields.filter((f) => f.kind === 'template').map((f) => f.name))));
+
+/** Where a key is used: node ids per tree, and objects (and prefab parts) with a starting value for it. */
+function keyUsers(d: Draft, schemaId: string, name: string): { trees: { tree: BehaviorTreeDoc; nodes: string[] }[]; objects: AgentHolder[] } {
     const trees: { tree: BehaviorTreeDoc; nodes: string[] }[] = [];
-    const placeholder = new RegExp(`\\{\\s*${name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}`);
-    for (const tree of doc.behaviors) {
+    const placeholder = new RegExp(`\\{\\s*${escapeRe(name)}\\s*\\}`);
+    for (const tree of d.behaviors) {
         if (tree.schema !== schemaId) continue;
         const nodes = new Set<string>();
         const visit = (id: string, item: any) => {
             if (item.key === name) nodes.add(id);
             if (Array.isArray(item.facts) && item.facts.includes(name)) nodes.add(id);
             if (Array.isArray(item.questions) && item.questions.some((q: any) => q.key === name)) nodes.add(id);
-            for (const t of [item.query, item.memoryQuery]) if (typeof t === 'string' && placeholder.test(t)) nodes.add(id);
+            if (templateTexts(item).some((t) => placeholder.test(t))) nodes.add(id);
         };
         walkNodes(tree.root, (n) => {
             visit(n.id, n);
-            for (const d of n.decorators ?? []) visit(n.id, d);
+            for (const dec of n.decorators ?? []) visit(n.id, dec);
             for (const s of n.services ?? []) visit(s.id, s);
         });
         if (nodes.size) trees.push({ tree, nodes: Array.from(nodes) });
     }
-    const treeIds = new Set(doc.behaviors.filter((t) => t.schema === schemaId).map((t) => t.id));
-    const objects = doc.nodes.filter((n) => {
-        const a = agentOf ? agentOf(n.id) : n.agent;
-        return a && treeIds.has(a.tree) && name in a.values;
-    });
+    const ids = new Set(d.behaviors.filter((t) => t.schema === schemaId).map((t) => t.id));
+    const objects = d.objectsWithAgents().filter((h) => ids.has(h.agent.tree) && Object.hasOwn(h.agent.values, name));
     return { trees, objects };
 }
 
+/** Memory item tags (a saved scene keeps 32). */
+const MEMORY_TAGS: FieldDef = { name: 'tags', kind: 'tags', label: 'Tags', description: '', default: [], max: 32 };
+
+/**
+ * A memory item got another id: the values that hold the old one follow it
+ * (conditions, defaults and starting values of keys an Ask chooses from
+ * memory, since those keys hold item ids).
+ */
+function renameMemoryItem(d: Draft, from: string, to: string) {
+    for (const tree of d.behaviors) {
+        const keys = memoryChoiceKeys(tree);
+        if (!keys.size) continue;
+        walkNodes(tree.root, (n) => {
+            for (const dec of n.decorators ?? []) {
+                if (dec.type !== 'condition' || !keys.has(dec.key) || dec.value !== from) continue;
+                dec.value = to;
+                d.touchTree(tree);
+            }
+        });
+        const schema = d.blackboards.find((s) => s.id === tree.schema);
+        for (const k of schema?.keys ?? []) {
+            if (!keys.has(k.name) || k.default !== from) continue;
+            k.default = to;
+            d.schemas.add(schema!.id);
+        }
+        for (const { node, agent } of d.objectsWithAgents()) {
+            if (agent.tree !== tree.id) continue;
+            const names = Object.keys(agent.values).filter((k) => keys.has(k) && agent.values[k] === from);
+            if (!names.length) continue;
+            d.agents.set(node.id, { ...agent, values: { ...agent.values, ...Object.fromEntries(names.map((k) => [k, to])) } });
+            d.objects.add(node.id);
+        }
+    }
+}
+
 function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string, to: string) {
-    const placeholder = new RegExp(`\\{\\s*${from.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\s*\\}`, 'g');
+    const placeholder = new RegExp(`\\{\\s*${escapeRe(from)}\\s*\\}`, 'g');
     const fix = (item: any) => {
         if (item.key === from) item.key = to;
         if (Array.isArray(item.facts)) item.facts = item.facts.map((k: string) => (k === from ? to : k));
-        if (Array.isArray(item.questions)) for (const q of item.questions) if (q.key === from) q.key = to;
-        for (const f of ['query', 'memoryQuery']) if (typeof item[f] === 'string') item[f] = item[f].replace(placeholder, `{${to}}`);
+        if (Array.isArray(item.questions)) {
+            for (const q of item.questions) {
+                if (q.key === from) q.key = to;
+                if (typeof q.text === 'string') q.text = q.text.replace(placeholder, `{${to}}`);
+            }
+        }
+        for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') item[f] = item[f].replace(placeholder, `{${to}}`);
     };
     for (const tree of d.behaviors) {
         if (tree.schema !== schema.id) continue;
@@ -440,9 +540,9 @@ function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string
             if (JSON.stringify(n) !== before) hit = true;
         });
         if (hit) d.touchTree(tree);
-        // Objects running this tree keep their initial value under the new name.
+        // Objects running this tree (and prefab parts that give instances an agent) keep their starting value under the new name.
         for (const { node, agent } of d.objectsWithAgents()) {
-            if (agent.tree !== tree.id || !(from in agent.values)) continue;
+            if (agent.tree !== tree.id || !Object.hasOwn(agent.values, from)) continue;
             const values: Record<string, BlackboardValue> = {};
             for (const [k, v] of Object.entries(agent.values)) values[k === from ? to : k] = v;
             d.agents.set(node.id, { ...agent, values });
@@ -456,6 +556,21 @@ function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string
 function need<T>(op: BehaviorOp, field: string): T {
     if (op[field] === undefined || op[field] === null) throw new OpFail(`${op.op} needs "${field}".`, { field });
     return op[field] as T;
+}
+
+/** A schema or tree name (a saved scene keeps 200 characters). */
+function assetName(v: unknown, at: Partial<OpError> = {}): string {
+    if (v === undefined || v === null) throw new OpFail('name is missing.', { ...at, field: 'name' });
+    const name = String(v).trim().slice(0, 200);
+    if (!name) throw new OpFail('name is empty.', { ...at, field: 'name' });
+    return name;
+}
+
+/** A schema or tree id given by the caller (a saved scene keeps 100 characters). */
+function assetId(v: unknown): string {
+    const id = typeof v === 'string' ? v.trim() : '';
+    if (!id || id.length > 100) throw new OpFail('id must be a string of 1 to 100 characters.', { field: 'id' });
+    return id;
 }
 
 function allowOnly(op: BehaviorOp, fields: string[]) {
@@ -515,11 +630,10 @@ function apply(d: Draft, op: BehaviorOp) {
         // ------------------------------------------------------ schemas
         case 'create_schema': {
             allowOnly(op, ['name', 'keys', 'id']);
-            const name = String(need<string>(op, 'name')).trim();
-            if (!name) throw new OpFail('name is empty.', { field: 'name' });
+            const name = assetName(op.name);
             if (d.blackboards.some((s) => s.name.toLowerCase() === name.toLowerCase())) throw new OpFail(`A schema named "${name}" exists already.`, { field: 'name' });
-            const id = op.id === undefined ? uid('bb') : String(op.id);
-            if (d.blackboards.some((s) => s.id === id) || !id) throw new OpFail(`The schema id "${id}" is taken.`, { field: 'id' });
+            const id = op.id === undefined ? uid('bb') : assetId(op.id);
+            if (d.blackboards.some((s) => s.id === id)) throw new OpFail(`The schema id "${id}" is taken.`, { field: 'id' });
             const schema: BlackboardSchemaDoc = { id, name, version: 1, keys: [] };
             if (op.keys !== undefined) {
                 if (!Array.isArray(op.keys)) throw new OpFail('keys must be a list.', { field: 'keys' });
@@ -533,8 +647,7 @@ function apply(d: Draft, op: BehaviorOp) {
         case 'update_schema': {
             allowOnly(op, ['schema', 'name']);
             const s = d.schema(op.schema);
-            const name = String(need<string>(op, 'name')).trim();
-            if (!name) throw new OpFail('name is empty.', { schema: s.id, field: 'name' });
+            const name = assetName(op.name, { schema: s.id });
             if (d.blackboards.some((x) => x !== s && x.name.toLowerCase() === name.toLowerCase())) throw new OpFail(`A schema named "${name}" exists already.`, { schema: s.id, field: 'name' });
             s.name = name;
             d.schemas.add(s.id);
@@ -592,6 +705,7 @@ function apply(d: Draft, op: BehaviorOp) {
                 if (s.keys.some((k) => k.name === set.name)) throw new OpFail(`Schema "${s.name}" already has a key "${set.name}".`, { ...at, field: 'name' });
                 const from = key.name;
                 key.name = set.name;
+                d.rename(`s:${s.id}`, from, set.name);
                 renameKeyEverywhere(d, s, from, set.name);
             }
             d.schemas.add(s.id);
@@ -612,11 +726,11 @@ function apply(d: Draft, op: BehaviorOp) {
             const s = d.schema(op.schema);
             const name = String(need<string>(op, 'key'));
             if (!s.keys.some((k) => k.name === name)) throw new OpFail(`Schema "${s.name}" has no key "${name}".`, { schema: s.id, field: 'key' });
-            const users = keyUsers({ behaviors: d.behaviors, nodes: d.doc.nodes }, s.id, name, (id) => d.agentOf(id));
+            const users = keyUsers(d, s.id, name);
             if (users.trees.length || users.objects.length) {
                 const list = [
                     ...users.trees.map((u) => `tree "${u.tree.name}": ${u.nodes.join(', ')}`),
-                    ...(users.objects.length ? [`initial values of ${users.objects.map((n) => `"${n.name}"`).join(', ')}`] : []),
+                    ...(users.objects.length ? [`starting values of ${users.objects.map((h) => `"${holderName(h)}"`).join(', ')}`] : []),
                 ];
                 throw new OpFail(`"${name}" is in use and cannot be deleted. Used by ${list.join('; ')}.`, { schema: s.id, node: name });
             }
@@ -627,12 +741,11 @@ function apply(d: Draft, op: BehaviorOp) {
         // -------------------------------------------------------- trees
         case 'create_tree': {
             allowOnly(op, ['name', 'schema', 'root', 'id']);
-            const name = String(need<string>(op, 'name')).trim();
-            if (!name) throw new OpFail('name is empty.', { field: 'name' });
+            const name = assetName(op.name);
             if (d.behaviors.some((t) => t.name.toLowerCase() === name.toLowerCase())) throw new OpFail(`A tree named "${name}" exists already.`, { field: 'name' });
             const schema = d.schema(need(op, 'schema'));
-            const id = op.id === undefined ? uid('bt') : String(op.id);
-            if (!id || d.behaviors.some((t) => t.id === id)) throw new OpFail(`The tree id "${id}" is taken.`, { field: 'id' });
+            const id = op.id === undefined ? uid('bt') : assetId(op.id);
+            if (d.behaviors.some((t) => t.id === id)) throw new OpFail(`The tree id "${id}" is taken.`, { field: 'id' });
             const root = op.root === undefined ? ({ id: 'root', type: 'selector', children: [] } as BtNodeDoc) : buildNode(op.root, new Set(), { tree: id }, true);
             const tree: BehaviorTreeDoc = { id, name, version: 1, schema: schema.id, root };
             d.behaviors.push(tree);
@@ -644,8 +757,7 @@ function apply(d: Draft, op: BehaviorOp) {
             allowOnly(op, ['tree', 'name', 'schema']);
             const t = d.tree(op.tree);
             if (op.name !== undefined) {
-                const name = String(op.name).trim();
-                if (!name) throw new OpFail('name is empty.', { tree: t.id, field: 'name' });
+                const name = assetName(op.name, { tree: t.id });
                 if (d.behaviors.some((x) => x !== t && x.name.toLowerCase() === name.toLowerCase())) throw new OpFail(`A tree named "${name}" exists already.`, { tree: t.id, field: 'name' });
                 t.name = name;
             }
@@ -658,7 +770,7 @@ function apply(d: Draft, op: BehaviorOp) {
             const t = d.tree(op.tree);
             t.root = buildNode(need(op, 'root'), new Set(), { tree: t.id }, true);
             if (op.name !== undefined) {
-                const name = String(op.name).trim();
+                const name = String(op.name).trim().slice(0, 200);
                 if (name && d.behaviors.some((x) => x !== t && x.name.toLowerCase() === name.toLowerCase())) throw new OpFail(`A tree named "${name}" exists already.`, { tree: t.id, field: 'name' });
                 if (name) t.name = name;
             }
@@ -669,9 +781,10 @@ function apply(d: Draft, op: BehaviorOp) {
         case 'delete_tree': {
             allowOnly(op, ['tree', 'force']);
             const t = d.tree(op.tree);
+            // Prefab parts count too: new instances would get an agent on a missing tree.
             const users = d.objectsWithAgents().filter((x) => x.agent.tree === t.id);
             if (users.length && op.force !== true) {
-                throw new OpFail(`Tree "${t.name}" runs on ${users.map((u) => `"${u.node.name}"`).join(', ')}; remove their agents first (or pass force: true).`, { tree: t.id });
+                throw new OpFail(`Tree "${t.name}" runs on ${users.map((u) => `"${holderName(u)}"`).join(', ')}; remove their agents first (or pass force: true).`, { tree: t.id });
             }
             for (const u of users) {
                 d.agents.set(u.node.id, null);
@@ -725,7 +838,9 @@ function apply(d: Draft, op: BehaviorOp) {
             if (set.id !== undefined && set.id !== target.id) {
                 const taken = treeIds(t);
                 taken.delete(target.id);
+                const from = target.id;
                 target.id = readableId(set.id, taken, at);
+                d.rename(`t:${t.id}`, from, target.id);
             }
             if (set.note !== undefined) {
                 const n = note(set.note, at);
@@ -862,14 +977,17 @@ function apply(d: Draft, op: BehaviorOp) {
                 if (set.type !== undefined && set.type !== s.type) {
                     const taken = treeIds(t);
                     taken.delete(s.id);
-                    const fresh: any = buildService({ type: set.type, id: s.id }, taken, at);
+                    // Like update_node, the service keeps its id and note.
+                    const fresh: any = buildService({ type: set.type, id: s.id, note: s.note }, taken, at);
                     hit.host.services![hit.host.services!.indexOf(hit.service)] = fresh;
                     s = fresh;
                 }
                 if (set.id !== undefined && set.id !== s.id) {
                     const taken = treeIds(t);
                     taken.delete(s.id);
+                    const from = s.id;
                     s.id = readableId(set.id, taken, at);
+                    d.rename(`t:${t.id}`, from, s.id);
                 }
                 if (set.note !== undefined) {
                     const n = note(set.note, at);
@@ -885,20 +1003,21 @@ function apply(d: Draft, op: BehaviorOp) {
         case 'set_agent': {
             allowOnly(op, ['object', 'tree', 'enabled', 'values']);
             const obj = d.object(op.object);
+            const here = { object: obj.id };
             const cur = d.agentOf(obj.id);
-            if (!cur && op.tree === undefined) throw new OpFail(`"${obj.name}" has no agent yet; give the tree it runs.`, { field: 'tree' });
+            if (!cur && op.tree === undefined) throw new OpFail(`"${obj.name}" has no agent yet; give the tree it runs.`, { ...here, field: 'tree' });
             const agent: AgentDoc = cur ? { ...cur, values: { ...cur.values } } : { tree: '', enabled: true, values: {} };
             if (op.tree !== undefined) agent.tree = d.tree(op.tree).id;
             if (op.enabled !== undefined) {
-                if (typeof op.enabled !== 'boolean') throw new OpFail('enabled must be true or false.', { field: 'enabled' });
+                if (typeof op.enabled !== 'boolean') throw new OpFail('enabled must be true or false.', { ...here, field: 'enabled' });
                 agent.enabled = op.enabled;
             }
             if (op.values !== undefined) {
-                if (!isObj(op.values)) throw new OpFail('values must be an object of key: value.', { field: 'values' });
+                if (!isObj(op.values)) throw new OpFail('values must be an object of key: value.', { ...here, field: 'values' });
                 agent.values = {};
                 for (const [k, v] of Object.entries(op.values)) {
-                    if (!isReadableId(k)) throw new OpFail(`"${k}" is not a key name.`, { field: `values.${k}` });
-                    if (!(v === null || typeof v === 'boolean' || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v)))) throw new OpFail(`values.${k} must be a bool, number, string or null.`, { field: `values.${k}` });
+                    if (!isReadableId(k)) throw new OpFail(`"${k}" is not a key name.`, { ...here, field: `values.${k}` });
+                    if (!(v === null || typeof v === 'boolean' || typeof v === 'string' || (typeof v === 'number' && Number.isFinite(v)))) throw new OpFail(`values.${k} must be a bool, number, string or null.`, { ...here, field: `values.${k}` });
                     agent.values[k] = v as BlackboardValue;
                 }
             }
@@ -909,7 +1028,7 @@ function apply(d: Draft, op: BehaviorOp) {
         case 'remove_agent': {
             allowOnly(op, ['object']);
             const obj = d.object(op.object);
-            if (!d.agentOf(obj.id)) throw new OpFail(`"${obj.name}" has no agent.`, { field: 'object' });
+            if (!d.agentOf(obj.id)) throw new OpFail(`"${obj.name}" has no agent.`, { field: 'object', object: obj.id });
             d.agents.set(obj.id, null);
             d.objects.add(obj.id);
             return;
@@ -927,7 +1046,7 @@ function apply(d: Draft, op: BehaviorOp) {
             else if (!isReadableId(item.id)) throw new OpFail(`${JSON.stringify(item.id)} is not a valid id.`, { field: 'item.id' });
             else if (taken.has(item.id)) throw new OpFail(`A memory item "${item.id}" exists already.`, { field: 'item.id' });
             else id = item.id;
-            const tags = item.tags === undefined ? [] : (coerceField({ name: 'tags', kind: 'tags', label: 'Tags', description: '', default: [] }, item.tags, { field: 'item.tags' }) as string[]);
+            const tags = item.tags === undefined ? [] : (coerceField(MEMORY_TAGS, item.tags, { field: 'item.tags' }) as string[]);
             d.memory.items.push({ id, text, tags });
             d.memoryTouched = true;
             d.created.push({ kind: 'memory', id });
@@ -943,7 +1062,9 @@ function apply(d: Draft, op: BehaviorOp) {
             if (set.id !== undefined && set.id !== it.id) {
                 if (!isReadableId(set.id)) throw new OpFail(`${JSON.stringify(set.id)} is not a valid id.`, { field: 'id' });
                 if (d.memory.items.some((m) => m.id === set.id)) throw new OpFail(`A memory item "${set.id}" exists already.`, { field: 'id' });
+                const from = it.id;
                 it.id = set.id;
+                renameMemoryItem(d, from, set.id);
             }
             if (set.text !== undefined) {
                 const text = typeof set.text === 'string' ? set.text.trim().slice(0, 4000) : '';
@@ -951,7 +1072,7 @@ function apply(d: Draft, op: BehaviorOp) {
                 if (text !== it.text) delete it.vector;
                 it.text = text;
             }
-            if (set.tags !== undefined) it.tags = coerceField({ name: 'tags', kind: 'tags', label: 'Tags', description: '', default: [] }, set.tags, {}) as string[];
+            if (set.tags !== undefined) it.tags = coerceField(MEMORY_TAGS, set.tags, {}) as string[];
             d.memoryTouched = true;
             return;
         }
@@ -975,7 +1096,9 @@ function apply(d: Draft, op: BehaviorOp) {
             }
             for (const [id, v] of Object.entries(vectors)) {
                 const it: MemoryItemDoc | undefined = d.memory.items.find((m) => m.id === id);
-                if (it && typeof v === 'string' && /^[A-Za-z0-9+/=]+$/.test(v)) it.vector = v;
+                if (!isObj(v) || typeof v.vector !== 'string' || !/^[A-Za-z0-9+/=]+$/.test(v.vector)) throw new OpFail(`vectors.${id} must be { text, vector } with the vector in base64.`, { field: `vectors.${id}` });
+                // The text may have changed while it was embedded: that vector belongs to the old text.
+                if (it && v.text === it.text) it.vector = v.vector;
             }
             d.memoryTouched = true;
             return;
@@ -1018,7 +1141,7 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
         result.errors.push({ op: -1, name: 'batch', message: 'ops must be a non-empty list of operations.' });
         return result;
     }
-    const d = new Draft(doc);
+    const d = new Draft(doc, mode);
     for (let i = 0; i < ops.length; i++) {
         const op = ops[i];
         const name = isObj(op) && typeof op.op === 'string' ? op.op : '?';
@@ -1036,21 +1159,39 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     for (const t of d.behaviors) if (d.schemas.has(t.schema)) trees.add(t.id);
     const objects = new Set(d.objects);
     for (const { node, agent } of d.objectsWithAgents()) if (trees.has(agent.tree) || d.schemas.size) objects.add(node.id);
-    const liveAgent = (id: string) => doc.nodes.find((n) => n.id === id)?.agent;
-    const before = new Set(issuesOf(doc, liveAgent, trees, d.schemas, objects).map(issueKey));
+    const liveAgent = (id: string) => holderNode(doc, id)?.agent;
+    // The errors that were there before, as the same problems after the
+    // batch's renames: an old error is not a new one because a node, key or
+    // schema it names was renamed, or a decorator before it was added.
+    const renamed = (i: Issue) => {
+        const m = i.schema ? d.renames.get(`s:${i.schema}`) : i.tree ? d.renames.get(`t:${i.tree}`) : undefined;
+        return (i.node && m?.get(i.node)) || i.node;
+    };
+    const before = new Map<string, number>();
+    for (const i of issuesOf(doc, liveAgent, trees, d.schemas, objects)) {
+        if (i.severity !== 'error') continue;
+        const k = issueKey(i, renamed(i));
+        before.set(k, (before.get(k) ?? 0) + 1);
+    }
     const after = issuesOf({ behaviors: d.behaviors, blackboards: d.blackboards, memory: d.memory }, (id) => d.agentOf(id), trees, d.schemas, objects);
     result.issues = after;
-    result.added = after.filter((i) => i.severity === 'error' && !before.has(issueKey(i)));
+    result.added = after.filter((i) => {
+        if (i.severity !== 'error') return false;
+        const k = issueKey(i);
+        const left = before.get(k) ?? 0;
+        before.set(k, left - 1);
+        return left <= 0;
+    });
     result.created = d.created;
     if (mode === 'strict' && result.added.length) {
         result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
-        result.errors = result.added.map((i) => ({ op: -1, name: 'validate', message: i.message, tree: i.tree, schema: i.schema, node: i.node, field: i.field }));
+        result.errors = result.added.map((i) => ({ op: -1, name: 'validate', message: i.message, tree: i.tree, schema: i.schema, node: i.node, decorator: i.decorator, field: i.field, object: i.object }));
         return result;
     }
     // Every tree and schema whose content changed gets a new revision (new
     // ones start at 1); an edit that ends where it started changes nothing.
     const created = new Set(d.created.filter((c) => c.kind === 'tree' || c.kind === 'schema').map((c) => c.id));
-    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const same = (a: unknown, b: unknown) => stableJson(a) === stableJson(b);
     const unchanged = <T extends { id: string; version: number }>(list: T[], cur: T) => {
         const orig = list.find((x) => x.id === cur.id);
         return !!orig && same({ ...orig, version: 0 }, { ...cur, version: 0 });
@@ -1078,13 +1219,19 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     return result;
 }
 
+/** JSON with sorted keys: the same data compares equal whatever order its fields were written in. */
+function stableJson(v: unknown): string {
+    return JSON.stringify(v, (_k, x) => (isObj(x) ? Object.fromEntries(Object.keys(x).sort().map((k) => [k, x[k]])) : x));
+}
+
 /** Writes a batch's changes into a document (inside a store commit). */
 export function writeBehaviorChanges(doc: SceneDoc, changes: BehaviorChanges) {
     doc.blackboards = changes.blackboards;
     doc.behaviors = changes.behaviors;
     doc.memory = changes.memory;
     for (const [id, agent] of changes.agents) {
-        const node = doc.nodes.find((n) => n.id === id);
+        // A scene object, or a part of a prefab template.
+        const node = holderNode(doc, id);
         if (!node) continue;
         if (agent) node.agent = agent;
         else delete node.agent;

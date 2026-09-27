@@ -366,6 +366,11 @@ export class TreeInstance {
     private root: NodeRt;
     private byId = new Map<string, NodeRt>();
     private entries = 0;
+    /**
+     * Set by stop(), for good: a task that destroyed its own object stops the
+     * tree in the middle of a tick, and nothing after it may start.
+     */
+    private stopped = false;
     /** Ticks so far, for the debug view. */
     ticks = 0;
 
@@ -381,6 +386,7 @@ export class TreeInstance {
     // ------------------------------------------------------------- ticking
 
     tick() {
+        if (this.stopped) return;
         const now = this.host.now();
         this.ticks++;
         this.entries = 0;
@@ -396,8 +402,10 @@ export class TreeInstance {
         this.updateTask(now);
     }
 
-    /** Aborts everything (Play stops or the agent is removed). */
+    /** Aborts everything (Play stops or the agent is removed); the tree does not run again. */
     stop() {
+        if (this.stopped) return;
+        this.stopped = true;
         if (this.root.active) this.abort(this.root, this.host.now());
         for (const s of this.root.services) s.deactivate();
     }
@@ -416,7 +424,7 @@ export class TreeInstance {
 
     /** Tries to run a node: checks its decorators, activates it and runs it as far as it goes now. */
     private enter(n: NodeRt, now: number): Status {
-        if (++this.entries > MAX_ENTRIES) return 'failure';
+        if (this.stopped || ++this.entries > MAX_ENTRIES) return 'failure';
         const pass = this.entryPasses(n, now);
         n.lastPass = pass;
         if (!pass) {
@@ -431,6 +439,8 @@ export class TreeInstance {
             n.task = makeTask(n.doc, this.host);
             st = n.task ? n.task.start(now) : 'failure';
         }
+        // The task stopped the tree (it destroyed its own object): everything is aborted already.
+        if (this.stopped) return 'failure';
         if (st !== 'running') this.deactivate(n, now, st);
         return st;
     }
@@ -441,6 +451,7 @@ export class TreeInstance {
         for (let i = from; i < n.children.length; i++) {
             n.current = i;
             const st = this.enter(n.children[i], now);
+            if (this.stopped) return 'failure';
             if (st === 'running') return 'running';
             if (selector && st === 'success') return 'success';
             if (!selector && st === 'failure') return 'failure';
@@ -466,8 +477,15 @@ export class TreeInstance {
         if (n.composite) {
             const cur = n.children[n.current];
             if (cur) this.abort(cur, now);
-        } else {
-            n.task?.abort(now);
+        } else if (n.task) {
+            // A task that finished since the last tick (its promise settled,
+            // succeed() was called) keeps its result: it is not aborted.
+            const done = n.task.update(now);
+            if (done !== 'running') {
+                this.deactivate(n, now, done);
+                return;
+            }
+            n.task.abort(now);
         }
         this.deactivate(n, now, 'aborted');
     }
@@ -477,7 +495,7 @@ export class TreeInstance {
         let node = child;
         let status = st;
         let parent = node.parent;
-        while (parent) {
+        while (parent && !this.stopped) {
             const selector = parent.doc.type === 'selector';
             const goOn = selector ? status === 'failure' : status === 'success';
             if (goOn) {
@@ -500,8 +518,15 @@ export class TreeInstance {
         while (n && n.active) {
             // Self: the node's own conditions (the root has none).
             if (n.parent && n.conditions.length && !this.conditionsPass(n)) {
-                this.abort(n, now);
                 n.lastPass = false;
+                // A task that finished before its conditions failed keeps its result.
+                const done = n.task ? n.task.update(now) : 'running';
+                if (done !== 'running') {
+                    this.deactivate(n, now, done);
+                    this.propagate(n, done, now);
+                    return true;
+                }
+                this.abort(n, now);
                 this.propagate(n, 'failure', now);
                 return true;
             }

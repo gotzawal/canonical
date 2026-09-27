@@ -156,6 +156,8 @@ export class SpeechQueue {
                         /* go on with the next sentence */
                     }
                 }
+                // Stopped while speaking: the lines and the current one belong to the next session now.
+                if (gen !== this.generation) return;
                 this.lines = this.lines.filter((l) => l !== line);
                 this.current = null;
                 if (!line.cancelled) line.resolve();

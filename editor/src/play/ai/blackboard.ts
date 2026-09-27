@@ -14,6 +14,8 @@ export interface AnswerMeta {
     source: string;
     /** Play time of the write, seconds. */
     at: number;
+    /** Play time the value last changed (an answer that repeats the value keeps it). */
+    since: number;
     /** Ask node id and the request's number. */
     node: string;
     seq: number;
@@ -42,11 +44,25 @@ export class Blackboard {
     ) {
         this.keyMap = new Map(schema.keys.map((k) => [k.name, k]));
         for (const k of schema.keys) {
-            const o = overrides[k.name];
-            const start = o !== undefined && valueFits(k, o) ? o : k.default;
-            this.values.set(k.name, this.coerce(k, start));
+            const o = Object.hasOwn(overrides, k.name) ? overrides[k.name] : undefined;
+            this.values.set(k.name, this.initial(k, o !== undefined && valueFits(k, o) ? o : undefined));
             this.versions.set(k.name, 0);
         }
+    }
+
+    /**
+     * A key's starting value: the override, the schema default, the type's
+     * default. A key none of them fits (an enum without values) starts empty
+     * instead of stopping Play; validation reports it.
+     */
+    private initial(k: BlackboardKeyDoc, override?: BlackboardValue): RuntimeValue {
+        for (const v of [override, k.default, typeDefault(k.type, k.values)]) {
+            if (v === undefined) continue;
+            try {
+                return this.coerce(k, v);
+            } catch { /* try the next one */ }
+        }
+        return k.type === 'enum' || k.type === 'string' ? '' : k.type === 'bool' ? false : k.type === 'object' ? null : 0;
     }
 
     get keys(): BlackboardKeyDoc[] {
@@ -110,7 +126,7 @@ export class Blackboard {
      * (scripts write facts, Set Key and script tasks tree keys, Ask AI keys).
      * Returns true when the value changed; the key's version is raised then.
      */
-    write(name: string, value: unknown, owner: BlackboardKeyOwner, answer?: AnswerMeta): boolean {
+    write(name: string, value: unknown, owner: BlackboardKeyOwner, answer?: Omit<AnswerMeta, 'since'>): boolean {
         const key = this.keyMap.get(name);
         if (!key) throw new BlackboardError(`No key "${name}" in blackboard "${this.schema.name}". Keys: ${this.schema.keys.map((k) => k.name).join(', ')}.`);
         if (key.owner !== owner) {
@@ -118,8 +134,12 @@ export class Blackboard {
             throw new BlackboardError(`"${name}" is written by ${who}.`);
         }
         const v = this.coerce(key, value);
-        if (answer) this.answers.set(name, answer);
-        if (Object.is(this.values.get(name), v)) return false;
+        const same = Object.is(this.values.get(name), v);
+        if (answer) {
+            const prev = this.answers.get(name);
+            this.answers.set(name, { ...answer, since: same && prev ? prev.since : answer.at });
+        }
+        if (same) return false;
         this.values.set(name, v);
         this.versions.set(name, this.version(name) + 1);
         this.revision++;
@@ -131,7 +151,7 @@ export class Blackboard {
         const key = this.keyMap.get(name);
         if (!key) return;
         this.answers.delete(name);
-        const v = this.coerce(key, valueFits(key, key.default) ? key.default : typeDefault(key.type, key.values));
+        const v = this.initial(key);
         if (Object.is(this.values.get(name), v)) return;
         this.values.set(name, v);
         this.versions.set(name, this.version(name) + 1);

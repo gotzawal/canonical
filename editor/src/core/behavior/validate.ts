@@ -7,7 +7,7 @@ import type {
     AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardSchemaDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, MemoryDoc,
     SceneDoc,
 } from '../types';
-import { isCompositeDoc, schemaOf, walkNodes } from './format';
+import { isCompositeDoc, memoryChoiceKeys, schemaOf, walkNodes } from './format';
 import {
     activeFields, decoratorType, isReadableId, keyTypeInfo, nodeType, serviceType, valueFits, type FieldDef, type ItemTypeDef,
 } from './nodeTypes';
@@ -155,16 +155,20 @@ function checkFields(ctx: Ctx, def: ItemTypeDef, item: any, at: Partial<Issue>) 
                 break;
             }
             case 'template':
-                if (typeof v === 'string') {
-                    for (const m of v.matchAll(/\{([^{}]+)\}/g)) {
-                        if (ctx.schema && !keyOf(ctx, m[1].trim())) push(ctx, 'error', 'key-missing', `{${m[1]}} in ${f.label}: no key "${m[1].trim()}" in schema "${ctx.schema.name}".`, where);
-                    }
-                }
+                checkTemplate(ctx, v, f.label, where);
                 break;
             case 'questions':
                 checkQuestions(ctx, item, at);
                 break;
         }
+    }
+}
+
+/** {key} placeholders of a text: each names a key of the schema. */
+function checkTemplate(ctx: Ctx, v: unknown, label: string, where: Partial<Issue>) {
+    if (typeof v !== 'string' || !ctx.schema) return;
+    for (const m of v.matchAll(/\{([^{}]+)\}/g)) {
+        if (!keyOf(ctx, m[1].trim())) push(ctx, 'error', 'key-missing', `{${m[1]}} in ${label}: no key "${m[1].trim()}" in schema "${ctx.schema.name}".`, where);
     }
 }
 
@@ -179,6 +183,8 @@ function checkQuestions(ctx: Ctx, item: any, at: Partial<Issue>) {
         if (seen.has(q.key)) push(ctx, 'error', 'duplicate', `"${q.key}" is asked twice in this Ask.`, where);
         seen.add(q.key);
         if (!String(q.text ?? '').trim()) push(ctx, 'error', 'required', `The question for "${q.key}" has no text.`, { ...at, field: `questions[${i}].text` });
+        // Question texts are templates too ({key} is filled in when asking).
+        checkTemplate(ctx, q.text, `the question for "${q.key}"`, { ...at, field: `questions[${i}].text` });
         const key = checkKeyRef(ctx, { name: 'questions', kind: 'key', label: 'A question', description: '', default: '', keyOwners: ['ai'] }, q.key, where);
         if (!key || key.owner !== 'ai') return;
         const fmt = questionFormat(key, item.choices);
@@ -301,6 +307,16 @@ export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc
         return ctxOn;
     });
     if (usesContext && !recall) push(ctx, 'warning', 'no-recall', 'An Ask uses the context, but the tree has no Recall service to fill it.', { node: tree.root.id });
+    // Keys an Ask chooses from memory hold item ids: a condition on another id never matches.
+    const idKeys = memory ? memoryChoiceKeys(tree) : new Set<string>();
+    if (idKeys.size) {
+        walkNodes(tree.root, (n) =>
+            (n.decorators ?? []).forEach((d, i) => {
+                if (d.type !== 'condition' || (d.op !== 'eq' && d.op !== 'ne') || !idKeys.has(d.key) || typeof d.value !== 'string' || !d.value) return;
+                if (!memory!.items.some((m) => m.id === d.value)) push(ctx, 'warning', 'memory-id', `"${d.key}" holds memory item ids, and memory has no item "${d.value}".`, { node: n.id, decorator: i, field: 'value' });
+            }),
+        );
+    }
     return ctx.out;
 }
 
@@ -365,7 +381,13 @@ export function describeIssue(i: Issue, names?: { tree?: (id: string) => string;
     return `${parts.join(' / ')}: ${i.message}`;
 }
 
-/** A signature that stays the same for the same problem (to tell new problems from old ones). */
-export function issueKey(i: Issue): string {
-    return [i.severity, i.code, i.tree ?? '', i.schema ?? '', i.object ?? '', i.node ?? '', i.decorator ?? '', i.field ?? '', i.message].join('|');
+/**
+ * What makes a problem the same problem before and after an edit, to tell
+ * new problems from old ones: its kind and where it is, without its wording
+ * (which names schemas and keys that can be renamed) or positions in lists
+ * (a decorator added before it moves it). `node` is the node or key id,
+ * mapped through the edit's renames. Equal keys are counted, not merged.
+ */
+export function issueKey(i: Issue, node = i.node): string {
+    return [i.severity, i.code, i.tree ?? '', i.schema ?? '', i.object ?? '', node ?? '', (i.field ?? '').replace(/\[\d+\]/g, '[]')].join('|');
 }
