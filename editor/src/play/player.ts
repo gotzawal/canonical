@@ -2,7 +2,7 @@ import { Camera3D, Color, LitMaterial, MeshRenderer, Object3D, RenderNode } from
 import { defaultGeometry } from '../core/defaults';
 import { Emitter } from '../core/events';
 import type { Checkpoint, Store } from '../core/store';
-import type { NodeDoc } from '../core/types';
+import type { NodeDoc, SceneDoc, ScriptDoc, ShaderDoc } from '../core/types';
 import { hexToColor } from '../engine/color';
 import { cloneMaterial } from '../engine/modelParts';
 import type { Picker } from '../engine/picking';
@@ -14,7 +14,7 @@ import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
 import {
-    CTX, Script, withContext, type ChatRequest, type PlayApi, type Shape, type SpawnOptions, type ScriptTime,
+    CTX, Script, withContext, type ChatRequest, type PlayApi, type ScriptContext, type Shape, type SpawnOptions, type ScriptTime,
 } from './script';
 
 export type PlayState = 'stopped' | 'playing' | 'paused';
@@ -66,8 +66,9 @@ const MAX_DT = 0.1;
 /**
  * Play mode: instantiates the scripts attached to nodes, runs their
  * lifecycle every frame and, on Stop, puts the document, its undo history
- * and the engine scene back the way they were. Objects with an agent run
- * their behavior trees in the same frame loop (see play/ai/agents.ts).
+ * and the engine scene back the way they were (scripts and shaders changed
+ * meanwhile are kept). Objects with an agent run their behavior trees in
+ * the same frame loop (see play/ai/agents.ts).
  */
 export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost {
     state: PlayState = 'stopped';
@@ -85,6 +86,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     chatModel: ((req: ChatRequest) => Promise<string>) | null = null;
 
     private instances: Instance[] = [];
+    /** What each script of this session sees; cut off at Stop, so code still running later (a setTimeout) cannot reach the editor scene. */
+    private contexts: ScriptContext[] = [];
     private timers: Timer[] = [];
     private spawnedBy = new Map<Script, Object3D[]>();
     private spawnedAll = new Set<Object3D>();
@@ -180,6 +183,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         for (const inst of this.instances) {
             if (!inst.destroyed) this.call(inst, 'onDestroy');
         }
+        for (const ctx of this.contexts) {
+            ctx.api = null;
+            ctx.object3D = null;
+        }
+        this.contexts = [];
         this.offFrame?.();
         this.offFrame = null;
         this.unbindInput();
@@ -202,14 +210,34 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         }
         this.spawnedAll.clear();
         this.sync.detached.clear();
-        if (this.checkpointState) this.store.restoreCheckpoint(this.checkpointState);
+        const checkpoint = this.checkpointState;
         this.checkpointState = null;
+        // Code written while playing (Apply in the code panel, the assistant) is
+        // kept; everything else goes back to how it was before Play.
+        const code = checkpoint ? codeWrittenSince(JSON.parse(checkpoint.doc) as SceneDoc, this.store.doc) : null;
+        if (checkpoint) this.store.restoreCheckpoint(checkpoint);
         this.runtime.invalidateEnvironment();
         this.sync.rebuild();
         this.input.reset();
         this.input.endFrame();
         this.setState('stopped');
         this.store.setPlaying(false);
+        if (code) {
+            this.store.commit('Keep Code Written in Play', (d) => {
+                for (const s of code.scripts) {
+                    const i = d.scripts.findIndex((x) => x.id === s.id);
+                    if (i >= 0) d.scripts[i] = s;
+                    else d.scripts.push(s);
+                }
+                for (const s of code.shaders) {
+                    const i = d.shaders.findIndex((x) => x.id === s.id);
+                    if (i >= 0) d.shaders[i] = s;
+                    else d.shaders.push(s);
+                }
+            });
+            const n = code.scripts.length + code.shaders.length;
+            logInfo(`Kept ${n} script${n === 1 ? '' : 's'} or shader${n === 1 ? '' : 's'} changed while playing; the rest of the scene is back to how it was.`);
+        }
     }
 
     /** Plays for `seconds`, stops, and returns what the scripts reported. */
@@ -265,7 +293,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
                     }
                     continue;
                 }
-                const ctx = { nodeId: node.id, nodeName: node.name, scriptName: compiled.name, object3D: entry.obj, api: this };
+                const ctx: ScriptContext = { nodeId: node.id, nodeName: node.name, scriptName: compiled.name, object3D: entry.obj, api: this };
+                this.contexts.push(ctx);
                 let script: Script;
                 try {
                     script = withContext(ctx, () => new compiled.cls!());
@@ -334,8 +363,9 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private runTimers() {
         for (const t of this.timers.slice()) {
             if (t.cancelled || t.at > this.time.elapsed) continue;
+            // A destroyed script is gone from the instances: its timers end with it.
             const inst = this.instances.find((i) => i.script === t.owner);
-            if (inst && (inst.destroyed || inst.broken)) {
+            if (!inst || inst.destroyed || inst.broken) {
                 t.cancelled = true;
                 continue;
             }
@@ -352,6 +382,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     }
 
     private call(inst: Instance, method: string, ...args: unknown[]) {
+        // Destroyed during awake() or start() of another script: nothing more runs.
+        if (inst.destroyed && method !== 'onDestroy') return;
         const fn = (inst.script as any)[method];
         if (typeof fn !== 'function') return;
         try {
@@ -695,4 +727,13 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             t.cancelled = true;
         };
     }
+}
+
+/** Scripts and shaders added or changed since `before` (copies), or null when there are none. */
+function codeWrittenSince(before: SceneDoc, now: SceneDoc): { scripts: ScriptDoc[]; shaders: ShaderDoc[] } | null {
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const scripts = now.scripts.filter((s) => !same(before.scripts.find((b) => b.id === s.id), s));
+    const shaders = now.shaders.filter((s) => !same(before.shaders.find((b) => b.id === s.id), s));
+    if (!scripts.length && !shaders.length) return null;
+    return JSON.parse(JSON.stringify({ scripts, shaders }));
 }

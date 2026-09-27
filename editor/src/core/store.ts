@@ -107,7 +107,7 @@ export class Store extends Emitter<StoreEvents> {
     selection: string[] = [];
     camera: CameraState = defaultCamera();
     prefs: Prefs = loadPrefs();
-    /** True while Play mode runs; edits made meanwhile are reverted on Stop. */
+    /** True while Play mode runs; edits made meanwhile are reverted on Stop (except script and shader code). */
     playing = false;
 
     private index = new Map<string, NodeDoc>();

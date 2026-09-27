@@ -71,7 +71,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 **Code**
 
-- JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was
+- JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was, keeping the scripts and shaders you changed while playing
 - WGSL material shaders and full screen post effects in the built-in code editor; properties declared in the code become Inspector controls
 - The engine's render graph (passes and the resources they read and write): switch passes off and order the post chain
 
