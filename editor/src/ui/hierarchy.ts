@@ -74,7 +74,7 @@ export class HierarchyPanel {
         );
 
         store.on('change', () => this.render());
-        store.on('selection', () => this.render(true));
+        store.on('selection', () => this.reveal(store.primary?.id));
         editor.on('isolate', () => this.render(true));
         editor.sync.on('model', () => this.render(true));
         this.render(true);
@@ -119,6 +119,14 @@ export class HierarchyPanel {
             this.tree.appendChild(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
         }
         this.tree.scrollTop = scroll;
+    }
+
+    /** Shows the row of an object selected elsewhere (the viewport): its parents open, scrolled into view. */
+    private reveal(id: string | undefined) {
+        const store = this.editor.store;
+        for (let n = store.node(store.node(id)?.parent); n; n = store.node(n.parent)) this.collapsed.delete(n.id);
+        this.render(true);
+        if (id) this.tree.querySelector<HTMLElement>(`.tree-row[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
     }
 
     private isolationBanner(root: NodeDoc): HTMLElement {
