@@ -59,9 +59,10 @@ export class Outliner {
         this.render(true);
     }
 
-    /** Keeps the selection to nodes that still exist (after undo or a batch). */
-    prune() {
+    /** Keeps the selection to nodes that still exist (after undo or a batch), under their new ids when renamed. */
+    prune(renamed?: Map<string, string>) {
         const tree = this.host.tree();
+        this.selection = this.selection.map((id) => renamed?.get(id) ?? id);
         const keep = this.selection.filter((id) => tree && findNode(tree, id));
         if (keep.length !== this.selection.length) this.select(keep);
     }
@@ -438,9 +439,7 @@ export class Outliner {
             done = true;
             this.renaming = null;
             const next = input.value.trim();
-            if (apply && next && next !== id) {
-                if (this.host.apply([{ op: 'update_node', tree: tree.id, node: id, set: { id: next } }], 'Rename Node')) this.selection = this.selection.map((x) => (x === id ? next : x));
-            }
+            if (apply && next && next !== id) this.host.apply([{ op: 'update_node', tree: tree.id, node: id, set: { id: next } }], 'Rename Node');
             this.host.selected(this.selection, null);
             this.render(true);
             this.el.focus({ preventScroll: true });

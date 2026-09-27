@@ -75,11 +75,6 @@ export class BehaviorPanel {
             },
             part: () => this.part,
             apply: (ops, label) => this.apply(ops, label),
-            renamed: (from, to) => {
-                this.outliner.selection = this.outliner.selection.map((x) => (x === from ? to : x));
-                this.outliner.render(true);
-                this.props.render();
-            },
             focusPart: (part) => {
                 this.part = part;
                 this.props.render();
@@ -107,7 +102,7 @@ export class BehaviorPanel {
         this.el = h('div', { class: 'bt-panel' }, this.toolbar, this.body);
 
         const store = editor.store;
-        store.on('change', () => this.refresh());
+        store.on('change', (hint) => this.refresh(hint?.renamed));
         store.on('load', () => {
             this.treeId = null;
             this.outliner.select([]);
@@ -191,11 +186,11 @@ export class BehaviorPanel {
 
     // ---------------------------------------------------------- rendering
 
-    private refresh() {
+    private refresh(renamed?: Map<string, Map<string, string>>) {
         if (!this.visible) return;
         this.renderToolbar();
         if (this.mode === 'tree') {
-            this.outliner.prune();
+            this.outliner.prune(renamed?.get(`t:${this.tree()?.id}`));
             this.outliner.render();
             this.props.refresh();
         } else if (this.mode === 'schema') this.schemaEditor.render();

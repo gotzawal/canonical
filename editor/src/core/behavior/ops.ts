@@ -45,6 +45,8 @@ export interface BehaviorChanges {
     aiModels: AiModelDoc[];
     /** Objects whose agent changed: the new settings, or null to remove them. */
     agents: Map<string, AgentDoc | null>;
+    /** Items that got another id (see Draft.renames), for views that keep them selected. */
+    renamed: Map<string, Map<string, string>>;
 }
 
 export interface Created {
@@ -1397,7 +1399,7 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched, models: d.modelsTouched };
     result.ok = true;
     const changed = d.trees.size || d.schemas.size || d.objects.size || d.memoryTouched || d.modelsTouched;
-    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, aiModels: d.aiModels, agents: d.agents } : null;
+    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, aiModels: d.aiModels, agents: d.agents, renamed: d.renames } : null;
     return result;
 }
 

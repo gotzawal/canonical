@@ -25,6 +25,8 @@ export interface ChangeHint {
     design?: boolean;
     /** Only AI behavior data changed (blackboards, behavior trees, memory, agents). */
     behavior?: boolean;
+    /** Behavior tree nodes, services and keys that got another id: old id -> new id by "t:" tree id and "s:" schema id. */
+    renamed?: Map<string, Map<string, string>>;
 }
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';

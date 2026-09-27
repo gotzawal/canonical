@@ -23,8 +23,6 @@ export interface PropertiesHost {
     issues(): Issue[];
     locked(): boolean;
     apply(ops: BehaviorOp[], label: string): string[] | null;
-    /** A node was renamed (the outliner keeps it selected). */
-    renamed(from: string, to: string): void;
     focusPart(part: FocusPart): void;
 }
 
@@ -142,8 +140,7 @@ export class PropertiesPanel {
         const id = new TextField(node.id, (v) => {
             const next = v.trim();
             if (!next || next === node.id) return;
-            if (this.host.apply([{ op: 'update_node', tree: tree.id, node: node.id, set: { id: next } }], 'Rename Node')) this.host.renamed(node.id, next);
-            else id.set(node.id);
+            if (!this.host.apply([{ op: 'update_node', tree: tree.id, node: node.id, set: { id: next } }], 'Rename Node')) id.set(node.id);
         });
         id.el.classList.add('name-input');
         const note = new TextField(node.note ?? '', (v) => this.host.apply([{ op: 'update_node', tree: tree.id, node: node.id, set: { note: v } }], 'Node Note'), 'Note');
