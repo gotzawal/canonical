@@ -112,6 +112,8 @@ export class Agent extends Emitter<AgentEvents> {
     private conversation = uid('c');
     private saveTimer = 0;
     private loading: Promise<void> = Promise.resolve();
+    /** Counts conversation switches (New conversation, another project): a request of an earlier one stops writing. */
+    private generation = 0;
 
     constructor(private editor: Editor, private context: () => string) {
         super();
@@ -138,6 +140,7 @@ export class Agent extends Emitter<AgentEvents> {
 
     private async loadSession() {
         const key = SESSION_PREFIX + this.editor.store.doc.design.id;
+        this.generation++;
         this.sessionKey = key;
         this.turns = [];
         this.history = [];
@@ -163,15 +166,18 @@ export class Agent extends Emitter<AgentEvents> {
     /** Stores the conversation of this project (debounced). */
     private saveSession() {
         clearTimeout(this.saveTimer);
+        // This conversation, even if another one is loaded before the timer fires.
         const key = this.sessionKey;
+        const { history, usage, conversation } = this;
+        const all = this.turns;
         this.saveTimer = window.setTimeout(() => {
-            if (!this.turns.length && !this.history.length) {
+            if (!all.length && !history.length) {
                 void kvDelete(key);
                 return;
             }
             // Screenshots are the bulk of a conversation: keep the latest ones.
             let images = 0;
-            const turns = this.turns
+            const turns = all
                 .slice(-400)
                 .reverse()
                 .map((t) => {
@@ -181,7 +187,7 @@ export class Agent extends Emitter<AgentEvents> {
                 })
                 .reverse()
                 .map((t) => (t.tool?.result && t.tool.result.length > 6000 ? { ...t, tool: { ...t.tool, result: t.tool.result.slice(0, 6000) + '...' } } : t));
-            const data: SessionData = { version: 1, turns, history: this.history, usage: this.usage, savedAt: new Date().toISOString(), conversation: this.conversation };
+            const data: SessionData = { version: 1, turns, history, usage, savedAt: new Date().toISOString(), conversation };
             void kvSet(key, data);
         }, 600);
     }
@@ -189,6 +195,7 @@ export class Agent extends Emitter<AgentEvents> {
     /** Starts a new conversation (the scene memo stays). */
     reset() {
         if (this.busy) this.stop();
+        this.generation++;
         this.turns = [];
         this.history = [];
         this.placeholders.clear();
@@ -240,18 +247,25 @@ export class Agent extends Emitter<AgentEvents> {
 
     // ------------------------------------------------------------ requests
 
-    async send(text: string, attachments: Attachment[] = []) {
+    /** Runs a request; false when it could not start (busy, no key or no model). */
+    async send(text: string, attachments: Attachment[] = []): Promise<boolean> {
         const prompt = text.trim();
-        if ((!prompt && !attachments.length) || this.busy) return;
+        if ((!prompt && !attachments.length) || this.busy) return false;
         await this.loading;
+        const gen = this.generation;
+        // False once the conversation was switched: then nothing more is written to it.
+        const live = () => this.generation === gen;
+        const cut = () => {
+            if (!live()) throw new DOMException('Aborted', 'AbortError');
+        };
         const cred = this.credentials();
         if (!aiSettings.apiKey) {
             this.push({ role: 'note', text: 'Add your OpenRouter API key in the AI settings first.', error: true });
-            return;
+            return false;
         }
         if (!cred) {
             this.push({ role: 'note', text: 'Pick a model in the AI settings first.', error: true });
-            return;
+            return false;
         }
         const { key, model } = cred;
 
@@ -280,10 +294,13 @@ export class Agent extends Emitter<AgentEvents> {
             vision = supportsImages(info);
             caches = cacheStyle(model, info?.pricing) !== 'unknown';
             if (this.historySize() > COMPACT_CHARS) await this.compact(signal, true);
+            cut();
 
             const ctx = this.context();
             const body = ctx ? `<editor-context>\n${ctx}\n</editor-context>\n\n${prompt || 'Look at the attached images.'}` : prompt;
-            this.history.push(await this.userMessage(body, attachments, vision));
+            const message = await this.userMessage(body, attachments, vision);
+            cut();
+            this.history.push(message);
 
             // One undo step for everything this request changes.
             store.begin(label);
@@ -310,6 +327,7 @@ export class Agent extends Emitter<AgentEvents> {
                         },
                     },
                 );
+                cut();
                 this.lastModel = res.model;
                 this.addUsage(res.usage);
                 this.history.push(res.message);
@@ -351,6 +369,7 @@ export class Agent extends Emitter<AgentEvents> {
                         toolTurn.tool!.summary = 'invalid arguments';
                     } else {
                         const result = await runTool(this.env, call.function.name, args);
+                        cut();
                         content = JSON.stringify(result.data ?? null);
                         const failed = !!(result.data && typeof result.data === 'object' && 'error' in (result.data as any));
                         toolTurn.tool!.state = failed ? 'error' : 'done';
@@ -384,21 +403,32 @@ export class Agent extends Emitter<AgentEvents> {
         } catch (e: any) {
             if (e?.name === 'AbortError') {
                 stopped = true;
-                this.push({ role: 'note', text: 'Stopped.' });
+                if (live()) this.push({ role: 'note', text: 'Stopped.' });
             } else {
                 error = e instanceof OpenRouterError ? e.message : `${e?.message || e}`;
-                this.push({ role: 'note', text: error, error: true });
+                if (live()) this.push({ role: 'note', text: error, error: true });
                 console.warn('[ai] request failed', e);
             }
             // Leave the history consistent: every tool call needs a result.
-            this.repairHistory();
+            if (live()) this.repairHistory();
         } finally {
             if (begun) store.end();
             offCommit();
+            // A step stopped or failed before its first word leaves an empty
+            // bubble (it would show the typing dots for good), and a tool cut
+            // off leaves its row spinning.
+            for (let i = this.turns.length - 1; i >= 0; i--) {
+                const t = this.turns[i];
+                if (t.role === 'assistant' && !t.text.trim()) this.turns.splice(i, 1);
+                else if (t.tool?.state === 'running') {
+                    t.tool.state = 'error';
+                    t.tool.summary = stopped ? 'stopped' : 'did not finish';
+                }
+            }
             this.retireImages();
             this.busy = false;
             this.abort = null;
-            if (committed) {
+            if (committed && live()) {
                 const turn = [...this.turns].reverse().find((t) => t.role === 'assistant' || t.role === 'note') ?? last;
                 if (turn) turn.undoLabel = label;
             }
@@ -407,6 +437,7 @@ export class Agent extends Emitter<AgentEvents> {
             this.saveSession();
             this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
         }
+        return true;
     }
 
     /** The request message, with the attached images for models that see them. */

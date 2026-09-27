@@ -154,7 +154,13 @@ export class AIPanel {
         const attachments = this.attachments;
         this.attachments = [];
         this.renderAttachments();
-        void this.agent.send(text, attachments);
+        void this.agent.send(text, attachments).then((started) => {
+            // Nothing was sent (no model picked yet): the text comes back to be sent again.
+            if (started || this.input.value) return;
+            this.input.value = text;
+            this.attachments = attachments;
+            this.renderAttachments();
+        });
     }
 
     /** Sends a prompt as if typed (used by the pipeline's buttons). */

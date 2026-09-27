@@ -123,6 +123,9 @@ const objectFields = {
 const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
 const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
+/** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
+const SCENE_RESULT_CHARS = 28_000;
+
 function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
     return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
 }
@@ -682,7 +685,7 @@ class StagePolicy {
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
-                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with material.slot; colors and textures come in the Materials stage.');
+                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with set_material_slot / assign_material_slot; colors and textures come in the Materials stage.');
             }
         }
         return '';
@@ -721,36 +724,48 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 const d = doc();
                 // Parts of prefab instances follow their prefab: only the instances are listed.
                 const listed = d.nodes.filter((n) => !n.prefabChild);
-                const nodes = listed.slice(0, 400).map((n) => nodeSummary(d, n));
-                return {
-                    summary: `${d.nodes.length} objects`,
-                    data: {
-                        name: d.name,
-                        selection: store.selection,
-                        play_state: ed.player.state,
-                        environment: {
-                            sky: d.environment.sky,
-                            ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
-                            exposure: d.environment.exposure,
-                            bloom: d.environment.bloom,
-                            ao: d.environment.ao,
-                            fog: d.environment.fog,
-                            fxaa: d.environment.fxaa,
-                            gi: d.environment.gi,
-                        },
-                        objects: nodes,
-                        ...(listed.length > nodes.length ? { truncated: listed.length - nodes.length } : {}),
-                        prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
-                        assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
-                        scripts: d.scripts.map((s) => {
-                            const c = ed.compiler.get(s.id);
-                            if (c?.paused) return { id: s.id, name: s.name, paused: true };
-                            return { id: s.id, name: s.name, ok: !c?.error, ...(c?.error ? { error: `line ${c.error.line}: ${c.error.message}` } : {}) };
-                        }),
-                        shaders: d.shaders.map((s) => ({ id: s.id, name: s.name, kind: s.kind, lighting: s.kind === 'material' ? s.lighting : undefined, state: ed.shaders.status(s.id).state })),
-                        render_graph: { disabled_passes: d.renderGraph.disabled, post_effects: d.renderGraph.posts.map((p) => ({ id: p.id, shader: p.shader, enabled: p.enabled })) },
+                const data: Json = {
+                    name: d.name,
+                    selection: store.selection,
+                    play_state: ed.player.state,
+                    environment: {
+                        sky: d.environment.sky,
+                        ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
+                        exposure: d.environment.exposure,
+                        bloom: d.environment.bloom,
+                        ao: d.environment.ao,
+                        fog: d.environment.fog,
+                        fxaa: d.environment.fxaa,
+                        gi: d.environment.gi,
                     },
+                    prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
+                    assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+                    scripts: d.scripts.map((s) => {
+                        const c = ed.compiler.get(s.id);
+                        if (c?.paused) return { id: s.id, name: s.name, paused: true };
+                        return { id: s.id, name: s.name, ok: !c?.error, ...(c?.error ? { error: `line ${c.error.line}: ${c.error.message}` } : {}) };
+                    }),
+                    shaders: d.shaders.map((s) => ({ id: s.id, name: s.name, kind: s.kind, lighting: s.kind === 'material' ? s.lighting : undefined, state: ed.shaders.status(s.id).state })),
+                    render_graph: { disabled_passes: d.renderGraph.disabled, post_effects: d.renderGraph.posts.map((p) => ({ id: p.id, shader: p.shader, enabled: p.enabled })) },
                 };
+                // Objects come last and fit what a tool result may hold (longer
+                // results are cut): full entries first, then only id and name.
+                let room = SCENE_RESULT_CHARS - JSON.stringify(data).length;
+                const objects: Json[] = [];
+                const more: Json[] = [];
+                for (const n of listed) {
+                    const full = more.length ? null : nodeSummary(d, n);
+                    const entry = full && JSON.stringify(full).length + 1 <= room - 4000 ? full : { id: n.id, name: n.name };
+                    const size = JSON.stringify(entry).length + 1;
+                    if (size > room) break;
+                    room -= size;
+                    (entry === full ? objects : more).push(entry);
+                }
+                data.objects = objects;
+                if (more.length) data.more_objects = more;
+                const left = listed.length - objects.length - more.length;
+                if (more.length || left) data.note = `${more.length ? `${more.length} objects are listed by id and name only (get_object gives the details)` : ''}${more.length && left ? '; ' : ''}${left ? `${left} more objects are not listed` : ''}.`;
+                return { summary: `${d.nodes.length} objects`, data };
             }
             case 'get_object': {
                 const n = node(doc(), args.id);
