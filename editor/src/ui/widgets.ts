@@ -8,12 +8,15 @@ export function formatNumber(v: number, precision = 3): string {
     return s.includes('.') ? s.replace(/\.?0+$/, '') || '0' : s;
 }
 
-/** Live-edit callbacks. `begin`/`end` bracket a continuous edit (drag). */
+/**
+ * Live-edit callbacks. `begin`/`end` bracket a continuous edit (drag).
+ * Vector fields also pass which component changed.
+ */
 export interface EditHooks<T> {
     begin?(): void;
-    input?(v: T): void;
+    input?(v: T, part?: number): void;
     end?(): void;
-    commit?(v: T): void;
+    commit?(v: T, part?: number): void;
 }
 
 export interface NumberOpts extends EditHooks<number> {
@@ -115,17 +118,28 @@ export class NumberField {
         el.addEventListener('pointerup', finish);
         el.addEventListener('pointercancel', finish);
 
+        // Only typed text is committed: leaving the field untouched, or with
+        // Escape, keeps the value as it is (it may have more digits than
+        // shown, or have changed elsewhere meanwhile).
+        let shown = '';
+        let settled = false;
         el.addEventListener('focus', () => {
             el.value = formatNumber(this.value, 6);
+            shown = el.value;
+            settled = false;
         });
-        el.addEventListener('blur', () => this.commitText());
+        el.addEventListener('blur', () => {
+            if (!settled && el.value !== shown) this.commitText();
+            else this.render();
+        });
         el.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter') {
-                this.commitText();
+                if (el.value !== shown) this.commitText();
+                settled = true;
                 el.blur();
             } else if (e.key === 'Escape') {
-                this.render();
+                settled = true;
                 el.blur();
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -133,6 +147,7 @@ export class NumberField {
                 const next = this.clamp(round(this.value + (e.key === 'ArrowUp' ? step : -step), this.opts.precision ?? 3));
                 this.value = next;
                 el.value = formatNumber(next, 6);
+                shown = el.value;
                 this.opts.commit?.(next);
             }
         });
@@ -236,12 +251,12 @@ export class Vec3Field {
                     begin: () => opts.begin?.(),
                     input: (v) => {
                         this.value[i] = v;
-                        opts.input?.([...this.value] as [number, number, number]);
+                        opts.input?.([...this.value] as [number, number, number], i);
                     },
                     end: () => opts.end?.(),
                     commit: (v) => {
                         this.value[i] = v;
-                        opts.commit?.([...this.value] as [number, number, number]);
+                        opts.commit?.([...this.value] as [number, number, number], i);
                     },
                 }),
         );
@@ -284,12 +299,12 @@ export class Vec2Field {
                     begin: () => opts.begin?.(),
                     input: (v) => {
                         this.value[i] = v;
-                        opts.input?.([...this.value] as [number, number]);
+                        opts.input?.([...this.value] as [number, number], i);
                     },
                     end: () => opts.end?.(),
                     commit: (v) => {
                         this.value[i] = v;
-                        opts.commit?.([...this.value] as [number, number]);
+                        opts.commit?.([...this.value] as [number, number], i);
                     },
                 }),
         );
@@ -420,12 +435,19 @@ export class SliderField {
             this.num.set(v);
             opts.input?.(v);
         });
-        this.range.addEventListener('change', () => {
-            if (this.live) {
-                this.live = false;
-                opts.end?.();
-            }
-        });
+        // A drag that ends where it started fires no change event: pointerup
+        // (and losing focus) end the edit too, so its transaction never stays open.
+        const finish = () => {
+            if (!this.live) return;
+            this.live = false;
+            // Without live hooks the value is committed when the drag ends.
+            if (!opts.input) opts.commit?.(parseFloat(this.range.value));
+            opts.end?.();
+        };
+        this.range.addEventListener('change', finish);
+        this.range.addEventListener('pointerup', finish);
+        this.range.addEventListener('pointercancel', finish);
+        this.range.addEventListener('blur', finish);
         this.el = h('div', { class: 'slider-field' }, this.range, this.num.el);
     }
 

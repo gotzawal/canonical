@@ -215,16 +215,28 @@ export class InspectorPanel {
 
     // -------------------------------------------------------------- binding
 
-    /** Edit hooks that write `apply` to every selected node passing `filter`. */
-    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void): EditHooks<T> {
+    /**
+     * Edit hooks that write `apply` to every selected node passing `filter`.
+     * With `read`, a vector field changes only the component that was edited
+     * on each node: the other components of a multi-selection stay their own.
+     */
+    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined): EditHooks<T> {
         const store = this.store;
-        const write = (v: T) => {
+        const write = (v: T, part?: number) => {
             const ids = store.selection.filter((id) => {
                 const n = store.node(id);
                 return n && filter(n);
             });
             store.update((doc) => {
-                for (const n of doc.nodes) if (ids.includes(n.id)) apply(n, v);
+                for (const n of doc.nodes) {
+                    if (!ids.includes(n.id)) continue;
+                    const cur = part !== undefined && read ? read(n) : undefined;
+                    if (Array.isArray(cur) && Array.isArray(v)) {
+                        const next = [...cur];
+                        next[part!] = v[part!];
+                        apply(n, next as T);
+                    } else apply(n, v);
+                }
             }, { nodes: ids });
         };
         return {
@@ -232,16 +244,16 @@ export class InspectorPanel {
                 this.open++;
                 store.begin(label);
             },
-            input: (v) => write(v),
+            input: (v, part) => write(v, part),
             end: () => {
                 if (this.open <= 0) return;
                 this.open--;
                 store.end();
             },
-            commit: (v) => {
+            commit: (v, part) => {
                 store.begin(label);
                 try {
-                    write(v);
+                    write(v, part);
                 } finally {
                     store.end();
                 }
@@ -294,19 +306,19 @@ export class InspectorPanel {
             value: this.node.position,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v)),
+            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position),
         });
         const rot = new Vec3Field({
             value: this.node.rotation,
             step: 0.5,
             precision: 2,
-            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v)),
+            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation),
         });
         const scl = new Vec3Field({
             value: this.node.scale,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v)),
+            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale),
         });
         this.watch(() => {
             pos.set(this.node.position);
@@ -491,9 +503,14 @@ export class InspectorPanel {
         const lit = m.type === 'lit' || (m.type === 'shader' && shaderDoc?.lighting !== 'unlit');
         const pbr = m.type === 'lit';
         const set = <K extends keyof MaterialDoc>(key: K, label: string) =>
-            this.hooks<MaterialDoc[K]>(label, has, (n, v) => {
-                (n.mesh!.material as any)[key] = v;
-            });
+            this.hooks<MaterialDoc[K]>(
+                label,
+                has,
+                (n, v) => {
+                    (n.mesh!.material as any)[key] = v;
+                },
+                (n) => n.mesh!.material[key],
+            );
         const rows: HTMLElement[] = [];
         const slot = m.slot ? this.store.doc.design.materials.find((x) => x.id === m.slot) : undefined;
         if (slot) {
@@ -764,7 +781,8 @@ export class InspectorPanel {
         const has: Filter = (n) => !!n.particles;
         const p = this.node.particles!;
         type P = ParticlesDoc;
-        const set = <K extends keyof P>(key: K, label: string) => this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v));
+        const set = <K extends keyof P>(key: K, label: string) =>
+            this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v), (n) => n.particles![key]);
         const pair = (key: 'life' | 'size' | 'spin', i: 0 | 1, label: string) =>
             this.hooks<number>(label, has, (n, v) => {
                 const r = [...n.particles![key]] as [number, number];
@@ -908,9 +926,13 @@ export class InspectorPanel {
         return this.store.selection.filter((id) => this.store.node(id)?.model?.asset === asset);
     }
 
-    private modelHooks<T>(label: string, apply: (model: NonNullable<NodeDoc['model']>, v: T) => void): EditHooks<T> {
+    private modelHooks<T>(
+        label: string,
+        apply: (model: NonNullable<NodeDoc['model']>, v: T) => void,
+        read?: (model: NonNullable<NodeDoc['model']>) => T | undefined,
+    ): EditHooks<T> {
         const asset = this.node.model?.asset;
-        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v));
+        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v), read && ((n) => read(n.model!)));
     }
 
     private modelSections(node: NodeDoc): HTMLElement[] {
@@ -1196,11 +1218,15 @@ export class InspectorPanel {
         const cast = new CheckboxField(po.castShadow ?? part.base.castShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { castShadow: v }, 'Mesh Cast Shadow'), 'Cast');
         const receive = new CheckboxField(po.receiveShadow ?? part.base.receiveShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { receiveShadow: v }, 'Mesh Receive Shadow'), 'Receive');
         const setT = (key: 'position' | 'rotation' | 'scale', label: string) =>
-            this.modelHooks<Vec3>(label, (model, v) => {
-                const parts = { ...(model.parts ?? {}) };
-                parts[part.path] = { ...(parts[part.path] ?? {}), [key]: v };
-                model.parts = parts;
-            });
+            this.modelHooks<Vec3>(
+                label,
+                (model, v) => {
+                    const parts = { ...(model.parts ?? {}) };
+                    parts[part.path] = { ...(parts[part.path] ?? {}), [key]: v };
+                    model.parts = parts;
+                },
+                (model) => model.parts?.[part.path]?.[key] ?? part.base[key],
+            );
         const pos = new Vec3Field({ value: po.position ?? part.base.position, step: 0.01, precision: 3, ...setT('position', 'Move Mesh') });
         const rot = new Vec3Field({ value: po.rotation ?? part.base.rotation, step: 0.5, precision: 2, ...setT('rotation', 'Rotate Mesh') });
         const scl = new Vec3Field({ value: po.scale ?? part.base.scale, step: 0.01, precision: 3, ...setT('scale', 'Scale Mesh') });
