@@ -78,6 +78,10 @@ export class ModelServices extends Emitter<{ status: ModelKind; needed: ModelKin
         return this.client.ready('embedder');
     }
 
+    get decisionLost(): boolean {
+        return this.client.status.decision.state === 'lost';
+    }
+
     embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null> {
         if (!this.embedderReady) return Promise.resolve(null);
         return this.client.embed(texts, kind).catch((e) => {

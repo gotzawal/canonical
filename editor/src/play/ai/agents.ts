@@ -58,6 +58,8 @@ export interface AIServices {
      * the embedding model its memory was embedded with (`embedder`, a model id).
      */
     prepare(needs: ModelNeeds, embedder: string): void;
+    /** The decision model was running and stopped (its GPU device was lost). */
+    readonly decisionLost?: boolean;
 }
 
 /** The blackboard as scripts see it: every key can be read, fact keys written. */
@@ -182,6 +184,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     player: Object3D | null = null;
     private inbox: (() => void)[] = [];
     private running = false;
+    /** The decision model was lost when the last frame looked. */
+    private modelLost = false;
     private queryCache = new Map<string, Promise<Float32Array | null>>();
     /** Vectors of the queries embedded so far (by the same keys). */
     private queryVectors = new Map<string, Float32Array>();
@@ -224,6 +228,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.queryCache.clear();
         this.queryVectors.clear();
         this.running = true;
+        // A model lost before this session: the keys start at their defaults anyway.
+        this.modelLost = !!this.services()?.decisionLost;
         this.memory = new MemoryIndex(doc.memory);
         this.player = null;
         const list: { id: string; name: string; obj: Object3D; tree: BehaviorTreeDoc; schema: BlackboardSchemaDoc; values: Record<string, BlackboardValue> }[] = [];
@@ -282,6 +288,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     /** The agent phase of a frame (Player.tick, between timers and lateUpdate). */
     frame() {
         if (!this.running) return;
+        this.checkModelLost();
         const due = this.inbox;
         this.inbox = [];
         for (const fn of due) {
@@ -303,6 +310,20 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             // After a long frame, skip the missed ticks instead of running them all now.
             if (a.nextTick <= now) a.nextTick = now + TICK_INTERVAL;
         }
+    }
+
+    /**
+     * When the decision model stops in the middle of a session (device
+     * lost), the AI keys go back to their schema defaults, as if there had
+     * never been a model: old answers must not steer the trees forever.
+     */
+    private checkModelLost() {
+        const lost = !!this.services()?.decisionLost;
+        if (lost && !this.modelLost) {
+            for (const a of this.agents) for (const k of a.blackboard.keys) if (k.owner === 'ai') a.blackboard.reset(k.name);
+            if (this.agents.length) this.host.warn('The decision model stopped (its GPU device was lost): AI keys are back to their defaults.');
+        }
+        this.modelLost = lost;
     }
 
     /** An agent's object was destroyed by a script: its tree stops. */
