@@ -10,7 +10,8 @@ import { ShaderManager } from './engine/shaders';
 import { SceneSync } from './engine/sync';
 import { Checkpoints } from './design/checkpoints';
 import { designSummary, memoLines, pipelineSummary } from './design/context';
-import { createMenu, menuDefinitions, showShortcuts } from './menus';
+import { Commands, editorCommands } from './commands';
+import { createMenu, menuDefinitions } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
 import { ModelServices, savedBackend } from './play/ai/services';
@@ -22,14 +23,13 @@ import { BriefScreen } from './ui/briefScreen';
 import { DesignPanel } from './ui/designPanel';
 import { PipelineBar } from './ui/pipelineBar';
 import { ShotView } from './ui/shotView';
-import { showBuildDialog } from './ui/buildDialog';
 import { Dock } from './ui/dock';
-import { h, isTyping } from './ui/dom';
+import { h } from './ui/dom';
 import { HierarchyPanel } from './ui/hierarchy';
 import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
 import { logo } from './ui/logo';
-import { closeMenus, dialog, menubar, showMenu, toast } from './ui/overlays';
+import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
@@ -147,13 +147,14 @@ async function main() {
     gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
         onContextMenu: (_x, _y, cx, cy, id) => {
+            const cmd = (c: string, patch?: Partial<MenuItem>) => editor.commands.item(c, patch);
             showMenu(
                 id
                     ? [
-                          { label: 'Frame', icon: 'focus', shortcut: 'F', action: () => editor.frameSelection() },
-                          { label: 'Duplicate', icon: 'copy', shortcut: 'Mod+D', action: () => editor.duplicateSelection() },
-                          { label: 'Delete', icon: 'trash', shortcut: 'Del', action: () => editor.deleteSelection() },
-                          { label: 'Hide', icon: 'eyeOff', shortcut: 'H', action: () => editor.toggleVisibility(store.selection) },
+                          cmd('view.frame', { label: 'Frame' }),
+                          cmd('edit.duplicate'),
+                          cmd('edit.delete'),
+                          cmd('edit.hide', { label: 'Hide' }),
                           { label: 'Drop to Ground', action: () => editor.dropToGround() },
                           { separator: true },
                           { label: 'Ask AI about this', icon: 'sparkle', action: () => editor.askAI('For the selected object: ') },
@@ -401,26 +402,18 @@ async function main() {
         const id = store.primary?.id;
         if (id) hierarchy.startRename(id);
     };
+    editor.commands = new Commands(editorCommands(editor, { rename, toggleDock: () => dock.toggle() }));
     menuSlot.append(
         menubar(
             menuDefinitions(editor, {
-                rename,
                 toggleLeft: () => void toggle(isNarrow() ? 'show-left' : 'hide-left'),
                 toggleRight: () => void toggle(isNarrow() ? 'show-right' : 'hide-right'),
-                toggleDock: () => dock.toggle(),
                 showGraph: () => dock.show('graph'),
                 showAI: () => showTab('ai'),
             }),
         ),
     );
-    toolbarSlot.append(
-        toolbar(editor, () => createMenu(editor), {
-            toggleDock: () => dock.toggle(),
-            showAI: () => showTab('ai'),
-            build: () => showBuildDialog(editor),
-            walk: () => editor.walk?.toggle(),
-        }),
-    );
+    toolbarSlot.append(toolbar(editor, () => createMenu(editor), () => showTab('ai')));
     statusSlot.append(statusbar(editor));
 
     const updateTitle = () => {
@@ -447,7 +440,7 @@ async function main() {
         if (st === 'stopped') camera.reapply();
     });
 
-    installShortcuts(editor, rename, dock);
+    editor.commands.install(editor);
     installDropGuard();
     autosave.schedule();
     if (unreadableAutosave) {
@@ -483,90 +476,6 @@ function aiContext(editor: Editor, dock: Dock): string {
     return lines.join('\n');
 }
 
-/** A dialog or an enlarged image is open: the scene behind it takes no shortcuts. */
-function modalOpen(): boolean {
-    return !!document.querySelector('.dialog-backdrop, .lightbox');
-}
-
-function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
-    const store = editor.store;
-    const player = editor.player;
-    // Play, the code panel, save and open work everywhere, also from text
-    // fields and the code editor. Those stop their keys from bubbling, so
-    // these run in the capture phase.
-    document.addEventListener(
-        'keydown',
-        (e) => {
-            if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || modalOpen()) return;
-            const key = e.key.toLowerCase();
-            const typing = isTyping(e.target);
-            // Mod+S in the code editor applies the file (codeEditor.ts).
-            const codeSave = key === 's' && !e.shiftKey && !!(e.target as HTMLElement | null)?.closest?.('.code-editor');
-            if (key === 'p') {
-                if (e.shiftKey) editor.pausePlay();
-                else editor.togglePlay();
-            } else if (key === 'j' || key === '`') {
-                dock.toggle();
-            } else if ((key === 's' && !codeSave) || (key === 'o' && !e.shiftKey)) {
-                // Leaving the field first commits what was typed in it.
-                if (typing) (e.target as HTMLElement).blur();
-                if (key === 'o') void editor.openSceneFile();
-                else void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
-            } else return;
-            e.preventDefault();
-            e.stopPropagation();
-        },
-        true,
-    );
-    document.addEventListener('keydown', (e) => {
-        if (e.defaultPrevented || modalOpen()) return;
-        const mod = e.ctrlKey || e.metaKey;
-        const key = e.key.toLowerCase();
-        // While playing, keys pressed with the viewport focused belong to the scripts.
-        if (player.state !== 'stopped' && !isTyping(e.target) && (e.target === editor.viewport.overlay || e.target === document.body)) {
-            player.keyEvent(e, true);
-            if (!mod) {
-                e.preventDefault();
-                return;
-            }
-        }
-        if (isTyping(e.target)) return;
-        // Holding a toggle key does not flip it on and off.
-        if (e.repeat && !mod && (key === 'h' || key === 'v' || key === 'g' || key === 'x')) return;
-        let handled = true;
-        if (mod && key === 'z') e.shiftKey ? store.redo() : store.undo();
-        else if (mod && key === 'y') store.redo();
-        else if (mod && key === 'b') showBuildDialog(editor);
-        else if (mod && key === 'd') editor.duplicateSelection();
-        else if (mod && key === 'a') editor.selectAll();
-        else if (mod && key === 'g') editor.groupSelection();
-        else if (mod || e.altKey) handled = false;
-        else if (key === 'q') editor.setTool('select');
-        else if (key === 'w') editor.setTool('translate');
-        else if (key === 'e') editor.setTool('rotate');
-        else if (key === 'r') editor.setTool('scale');
-        else if (key === 'x') editor.toggleSpace();
-        else if (key === 'v') editor.walk?.toggle();
-        else if (key === 'f') editor.frameSelection();
-        else if (key === 'home') editor.viewport.frameAll();
-        else if (key === 'g') store.setPrefs({ grid: !store.prefs.grid });
-        else if (key === 'h') editor.toggleVisibility(store.selection);
-        else if (key === 'delete' || key === 'backspace') editor.deleteSelection();
-        else if (key === 'f2') rename();
-        else if (key === '?') showShortcuts();
-        else if (e.code === 'Digit1' || e.code === 'Numpad1') editor.camera.setView(e.shiftKey ? 180 : 0, 0);
-        else if (e.code === 'Digit3' || e.code === 'Numpad3') editor.camera.setView(e.shiftKey ? 270 : 90, 0);
-        else if (e.code === 'Digit7' || e.code === 'Numpad7') editor.camera.setView(store.camera.yaw, e.shiftKey ? -89.5 : 89.5);
-        else if (key === 'escape') {
-            closeMenus();
-            if (!editor.viewport.cancelInteraction()) store.select([]);
-        } else handled = false;
-        if (handled) e.preventDefault();
-    });
-    document.addEventListener('keyup', (e) => {
-        if (player.state !== 'stopped') player.keyEvent(e, false);
-    });
-}
 
 /**
  * Files dropped outside the drop targets (viewport, AI tab, brief) would make

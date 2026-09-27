@@ -28,6 +28,7 @@ import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
 import type { Checkpoints } from './design/checkpoints';
+import type { Commands } from './commands';
 import type { ModelServices } from './play/ai/services';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
@@ -91,6 +92,8 @@ export class Editor extends Emitter<EditorEvents> {
     room: ReferenceRoom | null = null;
     /** The models of the agents (set up by main.ts). */
     models: ModelServices | null = null;
+    /** Keyboard shortcuts and menu commands (set up by main.ts). */
+    commands!: Commands;
 
     constructor(
         readonly store: Store,

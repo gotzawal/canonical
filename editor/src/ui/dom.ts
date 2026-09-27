@@ -67,5 +67,7 @@ export function shortcutLabel(s: string): string {
         .replace(/Shift/g, 'Shift')
         .replace(/\+/g, isMac ? '' : '+')
         .replace(/Cmd/g, isMac ? '⌘' : 'Cmd')
-        .replace(/Shift/g, isMac ? '⇧' : 'Shift');
+        .replace(/Shift/g, isMac ? '⇧' : 'Shift')
+        .replace(/\bEscape\b/, 'Esc')
+        .replace(/\bDelete\b/, 'Del');
 }
