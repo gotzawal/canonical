@@ -25,6 +25,8 @@ export class ViewQuad extends Object3D {
     rendererPassState: RendererPassState;
     quadShader: QuadShader;
     public _boundCtx: Context3D | null = null;
+    /** The resize listener on the context, removed by destroy(). */
+    private _resize: { ctx: Context3D; fn: (e: any) => void } | null = null;
 
     constructor(ctx: Context3D, vs: string = 'QuadGlsl_vs', fs: string = 'QuadGlsl_fs', rtFrame: RTFrame, multisample: number = 0, f: boolean = false) {
         super();
@@ -62,7 +64,7 @@ export class ViewQuad extends Object3D {
             })
         }
 
-        ctx.addEventListener(CResizeEvent.RESIZE, (e) => {
+        const onResize = (e: any) => {
             this.rendererPassState = WebGPUDescriptorCreator.createRendererPassState(ctx, rtFrame, `load`);
             if (multisample > 0) {
                 this.rendererPassState.multisample = this.quadShader.getDefaultColorShader().shaderState.multisample;
@@ -76,7 +78,19 @@ export class ViewQuad extends Object3D {
                     usage: GPUTextureUsage.RENDER_ATTACHMENT,
                 })
             }
-        }, this);
+        };
+        ctx.addEventListener(CResizeEvent.RESIZE, onResize, this);
+        this._resize = { ctx, fn: onResize };
+    }
+
+    public destroy(force?: boolean): void {
+        // Otherwise the context keeps rebuilding the pass state of a destroyed
+        // quad (and its render targets) on every resize.
+        if (this._resize) {
+            this._resize.ctx.removeEventListener(CResizeEvent.RESIZE, this._resize.fn, this);
+            this._resize = null;
+        }
+        super.destroy(force);
     }
 
     /**

@@ -3,6 +3,9 @@ import { GPUAddressMode, GPUTextureFormat } from '../gfx/graphics/webGpu/WebGPUC
 import { Context3D } from '../gfx/graphics/webGpu/Context3D';
 import { UUID } from '../util/Global';
 import { CResizeEvent } from '..';
+
+/** Resize listeners of auto-resized render textures (kept out of the class, whose shape other textures match). */
+const resizeListeners = new WeakMap<object, (e: any) => void>();
 /**
  * @internal
  * Render target texture 
@@ -53,12 +56,26 @@ export class RenderTexture extends Texture {
         this.resize(width, height, ctx);
 
         if (this.autoResize) {
-            this._boundCtx!.addEventListener(CResizeEvent.RESIZE, (e) => {
+            const onResize = (e) => {
                 let { width, height } = e.data;
                 this.resize(width, height);
                 this._textureChange = true;
-            }, this);
+            };
+            this._boundCtx!.addEventListener(CResizeEvent.RESIZE, onResize, this);
+            resizeListeners.set(this, onResize);
         }
+    }
+
+    public destroy(force?: boolean) {
+        // A freed texture stops following the canvas: otherwise every resize
+        // allocates it again (or throws, once its descriptor is gone) and the
+        // throw stops the resize listeners registered after it.
+        const onResize = force ? resizeListeners.get(this) : undefined;
+        if (onResize) {
+            this._boundCtx?.removeEventListener(CResizeEvent.RESIZE, onResize, this);
+            resizeListeners.delete(this);
+        }
+        super.destroy(force);
     }
 
     /**
