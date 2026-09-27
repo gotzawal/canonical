@@ -268,7 +268,14 @@ function levels(img: ImageData, lo: number, hi: number, notes: string[]) {
     };
     const p1 = pct(0.01), p99 = pct(0.99);
     if (p1 >= lo && p99 <= hi) return;
-    const a = Math.max(lo, p1), b = Math.min(hi, p99);
+    let a = Math.max(lo, p1), b = Math.min(hi, p99);
+    if (b <= a) {
+        // All of it lies outside the range (all darker or all brighter): shift it
+        // in, keeping its contrast as far as it fits, rather than inverting it.
+        const s = Math.min(p99 - p1, hi - lo);
+        a = p99 < lo ? lo : hi - s;
+        b = a + s;
+    }
     const span = Math.max(1, p99 - p1);
     for (let i = 0; i < d.length; i += 4) {
         for (let c = 0; c < 3; c++) d[i + c] = a + ((d[i + c] - p1) * (b - a)) / span;

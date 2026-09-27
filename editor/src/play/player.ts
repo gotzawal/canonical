@@ -387,7 +387,13 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         const fn = (inst.script as any)[method];
         if (typeof fn !== 'function') return;
         try {
-            fn.apply(inst.script, args);
+            const r = fn.apply(inst.script, args);
+            // An async method (async start, async onClick) fails later: report it like a throw.
+            if (r && typeof r.then === 'function') {
+                (r as Promise<unknown>).then(undefined, (e: any) => {
+                    if (this.state !== 'stopped' && e?.name !== 'AbortError') this.fail(inst, method, e);
+                });
+            }
         } catch (e) {
             this.fail(inst, method, e);
         }

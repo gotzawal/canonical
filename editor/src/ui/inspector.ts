@@ -135,6 +135,7 @@ export class InspectorPanel {
             n.light ? n.light.type : '-',
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
+            n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
             n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shading ?? '') + (o.alphaMode ?? '') + (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
@@ -144,6 +145,14 @@ export class InspectorPanel {
             this.store.doc.scripts.map((s) => s.id + s.name).join(','),
             this.store.doc.shaders.map((s) => s.id + s.name + s.kind + s.lighting).join(','),
         ].join('|');
+    }
+
+    /** What the Prefab section shows: template or model, whether a model exists, how many instances. */
+    private prefabKey(id: string): string {
+        const p = this.editor.prefab(id);
+        if (!p) return 'missing';
+        const hasModel = this.store.doc.assets.some((a) => a.id === p.asset);
+        return `${p.name}:${p.useModel ? 'model' : 'template'}:${hasModel}:${this.editor.instancesOf(id).length}`;
     }
 
     private propsKey(shaderId: string): string {
