@@ -211,4 +211,11 @@ The editor needs WebGPU: Chrome or Edge 113+ on Windows, macOS and ChromeOS, Chr
 Issues and pull requests are welcome. Commit messages follow the [commit convention](.github/commit-convention.md), for example `feat(editor): ...`. For the engine's internals, scripts and samples, see the [Orillusion contributing guide](.github/contributing.md).
 
 ## License
-Released under the [MIT](LICENSE) license. The Orillusion engine is copyright Orillusion and MIT licensed.
+The two parts of this repository have different licenses:
+
+| Part | License |
+|---|---|
+| The editor: `editor/` | [GNU Affero General Public License v3.0](editor/LICENSE) (AGPL-3.0-only) |
+| The Orillusion engine: `src/`, `packages/` | [MIT](LICENSE), copyright Orillusion |
+
+Under the AGPL you may use, change and share the editor, but whoever shares it or a changed version, or lets people use a changed version over a network, has to offer them its complete source under the same license. Games made with Build & Deploy include the player app, which is part of the editor and so under the AGPL too.

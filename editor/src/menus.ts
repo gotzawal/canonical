@@ -159,6 +159,8 @@ export function showAbout(editor: Editor) {
             h('dd', { text: b.time ? new Date(b.time).toLocaleString() : '-' }),
             h('dt', { text: 'GPU' }),
             h('dd', { text: editor.runtime.adapterInfo }),
+            h('dt', { text: 'License' }),
+            h('dd', { text: 'Editor AGPL-3.0, engine MIT' }),
         ),
         b.repo ? h('p', null, h('a', { text: `github.com/${b.repo}`, attrs: { href: `https://github.com/${b.repo}`, target: '_blank', rel: 'noopener' } })) : null,
     );
