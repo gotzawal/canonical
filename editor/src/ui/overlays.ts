@@ -54,6 +54,16 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
             const sub = renderItems(item.submenu, close);
             sub.classList.add('submenu');
             el.appendChild(sub);
+            // Next to its item, flipped or shifted to stay on screen. It is
+            // fixed, so the menu around it can scroll without clipping it.
+            el.addEventListener('pointerenter', () => {
+                sub.style.display = 'flex';
+                const r = el.getBoundingClientRect();
+                const s = sub.getBoundingClientRect();
+                sub.style.left = (r.right + s.width + 6 <= window.innerWidth ? r.right : Math.max(6, r.left - s.width)) + 'px';
+                sub.style.top = Math.max(6, Math.min(r.top - 6, window.innerHeight - s.height - 6)) + 'px';
+            });
+            el.addEventListener('pointerleave', () => (sub.style.display = ''));
         } else if (enabled) {
             el.addEventListener('click', () => {
                 close();
@@ -76,8 +86,8 @@ export function showMenu(items: MenuItem[], x: number, y: number) {
     el.classList.add('floating');
     document.body.appendChild(el);
     const r = el.getBoundingClientRect();
-    el.style.left = Math.min(x, window.innerWidth - r.width - 6) + 'px';
-    el.style.top = Math.min(y, window.innerHeight - r.height - 6) + 'px';
+    el.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+    el.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
     openMenu = { el, close };
 }
 
@@ -96,8 +106,9 @@ export function menubar(menus: { label: string; items: () => MenuItem[] }[]): HT
         el.classList.add('floating', 'dropdown');
         document.body.appendChild(el);
         const r = btn.getBoundingClientRect();
-        el.style.left = r.left + 'px';
+        el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - el.offsetWidth - 6)) + 'px';
         el.style.top = r.bottom + 2 + 'px';
+        el.style.maxHeight = window.innerHeight - r.bottom - 8 + 'px';
         btn.classList.add('open');
         active = btn;
         openMenu = { el, close };
