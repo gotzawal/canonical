@@ -60,6 +60,26 @@ export function isTyping(target: EventTarget | null): boolean {
 
 export const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
 
+/**
+ * Lets a row that is not a button be used from the keyboard like one: it
+ * takes the focus, Enter or Space clicks it, and the menu key (or
+ * Shift+F10) opens its context menu.
+ */
+export function pressable<T extends HTMLElement>(el: T): T {
+    el.tabIndex = 0;
+    if (!el.getAttribute('role')) el.setAttribute('role', 'button');
+    el.addEventListener('keydown', (e) => {
+        if (e.target !== el) return;
+        if (e.key === 'Enter' || e.key === ' ') el.click();
+        else if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
+            const r = el.getBoundingClientRect();
+            el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: r.left + 12, clientY: r.bottom }));
+        } else return;
+        e.preventDefault();
+    });
+    return el;
+}
+
 /** Formats a shortcut like "Mod+Z" for the current platform. */
 export function shortcutLabel(s: string): string {
     return s

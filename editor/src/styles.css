@@ -96,6 +96,12 @@ a {
     flex: 1;
 }
 
+/* Rows used as buttons (dom.ts pressable). */
+[role='button']:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+
 /* ------------------------------------------------------------- surfaces */
 
 /* Docked cards. */

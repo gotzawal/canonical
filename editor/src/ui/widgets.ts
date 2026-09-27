@@ -1,4 +1,4 @@
-import { h } from './dom';
+import { h, pressable } from './dom';
 import { icon } from './icons';
 import { normalizeHex } from '../engine/color';
 import type { Store } from '../core/store';
@@ -593,25 +593,29 @@ try {
 /** Collapsible inspector section; remembers its open state. */
 export function section(key: string, title: string, iconName: string | null, body: Node[], actions: Node[] = []): HTMLElement {
     const el = h('section', { class: 'section' + (collapsed[key] ? ' collapsed' : '') });
-    const header = h(
-        'header',
-        {
-            class: 'section-header',
-            on: {
-                click: (e) => {
-                    if ((e.target as HTMLElement).closest('.section-actions')) return;
-                    el.classList.toggle('collapsed');
-                    collapsed[key] = el.classList.contains('collapsed');
-                    try {
-                        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
-                    } catch { /* ignore */ }
+    const header = pressable(
+        h(
+            'header',
+            {
+                class: 'section-header',
+                attrs: { 'aria-expanded': String(!collapsed[key]) },
+                on: {
+                    click: (e) => {
+                        if ((e.target as HTMLElement).closest('.section-actions')) return;
+                        el.classList.toggle('collapsed');
+                        collapsed[key] = el.classList.contains('collapsed');
+                        header.setAttribute('aria-expanded', String(!collapsed[key]));
+                        try {
+                            localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
+                        } catch { /* ignore */ }
+                    },
                 },
             },
-        },
-        icon('chevronDown', 14, 'section-caret'),
-        iconName ? icon(iconName, 15) : null,
-        h('span', { class: 'section-title', text: title }),
-        h('div', { class: 'section-actions' }, actions),
+            icon('chevronDown', 14, 'section-caret'),
+            iconName ? icon(iconName, 15) : null,
+            h('span', { class: 'section-title', text: title }),
+            h('div', { class: 'section-actions' }, actions),
+        ),
     );
     el.append(header, h('div', { class: 'section-body' }, body));
     return el;

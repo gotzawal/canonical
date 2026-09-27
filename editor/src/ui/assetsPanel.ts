@@ -3,7 +3,7 @@ import { refs } from '../core/refs';
 import { formatBytes } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
-import { clear, h } from './dom';
+import { clear, h, pressable } from './dom';
 import { icon } from './icons';
 import { MenuItem, showMenu } from './overlays';
 import { iconButton } from './widgets';
@@ -138,14 +138,18 @@ export class AssetsPanel {
     }
 
     private item(dragId: string, iconName: string, name: string, meta: string, state: string, title: string, onOpen: () => void, menu: MenuItem[]): HTMLElement {
-        const item = h(
+        const item = pressable(h(
             'div',
             { class: 'asset-item' + (state ? ' ' + state : ''), title, attrs: { draggable: 'true' } },
             icon(iconName, 15),
             h('span', { class: 'asset-name', text: name }),
             state === 'error' ? h('span', { class: 'tree-badge error', text: 'error' }) : null,
             h('span', { class: 'asset-size', text: meta }),
-        );
+        ));
+        // Enter opens it, as a double click does.
+        item.addEventListener('click', (e) => {
+            if (e.detail === 0) onOpen();
+        });
         item.addEventListener('dragstart', (e) => {
             e.dataTransfer!.setData(ASSET_MIME, dragId);
             e.dataTransfer!.effectAllowed = 'copy';

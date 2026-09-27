@@ -14,7 +14,7 @@ import { schemaOf } from '../core/behavior/format';
 import { formatValue, keyTypeInfo } from '../core/behavior/nodeTypes';
 import { validateAgent } from '../core/behavior/validate';
 import { valueControl } from './behavior/fields';
-import { clear, h } from './dom';
+import { clear, h, pressable } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
@@ -1190,15 +1190,15 @@ export class InspectorPanel {
             this.editor.setModelPart(this.sameModel(), part.path, { visible: visible ? false : undefined }, visible ? 'Hide Mesh' : 'Show Mesh');
         });
         const slotKey = po.material ?? part.slot;
-        const head = h(
+        const head = pressable(h(
             'div',
-            { class: 'part-row' + (open ? ' open' : '') + (focused ? ' focused' : '') + (visible ? '' : ' hidden-node'), attrs: { role: 'button', tabindex: 0 } },
+            { class: 'part-row' + (open ? ' open' : '') + (focused ? ' focused' : '') + (visible ? '' : ' hidden-node'), attrs: { 'aria-expanded': String(open) } },
             icon('chevron', 12, 'slot-caret'),
             h('span', { class: 'part-name', text: part.name, title: part.path }),
             Object.keys(po).length ? h('span', { class: 'override-dot', title: 'Changed from the model file' }) : null,
             h('span', { class: 'part-meta', text: `${slotKey} · ${part.triangles.toLocaleString()} tris` }),
             eye,
-        );
+        ));
         head.addEventListener('click', () => {
             if (open) this.openParts.delete(part.path);
             else this.openParts.add(part.path);
