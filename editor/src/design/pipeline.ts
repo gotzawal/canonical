@@ -194,7 +194,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /**
      * Completes the current stage: captures every shot into its history,
      * takes a scene snapshot and moves on. Asks first when checklist items
-     * are open.
+     * are open; refused while the shots cannot be captured.
      */
     async complete(force = false): Promise<boolean> {
         if (this.busy) return false;
@@ -202,6 +202,11 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const id = design.stage;
         const def = stageDef(id);
         if (design.stages[id].status === 'done') return false;
+        const block = design.shots.length ? this.captureBlock() : '';
+        if (block) {
+            toast(block, 'info', 5000);
+            return false;
+        }
         const prog = this.progress(id);
         if (prog.open.length && !force) {
             const list = prog.open.map((i) => `- ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('\n');
@@ -536,10 +541,24 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     /**
+     * Why shots cannot be captured now, or '' when they can: the viewport
+     * shows something else in place of the scene, and a capture would too.
+     */
+    captureBlock(): string {
+        const ed = this.editor;
+        if (ed.isolated) return 'The view shows only the prefab being edited. Finish the edit first (Apply or Discard).';
+        if (ed.room?.active) return 'The view shows the reference room. Leave it first.';
+        if (ed.walk?.active) return 'The view follows the walk camera. Stop walking first.';
+        return '';
+    }
+
+    /**
      * Renders a view: `camera` holds the frame's field of view, `aspect` the
      * frame's shape. The editor view comes back afterwards.
      */
     async captureCamera(camera: CameraState, aspect: number, maxWidth = 1600): Promise<Blob> {
+        const block = this.captureBlock();
+        if (block) throw new Error(block);
         const runtime = this.editor.runtime;
         const prev = { ...this.store.camera, target: [...this.store.camera.target] as CameraState['target'] };
         const { rect, viewH } = this.frameFor(aspect, 1);
