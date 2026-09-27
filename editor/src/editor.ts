@@ -867,8 +867,16 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     attachScript(ids: string[], scriptId: string, props: Record<string, ParamValue> = {}) {
-        const targets = ids.filter((id) => this.store.node(id));
-        if (!targets.length || !this.store.doc.scripts.some((s) => s.id === scriptId)) return;
+        if (!this.store.doc.scripts.some((s) => s.id === scriptId)) return;
+        // One copy per object: the Inspector finds a script's field values by the script.
+        const targets = ids.filter((id) => {
+            const n = this.store.node(id);
+            return n && !n.scripts?.some((r) => r.script === scriptId);
+        });
+        if (!targets.length) {
+            if (ids.length) toast('The script is already attached.', 'info');
+            return;
+        }
         this.store.commit('Add Script', (d) => {
             for (const n of d.nodes) {
                 if (!targets.includes(n.id)) continue;
