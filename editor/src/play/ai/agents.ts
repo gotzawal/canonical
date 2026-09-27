@@ -186,6 +186,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     private running = false;
     /** The decision model was lost when the last frame looked. */
     private modelLost = false;
+    /** The agents' tick offsets are set in the first frame of a session. */
+    private spreadPending = false;
     private queryCache = new Map<string, Promise<Float32Array | null>>();
     /** Vectors of the queries embedded so far (by the same keys). */
     private queryVectors = new Map<string, Float32Array>();
@@ -256,6 +258,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             agent.nextTick = this.time + (i / Math.max(1, list.length)) * TICK_INTERVAL;
             this.agents.push(agent);
         });
+        this.spreadPending = true;
         if (this.agents.length) {
             const needs = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded);
             if (needs.decision || needs.embedder) this.services()?.prepare(needs, this.host.doc().memory.embedder);
@@ -299,6 +302,12 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             }
         }
         const now = this.time;
+        if (this.spreadPending) {
+            // The offsets count from the first agent frame: a long first frame
+            // must not make every agent due at once.
+            this.spreadPending = false;
+            this.agents.forEach((a, i) => (a.nextTick = now + (i / Math.max(1, this.agents.length)) * TICK_INTERVAL));
+        }
         for (const a of this.agents.slice()) {
             if (now < a.nextTick) continue;
             try {
@@ -307,8 +316,10 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
                 console.error(`[ai] tick of "${a.name}" failed`, e);
             }
             a.nextTick += TICK_INTERVAL;
-            // After a long frame, skip the missed ticks instead of running them all now.
-            if (a.nextTick <= now) a.nextTick = now + TICK_INTERVAL;
+            // After a long frame, skip the missed ticks instead of running them
+            // all now, keeping the agent's phase: resetting every late agent to
+            // now + interval would line all of them up in the same frames.
+            if (a.nextTick <= now) a.nextTick += Math.ceil((now - a.nextTick) / TICK_INTERVAL + 1e-9) * TICK_INTERVAL;
         }
     }
 
