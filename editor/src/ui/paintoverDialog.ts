@@ -333,7 +333,7 @@ class PaintoverDialog {
         const notes: string[] = [];
         const open = this.editor.pipeline.progress('level').items.filter((i) => ['level.route', 'level.sightlines', 'level.play'].includes(i.id) && !i.done);
         if (open.length && d.stage === 'level') notes.push('Play checks are still open. Paintovers are best made once the blockout passes them.');
-        if (shot.stale) notes.push('The level changed after the target was chosen. Make a new paintover or choose the target again.');
+        if (shot.stale) notes.push('The level or the framing changed after the target was chosen. Make a new paintover or choose the target again.');
         if (!shot.target && shot.paintovers.length) notes.push('Choose the paintover that becomes the target of this shot.');
         for (const n of notes) this.resultsEl.appendChild(h('div', { class: 'design-note' }, icon('info', 14), h('span', { text: n })));
         const grid = h('div', { class: 'po-grid' });
@@ -397,7 +397,8 @@ class PaintoverDialog {
         if (p.prompt) this.prompt.value = p.prompt;
         if (p.model) this.modelInput.value = p.model;
         this.seed.value = p.seed != null ? String(p.seed) : '';
-        this.extra = (p.refs ?? []).filter((r) => r !== this.shot?.concept && this.editor.store.doc.design.shots.every((s) => !s.history.some((hh) => hh.asset === r)));
+        // The first reference was the capture of that time: a fresh one is sent instead.
+        this.extra = (p.refs ?? []).slice(1).filter((r) => r !== this.shot?.concept);
         this.params = { ...(p.params ?? {}) };
         this.modelChanged(this.params);
         this.renderRefs();
@@ -491,7 +492,8 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
         });
         const n = res.paintovers.length;
         const cost = res.cost != null ? ` ($${res.cost.toFixed(3)})` : '';
-        toast(`${n} paintover${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
+        const kept = job.abort.signal.aborted ? 'Cancelled; kept ' : '';
+        toast(`${kept}${n} paintover${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
         if (res.errors.length) toast(`${res.errors.length} request${res.errors.length === 1 ? '' : 's'} failed: ${res.errors[0]}`, 'error');
         if (res.dropped.length) toast(`Left out options the model does not take: ${res.dropped.join(', ')}`, 'info', 6000);
         const away = document.hidden || !document.hasFocus() || !current || current.closed || current.shotId !== shotId;

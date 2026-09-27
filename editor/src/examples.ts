@@ -21,6 +21,13 @@ function attach(node: NodeDoc, s: ScriptDoc, props: Record<string, ParamValue> =
     node.scripts = [...(node.scripts ?? []), { script: s.id, enabled: true, props }];
 }
 
+/** The examples are finished scenes: they skip the planning brief (and its start screen). */
+function exampleDesign() {
+    const design = defaultDesign();
+    design.brief.skipped = true;
+    return design;
+}
+
 /**
  * A small scene that shows off primitives, materials and light types, plus
  * scripts (press Play), a custom shader material, a post effect and a game
@@ -127,7 +134,7 @@ export function exampleShowcase(): SceneDoc {
         behaviors: [],
         memory: defaultMemory(),
         aiModels: [],
-        design: defaultDesign(),
+        design: exampleDesign(),
     };
 }
 
@@ -393,7 +400,7 @@ export function exampleGuard(): SceneDoc {
         behaviors: [],
         memory: defaultMemory(),
         aiModels: [],
-        design: defaultDesign(),
+        design: exampleDesign(),
     };
     // The behavior data goes through the edit operations like any edit, so the example is valid by construction.
     const r = applyBehaviorOps(
@@ -449,7 +456,15 @@ export function exampleGuard(): SceneDoc {
                                     note: 'Only a stranger judged a threat is chased.',
                                     decorators: [{ type: 'condition', key: 'response', op: 'eq', value: 'chase' }, { type: 'condition', key: 'threat', op: 'ge', value: 0.5 }],
                                 },
-                                { id: 'warn', type: 'script', method: 'warn' },
+                                {
+                                    id: 'warning',
+                                    type: 'sequence',
+                                    note: 'After the warning the guard waits for an answer before it warns again.',
+                                    children: [
+                                        { id: 'warn', type: 'script', method: 'warn' },
+                                        { id: 'listen', type: 'wait', seconds: 5, deviation: 1 },
+                                    ],
+                                },
                             ],
                         },
                         { id: 'halt', type: 'script', method: 'halt', decorators: [{ type: 'condition', key: 'dist', op: 'eq', value: 'near' }, { type: 'cooldown', seconds: 8 }] },

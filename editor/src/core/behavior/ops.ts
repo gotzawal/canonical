@@ -45,6 +45,8 @@ export interface BehaviorChanges {
     aiModels: AiModelDoc[];
     /** Objects whose agent changed: the new settings, or null to remove them. */
     agents: Map<string, AgentDoc | null>;
+    /** Items that got another id (see Draft.renames), for views that keep them selected. */
+    renamed: Map<string, Map<string, string>>;
 }
 
 export interface Created {
@@ -92,7 +94,7 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'update_schema', fields: 'schema, name', description: 'Rename a schema.' },
     { op: 'delete_schema', fields: 'schema', description: 'Delete a schema no tree uses.' },
     { op: 'add_key', fields: 'schema, key: {name, type, owner, default?, description?, values?: [{value, description}]}, index?', description: 'Add a key.' },
-    { op: 'update_key', fields: 'schema, key, set: {name?, type?, owner?, default?, description?, values?}', description: 'Change a key. A new name is also written into every tree and object that uses the key.' },
+    { op: 'update_key', fields: 'schema, key, set: {name?, type?, owner?, default?, description?, values?}', description: 'Change a key. A new name is also written into every tree and object that uses the key, and so is an enum value renamed at its place in values.' },
     { op: 'move_key', fields: 'schema, key, index', description: 'Reorder a key.' },
     { op: 'delete_key', fields: 'schema, key', description: 'Delete a key; refused while nodes use it (the error lists them).' },
     { op: 'create_tree', fields: 'name, schema, root?: node, id?', description: 'New behavior tree; the root defaults to an empty Selector "root".' },
@@ -109,7 +111,7 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'update_decorator', fields: 'tree, node, index, set', description: 'Change a decorator (by its index on the node).' },
     { op: 'remove_decorator', fields: 'tree, node, index', description: 'Remove a decorator.' },
     { op: 'add_service', fields: 'tree, node, service: {type, id?, ...fields}', description: 'Attach a service.' },
-    { op: 'update_service', fields: 'tree, service, set', description: 'Change a service (by its id); set.id renames it.' },
+    { op: 'update_service', fields: 'tree, service, set', description: 'Change a service (by its id); set.id renames it (and the {context:slot} placeholders of a Recall\'s slot).' },
     { op: 'remove_service', fields: 'tree, service', description: 'Remove a service.' },
     { op: 'set_agent', fields: 'object, tree?, enabled?, values?: {key: value}', description: 'Make a scene object run a tree, or change its agent settings (values replace the initial value overrides).' },
     { op: 'remove_agent', fields: 'object', description: 'The object no longer runs a tree.' },
@@ -458,36 +460,55 @@ function buildKey(input: unknown, schema: BlackboardSchemaDoc, at: Partial<OpErr
     return key;
 }
 
-const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-
-/** Texts of an item that can hold {key} placeholders: templates and question texts. */
-function templateTexts(item: any): string[] {
-    const out: string[] = [];
-    for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') out.push(item[f]);
-    if (Array.isArray(item.questions)) for (const q of item.questions) if (typeof q?.text === 'string') out.push(q.text);
-    return out;
+/** Every item of a tree (its nodes, their decorators and services) with its type, and the id of the node or service it is. */
+function walkItems(tree: BehaviorTreeDoc, fn: (item: any, def: ItemTypeDef, id: string) => void) {
+    const visit = (item: any, def: ItemTypeDef | undefined, id: string) => def && fn(item, def, id);
+    walkNodes(tree.root, (n) => {
+        visit(n, nodeType(n.type), n.id);
+        for (const dec of n.decorators ?? []) visit(dec, decoratorType(dec.type), n.id);
+        for (const s of n.services ?? []) visit(s, serviceType(s.type), s.id);
+    });
 }
 
-/** Fields of the node and service types that are templates. */
-const TEMPLATE_FIELDS = Array.from(new Set([...NODE_TYPES, ...SERVICE_TYPES].flatMap((t) => t.fields.filter((f) => f.kind === 'template').map((f) => f.name))));
+/**
+ * Maps every name the items of a tree refer to, as the fields of their types
+ * say: keys (key and keys fields, question keys) and the {name} placeholders
+ * of templates and question texts ({key}, or context:slot for a slot of the
+ * context pool). `fn` gets each name and the id of the node or service that
+ * holds it, and returns the name to keep.
+ */
+function mapRefs(tree: BehaviorTreeDoc, fn: (name: string, id: string) => string) {
+    walkItems(tree, (item, def, id) => {
+        const text = (s: string) =>
+            s.replace(/\{([^{}]+)\}/g, (m, raw: string) => {
+                const name = raw.trim();
+                const next = fn(name, id);
+                return next === name ? m : `{${next}}`;
+            });
+        for (const f of def.fields) {
+            const v = item[f.name];
+            if (f.kind === 'key' && typeof v === 'string' && v) item[f.name] = fn(v, id);
+            else if (f.kind === 'keys' && Array.isArray(v)) item[f.name] = v.map((k: string) => fn(k, id));
+            else if (f.kind === 'template' && typeof v === 'string') item[f.name] = text(v);
+            else if (f.kind === 'questions' && Array.isArray(v)) {
+                for (const q of v) {
+                    if (q.key) q.key = fn(q.key, id);
+                    if (typeof q.text === 'string') q.text = text(q.text);
+                }
+            }
+        }
+    });
+}
 
 /** Where a key is used: node ids per tree, and objects (and prefab parts) with a starting value for it. */
 function keyUsers(d: Draft, schemaId: string, name: string): { trees: { tree: BehaviorTreeDoc; nodes: string[] }[]; objects: AgentHolder[] } {
     const trees: { tree: BehaviorTreeDoc; nodes: string[] }[] = [];
-    const placeholder = new RegExp(`\\{\\s*${escapeRe(name)}\\s*\\}`);
     for (const tree of d.behaviors) {
         if (tree.schema !== schemaId) continue;
         const nodes = new Set<string>();
-        const visit = (id: string, item: any) => {
-            if (item.key === name) nodes.add(id);
-            if (Array.isArray(item.facts) && item.facts.includes(name)) nodes.add(id);
-            if (Array.isArray(item.questions) && item.questions.some((q: any) => q.key === name)) nodes.add(id);
-            if (templateTexts(item).some((t) => placeholder.test(t))) nodes.add(id);
-        };
-        walkNodes(tree.root, (n) => {
-            visit(n.id, n);
-            for (const dec of n.decorators ?? []) visit(n.id, dec);
-            for (const s of n.services ?? []) visit(s.id, s);
+        mapRefs(tree, (k, id) => {
+            if (k === name) nodes.add(id);
+            return k;
         });
         if (nodes.size) trees.push({ tree, nodes: Array.from(nodes) });
     }
@@ -500,61 +521,47 @@ function keyUsers(d: Draft, schemaId: string, name: string): { trees: { tree: Be
 const MEMORY_TAGS: FieldDef = { name: 'tags', kind: 'tags', label: 'Tags', description: '', default: [], max: 32 };
 
 /**
- * A memory item got another id: the values that hold the old one follow it
- * (conditions, defaults and starting values of keys an Ask chooses from
- * memory, since those keys hold item ids).
+ * A value of some keys got another name (an enum value, a memory item id):
+ * what holds the old one follows it (value fields of the tree such as
+ * conditions and Set Key, the keys' defaults, and the starting values of
+ * objects that run the tree).
  */
-function renameMemoryItem(d: Draft, from: string, to: string) {
-    for (const tree of d.behaviors) {
-        const keys = memoryChoiceKeys(tree);
-        if (!keys.size) continue;
-        walkNodes(tree.root, (n) => {
-            for (const dec of n.decorators ?? []) {
-                if (dec.type !== 'condition' || !keys.has(dec.key) || dec.value !== from) continue;
-                dec.value = to;
-                d.touchTree(tree);
-            }
-        });
-        const schema = d.blackboards.find((s) => s.id === tree.schema);
-        for (const k of schema?.keys ?? []) {
-            if (!keys.has(k.name) || k.default !== from) continue;
-            k.default = to;
-            d.schemas.add(schema!.id);
+function renameValue(d: Draft, tree: BehaviorTreeDoc, keys: Set<string>, from: string, to: string) {
+    walkItems(tree, (item, def) => {
+        for (const f of def.fields) {
+            if (f.kind !== 'value' || !keys.has(item[f.keyField ?? 'key']) || item[f.name] !== from) continue;
+            item[f.name] = to;
+            d.touchTree(tree);
         }
-        for (const { node, agent } of d.objectsWithAgents()) {
-            if (agent.tree !== tree.id) continue;
-            const names = Object.keys(agent.values).filter((k) => keys.has(k) && agent.values[k] === from);
-            if (!names.length) continue;
-            d.agents.set(node.id, { ...agent, values: { ...agent.values, ...Object.fromEntries(names.map((k) => [k, to])) } });
-            d.objects.add(node.id);
-        }
+    });
+    const schema = d.blackboards.find((s) => s.id === tree.schema);
+    for (const k of schema?.keys ?? []) {
+        if (!keys.has(k.name) || k.default !== from) continue;
+        k.default = to;
+        d.schemas.add(schema!.id);
+    }
+    for (const { node, agent } of d.objectsWithAgents()) {
+        if (agent.tree !== tree.id) continue;
+        const names = Object.keys(agent.values).filter((k) => keys.has(k) && agent.values[k] === from);
+        if (!names.length) continue;
+        d.agents.set(node.id, { ...agent, values: { ...agent.values, ...Object.fromEntries(names.map((k) => [k, to])) } });
+        d.objects.add(node.id);
     }
 }
 
+/** A memory item got another id: the keys an Ask chooses from memory hold item ids. */
+function renameMemoryItem(d: Draft, from: string, to: string) {
+    for (const tree of d.behaviors) renameValue(d, tree, memoryChoiceKeys(tree), from, to);
+}
+
 function renameKeyEverywhere(d: Draft, schema: BlackboardSchemaDoc, from: string, to: string) {
-    const placeholder = new RegExp(`\\{\\s*${escapeRe(from)}\\s*\\}`, 'g');
-    const fix = (item: any) => {
-        if (item.key === from) item.key = to;
-        if (Array.isArray(item.facts)) item.facts = item.facts.map((k: string) => (k === from ? to : k));
-        if (Array.isArray(item.questions)) {
-            for (const q of item.questions) {
-                if (q.key === from) q.key = to;
-                if (typeof q.text === 'string') q.text = q.text.replace(placeholder, `{${to}}`);
-            }
-        }
-        for (const f of TEMPLATE_FIELDS) if (typeof item[f] === 'string') item[f] = item[f].replace(placeholder, `{${to}}`);
-    };
     for (const tree of d.behaviors) {
         if (tree.schema !== schema.id) continue;
-        let hit = false;
-        walkNodes(tree.root, (n) => {
-            const before = JSON.stringify(n);
-            fix(n);
-            for (const dec of n.decorators ?? []) fix(dec);
-            for (const s of n.services ?? []) fix(s);
-            if (JSON.stringify(n) !== before) hit = true;
+        mapRefs(tree, (k) => {
+            if (k !== from) return k;
+            d.touchTree(tree);
+            return to;
         });
-        if (hit) d.touchTree(tree);
         // Objects running this tree (and prefab parts that give instances an agent) keep their starting value under the new name.
         for (const { node, agent } of d.objectsWithAgents()) {
             if (agent.tree !== tree.id || !Object.hasOwn(agent.values, from)) continue;
@@ -791,7 +798,18 @@ function apply(d: Draft, op: BehaviorOp) {
             }
             if (set.values !== undefined) {
                 if (key.type !== 'enum') throw new OpFail('Only enum keys have values.', { ...at, field: 'values' });
-                key.values = buildValues(set.values, at);
+                const before = key.values ?? [];
+                const values = buildValues(set.values, at);
+                // A value given another name at its place is renamed where it is held.
+                if (values.length === before.length) {
+                    before.forEach(({ value: from }, i) => {
+                        const to = values[i].value;
+                        if (values.some((v) => v.value === from) || before.some((v) => v.value === to)) return;
+                        if (key.default === from) key.default = to;
+                        for (const t of d.behaviors) if (t.schema === s.id) renameValue(d, t, new Set([key.name]), from, to);
+                    });
+                }
+                key.values = values;
             }
             if (set.default !== undefined) {
                 if (!valueFits(key, set.default)) throw new OpFail(`The default ${JSON.stringify(set.default)} does not fit a ${key.type} key.`, { ...at, field: 'default' });
@@ -1087,6 +1105,8 @@ function apply(d: Draft, op: BehaviorOp) {
                     const from = s.id;
                     s.id = readableId(set.id, taken, at);
                     d.rename(`t:${t.id}`, from, s.id);
+                    // A Recall fills the context slot named after it.
+                    if (s.type === 'recall') mapRefs(t, (n) => (n === `context:${from}` ? `context:${s.id}` : n));
                 }
                 if (set.note !== undefined) {
                     const n = note(set.note, at);
@@ -1379,7 +1399,7 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched, models: d.modelsTouched };
     result.ok = true;
     const changed = d.trees.size || d.schemas.size || d.objects.size || d.memoryTouched || d.modelsTouched;
-    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, aiModels: d.aiModels, agents: d.agents } : null;
+    result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, aiModels: d.aiModels, agents: d.agents, renamed: d.renames } : null;
     return result;
 }
 

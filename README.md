@@ -45,7 +45,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 - Works on the open project through tools: it reads and edits the scene and imported models, writes and fixes scripts and shaders, changes the render graph, runs Play tests and reads the console
 - With vision models it can also look at the viewport, the shots and the images you attach (drop or paste them into the AI tab)
-- Everything one request changes is a single undo step
+- Everything one request changes is a single undo step; edits you make by hand while it works stay steps of their own
 - Remembers each project: the conversation is kept in the browser, long conversations are compacted, and a short scene memo carries the context to later sessions
 - Works with any OpenRouter model that supports tool calls
 
@@ -71,7 +71,7 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 **Code**
 
-- JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was
+- JavaScript behaviours, and a Play mode (`Ctrl+P`) to run them; Stop puts the scene back exactly as it was, keeping the scripts and shaders you changed while playing
 - WGSL material shaders and full screen post effects in the built-in code editor; properties declared in the code become Inspector controls
 - The engine's render graph (passes and the resources they read and write): switch passes off and order the post chain
 
@@ -204,11 +204,32 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 | `samples/` | Engine samples, served by `pnpm run dev` (they load assets from the `public` submodule: `git submodule update --init`) |
 | `test/` | Engine tests |
 
+### Testing
+Check a change with `pnpm run editor:typecheck` and `pnpm run editor:build`, then drive the built editor in a browser: serve it with `npx vite preview --config editor/vite.config.js`, which also serves the player app that Build & Deploy needs. What has worked for scripted runs (Playwright or plain CDP):
+
+- **WebGPU without a GPU.** Chromium can run WebGPU on the CPU with SwiftShader: `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader`. On a server, run the browser headed under a virtual display (`xvfb-run -a node test.mjs`), which is more reliable than headless.
+- **Start clean.** The editor restores its last scene, layout and settings from localStorage and IndexedDB. Clear both and reload for a new scene. A new scene opens on the brief screen; "Work without a brief" dismisses it.
+- **Wait for state, not time.** The editor is `window.__editor` (its store, pipeline, camera and so on). It is ready when `.viewport canvas.gpu` is there and `.viewport-loading` is gone. SwiftShader can stop drawing frames for many seconds after a load, and waits that poll on animation frames stop with it. So give `waitForFunction` a `{ polling: 100 }` interval, click with `el.click()` inside `page.evaluate` when Playwright's actionability waits time out, and wait for `!__editor.camera.animating` after camera moves.
+- **Keys.** Shortcuts take digits by their position (`Shift+1` is the back view, not `!`), and letters by position too when the layout types another script (Korean, Cyrillic). For a symbol typed with Shift, press the symbol (`?`), not `Shift+/`.
+- **The assistant without an account.** Put a dummy key in `localStorage['canonical-editor/openrouter-key']`. Then answer `https://openrouter.ai/api/v1/models` and `/api/v1/chat/completions` with `context.route`. A chat reply is a `text/event-stream` body of `data: {"choices":[{"delta":...}]}` lines ending with `data: [DONE]`, so a test can script tool calls step by step.
+- **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats and the script compiler, run in Node. Bundle a test with `npx esbuild test.ts --bundle --platform=node --format=esm --outfile=test.mjs`, and stub the few globals they touch (`window`, `document`, `localStorage`).
+- **The engine.** `pnpm run test:ci` runs `test/` in Electron with SwiftShader. The same page (`test/?auto` on `pnpm run dev`) also runs in Chromium when `window.electron` is stubbed to collect the results.
+- **Load.** SwiftShader is CPU bound. With several browsers at once, the GPU process can lose its device ("Instance dropped" errors) or time out. Run browser tests one at a time, and rerun a failure on an idle machine before deciding it is not the change.
+
 ### Browser support
 The editor needs WebGPU: Chrome or Edge 113+ on Windows, macOS and ChromeOS, Chrome 121+ on Android, Safari 26+, and Firefox 141+ on Windows. On Linux, Chrome may need `chrome://flags/#enable-unsafe-webgpu` and Vulkan.
+
+On tablets and phones the side panels open from the top bar as drawers, or as sheets over the lower half of the view on a phone held upright. In the viewport one finger orbits, two fingers pan and pinch to zoom, and a long press opens the context menu.
 
 ## Contributing
 Issues and pull requests are welcome. Commit messages follow the [commit convention](.github/commit-convention.md), for example `feat(editor): ...`. For the engine's internals, scripts and samples, see the [Orillusion contributing guide](.github/contributing.md).
 
 ## License
-Released under the [MIT](LICENSE) license. The Orillusion engine is copyright Orillusion and MIT licensed.
+The two parts of this repository have different licenses:
+
+| Part | License |
+|---|---|
+| The editor: `editor/` | [GNU Affero General Public License v3.0](editor/LICENSE) (AGPL-3.0-only) |
+| The Orillusion engine: `src/`, `packages/` | [MIT](LICENSE), copyright Orillusion |
+
+Under the AGPL you may use, change and share the editor, but whoever shares it or a changed version, or lets people use a changed version over a network, has to offer them its complete source under the same license. Games made with Build & Deploy include the player app, which is part of the editor and so under the AGPL too.

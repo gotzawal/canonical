@@ -7,11 +7,7 @@ import type { AreaDoc, AreaObjectDoc, DesignDoc, StageId, Vec3 } from '../core/t
 import { evaluateStage, stageDef } from '../design/stages';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { hex, num, optStr, str, ToolError, v3, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, hex, num, optStr, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const SECTIONS = ['all', 'brief', 'layout', 'areas', 'concepts', 'specs', 'mood', 'play', 'effects', 'materials', 'budget', 'questions', 'shots', 'stages', 'snapshots', 'memo'];

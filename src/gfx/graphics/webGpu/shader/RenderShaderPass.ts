@@ -1427,10 +1427,13 @@ export class RenderShaderPass extends ShaderPassBase {
             if (Object.prototype.hasOwnProperty.call(this.textures, key)) {
                 const texture = this.textures[key];
                 Reference.getInstance().detached(texture, this);
+                // Only this pass stops following the texture. destroy(false)
+                // dropped the change callbacks of every pass sampling it, so a
+                // shared texture (the scene color a post effect reads) recreated
+                // on resize left the other passes bound to the destroyed one.
+                texture.unBindStateChange(this);
                 if (force && !Reference.getInstance().hasReference(texture)) {
                     texture.destroy(force);
-                } else {
-                    texture.destroy(false);
                 }
             }
         }

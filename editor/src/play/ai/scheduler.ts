@@ -56,6 +56,8 @@ export interface JobResult {
 /** Runs batches of a model (the inference worker). */
 export interface ModelProvider {
     ready(model: string): boolean;
+    /** Changes with the model's files or options: answers of another revision are not reused. */
+    revision(model: string): string;
     /** Kind and backend, e.g. "laya/webgpu". */
     name(model: string): string;
     run(model: string, inputs: unknown[]): Promise<{ outputs: unknown[]; ms: number }>;
@@ -157,6 +159,9 @@ export class Scheduler {
     }
 
     submit(job: ModelJob): Promise<JobResult> {
+        // The caches and joins go by the model's revision too.
+        const rev = this.provider.revision(job.model);
+        job = { ...job, key: job.key && `${rev}\u0000${job.key}`, semanticKey: job.semanticKey && `${rev}\u0000${job.semanticKey}` };
         return new Promise((resolve) => {
             const since = performance.now();
             if (!this.provider.ready(job.model)) {

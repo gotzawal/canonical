@@ -8,11 +8,7 @@ import type { NodeDoc, ParticlesDoc } from '../core/types';
 import { addColorGrade, addVignette } from '../design/effects';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { node, num, str, ToolError, v3, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, node, num, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const pair = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 };

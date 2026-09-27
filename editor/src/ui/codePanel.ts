@@ -488,10 +488,11 @@ export class CodePanel {
         const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
         const doc = this.doc;
         if (!doc) return;
-        const replace = async (code: string) => {
-            if (this.code.value.trim() && !(await confirmDialog('Replace code', 'Replace the current code with the template?', 'Replace'))) return;
+        const replace = async (code: string): Promise<boolean> => {
+            if (this.code.value.trim() && !(await confirmDialog('Replace code', 'Replace the current code with the template?', 'Replace'))) return false;
             this.code.setValue(code);
             this.onEdit();
+            return true;
         };
         const templates: MenuItem[] =
             this.kind === 'behavior'
@@ -500,10 +501,11 @@ export class CodePanel {
                 ? SCRIPT_TEMPLATES.map((t) => ({ label: t.label, action: () => void replace(t.code(className(doc.name))) }))
                 : SHADER_TEMPLATES.filter((t) => t.kind === (doc as ShaderDoc).kind).map((t) => ({
                       label: t.label,
-                      action: () => {
-                          void replace(t.code);
-                          if ((doc as ShaderDoc).lighting !== t.lighting) this.editor.updateShader(this.id, { lighting: t.lighting });
-                      },
+                      action: () =>
+                          void replace(t.code).then((done) => {
+                              // Only once the code is replaced: Cancel keeps the shader as it was.
+                              if (done && (doc as ShaderDoc).lighting !== t.lighting) this.editor.updateShader(this.id, { lighting: t.lighting });
+                          }),
                   }));
         showMenu(
             [

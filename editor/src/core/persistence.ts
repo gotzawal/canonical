@@ -1,8 +1,9 @@
 import { createZip, readZip, type ZipEntry } from '../build/zip';
-import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset } from './assets';
+import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
 import { designAssetIds } from './design';
+import { usedIds } from './refs';
 import { sanitize, Store } from './store';
-import type { AssetMeta, CameraState, ParamValue, SceneDoc, SceneFile } from './types';
+import type { AssetMeta, CameraState, SceneDoc, SceneFile } from './types';
 
 const AUTOSAVE_KEY = 'canonical-editor/autosave';
 
@@ -14,23 +15,39 @@ export interface Autosave {
     scriptsPaused?: boolean;
 }
 
+const UNREADABLE_KEY = 'canonical-editor/autosave-unreadable';
+
+/** The autosave that could not be read at startup (saved by a newer version, damaged), kept for the user. */
+export let unreadableAutosave: { raw: string; reason: string } | null = null;
+
 export function readAutosave(): Autosave | null {
+    let raw: string | null = null;
     try {
-        const raw = localStorage.getItem(AUTOSAVE_KEY);
+        raw = localStorage.getItem(AUTOSAVE_KEY);
         if (!raw) return null;
         const parsed = JSON.parse(raw);
         if (!parsed || !parsed.doc) return null;
         return { doc: sanitize(parsed.doc), camera: parsed.camera, savedAt: parsed.savedAt, scriptsPaused: parsed.scriptsPaused === true };
-    } catch {
+    } catch (e: any) {
+        // The next autosave would overwrite it: keep a copy and tell the user (main.ts).
+        if (raw) {
+            unreadableAutosave = { raw, reason: e?.message || String(e) };
+            try {
+                localStorage.setItem(UNREADABLE_KEY, raw);
+            } catch { /* no room for a second copy: the download is left */ }
+        }
         return null;
     }
 }
+
+/** How safe the project is in this browser after a save: when it was saved, or what would be lost. */
+export type SaveStatus = { saved: Date; problem?: undefined } | { saved?: Date; problem: string };
 
 /** Keeps the current scene in localStorage (assets are already in IndexedDB). */
 export class AutoSaver {
     private timer = 0;
     lastSaved = '';
-    onSaved: (time: Date) => void = () => {};
+    onStatus: (status: SaveStatus) => void = () => {};
     /** Saved with the scene so a reload keeps untrusted scripts paused. */
     scriptsPaused = false;
 
@@ -65,10 +82,17 @@ export class AutoSaver {
         try {
             localStorage.setItem(AUTOSAVE_KEY, `${content.slice(0, -1)},"savedAt":${JSON.stringify(new Date().toISOString())}}`);
             this.lastSaved = content;
-            this.onSaved(new Date());
-        } catch (e) {
+        } catch (e: any) {
             console.warn('[editor] autosave failed', e);
+            this.onStatus({ problem: `Not saved in this browser (${e?.name === 'QuotaExceededError' ? 'its storage is full' : e?.message || e}): save a project file to keep your work.` });
+            return;
         }
+        const lost = unstoredCount(usedAssetIds(this.store.doc));
+        this.onStatus(
+            lost
+                ? { saved: new Date(), problem: `${lost} imported file${lost === 1 ? ' is' : 's are'} only in memory (the browser refused to store ${lost === 1 ? 'it' : 'them'}) and would be lost on reload: save a project file.` }
+                : { saved: new Date() },
+        );
     }
 }
 
@@ -131,6 +155,7 @@ function assetFileName(meta: AssetMeta): string {
  */
 export async function exportProject(store: Store): Promise<{ blob: Blob; missing: string[] }> {
     const doc = JSON.parse(JSON.stringify(store.doc)) as SceneDoc;
+    doc.assets = keptAssets(doc);
     const metas = new Map<string, AssetMeta>(doc.assets.map((a) => [a.id, a]));
     // Snapshots can use assets the project no longer lists: take their metas from the snapshots.
     for (const snap of doc.design.snapshots) {
@@ -210,36 +235,50 @@ export async function importSceneFile(text: string): Promise<{ doc: SceneDoc; ca
     return { doc: sanitize(parsed), camera };
 }
 
+/** Assets the game uses (core/refs.ts). */
 export function usedAssetIds(doc: SceneDoc): Set<string> {
-    const ids = new Set<string>();
-    const known = new Set(doc.assets.map((a) => a.id));
-    // Texture properties of custom shaders hold asset ids as values.
-    const params = (values?: Record<string, ParamValue>) => {
-        for (const v of Object.values(values ?? {})) if (typeof v === 'string' && known.has(v)) ids.add(v);
-    };
-    for (const n of doc.nodes) {
-        if (n.model?.asset) ids.add(n.model.asset);
-        const m = n.mesh?.material;
-        for (const id of [m?.map, m?.normalMap, m?.metalRoughMap, m?.aoMap, m?.emissiveMap]) if (id) ids.add(id);
-        params(n.mesh?.material.params);
-        for (const o of Object.values(n.model?.materials ?? {})) {
-            if (o.map) ids.add(o.map);
-            params(o.params);
-        }
-    }
-    for (const p of doc.renderGraph.posts) params(p.params);
-    // ... and a property's default may name one in the shader code.
-    for (const s of doc.shaders) {
-        for (const id of known) if (s.code.includes(id)) ids.add(id);
-    }
-    return ids;
+    return usedIds(doc, 'asset');
 }
 
-/** Drops IndexedDB blobs the current project no longer lists (keeping what its snapshots use). */
+const TAB_LOCK = 'canonical-editor/tab';
+
+/**
+ * Every editor tab of this site holds or waits for one lock, so the open
+ * tabs can be counted: they share the autosave and the stored files.
+ */
+export function registerTab() {
+    (navigator as any).locks?.request?.(TAB_LOCK, () => new Promise(() => {}));
+}
+
+/** True when the editor is open in another tab of this browser too. */
+export async function otherTabsOpen(): Promise<boolean> {
+    try {
+        const state = await (navigator as any).locks?.query?.();
+        if (!state) return false;
+        return [...(state.held ?? []), ...(state.pending ?? [])].filter((l: { name: string }) => l.name === TAB_LOCK).length > 1;
+    } catch {
+        return false;
+    }
+}
+
+/**
+ * The assets a project keeps: every file the user imported (placed or
+ * not), and the planning images the design still shows; those of deleted
+ * shots and replaced paintovers go.
+ */
+export function keptAssets(doc: SceneDoc): AssetMeta[] {
+    const design = designAssetIds(doc.design);
+    return doc.assets.filter((a) => a.purpose !== 'design' || design.has(a.id));
+}
+
+/** Drops IndexedDB blobs the project no longer keeps (keeping what its snapshots use). */
 export function collectGarbage(doc: SceneDoc) {
-    const keep = new Set(doc.assets.map((a) => a.id));
+    const keep = new Set(keptAssets(doc).map((a) => a.id));
     for (const id of designAssetIds(doc.design)) keep.add(id);
-    void deleteAssets(keep);
+    // The scene of another tab uses files this one does not list: clean up only when alone.
+    void otherTabsOpen().then((others) => {
+        if (!others) void deleteAssets(keep);
+    });
 }
 
 export function download(blob: Blob, name: string) {

@@ -570,7 +570,7 @@ export class DesignPanel {
         const badges: HTMLElement[] = [];
         if (shot.target) badges.push(h('span', { class: 'shot-badge ok', text: 'target' }));
         else badges.push(h('span', { class: 'shot-badge', text: 'no target' }));
-        if (shot.stale) badges.push(h('span', { class: 'shot-badge warn', text: 'needs update', title: 'The level was reopened after this paintover was chosen' }));
+        if (shot.stale) badges.push(h('span', { class: 'shot-badge warn', text: 'needs update', title: 'The level was reopened or the shot reframed after this paintover was chosen' }));
         if (shot.approved) badges.push(h('span', { class: 'shot-badge ok', text: 'approved' }));
         const stage = stageDef(d.stage);
         if (stage.matchLabel && shot.target) {

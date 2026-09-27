@@ -50,7 +50,7 @@ interface CompilerEvents {
     trust: boolean;
 }
 
-export const PAUSED_MESSAGE = 'Scripts from an opened scene file are paused. Choose "Enable Scripts" to run them.';
+export const PAUSED_MESSAGE = 'Scripts from an opened scene file or snapshot are paused. Choose "Enable Scripts" to run them.';
 
 const MODULES: Record<string, () => any> = {
     '@orillusion/core': () => core,
@@ -88,9 +88,10 @@ export function transformModule(code: string): { code: string; defaultName: stri
             const specs = named[1]
                 .split(',')
                 .map((s) => s.trim())
-                .filter(Boolean)
+                // Script is already in scope (a parameter of the wrapper): declaring it again fails.
+                .filter((s) => s && s !== 'Script')
                 .map((s) => s.replace(/^([A-Za-z_$][\w$]*)\s+as\s+([A-Za-z_$][\w$]*)$/, '$1: $2'));
-            parts.push(`const { ${specs.join(', ')} } = ${src};`);
+            if (specs.length) parts.push(`const { ${specs.join(', ')} } = ${src};`);
         } else if (rest) {
             error ??= { line: lineAt(offset), column: 1, message: `Unsupported import: ${m.trim()}` };
         }
@@ -98,7 +99,8 @@ export function transformModule(code: string): { code: string; defaultName: stri
     });
     out = out.replace(/^[ \t]*import\s+(['"])[^'"]+\1[ \t]*;?/gm, '');
     let defaultName: string | null = null;
-    out = out.replace(/\bexport\s+default\s+class\s+([A-Za-z_$][\w$]*)/, (_m, name: string) => {
+    // A class without a name (export default class extends Script) is left to the next rule.
+    out = out.replace(/\bexport\s+default\s+class\s+(?!extends\b)([A-Za-z_$][\w$]*)/, (_m, name: string) => {
         defaultName = name;
         return `class ${name}`;
     });

@@ -9,11 +9,7 @@ import { blobToDataUrl } from '../core/images';
 import { assetImageDataUrl } from '../core/images';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { node, num, optStr, r3, rv, str, ToolError, v3, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, node, num, optStr, r3, rv, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const place = { type: ['array', 'string'], description: '[x, y, z], or the name / id of an object or route point.' };
@@ -29,7 +25,7 @@ export function greyboxToolDefs(): ToolDef[] {
             fov: { type: 'number', description: 'Vertical field of view of the frame in degrees (default 50).' },
             aspect: { type: 'number', description: 'Width / height; defaults to the concept image, else 16/9.' },
         }),
-        def('update_shot', 'Change a shot: name, area, concept, camera (position, look_at, fov) or final approval.', {
+        def('update_shot', 'Change a shot: name, area, concept, camera (position, look_at, fov) or final approval. A new camera marks the target paintover as needing an update and drops the matches and the approval.', {
             shot: { type: 'string', description: 'Shot id or name.' },
             name: { type: 'string' },
             area: { type: ['string', 'null'] },
@@ -153,18 +149,12 @@ export async function runGreyboxTool(env: ToolEnv, name: string, args: Json): Pr
             if (args.name !== undefined) patch.name = str(args.name, 'name', 200).trim() || shot.name;
             if (args.area !== undefined) patch.area = areaRef(doc(), args.area);
             if (args.concept !== undefined) patch.concept = args.concept === null ? null : str(args.concept, 'concept', 64);
-            let camera: CameraState | null = null;
             if (args.position !== undefined || args.look_at !== undefined) {
                 const pos = args.position !== undefined ? v3(args.position, 'position') : add(shot.camera.target, orbitOffset(shot.camera));
                 const at = args.look_at !== undefined ? v3(args.look_at, 'look_at') : shot.camera.target;
-                camera = lookCamera(pos, at, args.fov !== undefined ? num(args.fov, 'fov') : shot.camera.fov);
-            } else if (args.fov !== undefined) camera = { ...shot.camera, fov: num(args.fov, 'fov') };
-            store.commit('AI: Edit Shot', (d) => {
-                const s = d.design.shots.find((x) => x.id === shot.id);
-                if (!s) return;
-                Object.assign(s, patch);
-                if (camera) s.camera = camera;
-            }, { design: true });
+                patch.camera = lookCamera(pos, at, args.fov !== undefined ? num(args.fov, 'fov') : shot.camera.fov);
+            } else if (args.fov !== undefined) patch.camera = { ...shot.camera, fov: num(args.fov, 'fov') };
+            pipeline.updateShot(shot.id, patch, 'AI: Edit Shot');
             return { data: { ok: true }, summary: shot.name };
         }
         case 'delete_shot': {
@@ -290,17 +280,14 @@ export async function runGreyboxTool(env: ToolEnv, name: string, args: Json): Pr
             const list: Json[] = Array.isArray(args.instances) ? args.instances : [];
             if (!list.length) throw new ToolError('instances is empty.');
             const placed: { id: string; name: string }[] = [];
-            store.begin('AI: Place Prefab');
-            try {
+            store.transact('AI: Place Prefab', () => {
                 for (const inst of list) {
                     const id = ed.placePrefab(prefab.id, v3(inst.position, 'position'), inst.rotation_y !== undefined ? num(inst.rotation_y, 'rotation_y') : 0, false);
                     if (!id) throw new ToolError('Placement is locked in this stage.');
                     if (inst.name) ed.rename(id, String(inst.name));
                     placed.push({ id, name: store.node(id)?.name ?? '' });
                 }
-            } finally {
-                store.end();
-            }
+            });
             return { data: { placed }, summary: `${placed.length} x ${prefab.name}` };
         }
     }

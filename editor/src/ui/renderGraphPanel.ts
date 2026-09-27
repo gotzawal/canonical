@@ -6,7 +6,7 @@ import { clear, h } from './dom';
 import { icon } from './icons';
 import { showMenu, type MenuItem } from './overlays';
 import { shaderParamRows } from './paramFields';
-import { CheckboxField, EditHooks, button, iconButton } from './widgets';
+import { CheckboxField, EditHooks, FieldSteps, button, iconButton } from './widgets';
 
 const NODE_W = 170;
 const NODE_H = 46;
@@ -48,11 +48,12 @@ export class RenderGraphPanel {
     private selected: string | null = null;
     private resource: string | null = null;
     private info: GraphInfo = { passes: [], edges: [], error: '' };
-    private open = 0;
+    private steps: FieldSteps;
     private expanded = new Set<string>();
     private visible = false;
 
     constructor(private editor: Editor) {
+        this.steps = new FieldSteps(editor.store);
         this.canvas = h('div', { class: 'graph-canvas' });
         this.side = h('div', { class: 'graph-side' });
         this.errorBar = h('div', { class: 'graph-error', attrs: { hidden: true } });
@@ -215,10 +216,8 @@ export class RenderGraphPanel {
     // ------------------------------------------------------------------ side
 
     private renderSide() {
-        while (this.open > 0) {
-            this.open--;
-            this.editor.store.end();
-        }
+        // Each step of a drag changes the graph: the field being dragged stays, and the panel is rebuilt when it ends.
+        if (this.steps.active) return;
         clear(this.side);
         const pass = this.info.passes.find((p) => p.name === this.selected);
         if (pass) this.side.appendChild(this.passDetails(pass));
@@ -338,33 +337,13 @@ export class RenderGraphPanel {
 
     private paramHooks(postId: string, name: string, label: string): EditHooks<ParamValue> {
         const store = this.editor.store;
-        const write = (v: ParamValue) => {
+        return this.steps.hooks(label, (v: ParamValue) => {
             store.update((doc) => {
                 const p = doc.renderGraph.posts.find((x) => x.id === postId);
                 if (p) p.params = { ...p.params, [name]: v };
             }, { env: true });
             this.editor.graph.apply();
-        };
-        return {
-            begin: () => {
-                this.open++;
-                store.begin(label);
-            },
-            input: write,
-            end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                store.end();
-            },
-            commit: (v) => {
-                store.begin(label);
-                try {
-                    write(v);
-                } finally {
-                    store.end();
-                }
-            },
-        };
+        }, { after: () => this.renderSide() });
     }
 
     private addMenu(e: MouseEvent) {

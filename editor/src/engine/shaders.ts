@@ -1,6 +1,6 @@
 import {
     BlendMode, Color, Engine3D, GPUTextureFormat, Material, PassType, PostBase, Preprocessor, RenderShaderPass,
-    RenderTexture, Shader, ShaderLib, Texture, Vector4, View3D, ViewQuad,
+    RenderTexture, RTResourceMap, Shader, ShaderLib, Texture, Vector4, View3D, ViewQuad,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
@@ -621,5 +621,21 @@ export class EditorPost extends PostBase {
         const ctx = this._boundCtx!;
         const last = ctx.gpuContext.lastRenderPassState.getLastRenderTexture(ctx);
         this.postQuad.renderToViewQuad(view, this.postQuad, command, last);
+    }
+
+    public destroy(force?: boolean) {
+        const rt = this.renderTexture;
+        const ctx = this._boundCtx;
+        super.destroy(force);
+        // The render target is named after this post and shader version, so
+        // nothing else uses it: free it, or every compile of a post shader
+        // would keep another full screen texture in the registry.
+        if (rt && ctx) {
+            const targets = RTResourceMap.forContext(ctx).rtTextureMap;
+            if (targets.get(rt.name) === rt) targets.delete(rt.name);
+            rt.destroy(true);
+        }
+        this.renderTexture = null;
+        this.postQuad = null;
     }
 }

@@ -10,11 +10,12 @@ import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import type {
-    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
+    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
 } from '../core/types';
 import type { Editor } from '../editor';
 import { confirmDialog, toast } from '../ui/overlays';
 import { notices } from '../ui/notify';
+import { syncSlots } from './materialSlots';
 import { cameraFov, FRAME_MARGIN, frameFov, frameRect } from './shotCamera';
 import { nextStage, stageDef, stageProgress, type CheckState } from './stages';
 
@@ -41,10 +42,16 @@ export class Pipeline extends Emitter<PipelineEvents> {
     busy = false;
     /** Shot framed in the viewport (see ui/shotView.ts). */
     activeShot: string | null = null;
+    /** The view's field of view before a shot was shown. */
+    private viewFov: number | null = null;
 
     constructor(private editor: Editor) {
         super();
-        editor.store.on('load', () => this.showShot(null));
+        editor.store.on('load', () => {
+            // The loaded scene comes with its own camera.
+            this.viewFov = null;
+            this.showShot(null);
+        });
         editor.store.on('change', () => {
             if (this.activeShot && !this.shot(this.activeShot)) this.showShot(null);
         });
@@ -75,15 +82,22 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     /**
-     * True when the nodes may be moved, created or deleted; otherwise tells
-     * the user why not.
+     * Why the nodes may not be moved or deleted now, or '' when they may:
+     * the lock holds pinned nodes, also those under a light or camera,
+     * which would go with it. The one check for every way of editing.
      */
+    placementBlock(ids: string[]): string {
+        if (!this.placementLocked) return '';
+        const moved = ids.flatMap((id) => [this.store.node(id), ...this.store.descendants(id)]);
+        if (!moved.some((n) => this.isPinned(n))) return '';
+        return `Placement is locked in the ${stageDef(this.design.stage).title} stage: only lights, cameras and effects move, without objects under them. It can be unlocked in the pipeline bar.`;
+    }
+
+    /** True when the nodes may be moved or deleted; otherwise tells the user why not. */
     canPlace(ids: string[], quiet = false): boolean {
-        if (!this.placementLocked) return true;
-        const pinned = ids.map((id) => this.store.node(id)).filter((n) => this.isPinned(n));
-        if (!pinned.length) return true;
-        if (!quiet) toast(`Placement is locked in the ${stageDef(this.design.stage).title} stage. Unlock it in the pipeline bar to move objects.`, 'info', 4500);
-        return false;
+        const why = this.placementBlock(ids);
+        if (why && !quiet) toast(why, 'info', 5000);
+        return !why;
     }
 
     setUnlocked(v: boolean) {
@@ -180,7 +194,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /**
      * Completes the current stage: captures every shot into its history,
      * takes a scene snapshot and moves on. Asks first when checklist items
-     * are open.
+     * are open; refused while the shots cannot be captured.
      */
     async complete(force = false): Promise<boolean> {
         if (this.busy) return false;
@@ -188,6 +202,11 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const id = design.stage;
         const def = stageDef(id);
         if (design.stages[id].status === 'done') return false;
+        const block = design.shots.length ? this.captureBlock() : '';
+        if (block) {
+            toast(block, 'info', 5000);
+            return false;
+        }
         const prog = this.progress(id);
         if (prog.open.length && !force) {
             const list = prog.open.map((i) => `- ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('\n');
@@ -212,10 +231,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const { meta: snapMeta, snap } = await this.makeSnapshot(`${def.title} complete`, id);
             const next = nextStage(id);
             this.store.commit(`Complete Stage: ${def.title}`, (d) => {
-                d.assets.push(...captures.map((c) => c.meta), snapMeta);
-                for (const c of captures) {
-                    d.design.shots.find((s) => s.id === c.shot)?.history.push({ stage: id, asset: c.meta.id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
-                }
+                d.assets.push(snapMeta);
+                for (const c of captures) addToHistory(d, c.shot, c.meta, { stage: id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
                 d.design.snapshots.push(snap);
                 const st = d.design.stages[id];
                 st.status = 'done';
@@ -282,8 +299,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
             dd.stages[id].proposal = null;
             delete dd.unlocked;
             if (target <= stageIndex('level')) for (const s of dd.shots) if (s.target) s.stale = true;
-            // Matches judged in the reopened stage and after it are judged again.
+            // Matches judged in the reopened stage and after it are judged again,
+            // and so is the final approval.
             for (const s of dd.shots) {
+                delete s.approved;
                 if (!s.matched) continue;
                 s.matched = s.matched.filter((m) => stageIndex(m) < target);
                 if (!s.matched.length) delete s.matched;
@@ -334,6 +353,14 @@ export class Pipeline extends Emitter<PipelineEvents> {
         }
         if (this.editor.player.state !== 'stopped') this.editor.stopPlay();
         const s = file.scene;
+        // A snapshot can come with an opened file: script code the scene does
+        // not have yet stays paused until the user reads and enables it, as
+        // for the file itself (compiling runs it). Paused before the commit compiles.
+        const known = new Set(this.store.doc.scripts.map((x) => x.code));
+        if (this.editor.compiler.trusted && s.scripts.some((x) => !known.has(x.code))) {
+            this.editor.compiler.setTrusted(false);
+            toast('The snapshot brings back script code: its scripts are paused until you enable them.', 'info', 6000);
+        }
         this.store.commit(`Restore Snapshot: ${snap.name}`, (d) => {
             d.environment = s.environment;
             d.scripts = s.scripts;
@@ -341,13 +368,19 @@ export class Pipeline extends Emitter<PipelineEvents> {
             d.renderGraph = s.renderGraph;
             d.nodes = s.nodes;
             d.prefabs = s.prefabs ?? [];
-            // The objects' agents need the trees, schemas and memory of the same time.
+            // The objects' agents need the trees, schemas, memory and models of the same time.
             d.blackboards = s.blackboards;
             d.behaviors = s.behaviors;
             d.memory = s.memory;
-            const designAssets = d.assets.filter((a) => a.purpose === 'design');
+            d.aiModels = s.aiModels;
+            // The design section stays, so do the files it uses: planning images,
+            // and the swatches of its material slots (plain textures).
+            const swatches = new Set(d.design.materials.map((m) => m.swatch).filter(Boolean));
+            const designAssets = d.assets.filter((a) => a.purpose === 'design' || swatches.has(a.id));
             const ids = new Set(designAssets.map((a) => a.id));
             d.assets = [...s.assets.filter((a) => !ids.has(a.id)), ...designAssets];
+            // Linked surfaces follow the slots as they are now.
+            syncSlots(d);
         });
         this.store.select([]);
         return true;
@@ -424,15 +457,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
         return shot;
     }
 
-    updateShot(id: string, patch: Partial<Pick<ShotDoc, 'name' | 'area' | 'concept' | 'aspect' | 'target' | 'approved' | 'stale'>>, label = 'Edit Shot') {
+    updateShot(id: string, patch: ShotPatch, label = 'Edit Shot') {
         this.store.commit(label, (d) => {
             const s = d.design.shots.find((x) => x.id === id);
-            if (!s) return;
-            if (patch.target !== undefined && patch.target !== s.target) delete s.matched;
-            Object.assign(s, patch);
-            if (patch.target !== undefined) delete s.stale;
-            if (s.stale === false) delete s.stale;
-            if (s.approved === false) delete s.approved;
+            if (s) patchShot(s, patch);
         }, { design: true });
     }
 
@@ -446,10 +474,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const s = d.design.shots.find((x) => x.id === shotId);
             if (!s) return;
             s.paintovers = s.paintovers.filter((p) => p.asset !== asset);
-            if (s.target === asset) {
-                s.target = null;
-                delete s.stale;
-            }
+            if (s.target === asset) patchShot(s, { target: null });
             // The file goes too unless something else uses it.
             if (!designAssetIds(d.design).has(asset)) d.assets = d.assets.filter((a) => a.id !== asset);
         }, { design: true });
@@ -458,12 +483,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** Stores the current view as the shot's camera (while the shot is shown). */
     updateShotFromView(id: string) {
         const shot = this.shot(id);
-        if (!shot) return;
-        const camera = this.viewAsShot(shot.aspect);
-        this.store.commit('Update Shot', (d) => {
-            const s = d.design.shots.find((x) => x.id === id);
-            if (s) s.camera = camera;
-        }, { design: true });
+        if (shot) this.updateShot(id, { camera: this.viewAsShot(shot.aspect) }, 'Update Shot');
     }
 
     deleteShot(id: string) {
@@ -476,11 +496,17 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** Shows a shot: the camera moves to it and the viewport draws its frame. */
     showShot(id: string | null, animate = true) {
         const shot = this.shot(id);
+        // A shot widens the lens to fit its frame; hiding it goes back to the
+        // view's own lens (else every new shot from the view came out wider).
+        if (shot && !this.activeShot) this.viewFov = this.store.camera.fov;
         this.activeShot = shot ? shot.id : null;
         if (shot) {
             const cam = this.shotCamera(shot);
             if (animate) this.editor.camera.animateTo(cam, 320);
             else this.editor.camera.jump(cam);
+        } else if (this.viewFov !== null) {
+            this.editor.camera.jump({ ...this.store.camera, fov: this.viewFov });
+            this.viewFov = null;
         }
         this.emit('shot', this.activeShot);
     }
@@ -502,10 +528,24 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     /**
+     * Why shots cannot be captured now, or '' when they can: the viewport
+     * shows something else in place of the scene, and a capture would too.
+     */
+    captureBlock(): string {
+        const ed = this.editor;
+        if (ed.isolated) return 'The view shows only the prefab being edited. Finish the edit first (Apply or Discard).';
+        if (ed.room?.active) return 'The view shows the reference room. Leave it first.';
+        if (ed.walk?.active) return 'The view follows the walk camera. Stop walking first.';
+        return '';
+    }
+
+    /**
      * Renders a view: `camera` holds the frame's field of view, `aspect` the
      * frame's shape. The editor view comes back afterwards.
      */
     async captureCamera(camera: CameraState, aspect: number, maxWidth = 1600): Promise<Blob> {
+        const block = this.captureBlock();
+        if (block) throw new Error(block);
         const runtime = this.editor.runtime;
         const prev = { ...this.store.camera, target: [...this.store.camera.target] as CameraState['target'] };
         const { rect, viewH } = this.frameFor(aspect, 1);
@@ -532,10 +572,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const shot = this.shot(id);
         const meta = await putDesignImage(blob, `${fileStem(shot?.name ?? 'shot')}-${label}.jpg`);
         const stage = this.design.stage;
-        this.store.commit('Capture Shot', (d) => {
-            d.assets.push(meta);
-            d.design.shots.find((s) => s.id === id)?.history.push({ stage, asset: meta.id, at: now(), manual: true, ...extra });
-        }, { design: true });
+        this.store.commit('Capture Shot', (d) => addToHistory(d, id, meta, { stage, at: now(), manual: true, ...extra }), { design: true });
         return meta;
     }
 
@@ -586,12 +623,58 @@ export class Pipeline extends Emitter<PipelineEvents> {
             else set.delete(stage);
             if (set.size) s.matched = [...set];
             else delete s.matched;
-            if (meta && evidence) {
-                d.assets.push(meta);
-                s.history.push({ stage, asset: meta.id, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
-            }
+            if (meta && evidence) addToHistory(d, id, meta, { stage, at: now(), manual: true, score: evidence.score, compare: evidence.mode });
         }, { design: true });
     }
+}
+
+export type ShotPatch = Partial<Pick<ShotDoc, 'name' | 'area' | 'concept' | 'camera' | 'aspect' | 'target' | 'approved' | 'stale'>>;
+
+/**
+ * Changes a shot inside a commit. Its matches and approval were judged
+ * against its target as it is framed: a new target or framing drops them,
+ * and a new framing marks the target as needing an update (it was painted
+ * over the old one).
+ */
+export function patchShot(s: ShotDoc, patch: ShotPatch) {
+    const reframed = (!!patch.camera && !sameView(patch.camera, s.camera)) || (patch.aspect !== undefined && patch.aspect !== s.aspect);
+    if (reframed || (patch.target !== undefined && patch.target !== s.target)) {
+        delete s.matched;
+        delete s.approved;
+    }
+    Object.assign(s, patch);
+    if (reframed && s.target) s.stale = true;
+    if (patch.target !== undefined) delete s.stale;
+    if (s.stale === false) delete s.stale;
+    if (s.approved === false) delete s.approved;
+}
+
+/** The same view but for rounding (a view goes through the frame's field of view and back). */
+function sameView(a: CameraState, b: CameraState): boolean {
+    const x = [...a.target, a.yaw, a.pitch, a.distance, a.fov];
+    const y = [...b.target, b.yaw, b.pitch, b.distance, b.fov];
+    return x.every((v, i) => Math.abs(v - y[i]) < 1e-4);
+}
+
+/** Manual captures (by hand or by the assistant) a shot keeps; the captures of stage completions all stay. */
+const KEEP_CAPTURES = 12;
+
+/**
+ * Adds a capture and its file to a shot's history (inside a commit). Past
+ * KEEP_CAPTURES manual captures the oldest go, and so do their files unless
+ * something else uses them.
+ */
+function addToHistory(d: SceneDoc, shotId: string, meta: AssetMeta, capture: Omit<ShotCaptureDoc, 'asset'>) {
+    const shot = d.design.shots.find((s) => s.id === shotId);
+    if (!shot) return;
+    d.assets.push(meta);
+    shot.history.push({ ...capture, asset: meta.id });
+    const old = new Set(shot.history.filter((c) => c.manual).slice(0, -KEEP_CAPTURES));
+    if (!old.size) return;
+    shot.history = shot.history.filter((c) => !old.has(c));
+    const used = designAssetIds(d.design);
+    const gone = new Set([...old].map((c) => c.asset));
+    d.assets = d.assets.filter((a) => !gone.has(a.id) || used.has(a.id));
 }
 
 function fileStem(name: string): string {

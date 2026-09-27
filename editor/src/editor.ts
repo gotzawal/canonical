@@ -4,13 +4,13 @@ import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
-    defaultCamera, defaultMaterial, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
+    defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
-import { DEG, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy, tidy3, transformPoint } from './core/math';
+import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
-    projectFileNameFor, usedAssetIds,
+    keptAssets, projectFileNameFor, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
@@ -28,6 +28,8 @@ import type { Player } from './play/player';
 import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
 import type { Checkpoints } from './design/checkpoints';
+import type { Commands } from './commands';
+import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
@@ -83,12 +85,16 @@ export class Editor extends Emitter<EditorEvents> {
     readonly pipeline: Pipeline;
     /** Root of the prefab instance being edited on its own (everything else hidden). */
     isolated: string | null = null;
+    /** Objects under the edited instance that were not generated parts when the edit started. */
+    private isolatedKept = new Set<string>();
     /** First person walk camera (set up by main.ts). */
     walk: WalkController | null = null;
     /** Neutral room to check swatches in (set up by main.ts). */
     room: ReferenceRoom | null = null;
     /** The models of the agents (set up by main.ts). */
     models: ModelServices | null = null;
+    /** Keyboard shortcuts and menu commands (set up by main.ts). */
+    commands!: Commands;
 
     constructor(
         readonly store: Store,
@@ -198,16 +204,13 @@ export class Editor extends Emitter<EditorEvents> {
         const parentWorld = parent ? this.picker.worldMatrix(parent) : null;
         const invParent = (parentWorld && invert(parentWorld)) || mat4();
         group.position = tidy3(transformPoint(invParent, center), 3);
-        this.store.begin('Group');
-        try {
+        this.store.transact('Group', () => {
             this.store.update((doc) => {
                 const idx = doc.nodes.findIndex((n) => n.id === roots[0]);
                 doc.nodes.splice(Math.max(0, idx), 0, group);
             });
             this.moveNodes(roots, group.id, null, 'Group');
-        } finally {
-            this.store.end();
-        }
+        });
         this.store.select([group.id]);
     }
 
@@ -307,8 +310,7 @@ export class Editor extends Emitter<EditorEvents> {
                 if (!n) continue;
                 // Convert the world-space offset into the parent's space.
                 const parentWorld = n.parent ? this.picker.worldMatrix(n.parent) : null;
-                const scaleY = parentWorld ? Math.hypot(parentWorld[4], parentWorld[5], parentWorld[6]) || 1 : 1;
-                n.position = tidy3([n.position[0], n.position[1] + m.dy / scaleY, n.position[2]]);
+                n.position = tidy3(add(n.position, transformDir((parentWorld && invert(parentWorld)) || mat4(), [0, m.dy, 0])));
             }
         }, { nodes: moves.map((m) => m.id) });
     }
@@ -337,14 +339,12 @@ export class Editor extends Emitter<EditorEvents> {
         }
 
         store.commit(label, (doc) => {
-            const moved: NodeDoc[] = [];
-            for (const id of moving) {
-                const n = doc.nodes.find((x) => x.id === id);
-                if (!n) continue;
-                const t = transforms.get(id);
+            // In the order they had, not the order they were selected in.
+            const moved = doc.nodes.filter((n) => moving.includes(n.id));
+            for (const n of moved) {
+                const t = transforms.get(n.id);
                 if (t) Object.assign(n, t);
                 n.parent = parent;
-                moved.push(n);
             }
             doc.nodes = doc.nodes.filter((n) => !moving.includes(n.id));
             let index = beforeId ? doc.nodes.findIndex((n) => n.id === beforeId) : -1;
@@ -392,10 +392,11 @@ export class Editor extends Emitter<EditorEvents> {
             }
         }
         const meta = await putAsset(file, file.name, 'model');
-        this.store.commit('Import Model', (doc) => {
-            doc.assets.push(meta);
+        // One undo step takes both back: the file and the object showing it.
+        this.store.transact('Import Model', () => {
+            this.store.update((doc) => doc.assets.push(meta));
+            this.addModel(meta.id, at, true);
         });
-        this.addModel(meta.id, at, true);
         toast(`Imported ${file.name}`, 'success');
     }
 
@@ -566,6 +567,7 @@ export class Editor extends Emitter<EditorEvents> {
         }
         if (!this.pipeline.canPlace([rootId])) return;
         this.isolated = rootId;
+        this.isolatedKept = new Set(this.store.descendants(rootId).filter((n) => !n.prefabChild).map((n) => n.id));
         const ids = new Set([rootId, ...this.store.descendants(rootId).map((n) => n.id)]);
         this.sync.setIsolation(ids);
         this.store.select([rootId]);
@@ -602,7 +604,24 @@ export class Editor extends Emitter<EditorEvents> {
             });
             toast(others.length ? `Updated ${others.length + 1} instances.` : 'Prefab updated.', 'success');
         } else {
-            this.store.commit('Discard Prefab Edit', (doc) => regenerate(doc, prefabId, [rootId]));
+            const kept = this.isolatedKept;
+            const added = this.store.descendants(rootId).filter((n) => !n.prefabChild && !kept.has(n.id));
+            this.store.commit('Discard Prefab Edit', (doc) => {
+                // Parts added during the edit go with everything below them;
+                // regenerating keeps the objects that were under the instance before.
+                const doomed = new Set(added.map((n) => n.id));
+                for (let grew = true; grew; ) {
+                    grew = false;
+                    for (const n of doc.nodes) {
+                        if (n.parent && doomed.has(n.parent) && !doomed.has(n.id)) {
+                            doomed.add(n.id);
+                            grew = true;
+                        }
+                    }
+                }
+                doc.nodes = doc.nodes.filter((n) => !doomed.has(n.id));
+                regenerate(doc, prefabId, [rootId]);
+            });
         }
         this.store.select([rootId]);
     }
@@ -834,21 +853,25 @@ export class Editor extends Emitter<EditorEvents> {
     async deleteScript(id: string, confirm = true) {
         const doc = this.store.doc.scripts.find((s) => s.id === id);
         if (!doc) return;
-        const users = this.store.doc.nodes.filter((n) => n.scripts?.some((r) => r.script === id));
-        if (confirm && users.length && !(await confirmDialog('Delete script', `${doc.name} is attached to ${users.length} object(s). Delete it anyway?`, 'Delete', true))) return;
+        const users = uses(this.store.doc, 'script', id);
+        if (confirm && users && !(await confirmDialog('Delete script', `${doc.name} is attached to ${users} object(s). Delete it anyway?`, 'Delete', true))) return;
         this.store.commit('Delete Script', (d) => {
             d.scripts = d.scripts.filter((s) => s.id !== id);
-            for (const n of d.nodes) {
-                if (!n.scripts) continue;
-                n.scripts = n.scripts.filter((r) => r.script !== id);
-                if (!n.scripts.length) delete n.scripts;
-            }
+            dropRefs(d, 'script', id);
         });
     }
 
     attachScript(ids: string[], scriptId: string, props: Record<string, ParamValue> = {}) {
-        const targets = ids.filter((id) => this.store.node(id));
-        if (!targets.length || !this.store.doc.scripts.some((s) => s.id === scriptId)) return;
+        if (!this.store.doc.scripts.some((s) => s.id === scriptId)) return;
+        // One copy per object: the Inspector finds a script's field values by the script.
+        const targets = ids.filter((id) => {
+            const n = this.store.node(id);
+            return n && !n.scripts?.some((r) => r.script === scriptId);
+        });
+        if (!targets.length) {
+            if (ids.length) toast('The script is already attached.', 'info');
+            return;
+        }
         this.store.commit('Add Script', (d) => {
             for (const n of d.nodes) {
                 if (!targets.includes(n.id)) continue;
@@ -904,39 +927,18 @@ export class Editor extends Emitter<EditorEvents> {
             if (patch.kind && patch.kind !== s.kind) {
                 s.kind = patch.kind;
                 // A shader cannot be both; drop the uses of the other kind.
-                if (s.kind === 'post') this.unuseMaterialShader(d, id);
-                else d.renderGraph.posts = d.renderGraph.posts.filter((p) => p.shader !== id);
+                dropRefs(d, 'shader', id, s.kind === 'post' ? 'object' : 'post');
             }
         });
-    }
-
-    private unuseMaterialShader(d: SceneDoc, id: string) {
-        for (const n of d.nodes) {
-            if (n.mesh?.material.shader === id) {
-                n.mesh.material.type = 'lit';
-                n.mesh.material.shader = null;
-                delete n.mesh.material.params;
-            }
-            for (const o of Object.values(n.model?.materials ?? {})) {
-                if (o.shader === id) {
-                    delete o.shader;
-                    delete o.params;
-                }
-            }
-        }
     }
 
     async deleteShader(id: string, confirm = true) {
         const doc = this.store.doc.shaders.find((s) => s.id === id);
         if (!doc) return;
-        const used =
-            this.store.doc.renderGraph.posts.some((p) => p.shader === id) ||
-            this.store.doc.nodes.some((n) => n.mesh?.material.shader === id || Object.values(n.model?.materials ?? {}).some((o) => o.shader === id));
-        if (confirm && used && !(await confirmDialog('Delete shader', `${doc.name} is in use. Materials using it go back to Lit. Delete it anyway?`, 'Delete', true))) return;
+        if (confirm && uses(this.store.doc, 'shader', id) && !(await confirmDialog('Delete shader', `${doc.name} is in use. Materials using it go back to Lit. Delete it anyway?`, 'Delete', true))) return;
         this.store.commit('Delete Shader', (d) => {
             d.shaders = d.shaders.filter((s) => s.id !== id);
-            d.renderGraph.posts = d.renderGraph.posts.filter((p) => p.shader !== id);
-            this.unuseMaterialShader(d, id);
+            dropRefs(d, 'shader', id);
         });
     }
 
@@ -1164,7 +1166,7 @@ export class Editor extends Emitter<EditorEvents> {
         const result = applyBehaviorOps(this.store.doc, ops, opts.mode ?? 'lenient');
         const changes = result.changes;
         if (result.ok && changes) {
-            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true });
+            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true, renamed: changes.renamed });
         }
         return result;
     }
@@ -1220,6 +1222,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     /** Starts Play; `asked` skips the question about paused scripts (already answered). */
     play(asked = false) {
+        if (this.player.state === 'stopped') {
+            // The game needs the whole scene and the keys: leave these view modes first.
+            if (this.isolated) {
+                toast('Finish editing the prefab first (Apply or Discard).', 'info');
+                return;
+            }
+            if (this.walk?.active) this.walk.stop();
+            if (this.room?.active) this.room.close();
+        }
         if (!asked && this.player.state === 'stopped' && !this.compiler.trusted && this.usesScripts()) {
             void this.confirmScripts().then((run) => {
                 if (run) this.play(true);
@@ -1253,8 +1264,8 @@ export class Editor extends Emitter<EditorEvents> {
     private async confirmScripts(): Promise<boolean> {
         const count = this.store.doc.scripts.length;
         const choice = await dialog(
-            'Run scripts from this file?',
-            `This scene was opened from a file and has ${count} script${count === 1 ? '' : 's'}. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
+            'Run the paused scripts?',
+            `This scene has ${count} script${count === 1 ? '' : 's'} from an opened file or snapshot. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
             [
                 { label: 'Cancel', value: 'cancel' },
                 { label: 'Play Without Scripts', value: 'without' },
@@ -1280,10 +1291,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ---------------------------------------------------------------- files
 
+    /** Asks before the current scene is replaced; true when nothing would be lost or the user agrees. */
+    private async confirmReplace(title: string, ok: string, what = 'Discard the current scene?'): Promise<boolean> {
+        const d = this.store.doc;
+        const empty = !d.nodes.length && !d.scripts.length && !d.shaders.length && !d.design.brief.text.trim() && !d.design.concepts.length && !d.design.areas.length;
+        return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
+    }
+
     async newScene(kind: 'default' | 'empty' | 'showcase' | 'guard' = 'default') {
-        if (this.store.doc.nodes.length && !(await confirmDialog('New scene', 'Discard the current scene? It is only kept in this browser unless you saved a file.', 'Discard', true))) {
-            return;
-        }
+        if (!(await this.confirmReplace('New scene', 'Discard'))) return;
         const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : newScene();
         const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
         this.loadDoc(doc, camera);
@@ -1300,7 +1316,7 @@ export class Editor extends Emitter<EditorEvents> {
         // Pause before loading so no untrusted code is evaluated, and trust
         // only once the previous document's scripts are gone.
         this.compiler.setTrusted(false);
-        this.store.load(doc, camera);
+        this.store.load({ ...doc, assets: keptAssets(doc) }, camera);
         this.compiler.setTrusted(trusted || !this.store.doc.scripts.length);
         collectGarbage(this.store.doc);
     }
@@ -1346,6 +1362,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     private async openSceneFromFile(file: File) {
+        if (!(await this.confirmReplace('Open scene', 'Open', `Replace the current scene with ${file.name}?`))) return;
         try {
             const { doc, camera } = file.name.toLowerCase().endsWith('.zip') ? await importProject(file) : await importSceneFile(await file.text());
             this.loadDoc(doc, camera ?? defaultCamera(), false);
@@ -1383,8 +1400,15 @@ export class Editor extends Emitter<EditorEvents> {
         this.store.setPrefs({ space: this.store.prefs.space === 'world' ? 'local' : 'world' });
     }
 
+    /** Selects what a click could: shown objects, prefab parts as their instance, and only the prefab being edited while one is. */
     selectAll() {
-        this.store.select(this.store.doc.nodes.map((n) => n.id));
+        const ids = new Set<string>();
+        for (const n of this.store.doc.nodes) {
+            if (!this.sync.entries.get(n.id)?.visible) continue;
+            if (this.isolated && n.id !== this.isolated && !this.store.isAncestor(this.isolated, n.id)) continue;
+            ids.add(this.selectable(n.id));
+        }
+        this.store.select([...ids]);
     }
 }
 

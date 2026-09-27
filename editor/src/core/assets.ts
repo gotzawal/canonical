@@ -12,6 +12,15 @@ interface AssetRecord extends AssetMeta {
 /** In-memory fallback when IndexedDB is unavailable (private windows etc). */
 const memory = new Map<string, AssetRecord>();
 const urls = new Map<string, string>();
+/** Assets IndexedDB refused (full, or unavailable): in memory only, gone after a reload. */
+const unstored = new Set<string>();
+
+/** How many of these assets are in memory only. */
+export function unstoredCount(ids: Iterable<string>): number {
+    let n = 0;
+    for (const id of ids) if (unstored.has(id)) n++;
+    return n;
+}
 
 /**
  * Where asset files come from when not from this browser's IndexedDB: a
@@ -41,7 +50,9 @@ export async function putAsset(blob: Blob, name: string, kind: AssetKind, id = u
     forgetUrl(id);
     try {
         await tx('assets', 'readwrite', (s) => s.put(record));
+        unstored.delete(id);
     } catch (e) {
+        unstored.add(id);
         console.warn('[editor] IndexedDB unavailable, asset kept in memory only', e);
     }
     return meta;

@@ -10,11 +10,7 @@ import type { DecisionLogEntry } from '../core/types';
 import { formatValue } from '../core/behavior/nodeTypes';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { ToolError, type Json } from './toolUtil';
-
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+import { def, ToolError, type Json } from './toolUtil';
 
 export function behaviorToolDefs(): ToolDef[] {
     return [

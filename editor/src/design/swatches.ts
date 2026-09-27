@@ -268,7 +268,14 @@ function levels(img: ImageData, lo: number, hi: number, notes: string[]) {
     };
     const p1 = pct(0.01), p99 = pct(0.99);
     if (p1 >= lo && p99 <= hi) return;
-    const a = Math.max(lo, p1), b = Math.min(hi, p99);
+    let a = Math.max(lo, p1), b = Math.min(hi, p99);
+    if (b <= a) {
+        // All of it lies outside the range (all darker or all brighter): shift it
+        // in, keeping its contrast as far as it fits, rather than inverting it.
+        const s = Math.min(p99 - p1, hi - lo);
+        a = p99 < lo ? lo : hi - s;
+        b = a + s;
+    }
     const span = Math.max(1, p99 - p1);
     for (let i = 0; i < d.length; i += 4) {
         for (let c = 0; c < 3; c++) d[i + c] = a + ((d[i + c] - p1) * (b - a)) / span;
@@ -391,18 +398,21 @@ export async function generateSwatches(gen: SwatchGeneration, opts: { signal?: A
     return { swatches, cost: res.cost, errors: res.errors, dropped: [...checked.dropped, ...(refs.length < gen.refs.length ? ['references (the model takes no images)'] : [])] };
 }
 
-/** File name of a swatch copied into a project; the same swatch is copied once. */
+/** File name of a swatch copied into a project: it carries the swatch's id (see swatchIdOf). */
 function assetName(rec: SwatchRecord): string {
     const stem = rec.name.normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'swatch';
     return `${stem}.${rec.id}.${rec.blob.type === 'image/png' ? 'png' : 'webp'}`;
 }
 
-/** The project's texture asset of a library swatch, copied in (inside no commit; the caller commits the meta) when missing. */
+/**
+ * The project's texture asset of a library swatch, copied in (inside no
+ * commit; the caller commits the meta) when missing. The same swatch is
+ * copied once, also after it was renamed in the library.
+ */
 export async function swatchAsset(editor: Editor, rec: SwatchRecord): Promise<{ meta: AssetMeta; added: boolean }> {
-    const name = assetName(rec);
-    const existing = editor.store.doc.assets.find((a) => a.kind === 'texture' && a.name === name);
+    const existing = editor.store.doc.assets.find((a) => a.kind === 'texture' && swatchIdOf(a) === rec.id);
     if (existing) return { meta: existing, added: false };
-    const meta = await putAsset(rec.blob, name, 'texture', undefined, { width: rec.size, height: rec.size });
+    const meta = await putAsset(rec.blob, assetName(rec), 'texture', undefined, { width: rec.size, height: rec.size });
     return { meta, added: true };
 }
 

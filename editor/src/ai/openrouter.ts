@@ -34,11 +34,21 @@ export interface ToolCall {
     function: { name: string; arguments: string };
 }
 
+/** A block of a model's reasoning: text with a signature, a summary, or encrypted data. */
+export interface ReasoningDetail {
+    type: string;
+    index?: number;
+    [field: string]: unknown;
+}
+
 export interface ChatMessage {
     role: 'system' | 'user' | 'assistant' | 'tool';
     content: string | ContentPart[] | null;
     tool_calls?: ToolCall[];
     tool_call_id?: string;
+    /** The reasoning of a thinking model, sent back unchanged with its message (see chat). */
+    reasoning?: string;
+    reasoning_details?: ReasoningDetail[];
 }
 
 export interface ToolDef {
@@ -109,15 +119,21 @@ export function headers(key: string): Record<string, string> {
 }
 
 export function errorText(body: string, status: number): string {
+    const hint =
+        status === 401 ? 'The API key was rejected (401). Check it in the AI settings.'
+        : status === 402 ? 'Your OpenRouter account is out of credits (402).'
+        : status === 429 ? 'Rate limited by OpenRouter (429). Wait a moment and try again.'
+        : '';
     try {
         const json = JSON.parse(body);
         const msg = json?.error?.message || json?.message;
         const raw = json?.error?.metadata?.raw;
-        if (msg) return raw && typeof raw === 'string' ? `${msg} (${raw.slice(0, 300)})` : msg;
+        // The server's words (e.g. "User not found.") and what to do about them.
+        if (msg) return [hint, raw && typeof raw === 'string' ? `${msg} (${raw.slice(0, 300)})` : msg].filter(Boolean).join(' ');
     } catch { /* not json */ }
-    if (status === 401) return 'The API key was rejected (401). Check it in the AI settings.';
-    if (status === 402) return 'Your OpenRouter account is out of credits (402).';
-    if (status === 429) return 'Rate limited by OpenRouter (429). Wait a moment and try again.';
+    if (hint) return hint;
+    // An error page of a proxy or gateway is not worth showing as it is.
+    if (/^\s*</.test(body)) return `OpenRouter returned HTTP ${status}. Try again in a moment.`;
     return body.slice(0, 300) || `HTTP ${status}`;
 }
 
@@ -154,12 +170,35 @@ export function pickDefaultModel(models: OpenRouterModel[]): string {
     );
 }
 
+/** Statuses worth one more try: timeouts, rate limits and gateway errors. */
+const TRANSIENT = new Set([408, 429, 500, 502, 503, 504]);
+const MAX_RETRIES = 2;
+const RETRY_DELAYS = [1500, 4000];
+
+/** Waits, or rejects with an AbortError once the request is stopped. */
+function pause(ms: number, signal?: AbortSignal): Promise<void> {
+    return new Promise((resolve, reject) => {
+        if (signal?.aborted) return reject(new DOMException('Aborted', 'AbortError'));
+        const t = setTimeout(done, ms);
+        function done() {
+            signal?.removeEventListener('abort', stop);
+            resolve();
+        }
+        function stop() {
+            clearTimeout(t);
+            reject(new DOMException('Aborted', 'AbortError'));
+        }
+        signal?.addEventListener('abort', stop, { once: true });
+    });
+}
+
 /**
  * Sends a chat completion request with streaming. `onText` receives content
  * as it arrives; tool calls are assembled from their streamed fragments.
  */
 export async function chat(key: string, req: ChatRequest, opts: { signal?: AbortSignal; onText?: (delta: string) => void } = {}): Promise<ChatResult> {
     let res: Response;
+    let retries = 0;
     // A provider that refuses a cache field gets the request again without it (see caching.ts).
     for (let attempt = 0; ; attempt++) {
         const r = refused.get(req.model) ?? {};
@@ -180,14 +219,28 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
         if (req.temperature !== undefined) body.temperature = req.temperature;
         if (req.max_tokens) body.max_tokens = req.max_tokens;
 
-        res = await fetch(`${OPENROUTER_URL}/chat/completions`, {
-            method: 'POST',
-            headers: headers(key),
-            body: JSON.stringify(body),
-            signal: opts.signal,
-        });
+        try {
+            res = await fetch(`${OPENROUTER_URL}/chat/completions`, {
+                method: 'POST',
+                headers: headers(key),
+                body: JSON.stringify(body),
+                signal: opts.signal,
+            });
+        } catch (e: any) {
+            // A dropped connection is tried again a few times; nothing was streamed yet.
+            if (e?.name === 'AbortError' || retries >= MAX_RETRIES) throw e;
+            await pause(RETRY_DELAYS[retries++], opts.signal);
+            continue;
+        }
         if (res.ok) break;
         const text = errorText(await res.text(), res.status);
+        // Busy or failing for a moment (rate limit, gateway errors): wait and try again.
+        if (TRANSIENT.has(res.status) && retries < MAX_RETRIES) {
+            const after = Number(res.headers.get('retry-after'));
+            await pause(after > 0 ? Math.min(after, 20) * 1000 : RETRY_DELAYS[retries], opts.signal);
+            retries++;
+            continue;
+        }
         const field = attempt < 3 ? refusedField(res.status, text) : null;
         if (field === 'session' && body.session_id) {
             refused.set(req.model, { ...r, session: true });
@@ -206,20 +259,12 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
     }
 
     const type = res.headers.get('content-type') || '';
-    if (!type.includes('text/event-stream') || !res.body) {
-        // Some routes answer without streaming.
-        const json = await res.json();
-        if (json?.error) throw new OpenRouterError(json.error.message || 'Request failed');
-        const choice = json?.choices?.[0];
-        const message: ChatMessage = { role: 'assistant', content: choice?.message?.content ?? '', tool_calls: choice?.message?.tool_calls };
-        if (message.content) opts.onText?.(String(message.content));
-        return { message, finishReason: choice?.finish_reason ?? 'stop', usage: json?.usage ?? null, model: json?.model ?? req.model };
-    }
-
-    const reader = res.body.getReader();
+    const reader = type.includes('text/event-stream') ? res.body?.getReader() : undefined;
     const decoder = new TextDecoder();
     let buffer = '';
     let content = '';
+    let reasoning = '';
+    const details: ReasoningDetail[] = [];
     const calls: ToolCall[] = [];
     let finishReason = '';
     let usage: Usage | null = null;
@@ -243,6 +288,8 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
             content += delta.content;
             opts.onText?.(delta.content);
         }
+        if (typeof delta.reasoning === 'string') reasoning += delta.reasoning;
+        for (const piece of delta.reasoning_details ?? []) addReasoning(details, piece);
         for (const tc of delta.tool_calls ?? []) {
             let i: number = typeof tc.index === 'number' ? tc.index : -1;
             if (i < 0) {
@@ -258,7 +305,9 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
         if (choice.finish_reason) finishReason = choice.finish_reason;
     };
 
-    for (;;) {
+    // Some routes answer without streaming: the whole answer is one chunk.
+    if (!reader) handle(await res.text());
+    while (reader) {
         const { done, value } = await reader.read();
         if (done) break;
         buffer += decoder.decode(value, { stream: true });
@@ -277,7 +326,34 @@ export async function chat(key: string, req: ChatRequest, opts: { signal?: Abort
     const toolCalls = calls.filter(Boolean).map((c, i) => ({ ...c, id: c.id || `call_${Date.now().toString(36)}_${i}` }));
     const message: ChatMessage = { role: 'assistant', content: content || null };
     if (toolCalls.length) message.tool_calls = toolCalls;
+    // A thinking model needs its reasoning back, unchanged, with the message
+    // it came with, or the next step of a tool loop is refused. Other models
+    // send none, so their messages stay as they were.
+    if (details.length) {
+        message.reasoning_details = details;
+        if (reasoning) message.reasoning = reasoning;
+    }
     return { message, finishReason: finishReason || (toolCalls.length ? 'tool_calls' : 'stop'), usage, model };
+}
+
+/** Where the streamed text of a reasoning block goes, per type. */
+const REASONING_TEXT: Record<string, string> = { 'reasoning.text': 'text', 'reasoning.summary': 'summary' };
+
+/**
+ * Adds a streamed piece of reasoning. The pieces of one block (its type and
+ * index) come in a row and make one detail, their text joined and the
+ * signature kept: the provider checks the block as a whole.
+ */
+function addReasoning(details: ReasoningDetail[], piece: ReasoningDetail) {
+    const last = details[details.length - 1];
+    const key = REASONING_TEXT[piece.type];
+    if (!key || last?.type !== piece.type || last.index !== piece.index) {
+        details.push({ ...piece });
+        return;
+    }
+    for (const [k, v] of Object.entries(piece)) {
+        if (v !== null && v !== undefined) last[k] = k === key ? `${last[k] ?? ''}${v}` : v;
+    }
 }
 
 // --------------------------------------------------------------- OAuth PKCE

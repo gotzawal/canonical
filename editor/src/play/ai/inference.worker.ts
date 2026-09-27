@@ -17,7 +17,7 @@ import { Tokenizer } from '@huggingface/tokenizers';
 import type * as Ort from 'onnxruntime-web';
 import { modelFingerprint } from '../../core/behavior/models';
 import type { AiModelDoc } from '../../core/types';
-import { ADAPTERS, type Adapter } from './adapters';
+import { ADAPTERS, type Adapter, type AdapterContext } from './adapters';
 
 declare const self: DedicatedWorkerGlobalScope;
 
@@ -27,7 +27,8 @@ export type WorkerIn =
     | { type: 'load'; id: number; model: AiModelDoc; download: boolean; size?: number }
     | { type: 'run'; id: number; model: string; inputs: unknown[]; priority: number }
     | { type: 'prepare'; model: string; inputs: unknown[] }
-    | { type: 'forget'; id: number; model: AiModelDoc };
+    | { type: 'forget'; id: number; model: AiModelDoc }
+    | { type: 'options'; id: number; model: AiModelDoc };
 
 export type WorkerOut =
     | { type: 'progress'; model: string; loaded: number; total: number; file: string }
@@ -50,6 +51,8 @@ interface Loaded {
     fingerprint: string;
     session: Ort.InferenceSession;
     adapter: Adapter;
+    /** What a new adapter needs besides the model: another option set gets one over the same session. */
+    context: Omit<AdapterContext, 'model'>;
     backend: 'webgpu' | 'wasm';
 }
 
@@ -264,11 +267,11 @@ async function load(m: AiModelDoc, download: boolean, size?: number): Promise<{ 
     if (!make) throw new Error(`No adapter for models of kind "${m.kind}".`);
     const run = (async () => {
         const files = await fetchModel(m, download, size);
-        const o = await runtime();
-        const adapter = make({ model: m, config: files.config, tokenizerConfig: files.tokenizerConfig, tokenizer: new Tokenizer(files.tokenizer, files.tokenizerConfig), ort: o });
+        const context = { config: files.config, tokenizerConfig: files.tokenizerConfig, tokenizer: new Tokenizer(files.tokenizer, files.tokenizerConfig), ort: await runtime() };
+        const adapter = make({ ...context, model: m });
         const s = await session(files.bytes, (sess) => adapter.warm(sess));
         const old = models.get(m.id);
-        models.set(m.id, { fingerprint, adapter, ...s });
+        models.set(m.id, { fingerprint, adapter, context, ...s });
         if (old && old.session !== s.session) void old.session.release().catch(() => {});
     })();
     loading.set(key, run);
@@ -363,5 +366,13 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
         case 'run':
             enqueue({ id: m.id, priority: m.priority, run: () => runModel(m.model, m.inputs) });
             return;
+        case 'options': {
+            // The same files with other options: a new adapter, the session stays.
+            const l = models.get(m.model.id);
+            const make = ADAPTERS[m.model.kind];
+            if (l && make && l.fingerprint === modelFingerprint(m.model)) l.adapter = make({ ...l.context, model: m.model });
+            reply(m.id, Promise.resolve(l?.adapter.info));
+            return;
+        }
     }
 };

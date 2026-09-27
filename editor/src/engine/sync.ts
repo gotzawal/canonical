@@ -563,6 +563,11 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.runtime.gi.invalidate();
     }
 
+    /** False for nodes isolation hides: the scene around an edited prefab, or all of it in the reference room. */
+    inView(id: string): boolean {
+        return !this.isolation || this.isolation.has(id);
+    }
+
     /** Shows another environment than the document's until called with null. */
     setEnvironmentOverride(env: EnvironmentDoc | null) {
         this.envOverride = env;
@@ -580,10 +585,9 @@ export class SceneSync extends Emitter<SyncEvents> {
             effective.set(node.id, v);
             return v;
         };
-        const iso = this.isolation;
         for (const node of this.store.doc.nodes) {
             const entry = this.entries.get(node.id);
-            if (entry) this.setEnabled(entry, resolve(node) && (!iso || iso.has(node.id) || (!!node.light && !this.isolateLights)));
+            if (entry) this.setEnabled(entry, resolve(node) && (this.inView(node.id) || (!!node.light && !this.isolateLights)));
         }
     }
 

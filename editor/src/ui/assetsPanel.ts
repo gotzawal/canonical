@@ -1,8 +1,9 @@
 import type { Editor } from '../editor';
+import { refs } from '../core/refs';
 import { formatBytes } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
-import { clear, h } from './dom';
+import { clear, h, pressable } from './dom';
 import { icon } from './icons';
 import { MenuItem, showMenu } from './overlays';
 import { iconButton } from './widgets';
@@ -70,10 +71,12 @@ export class AssetsPanel {
         const doc = this.editor.store.doc;
         const assets = doc.assets.filter((a) => a.purpose !== 'design');
         const planning = doc.assets.length - assets.length;
+        const scriptUses = new Map<string, number>();
+        for (const r of refs(doc)) if (r.kind === 'script') scriptUses.set(r.id, (scriptUses.get(r.id) ?? 0) + 1);
         const key = [
             doc.prefabs.map((p) => p.id + p.name + (p.useModel ? 'm' : '') + doc.nodes.filter((n) => n.prefab === p.id).length).join('|'),
             doc.assets.map((a) => a.id + a.name).join('|'),
-            doc.scripts.map((s) => s.id + s.name).join('|'),
+            doc.scripts.map((s) => s.id + s.name + (scriptUses.get(s.id) ?? 0)).join('|'),
             doc.shaders.map((s) => s.id + s.name + s.kind).join('|'),
         ].join('#');
         if (!force && key === this.key) return;
@@ -106,7 +109,7 @@ export class AssetsPanel {
         }
         for (const s of doc.scripts) {
             const c = this.editor.compiler.get(s.id);
-            const users = doc.nodes.filter((n) => n.scripts?.some((r) => r.script === s.id)).length;
+            const users = scriptUses.get(s.id) ?? 0;
             this.list.appendChild(
                 this.item(`script:${s.id}`, 'script', s.name, c?.paused ? 'paused' : users ? `${users} use${users > 1 ? 's' : ''}` : 'script', c?.error && !c.paused ? 'error' : '', 'Double-click to edit, drag onto an object to attach', () => this.editor.emit('open-code', { kind: 'script', id: s.id }), [
                     { label: 'Edit', icon: 'code', action: () => this.editor.emit('open-code', { kind: 'script', id: s.id }) },
@@ -135,14 +138,18 @@ export class AssetsPanel {
     }
 
     private item(dragId: string, iconName: string, name: string, meta: string, state: string, title: string, onOpen: () => void, menu: MenuItem[]): HTMLElement {
-        const item = h(
+        const item = pressable(h(
             'div',
             { class: 'asset-item' + (state ? ' ' + state : ''), title, attrs: { draggable: 'true' } },
             icon(iconName, 15),
             h('span', { class: 'asset-name', text: name }),
             state === 'error' ? h('span', { class: 'tree-badge error', text: 'error' }) : null,
             h('span', { class: 'asset-size', text: meta }),
-        );
+        ));
+        // Enter opens it, as a double click does.
+        item.addEventListener('click', (e) => {
+            if (e.detail === 0) onOpen();
+        });
         item.addEventListener('dragstart', (e) => {
             e.dataTransfer!.setData(ASSET_MIME, dragId);
             e.dataTransfer!.effectAllowed = 'copy';

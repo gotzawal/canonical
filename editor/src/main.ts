@@ -1,6 +1,7 @@
 import './styles.css';
 import { newScene } from './core/defaults';
-import { AutoSaver, readAutosave } from './core/persistence';
+import { readLocal, writeLocal } from './core/local';
+import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
 import { Picker } from './engine/picking';
@@ -10,7 +11,8 @@ import { ShaderManager } from './engine/shaders';
 import { SceneSync } from './engine/sync';
 import { Checkpoints } from './design/checkpoints';
 import { designSummary, memoLines, pipelineSummary } from './design/context';
-import { createMenu, menuDefinitions, showShortcuts } from './menus';
+import { Commands, editorCommands } from './commands';
+import { createMenu, menuDefinitions } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
 import { ModelServices, savedBackend } from './play/ai/services';
@@ -22,17 +24,17 @@ import { BriefScreen } from './ui/briefScreen';
 import { DesignPanel } from './ui/designPanel';
 import { PipelineBar } from './ui/pipelineBar';
 import { ShotView } from './ui/shotView';
-import { showBuildDialog } from './ui/buildDialog';
 import { Dock } from './ui/dock';
-import { h, isTyping } from './ui/dom';
+import { h } from './ui/dom';
 import { HierarchyPanel } from './ui/hierarchy';
 import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
 import { logo } from './ui/logo';
-import { closeMenus, menubar, showMenu, toast } from './ui/overlays';
+import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
+import { applyTheme } from './ui/theme';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
@@ -55,9 +57,12 @@ async function main() {
         return;
     }
 
+    registerTab();
     const saved = readAutosave();
     const store = new Store(saved?.doc ?? newScene());
     if (saved?.camera) store.camera = { ...store.camera, ...saved.camera };
+    applyTheme(store.prefs);
+    store.on('prefs', applyTheme);
 
     // ------------------------------------------------------------ shell
     const canvas = h('canvas', { class: 'gpu', style: 'width:100%;height:100%' });
@@ -94,17 +99,27 @@ async function main() {
             { class: 'workspace' },
             left,
             h('div', { class: 'splitter', dataset: { side: 'left' } }),
-            h('section', { class: 'center' }, toolbarSlot, viewportEl, h('div', { class: 'splitter horizontal dock-splitter', dataset: { side: 'dock' } }), dockSlot),
+            h('section', { class: 'center' }, h('div', { class: 'stage' }, toolbarSlot, viewportEl), h('div', { class: 'splitter horizontal dock-splitter', dataset: { side: 'dock' } }), dockSlot),
             h('div', { class: 'splitter', dataset: { side: 'right' } }),
             right,
         ),
         statusSlot,
     );
     restoreLayout(app);
+    clampLayout(app);
+    window.addEventListener('resize', () => clampLayout(app));
     installSplitters(app);
-    const toggle = (cls: string) => app.classList.toggle(cls);
-    leftToggle.addEventListener('click', () => toggle(isNarrow() ? 'show-left' : 'hide-left'));
-    rightToggle.addEventListener('click', () => toggle(isNarrow() ? 'show-right' : 'hide-right'));
+    /** Opens, closes or (without `open`) toggles a side panel: a column, or on narrow screens a drawer, one at a time. */
+    const setPanel = (side: 'left' | 'right', open?: boolean) => {
+        if (isNarrow()) {
+            const shown = app.classList.toggle(`show-${side}`, open);
+            if (shown) app.classList.remove(`show-${side === 'left' ? 'right' : 'left'}`);
+        } else app.classList.toggle(`hide-${side}`, open === undefined ? undefined : !open);
+        leftToggle.setAttribute('aria-pressed', String(app.classList.contains('show-left')));
+        rightToggle.setAttribute('aria-pressed', String(app.classList.contains('show-right')));
+    };
+    leftToggle.addEventListener('click', () => setPanel('left'));
+    rightToggle.addEventListener('click', () => setPanel('right'));
 
     // ----------------------------------------------------------- engine
     let runtime: Runtime;
@@ -141,13 +156,14 @@ async function main() {
     gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
         onContextMenu: (_x, _y, cx, cy, id) => {
+            const cmd = (c: string, patch?: Partial<MenuItem>) => editor.commands.item(c, patch);
             showMenu(
                 id
                     ? [
-                          { label: 'Frame', icon: 'focus', shortcut: 'F', action: () => editor.frameSelection() },
-                          { label: 'Duplicate', icon: 'copy', shortcut: 'Mod+D', action: () => editor.duplicateSelection() },
-                          { label: 'Delete', icon: 'trash', shortcut: 'Del', action: () => editor.deleteSelection() },
-                          { label: 'Hide', icon: 'eyeOff', shortcut: 'H', action: () => editor.toggleVisibility(store.selection) },
+                          cmd('view.frame', { label: 'Frame' }),
+                          cmd('edit.duplicate'),
+                          cmd('edit.delete'),
+                          cmd('edit.hide', { label: 'Hide' }),
                           { label: 'Drop to Ground', action: () => editor.dropToGround() },
                           { separator: true },
                           { label: 'Ask AI about this', icon: 'sparkle', action: () => editor.askAI('For the selected object: ') },
@@ -250,7 +266,7 @@ async function main() {
         const one = count === 1;
         scriptNotice.replaceChildren(
             icon('alert', 15),
-            h('span', { text: `${count} script${one ? '' : 's'} from the opened file ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
+            h('span', { text: `${count} script${one ? '' : 's'} from an opened file or snapshot ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
             button('Review', () => {
                 const first = store.doc.scripts[0];
                 if (first) dock.open('script', first.id);
@@ -291,10 +307,7 @@ async function main() {
         scenePanel.el.hidden = tab !== 'scene';
         designPanel.el.hidden = tab !== 'design';
         aiPanel.el.hidden = tab !== 'ai';
-        if (tab === 'ai' || tab === 'design') {
-            app.classList.remove('hide-right');
-            if (isNarrow()) app.classList.add('show-right');
-        }
+        if (tab === 'ai' || tab === 'design') setPanel('right', true);
         if (tab === 'ai') aiPanel.focus();
         if (tab === 'design') designPanel.shown();
     };
@@ -309,8 +322,7 @@ async function main() {
     editor.on('show-design', () => showTab('design'));
     editor.on('show-scene', () => {
         showTab('scene');
-        app.classList.remove('hide-right');
-        if (isNarrow()) app.classList.add('show-right');
+        setPanel('right', true);
     });
     editor.on('show-brief', () => brief.open());
     showTab('inspector');
@@ -395,26 +407,18 @@ async function main() {
         const id = store.primary?.id;
         if (id) hierarchy.startRename(id);
     };
+    editor.commands = new Commands(editorCommands(editor, { rename, toggleDock: () => dock.toggle() }));
     menuSlot.append(
         menubar(
             menuDefinitions(editor, {
-                rename,
-                toggleLeft: () => void toggle(isNarrow() ? 'show-left' : 'hide-left'),
-                toggleRight: () => void toggle(isNarrow() ? 'show-right' : 'hide-right'),
-                toggleDock: () => dock.toggle(),
+                toggleLeft: () => setPanel('left'),
+                toggleRight: () => setPanel('right'),
                 showGraph: () => dock.show('graph'),
                 showAI: () => showTab('ai'),
             }),
         ),
     );
-    toolbarSlot.append(
-        toolbar(editor, () => createMenu(editor), {
-            toggleDock: () => dock.toggle(),
-            showAI: () => showTab('ai'),
-            build: () => showBuildDialog(editor),
-            walk: () => editor.walk?.toggle(),
-        }),
-    );
+    toolbarSlot.append(toolbar(editor, () => createMenu(editor), () => showTab('ai')));
     statusSlot.append(statusbar(editor));
 
     const updateTitle = () => {
@@ -436,10 +440,27 @@ async function main() {
     store.on('playing', updateProbeHelpers);
     updateProbeHelpers();
     player.on('state', (st) => app.classList.toggle('paused', st === 'paused'));
+    // Scenes without a camera node play through the editor camera, which scripts may have moved.
+    player.on('state', (st) => {
+        if (st === 'stopped') camera.reapply();
+    });
 
-    installShortcuts(editor, rename, dock);
+    editor.commands.install(editor);
+    installDropGuard();
     autosave.schedule();
-    if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
+    if (unreadableAutosave) {
+        const lost = unreadableAutosave;
+        void dialog(
+            'The saved scene could not be opened',
+            `The scene this browser kept could not be read (${lost.reason}), so a new scene was started. Download the saved scene to keep it, for example to open it in a newer version of the editor.`,
+            [{ label: 'Close' }, { label: 'Download It', value: 'download', primary: true }],
+        ).then((v) => {
+            if (v === 'download') download(new Blob([lost.raw], { type: 'application/json' }), 'saved-scene.scene.json');
+        });
+    } else if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
+    void otherTabsOpen().then((others) => {
+        if (others) toast('The editor is also open in another tab. Both keep their scene in this browser, so the tab that saves last replaces the other one. Use one tab, or save a project file first.', 'info', 12000);
+    });
 
     (window as any).__editor = editor;
 }
@@ -460,76 +481,21 @@ function aiContext(editor: Editor, dock: Dock): string {
     return lines.join('\n');
 }
 
-function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
-    const store = editor.store;
-    const player = editor.player;
-    document.addEventListener('keydown', (e) => {
-        if (e.defaultPrevented) return;
-        const mod = e.ctrlKey || e.metaKey;
-        const key = e.key.toLowerCase();
-        if (mod && key === 'p') {
-            e.preventDefault();
-            if (e.shiftKey) editor.pausePlay();
-            else editor.togglePlay();
-            return;
-        }
-        if (mod && (key === 'j' || key === '`')) {
-            e.preventDefault();
-            dock.toggle();
-            return;
-        }
-        // While playing, keys pressed with the viewport focused belong to the scripts.
-        if (player.state !== 'stopped' && !isTyping(e.target) && (e.target === editor.viewport.overlay || e.target === document.body)) {
-            player.keyEvent(e, true);
-            if (!mod) {
-                e.preventDefault();
-                return;
-            }
-        }
-        if (isTyping(e.target)) {
-            // Save / open still work from text fields; everything else types.
-            if (mod && (key === 's' || key === 'o')) {
-                e.preventDefault();
-                (e.target as HTMLElement).blur();
-                if (key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
-                else void editor.openSceneFile();
-            }
-            return;
-        }
-        let handled = true;
-        if (mod && key === 'z') e.shiftKey ? store.redo() : store.undo();
-        else if (mod && key === 'y') store.redo();
-        else if (mod && key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
-        else if (mod && key === 'o') void editor.openSceneFile();
-        else if (mod && key === 'b') showBuildDialog(editor);
-        else if (mod && key === 'd') editor.duplicateSelection();
-        else if (mod && key === 'a') editor.selectAll();
-        else if (mod && key === 'g') editor.groupSelection();
-        else if (mod || e.altKey) handled = false;
-        else if (key === 'q') editor.setTool('select');
-        else if (key === 'w') editor.setTool('translate');
-        else if (key === 'e') editor.setTool('rotate');
-        else if (key === 'r') editor.setTool('scale');
-        else if (key === 'x') editor.toggleSpace();
-        else if (key === 'v') editor.walk?.toggle();
-        else if (key === 'f') editor.frameSelection();
-        else if (key === 'home') editor.viewport.frameAll();
-        else if (key === 'g') store.setPrefs({ grid: !store.prefs.grid });
-        else if (key === 'h') editor.toggleVisibility(store.selection);
-        else if (key === 'delete' || key === 'backspace') editor.deleteSelection();
-        else if (key === 'f2') rename();
-        else if (key === '?') showShortcuts();
-        else if (e.code === 'Digit1' || e.code === 'Numpad1') editor.camera.setView(e.shiftKey ? 180 : 0, 0);
-        else if (e.code === 'Digit3' || e.code === 'Numpad3') editor.camera.setView(e.shiftKey ? 270 : 90, 0);
-        else if (e.code === 'Digit7' || e.code === 'Numpad7') editor.camera.setView(store.camera.yaw, e.shiftKey ? -89.5 : 89.5);
-        else if (key === 'escape') {
-            closeMenus();
-            if (!editor.viewport.cancelInteraction()) store.select([]);
-        } else handled = false;
-        if (handled) e.preventDefault();
+
+/**
+ * Files dropped outside the drop targets (viewport, AI tab, brief) would make
+ * the browser open them and leave the editor, losing the undo history,
+ * unapplied code and a running AI request.
+ */
+function installDropGuard() {
+    const files = (e: DragEvent) => !!e.dataTransfer?.types.includes('Files');
+    document.addEventListener('dragover', (e) => {
+        if (files(e)) e.preventDefault();
     });
-    document.addEventListener('keyup', (e) => {
-        if (player.state !== 'stopped') player.keyEvent(e, false);
+    document.addEventListener('drop', (e) => {
+        if (!files(e) || e.defaultPrevented) return;
+        e.preventDefault();
+        toast('Drop files onto the viewport to import them, or onto the AI tab to attach them.', 'info');
     });
 }
 
@@ -538,21 +504,41 @@ function isNarrow() {
 }
 
 function restoreLayout(app: HTMLElement) {
-    try {
-        const layout = JSON.parse(localStorage.getItem(LAYOUT_KEY) || '{}');
-        for (const [k, v] of Object.entries(layout)) app.style.setProperty(k, String(v));
-    } catch { /* ignore */ }
+    for (const [k, v] of Object.entries(readLocal<Record<string, string>>(LAYOUT_KEY, {}) ?? {})) app.style.setProperty(k, String(v));
+}
+
+type Split = 'left' | 'right' | 'assets' | 'dock';
+
+/** What each splitter sizes, within the window or the panel holding it. */
+const SPLITS: Record<Split, { prop: string; holder: string; min: number; max: (holder: DOMRect) => number }> = {
+    left: { prop: '--left-w', holder: '.workspace', min: 180, max: () => window.innerWidth * 0.4 },
+    right: { prop: '--right-w', holder: '.workspace', min: 240, max: () => window.innerWidth * 0.5 },
+    assets: { prop: '--assets-h', holder: '.side.left', min: 60, max: (r) => r.height - 120 },
+    dock: { prop: '--dock-h', holder: '.center', min: 120, max: (r) => r.height - 140 },
+};
+
+function setSize(app: HTMLElement, split: Split, px: number) {
+    const { prop, holder, min, max } = SPLITS[split];
+    const box = app.querySelector(holder)!.getBoundingClientRect();
+    // A hidden holder (a closed drawer) has no size to fit in.
+    if (box.height) app.style.setProperty(prop, clampPx(px, min, Math.max(min, max(box))));
+}
+
+/** Keeps panel sizes (saved on a larger window, say) within the window, as the splitters do. */
+function clampLayout(app: HTMLElement) {
+    for (const split of Object.keys(SPLITS) as Split[]) {
+        const v = parseFloat(app.style.getPropertyValue(SPLITS[split].prop));
+        if (Number.isFinite(v)) setSize(app, split, v);
+    }
 }
 
 function saveLayout(app: HTMLElement) {
     const out: Record<string, string> = {};
-    for (const k of ['--left-w', '--right-w', '--assets-h', '--dock-h']) {
+    for (const { prop: k } of Object.values(SPLITS)) {
         const v = app.style.getPropertyValue(k);
         if (v) out[k] = v;
     }
-    try {
-        localStorage.setItem(LAYOUT_KEY, JSON.stringify(out));
-    } catch { /* ignore */ }
+    writeLocal(LAYOUT_KEY, out);
 }
 
 function installSplitters(app: HTMLElement) {
@@ -562,18 +548,13 @@ function installSplitters(app: HTMLElement) {
             e.preventDefault();
             sp.setPointerCapture(e.pointerId);
             sp.classList.add('active');
-            const side = sp.dataset.side;
-            const move = (ev: PointerEvent) => {
-                if (side === 'left') app.style.setProperty('--left-w', clampPx(ev.clientX, 180, window.innerWidth * 0.4));
-                else if (side === 'right') app.style.setProperty('--right-w', clampPx(window.innerWidth - ev.clientX, 240, window.innerWidth * 0.5));
-                else if (side === 'assets') {
-                    const panel = sp.parentElement!.getBoundingClientRect();
-                    app.style.setProperty('--assets-h', clampPx(panel.bottom - ev.clientY, 60, panel.height - 120));
-                } else if (side === 'dock') {
-                    const center = sp.parentElement!.getBoundingClientRect();
-                    app.style.setProperty('--dock-h', clampPx(center.bottom - ev.clientY, 120, center.height - 140));
-                }
-            };
+            const split = sp.dataset.side as Split;
+            // Sizes from the holder's inner edge, keeping the pointer in the middle of the gap.
+            const box = sp.parentElement!.getBoundingClientRect();
+            const vertical = split === 'left' || split === 'right';
+            const inset = (parseFloat(getComputedStyle(sp.parentElement!).paddingLeft) || 0) + (vertical ? sp.offsetWidth : sp.offsetHeight) / 2;
+            const move = (ev: PointerEvent) =>
+                setSize(app, split, split === 'left' ? ev.clientX - box.left - inset : split === 'right' ? box.right - inset - ev.clientX : box.bottom - inset - ev.clientY);
             const up = () => {
                 sp.classList.remove('active');
                 sp.removeEventListener('pointermove', move);

@@ -3,7 +3,7 @@ import { clampGIGrid } from '../core/giLimits';
 import type { EnvironmentDoc, SkyType, Vec3 } from '../core/types';
 import { clear, h } from './dom';
 import {
-    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec3Field, button, row, section,
+    CheckboxField, ColorField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec3Field, button, row, section,
 } from './widgets';
 
 /** Scene-wide settings: sky, exposure, post effects, and editor preferences. */
@@ -13,10 +13,11 @@ export class ScenePanel {
     private syncs: (() => void)[] = [];
     private sky: SkyType | null = null;
     private giOn: boolean | null = null;
-    private open = 0;
+    private steps: FieldSteps;
     private fov: SliderField | null = null;
 
     constructor(private editor: Editor) {
+        this.steps = new FieldSteps(editor.store);
         this.body = h('div', { class: 'panel-body' });
         this.el = h('div', { class: 'panel scene-panel' }, this.body);
         editor.store.on('change', () => {
@@ -38,34 +39,11 @@ export class ScenePanel {
 
     private hooks<T>(label: string, apply: (env: EnvironmentDoc, v: T) => void): EditHooks<T> {
         const store = this.editor.store;
-        const write = (v: T) => store.update((doc) => apply(doc.environment, v), { env: true });
-        return {
-            begin: () => {
-                this.open++;
-                store.begin(label);
-            },
-            input: write,
-            end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                store.end();
-            },
-            commit: (v) => {
-                store.begin(label);
-                try {
-                    write(v);
-                } finally {
-                    store.end();
-                }
-            },
-        };
+        return this.steps.hooks(label, (v: T) => store.update((doc) => apply(doc.environment, v), { env: true }));
     }
 
     private render() {
-        while (this.open > 0) {
-            this.open--;
-            this.editor.store.end();
-        }
+        this.steps.close();
         clear(this.body);
         this.syncs = [];
         const env = this.env;

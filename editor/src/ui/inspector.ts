@@ -14,12 +14,12 @@ import { schemaOf } from '../core/behavior/format';
 import { formatValue, keyTypeInfo } from '../core/behavior/nodeTypes';
 import { validateAgent } from '../core/behavior/validate';
 import { valueControl } from './behavior/fields';
-import { clear, h } from './dom';
+import { clear, h, pressable } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
-    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
+    CheckboxField, ColorField, EditHooks, FieldGuard, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
     iconButton, row, section,
 } from './widgets';
 
@@ -76,16 +76,23 @@ export class InspectorPanel {
     private body: HTMLElement;
     private syncs: (() => void)[] = [];
     private shape = '';
-    /** Continuous edits begun by widgets that have not ended yet. */
-    private open = 0;
+    private steps: FieldSteps;
+    /** For fields that move objects: refused while the stage locks placement (the fields then show the values again). */
+    private placement: FieldGuard = {
+        allow: () => this.editor.pipeline.canPlace(this.store.selection),
+        after: () => this.refresh(),
+    };
     private openSlots = new Set<string>();
     private openParts = new Set<string>();
     private partFilter = '';
+    /** The object the mesh filter was typed for: another object starts unfiltered. */
+    private partFilterFor = '';
 
     constructor(private editor: Editor, private showScene: () => void) {
         this.body = h('div', { class: 'panel-body inspector-body' });
         this.el = h('div', { class: 'panel inspector' }, this.body);
         const store = editor.store;
+        this.steps = new FieldSteps(store);
         store.on('selection', () => this.render());
         store.on('change', () => {
             if (this.shapeKey() !== this.shape) this.render();
@@ -133,6 +140,7 @@ export class InspectorPanel {
             n.light ? n.light.type : '-',
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
+            n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
             n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shading ?? '') + (o.alphaMode ?? '') + (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
@@ -142,6 +150,14 @@ export class InspectorPanel {
             this.store.doc.scripts.map((s) => s.id + s.name).join(','),
             this.store.doc.shaders.map((s) => s.id + s.name + s.kind + s.lighting).join(','),
         ].join('|');
+    }
+
+    /** What the Prefab section shows: template or model, whether a model exists, how many instances. */
+    private prefabKey(id: string): string {
+        const p = this.editor.prefab(id);
+        if (!p) return 'missing';
+        const hasModel = this.store.doc.assets.some((a) => a.id === p.asset);
+        return `${p.name}:${p.useModel ? 'model' : 'template'}:${hasModel}:${this.editor.instancesOf(id).length}`;
     }
 
     private propsKey(shaderId: string): string {
@@ -174,16 +190,16 @@ export class InspectorPanel {
     }
 
     render() {
-        // A widget being torn down mid-drag must not leave its transaction open.
-        while (this.open > 0) {
-            this.open--;
-            this.store.end();
-        }
+        this.steps.close();
         this.shape = this.shapeKey();
         this.syncs = [];
         const scroll = this.body.scrollTop;
         clear(this.body);
         const node = this.store.primary;
+        if (node?.id !== this.partFilterFor) {
+            this.partFilter = '';
+            this.partFilterFor = node?.id ?? '';
+        }
         if (!node) {
             this.body.append(
                 h(
@@ -215,38 +231,31 @@ export class InspectorPanel {
 
     // -------------------------------------------------------------- binding
 
-    /** Edit hooks that write `apply` to every selected node passing `filter`. */
-    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void): EditHooks<T> {
+    /**
+     * Edit hooks that write `apply` to every selected node passing `filter`.
+     * With `read`, a vector field changes only the component that was edited
+     * on each node: the other components of a multi-selection stay their own.
+     */
+    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined, guard?: FieldGuard): EditHooks<T> {
         const store = this.store;
-        const write = (v: T) => {
+        const write = (v: T, part?: number) => {
             const ids = store.selection.filter((id) => {
                 const n = store.node(id);
                 return n && filter(n);
             });
             store.update((doc) => {
-                for (const n of doc.nodes) if (ids.includes(n.id)) apply(n, v);
+                for (const n of doc.nodes) {
+                    if (!ids.includes(n.id)) continue;
+                    const cur = part !== undefined && read ? read(n) : undefined;
+                    if (Array.isArray(cur) && Array.isArray(v)) {
+                        const next = [...cur];
+                        next[part!] = v[part!];
+                        apply(n, next as T);
+                    } else apply(n, v);
+                }
             }, { nodes: ids });
         };
-        return {
-            begin: () => {
-                this.open++;
-                store.begin(label);
-            },
-            input: (v) => write(v),
-            end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                store.end();
-            },
-            commit: (v) => {
-                store.begin(label);
-                try {
-                    write(v);
-                } finally {
-                    store.end();
-                }
-            },
-        };
+        return this.steps.hooks(label, write, guard);
     }
 
     private watch(fn: () => void) {
@@ -294,19 +303,19 @@ export class InspectorPanel {
             value: this.node.position,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v)),
+            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position, this.placement),
         });
         const rot = new Vec3Field({
             value: this.node.rotation,
             step: 0.5,
             precision: 2,
-            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v)),
+            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation, this.placement),
         });
         const scl = new Vec3Field({
             value: this.node.scale,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v)),
+            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale, this.placement),
         });
         this.watch(() => {
             pos.set(this.node.position);
@@ -491,9 +500,14 @@ export class InspectorPanel {
         const lit = m.type === 'lit' || (m.type === 'shader' && shaderDoc?.lighting !== 'unlit');
         const pbr = m.type === 'lit';
         const set = <K extends keyof MaterialDoc>(key: K, label: string) =>
-            this.hooks<MaterialDoc[K]>(label, has, (n, v) => {
-                (n.mesh!.material as any)[key] = v;
-            });
+            this.hooks<MaterialDoc[K]>(
+                label,
+                has,
+                (n, v) => {
+                    (n.mesh!.material as any)[key] = v;
+                },
+                (n) => n.mesh!.material[key],
+            );
         const rows: HTMLElement[] = [];
         const slot = m.slot ? this.store.doc.design.materials.find((x) => x.id === m.slot) : undefined;
         if (slot) {
@@ -764,7 +778,8 @@ export class InspectorPanel {
         const has: Filter = (n) => !!n.particles;
         const p = this.node.particles!;
         type P = ParticlesDoc;
-        const set = <K extends keyof P>(key: K, label: string) => this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v));
+        const set = <K extends keyof P>(key: K, label: string) =>
+            this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v), (n) => n.particles![key]);
         const pair = (key: 'life' | 'size' | 'spin', i: 0 | 1, label: string) =>
             this.hooks<number>(label, has, (n, v) => {
                 const r = [...n.particles![key]] as [number, number];
@@ -908,9 +923,14 @@ export class InspectorPanel {
         return this.store.selection.filter((id) => this.store.node(id)?.model?.asset === asset);
     }
 
-    private modelHooks<T>(label: string, apply: (model: NonNullable<NodeDoc['model']>, v: T) => void): EditHooks<T> {
+    private modelHooks<T>(
+        label: string,
+        apply: (model: NonNullable<NodeDoc['model']>, v: T) => void,
+        read?: (model: NonNullable<NodeDoc['model']>) => T | undefined,
+        guard?: FieldGuard,
+    ): EditHooks<T> {
         const asset = this.node.model?.asset;
-        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v));
+        return this.hooks<T>(label, (n) => n.model?.asset === asset, (n, v) => apply(n.model!, v), read && ((n) => read(n.model!)), guard);
     }
 
     private modelSections(node: NodeDoc): HTMLElement[] {
@@ -1170,15 +1190,15 @@ export class InspectorPanel {
             this.editor.setModelPart(this.sameModel(), part.path, { visible: visible ? false : undefined }, visible ? 'Hide Mesh' : 'Show Mesh');
         });
         const slotKey = po.material ?? part.slot;
-        const head = h(
+        const head = pressable(h(
             'div',
-            { class: 'part-row' + (open ? ' open' : '') + (focused ? ' focused' : '') + (visible ? '' : ' hidden-node'), attrs: { role: 'button', tabindex: 0 } },
+            { class: 'part-row' + (open ? ' open' : '') + (focused ? ' focused' : '') + (visible ? '' : ' hidden-node'), attrs: { 'aria-expanded': String(open) } },
             icon('chevron', 12, 'slot-caret'),
             h('span', { class: 'part-name', text: part.name, title: part.path }),
             Object.keys(po).length ? h('span', { class: 'override-dot', title: 'Changed from the model file' }) : null,
             h('span', { class: 'part-meta', text: `${slotKey} · ${part.triangles.toLocaleString()} tris` }),
             eye,
-        );
+        ));
         head.addEventListener('click', () => {
             if (open) this.openParts.delete(part.path);
             else this.openParts.add(part.path);
@@ -1196,11 +1216,16 @@ export class InspectorPanel {
         const cast = new CheckboxField(po.castShadow ?? part.base.castShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { castShadow: v }, 'Mesh Cast Shadow'), 'Cast');
         const receive = new CheckboxField(po.receiveShadow ?? part.base.receiveShadow, (v) => this.editor.setModelPart(this.sameModel(), part.path, { receiveShadow: v }, 'Mesh Receive Shadow'), 'Receive');
         const setT = (key: 'position' | 'rotation' | 'scale', label: string) =>
-            this.modelHooks<Vec3>(label, (model, v) => {
-                const parts = { ...(model.parts ?? {}) };
-                parts[part.path] = { ...(parts[part.path] ?? {}), [key]: v };
-                model.parts = parts;
-            });
+            this.modelHooks<Vec3>(
+                label,
+                (model, v) => {
+                    const parts = { ...(model.parts ?? {}) };
+                    parts[part.path] = { ...(parts[part.path] ?? {}), [key]: v };
+                    model.parts = parts;
+                },
+                (model) => model.parts?.[part.path]?.[key] ?? part.base[key],
+                this.placement,
+            );
         const pos = new Vec3Field({ value: po.position ?? part.base.position, step: 0.01, precision: 3, ...setT('position', 'Move Mesh') });
         const rot = new Vec3Field({ value: po.rotation ?? part.base.rotation, step: 0.5, precision: 2, ...setT('rotation', 'Rotate Mesh') });
         const scl = new Vec3Field({ value: po.scale ?? part.base.scale, step: 0.01, precision: 3, ...setT('scale', 'Scale Mesh') });
@@ -1355,19 +1380,7 @@ export class InspectorPanel {
                 const label = `Agent Value ${key.name}`;
                 const write = (v: unknown) =>
                     this.applyAgent(sameTree().map((n) => ({ op: 'set_agent', object: n.id, values: { ...n.agent!.values, [key.name]: v } })), label);
-                const control = valueControl(key, Object.hasOwn(agent.values, key.name) ? agent.values[key.name] : key.default, ctx, {
-                    commit: write,
-                    begin: () => {
-                        this.open++;
-                        store.begin(`Behavior: ${label}`);
-                    },
-                    input: write,
-                    end: () => {
-                        if (this.open <= 0) return;
-                        this.open--;
-                        store.end();
-                    },
-                });
+                const control = valueControl(key, Object.hasOwn(agent.values, key.name) ? agent.values[key.name] : key.default, ctx, this.steps.hooks(`Behavior: ${label}`, write));
                 const reset = iconButton('undo', `Back to the schema default (${formatValue(key.default)})`, () =>
                     this.applyAgent(
                         sameTree()

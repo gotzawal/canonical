@@ -208,6 +208,8 @@ export class Camera3D extends ComponentBase {
     }
 
     public updateProjection() {
+        // A destroyed camera has released its matrices.
+        if (!this._projectionMatrix) return;
         let ctx = this._deriveCtx();
         if (ctx) {
             if (!this._resizeListenerAttached) this._bindToCtx(ctx);
@@ -692,6 +694,13 @@ export class Camera3D extends ComponentBase {
      * @param force whether to force-destroy
      */
     public destroy(force?: boolean): void {
+        // Stop following canvas resizes: a listener left on the context would
+        // call updateProjection() on this destroyed camera, and its throw stops
+        // the listeners registered after it.
+        if (this._resizeListenerAttached && this._boundCtx) {
+            this._boundCtx.removeEventListener(CResizeEvent.RESIZE, this.updateProjection, this);
+            this._resizeListenerAttached = false;
+        }
         // Release the 7 Matrix4 slots this camera holds in the static matrix table;
         // ComponentBase.destroy() wouldn't know about these private fields.
         for (const m of [this._projectionMatrix, this._projectionMatrixInv, this._viewMatrix, this._viewMatrixInv, this._unprojection, this._pvMatrix, this._pvMatrixInv]) {

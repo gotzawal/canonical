@@ -53,7 +53,7 @@ export interface AgentDone {
 }
 
 interface AgentEvents {
-    /** Turns changed (new turn, streamed text, tool state). */
+    /** A turn came, changed (streamed text, tool state) or went (it is no longer in turns); null: the whole conversation. */
     update: AgentTurn | null;
     busy: boolean;
     done: AgentDone;
@@ -103,22 +103,35 @@ export class Agent extends Emitter<AgentEvents> {
     private placeholders = new Map<ChatMessage, string>();
     private abort: AbortController | null = null;
     busy = false;
-    /** Compaction or memo refresh running (the Send button waits). */
+    /** Compaction running (the Send button waits). */
     working = false;
     usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
     lastModel = '';
     private sessionKey = '';
     /** Sent as OpenRouter's session_id, so the requests of a conversation stay with the provider holding its prompt cache. */
     private conversation = uid('c');
-    private saveTimer = 0;
+    /** Pending saves, per conversation (a switch must not cancel the save of the one before). */
+    private saveTimers = new Map<string, number>();
+    /** A conversation being read: empty for a moment, which must not be saved (that deletes it). */
+    private loadingKey = '';
     private loading: Promise<void> = Promise.resolve();
+    /** Counts conversation switches (New conversation, another project): a request of an earlier one stops writing. */
+    private generation = 0;
+    /** The memo refresh running, and the work it takes in (see refreshMemo). */
+    private refreshing: { session: string; recent: string; abort: AbortController } | null = null;
 
     constructor(private editor: Editor, private context: () => string) {
         super();
         this.loading = this.loadSession();
         editor.store.on('load', () => {
             if (SESSION_PREFIX + editor.store.doc.design.id === this.sessionKey) return;
-            if (this.busy) this.stop();
+            if (this.busy) {
+                // The request stops as if by hand, and the project left behind keeps it in its conversation.
+                this.stop();
+                this.push({ role: 'note', text: 'Stopped.' });
+                this.settle(true);
+                this.saveSession();
+            }
             this.loading = this.loadSession();
         });
     }
@@ -138,6 +151,7 @@ export class Agent extends Emitter<AgentEvents> {
 
     private async loadSession() {
         const key = SESSION_PREFIX + this.editor.store.doc.design.id;
+        this.generation++;
         this.sessionKey = key;
         this.turns = [];
         this.history = [];
@@ -145,7 +159,9 @@ export class Agent extends Emitter<AgentEvents> {
         this.usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
         this.conversation = uid('c');
         this.emit('update', null);
+        this.loadingKey = key;
         const data = await kvGet<SessionData>(key).catch(() => undefined);
+        if (this.loadingKey === key) this.loadingKey = '';
         if (this.sessionKey !== key || !data || data.version !== 1) return;
         if (typeof data.conversation === 'string' && data.conversation) this.conversation = data.conversation;
         this.turns = Array.isArray(data.turns) ? data.turns : [];
@@ -162,16 +178,21 @@ export class Agent extends Emitter<AgentEvents> {
 
     /** Stores the conversation of this project (debounced). */
     private saveSession() {
-        clearTimeout(this.saveTimer);
+        // This conversation, even if another one is loaded before the timer fires.
         const key = this.sessionKey;
-        this.saveTimer = window.setTimeout(() => {
-            if (!this.turns.length && !this.history.length) {
+        if (key === this.loadingKey) return;
+        clearTimeout(this.saveTimers.get(key));
+        const { history, usage, conversation } = this;
+        const all = this.turns;
+        this.saveTimers.set(key, window.setTimeout(() => {
+            this.saveTimers.delete(key);
+            if (!all.length && !history.length) {
                 void kvDelete(key);
                 return;
             }
             // Screenshots are the bulk of a conversation: keep the latest ones.
             let images = 0;
-            const turns = this.turns
+            const turns = all
                 .slice(-400)
                 .reverse()
                 .map((t) => {
@@ -181,14 +202,15 @@ export class Agent extends Emitter<AgentEvents> {
                 })
                 .reverse()
                 .map((t) => (t.tool?.result && t.tool.result.length > 6000 ? { ...t, tool: { ...t.tool, result: t.tool.result.slice(0, 6000) + '...' } } : t));
-            const data: SessionData = { version: 1, turns, history: this.history, usage: this.usage, savedAt: new Date().toISOString(), conversation: this.conversation };
+            const data: SessionData = { version: 1, turns, history, usage, savedAt: new Date().toISOString(), conversation };
             void kvSet(key, data);
-        }, 600);
+        }, 600));
     }
 
     /** Starts a new conversation (the scene memo stays). */
     reset() {
         if (this.busy) this.stop();
+        this.generation++;
         this.turns = [];
         this.history = [];
         this.placeholders.clear();
@@ -240,18 +262,25 @@ export class Agent extends Emitter<AgentEvents> {
 
     // ------------------------------------------------------------ requests
 
-    async send(text: string, attachments: Attachment[] = []) {
+    /** Runs a request; false when it could not start (busy, no key or no model). */
+    async send(text: string, attachments: Attachment[] = []): Promise<boolean> {
         const prompt = text.trim();
-        if ((!prompt && !attachments.length) || this.busy) return;
+        if ((!prompt && !attachments.length) || this.busy) return false;
         await this.loading;
+        const gen = this.generation;
+        // False once the conversation was switched: then nothing more is written to it.
+        const live = () => this.generation === gen;
+        const cut = () => {
+            if (!live()) throw new DOMException('Aborted', 'AbortError');
+        };
         const cred = this.credentials();
         if (!aiSettings.apiKey) {
             this.push({ role: 'note', text: 'Add your OpenRouter API key in the AI settings first.', error: true });
-            return;
+            return false;
         }
         if (!cred) {
             this.push({ role: 'note', text: 'Pick a model in the AI settings first.', error: true });
-            return;
+            return false;
         }
         const { key, model } = cred;
 
@@ -262,10 +291,9 @@ export class Agent extends Emitter<AgentEvents> {
         const signal = this.abort.signal;
         const store = this.editor.store;
         const label = `AI: ${(prompt || 'images').replace(/\s+/g, ' ').slice(0, 40)}${prompt.length > 40 ? '...' : ''}`;
+        // The tools' edits undo as one step (store.squash); edits by hand meanwhile stay apart.
+        const batch = uid('r');
         let committed = false;
-        const offCommit = store.on('commit', (l) => {
-            if (l === label) committed = true;
-        });
         let last: AgentTurn | null = null;
         let answer = '';
         const toolLines: string[] = [];
@@ -273,21 +301,20 @@ export class Agent extends Emitter<AgentEvents> {
         let stopped = false;
         let vision = false;
         let caches = false;
-        let begun = false;
         try {
             const models = await listModels().catch(() => []);
             const info = models.find((m) => m.id === model);
             vision = supportsImages(info);
             caches = cacheStyle(model, info?.pricing) !== 'unknown';
             if (this.historySize() > COMPACT_CHARS) await this.compact(signal, true);
+            cut();
 
             const ctx = this.context();
             const body = ctx ? `<editor-context>\n${ctx}\n</editor-context>\n\n${prompt || 'Look at the attached images.'}` : prompt;
-            this.history.push(await this.userMessage(body, attachments, vision));
+            const message = await this.userMessage(body, attachments, vision);
+            cut();
+            this.history.push(message);
 
-            // One undo step for everything this request changes.
-            store.begin(label);
-            begun = true;
             const maxSteps = Math.max(1, Math.min(60, aiSettings.value.maxSteps || 24));
             let step = 0;
             for (; step < maxSteps; step++) {
@@ -310,6 +337,7 @@ export class Agent extends Emitter<AgentEvents> {
                         },
                     },
                 );
+                cut();
                 this.lastModel = res.model;
                 this.addUsage(res.usage);
                 this.history.push(res.message);
@@ -323,11 +351,15 @@ export class Agent extends Emitter<AgentEvents> {
                     // Only tool calls: drop the empty bubble.
                     this.turns.splice(this.turns.indexOf(turn), 1);
                     last = null;
-                    this.emit('update', null);
+                    this.emit('update', turn);
                 }
                 const calls = res.message.tool_calls ?? [];
                 if (!calls.length) {
+                    const empty = !res.message.content;
+                    // Providers refuse an assistant message without content in later requests.
+                    if (empty) res.message.content = '(empty answer)';
                     if (res.finishReason === 'length') this.push({ role: 'note', text: 'The answer was cut off by the length limit.' });
+                    else if (empty) this.push({ role: 'note', text: 'The model sent an empty answer. Send the request again, or try another model.' });
                     break;
                 }
                 const images: string[] = [];
@@ -346,7 +378,8 @@ export class Agent extends Emitter<AgentEvents> {
                         toolTurn.tool!.state = 'error';
                         toolTurn.tool!.summary = 'invalid arguments';
                     } else {
-                        const result = await runTool(this.env, call.function.name, args);
+                        const result = await store.inBatch(batch, () => runTool(this.env, call.function.name, args));
+                        cut();
                         content = JSON.stringify(result.data ?? null);
                         const failed = !!(result.data && typeof result.data === 'object' && 'error' in (result.data as any));
                         toolTurn.tool!.state = failed ? 'error' : 'done';
@@ -380,29 +413,50 @@ export class Agent extends Emitter<AgentEvents> {
         } catch (e: any) {
             if (e?.name === 'AbortError') {
                 stopped = true;
-                this.push({ role: 'note', text: 'Stopped.' });
+                if (live()) this.push({ role: 'note', text: 'Stopped.' });
             } else {
                 error = e instanceof OpenRouterError ? e.message : `${e?.message || e}`;
-                this.push({ role: 'note', text: error, error: true });
+                if (live()) this.push({ role: 'note', text: error, error: true });
                 console.warn('[ai] request failed', e);
             }
-            // Leave the history consistent: every tool call needs a result.
-            this.repairHistory();
         } finally {
-            if (begun) store.end();
-            offCommit();
-            this.retireImages();
+            committed = store.squash(batch, label);
+            // A conversation left for another project was settled when it was left (see the constructor).
+            if (live()) this.settle(stopped);
             this.busy = false;
             this.abort = null;
-            if (committed) {
+            if (committed && live()) {
                 const turn = [...this.turns].reverse().find((t) => t.role === 'assistant' || t.role === 'note') ?? last;
-                if (turn) turn.undoLabel = label;
+                if (turn) {
+                    turn.undoLabel = label;
+                    this.emit('update', turn);
+                }
             }
             this.emit('busy', false);
-            this.emit('update', null);
-            this.saveSession();
+            if (live()) this.saveSession();
             this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
         }
+        return true;
+    }
+
+    /**
+     * Tidies up after a request: a step stopped or failed before its first
+     * word leaves an empty bubble (it would show the typing dots for good),
+     * a tool cut off leaves its row spinning, every tool call needs a result
+     * in the history, and images the model has seen are not sent again.
+     */
+    private settle(stopped: boolean) {
+        for (let i = this.turns.length - 1; i >= 0; i--) {
+            const t = this.turns[i];
+            if (t.role === 'assistant' && !t.text.trim()) this.turns.splice(i, 1);
+            else if (t.tool?.state === 'running') {
+                t.tool.state = 'error';
+                t.tool.summary = stopped ? 'stopped' : 'did not finish';
+            } else continue;
+            this.emit('update', t);
+        }
+        this.repairHistory();
+        this.retireImages();
     }
 
     /** The request message, with the attached images for models that see them. */
@@ -463,7 +517,8 @@ export class Agent extends Emitter<AgentEvents> {
         const cut = starts[starts.length - KEEP_REQUESTS];
         const older = this.history.slice(0, cut);
         const note = this.push({ role: 'note', text: auto ? 'The conversation is long: compacting the earlier messages...' : 'Compacting the earlier messages...' });
-        const wasWorking = this.working;
+        // Another conversation can be opened while the model summarizes: this one is not about it.
+        const gen = this.generation;
         this.working = true;
         this.emit('busy', this.busy);
         try {
@@ -482,6 +537,7 @@ export class Agent extends Emitter<AgentEvents> {
                 },
                 { signal },
             );
+            if (this.generation !== gen) return false;
             this.addUsage(res.usage);
             const summary = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!summary) throw new Error('The model returned an empty summary.');
@@ -498,13 +554,14 @@ export class Agent extends Emitter<AgentEvents> {
             return true;
         } catch (e: any) {
             if (e?.name === 'AbortError') throw e;
+            if (this.generation !== gen) return false;
             note.text = `Compacting failed (${e?.message || e}); the oldest messages were dropped instead.`;
             note.error = true;
             this.emit('update', note);
             this.trimHistory(COMPACT_CHARS);
             return false;
         } finally {
-            this.working = wasWorking;
+            this.working = false;
             this.emit('busy', this.busy);
         }
     }
@@ -539,31 +596,40 @@ export class Agent extends Emitter<AgentEvents> {
      * Rewrites the scene memo (DesignDoc.memo) from the old memo, the state
      * of the project and what happened since: the assistant's long-term
      * context for this scene. Returns false when it could not run.
+     *
+     * It runs in the background: requests do not wait for it. A refresh
+     * still running when the next one starts is stopped, and the next one
+     * takes over its work, so an older answer never replaces a newer memo.
      */
     async refreshMemo(recent: string): Promise<boolean> {
         const cred = this.credentials();
         if (!cred || !aiSettings.value.memo) return false;
         const store = this.editor.store;
         const doc = store.doc;
+        // The project the memo is for: another one can be opened while the model writes.
+        const session = this.sessionKey;
+        const before = this.refreshing;
+        before?.abort.abort();
+        if (before?.session === session) recent = `${before.recent}\n${recent}`;
+        const job = (this.refreshing = { session, recent, abort: new AbortController() });
         const state = [
             `Scene "${doc.name}": ${doc.nodes.length} objects, ${doc.prefabs.length} prefabs, ${doc.scripts.length} scripts, ${doc.shaders.length} shaders.`,
             ...pipelineSummary(doc),
             ...designSummary(doc),
         ].join('\n');
-        this.working = true;
-        this.emit('busy', this.busy);
         try {
             const res = await chat(cred.key, {
                 model: cred.model,
                 messages: [
                     { role: 'system', content: MEMO_PROMPT },
-                    { role: 'user', content: `Current memo:\n${doc.design.memo.text.trim() || '(empty)'}\n\nProject state:\n${state}\n\nRecent work:\n${recent.slice(0, 12000) || '(no details)'}` },
+                    { role: 'user', content: `Current memo:\n${doc.design.memo.text.trim() || '(empty)'}\n\nProject state:\n${state}\n\nRecent work:\n${recent.slice(-12000) || '(no details)'}` },
                 ],
                 temperature: 0.2,
                 max_tokens: 800,
                 ...this.cacheRequest,
                 cacheable: false,
-            });
+            }, { signal: job.abort.signal });
+            if (this.sessionKey !== session) return false;
             this.addUsage(res.usage);
             this.saveSession();
             const text = typeof res.message.content === 'string' ? res.message.content.trim() : '';
@@ -572,12 +638,11 @@ export class Agent extends Emitter<AgentEvents> {
                 d.design.memo = { text: text.slice(0, 6000), at: new Date().toISOString() };
             }, { design: true });
             return true;
-        } catch (e) {
-            console.warn('[ai] memo refresh failed', e);
+        } catch (e: any) {
+            if (e?.name !== 'AbortError') console.warn('[ai] memo refresh failed', e);
             return false;
         } finally {
-            this.working = false;
-            this.emit('busy', this.busy);
+            if (this.refreshing === job) this.refreshing = null;
         }
     }
 }

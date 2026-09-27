@@ -163,7 +163,8 @@ export interface GenerateOptions {
 /**
  * Generates images. Models that list `n` get several images per request
  * (unless streamed); others get one request per image, with seeds counting
- * up from the seed, at most four requests at a time.
+ * up from the seed, at most four requests at a time. A cancelled generation
+ * returns the images that arrived before (an AbortError when none did).
  */
 export async function generateImages(key: string, model: ImageModel | undefined, req: ImageRequest, opts: GenerateOptions = {}): Promise<ImageResult> {
     const count = Math.max(1, Math.min(MAX_IMAGES, Math.round(req.count ?? 1)));
@@ -199,17 +200,16 @@ export async function generateImages(key: string, model: ImageModel | undefined,
             opts.onProgress?.(done, count);
             if (!res.blobs.length) errors.push('The model returned no image.');
         } catch (e: any) {
-            if (e?.name === 'AbortError') throw e;
-            errors.push(e?.message || String(e));
+            if (e?.name !== 'AbortError') errors.push(e?.message || String(e));
         }
     };
     const queue = [...batches];
     const workers = Array.from({ length: Math.min(4, queue.length) }, async () => {
-        for (let b = queue.shift(); b; b = queue.shift()) await run(b);
+        for (let b = queue.shift(); b && !opts.signal?.aborted; b = queue.shift()) await run(b);
     });
     await Promise.all(workers);
     const list = images.filter((x): x is GeneratedImage => !!x);
-    if (!list.length) throw new OpenRouterError(errors[0] || 'The model returned no image.');
+    if (!list.length) throw opts.signal?.aborted ? new DOMException('Aborted', 'AbortError') : new OpenRouterError(errors[0] || 'The model returned no image.');
     return { images: list, cost, errors };
 }
 

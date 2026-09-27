@@ -5,12 +5,12 @@ import {
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import type {
-    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc, Vec3,
+    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc,
 } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
 import { recentLogs } from '../ui/statusbar';
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
-import { hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
+import { def, hex, node, num, params, r3, rv, script, shader, ToolError, v3, type Json } from './toolUtil';
 import { designToolDefs, runDesignTool } from './designTools';
 import { greyboxToolDefs, runGreyboxTool } from './greyboxTools';
 import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
@@ -123,15 +123,19 @@ const objectFields = {
 const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
 const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
-function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
-}
+/** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
+const SCENE_RESULT_CHARS = 28_000;
+
+/** Tools that only read or look: every stage has them. */
+const READ_TOOLS = ['get_scene', 'get_object', 'list_model_parts', 'read_script', 'read_shader', 'get_render_graph', 'get_console', 'capture_viewport', 'view_images', 'select_objects', 'read_design', 'get_behavior_outline', 'validate_behavior', 'get_decision_log'];
 
 /**
  * Tool groups: a tool is offered when the current pipeline stage allows one
- * of its groups (see design/stages.ts). Tools missing here are always there.
+ * of its groups (see design/stages.ts). A tool missing here is never
+ * offered, so a new one cannot slip past the stages.
  */
 const TOOL_GROUPS: Record<string, ToolGroup[]> = {
+    ...Object.fromEntries(READ_TOOLS.map((t) => [t, ['read']])),
     create_objects: ['objects', 'lights', 'effects'],
     update_objects: ['objects', 'lights', 'materials', 'effects'],
     delete_objects: ['objects', 'lights', 'effects'],
@@ -186,12 +190,14 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
 /** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
 export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
     if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
-    return new Set(stageDef(env.editor.pipeline.design.stage).tools);
+    const design = env.editor.pipeline.design;
+    // Working without a brief: the pipeline has not started, so the Brief stage limits nothing.
+    if (design.stage === 'brief' && design.brief.skipped) return new Set(ALL_TOOL_GROUPS);
+    return new Set(stageDef(design.stage).tools);
 }
 
 function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
-    const groups = TOOL_GROUPS[name];
-    return !groups || groups.some((g) => allowed.has(g));
+    return !!TOOL_GROUPS[name]?.some((g) => allowed.has(g));
 }
 
 export function toolDefs(env: ToolEnv): ToolDef[] {
@@ -435,6 +441,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     if (spec.parent !== undefined) {
         const p = resolveParent(doc, spec.parent, batch);
         if (p === n.id) throw new ToolError('An object cannot be its own parent.');
+        // Nor go under one of its own descendants: the hierarchy would loop.
+        const lookup = (id: string) => batch.find((b) => b.id === id) ?? doc.nodes.find((x) => x.id === id);
+        for (let cur = p, steps = 0; cur && steps <= doc.nodes.length + batch.length; cur = lookup(cur)?.parent ?? null, steps++) {
+            if (cur === n.id) throw new ToolError(`"${n.name}" cannot go under "${lookup(p!)?.name ?? p}", which is inside it.`);
+        }
         n.parent = p;
     }
     if (spec.position !== undefined) n.position = v3(spec.position, 'position');
@@ -630,42 +641,40 @@ const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 's
  */
 class StagePolicy {
     readonly allowed: Set<ToolGroup>;
-    readonly locked: boolean;
     readonly stage: string;
+    private pipeline: ToolEnv['editor']['pipeline'];
     warnings = new Set<string>();
 
     constructor(env: ToolEnv) {
         this.allowed = allowedGroups(env);
-        this.locked = env.editor.pipeline.placementLocked;
-        this.stage = stageDef(env.editor.pipeline.design.stage).title;
+        this.pipeline = env.editor.pipeline;
+        this.stage = stageDef(this.pipeline.design.stage).title;
     }
 
     private any(...groups: ToolGroup[]): boolean {
         return groups.some((g) => this.allowed.has(g));
     }
 
-    private placement(): string {
-        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
-        if (this.locked) return `Placement is locked in the ${this.stage} stage; only lights, cameras and effects move. The user can unlock it in the pipeline bar.`;
-        return '';
+    /** The stage's tools allow moving or deleting `n`, and the placement lock does (Pipeline.placementBlock). */
+    private placement(n: NodeDoc, verb: string): string {
+        const mover = !!n.light || !!n.camera || !!n.particles;
+        if (!(mover ? this.any('lights', 'objects', 'shots', 'effects') : this.allowed.has('objects'))) return `"${n.name}" cannot be ${verb} in the ${this.stage} stage.`;
+        const why = this.pipeline.placementBlock([n.id]);
+        return why ? `"${n.name}": ${why}` : '';
     }
 
     create(type: string): string {
         if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added in the ${this.stage} stage.`;
         if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added in the ${this.stage} stage.`;
-        return this.placement();
+        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
+        return this.pipeline.placementLocked ? `Placement is locked in the ${this.stage} stage: new objects would change the level. It can be unlocked in the pipeline bar.` : '';
     }
 
     update(n: NodeDoc, spec: Json): string {
         if (n.prefabChild) return `"${n.name}" is part of a prefab instance and follows its prefab; change the instance (its root) instead.`;
-        const mover = !!n.light || !!n.camera;
         if (PLACEMENT_FIELDS.some((f) => spec[f] !== undefined)) {
-            if (mover) {
-                if (!this.any('lights', 'objects', 'shots')) return `"${n.name}" cannot be moved in the ${this.stage} stage.`;
-            } else {
-                const err = this.placement();
-                if (err) return `"${n.name}": ${err}`;
-            }
+            const err = this.placement(n, 'moved');
+            if (err) return err;
         }
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
@@ -673,16 +682,14 @@ class StagePolicy {
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
-                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with material.slot; colors and textures come in the Materials stage.');
+                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with set_material_slot / assign_material_slot; colors and textures come in the Materials stage.');
             }
         }
         return '';
     }
 
     remove(n: NodeDoc): string {
-        if (n.light || n.camera) return this.any('lights', 'objects') ? '' : `"${n.name}" cannot be deleted in the ${this.stage} stage.`;
-        const err = this.placement();
-        return err ? `"${n.name}": ${err}` : '';
+        return this.placement(n, 'deleted');
     }
 }
 
@@ -712,36 +719,48 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 const d = doc();
                 // Parts of prefab instances follow their prefab: only the instances are listed.
                 const listed = d.nodes.filter((n) => !n.prefabChild);
-                const nodes = listed.slice(0, 400).map((n) => nodeSummary(d, n));
-                return {
-                    summary: `${d.nodes.length} objects`,
-                    data: {
-                        name: d.name,
-                        selection: store.selection,
-                        play_state: ed.player.state,
-                        environment: {
-                            sky: d.environment.sky,
-                            ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
-                            exposure: d.environment.exposure,
-                            bloom: d.environment.bloom,
-                            ao: d.environment.ao,
-                            fog: d.environment.fog,
-                            fxaa: d.environment.fxaa,
-                            gi: d.environment.gi,
-                        },
-                        objects: nodes,
-                        ...(listed.length > nodes.length ? { truncated: listed.length - nodes.length } : {}),
-                        prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
-                        assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
-                        scripts: d.scripts.map((s) => {
-                            const c = ed.compiler.get(s.id);
-                            if (c?.paused) return { id: s.id, name: s.name, paused: true };
-                            return { id: s.id, name: s.name, ok: !c?.error, ...(c?.error ? { error: `line ${c.error.line}: ${c.error.message}` } : {}) };
-                        }),
-                        shaders: d.shaders.map((s) => ({ id: s.id, name: s.name, kind: s.kind, lighting: s.kind === 'material' ? s.lighting : undefined, state: ed.shaders.status(s.id).state })),
-                        render_graph: { disabled_passes: d.renderGraph.disabled, post_effects: d.renderGraph.posts.map((p) => ({ id: p.id, shader: p.shader, enabled: p.enabled })) },
+                const data: Json = {
+                    name: d.name,
+                    selection: store.selection,
+                    play_state: ed.player.state,
+                    environment: {
+                        sky: d.environment.sky,
+                        ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
+                        exposure: d.environment.exposure,
+                        bloom: d.environment.bloom,
+                        ao: d.environment.ao,
+                        fog: d.environment.fog,
+                        fxaa: d.environment.fxaa,
+                        gi: d.environment.gi,
                     },
+                    prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
+                    assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
+                    scripts: d.scripts.map((s) => {
+                        const c = ed.compiler.get(s.id);
+                        if (c?.paused) return { id: s.id, name: s.name, paused: true };
+                        return { id: s.id, name: s.name, ok: !c?.error, ...(c?.error ? { error: `line ${c.error.line}: ${c.error.message}` } : {}) };
+                    }),
+                    shaders: d.shaders.map((s) => ({ id: s.id, name: s.name, kind: s.kind, lighting: s.kind === 'material' ? s.lighting : undefined, state: ed.shaders.status(s.id).state })),
+                    render_graph: { disabled_passes: d.renderGraph.disabled, post_effects: d.renderGraph.posts.map((p) => ({ id: p.id, shader: p.shader, enabled: p.enabled })) },
                 };
+                // Objects come last and fit what a tool result may hold (longer
+                // results are cut): full entries first, then only id and name.
+                let room = SCENE_RESULT_CHARS - JSON.stringify(data).length;
+                const objects: Json[] = [];
+                const more: Json[] = [];
+                for (const n of listed) {
+                    const full = more.length ? null : nodeSummary(d, n);
+                    const entry = full && JSON.stringify(full).length + 1 <= room - 4000 ? full : { id: n.id, name: n.name };
+                    const size = JSON.stringify(entry).length + 1;
+                    if (size > room) break;
+                    room -= size;
+                    (entry === full ? objects : more).push(entry);
+                }
+                data.objects = objects;
+                if (more.length) data.more_objects = more;
+                const left = listed.length - objects.length - more.length;
+                if (more.length || left) data.note = `${more.length ? `${more.length} objects are listed by id and name only (get_object gives the details)` : ''}${more.length && left ? '; ' : ''}${left ? `${left} more objects are not listed` : ''}.`;
+                return { summary: `${d.nodes.length} objects`, data };
             }
             case 'get_object': {
                 const n = node(doc(), args.id);
@@ -1019,12 +1038,13 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 return { data: { ok: true }, summary: s.name };
             }
             case 'write_shader': {
-                const kind = args.kind === 'post' ? 'post' : 'material';
-                const lighting = args.lighting === 'unlit' ? 'unlit' : 'lit';
                 const code = String(args.code ?? '');
                 if (!code.trim()) throw new ToolError('code is empty.');
                 const name = String(args.name ?? 'Shader.wgsl');
                 const existing = args.id ? shader(doc(), args.id) : doc().shaders.find((s) => s.name.toLowerCase() === name.toLowerCase() || s.name.toLowerCase() === (name + '.wgsl').toLowerCase());
+                // A rewrite keeps the kind and lighting the call leaves out.
+                const kind = args.kind === 'post' || args.kind === 'material' ? args.kind : existing?.kind ?? 'material';
+                const lighting = args.lighting === 'unlit' || args.lighting === 'lit' ? args.lighting : existing?.lighting ?? 'lit';
                 let id: string;
                 if (existing) {
                     id = existing.id;

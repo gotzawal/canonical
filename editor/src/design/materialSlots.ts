@@ -7,6 +7,7 @@
 import { uid } from '../core/ids';
 import { makeMaterialSlot } from '../core/design';
 import { TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
+import type { ChangeHint } from '../core/store';
 import type { MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
 import type { Editor } from '../editor';
 import { getSwatch, swatchAsset } from './swatches';
@@ -80,6 +81,7 @@ export interface SlotPatch {
 /** Creates a slot, or changes one (by id); linked materials follow. Returns the slot. */
 export function upsertSlot(editor: Editor, patch: SlotPatch & { id?: string }, label?: string): MaterialSlotDoc {
     let id = patch.id ?? '';
+    const hint = slotChangeHint(editor, id);
     editor.store.commit(label ?? (patch.id ? 'Edit Material Slot' : 'Add Material Slot'), (d) => {
         let slot = id ? d.design.materials.find((s) => s.id === id) : undefined;
         if (!slot) {
@@ -100,8 +102,16 @@ export function upsertSlot(editor: Editor, patch: SlotPatch & { id?: string }, l
             else delete slot.flat;
         }
         syncSlots(d, id);
-    }, { design: true });
+    }, hint);
     return editor.store.doc.design.materials.find((s) => s.id === id)!;
+}
+
+/**
+ * Change hint of a slot edit: with linked meshes their materials change
+ * too, so the scene follows (a design-only hint skips the engine sync).
+ */
+function slotChangeHint(editor: Editor, slotId: string): ChangeHint | undefined {
+    return slotId && linkedMaterials(editor.store.doc).some(({ m }) => m.slot === slotId) ? undefined : { design: true };
 }
 
 /**
@@ -191,6 +201,7 @@ export async function useSwatch(editor: Editor, slotId: string, swatchId: string
     const rec = await getSwatch(swatchId);
     if (!rec) throw new Error('That swatch is not in the library of this browser.');
     const { meta, added } = await swatchAsset(editor, rec);
+    const hint = slotChangeHint(editor, slotId);
     editor.store.commit('Use Swatch', (d) => {
         if (added && !d.assets.some((a) => a.id === meta.id)) d.assets.push(meta);
         const slot = d.design.materials.find((s) => s.id === slotId);
@@ -202,7 +213,7 @@ export async function useSwatch(editor: Editor, slotId: string, swatchId: string
         if (rec.metallic !== undefined) slot.metallic = rec.metallic;
         delete slot.flat;
         syncSlots(d, slotId);
-    }, { design: true });
+    }, hint);
     const slot = editor.store.doc.design.materials.find((s) => s.id === slotId);
     if (!slot) throw new Error('No such material slot.');
     return slot;

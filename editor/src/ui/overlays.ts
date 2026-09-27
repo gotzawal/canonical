@@ -1,6 +1,81 @@
 import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
 
+// ----------------------------------------------------------------- layers
+
+// Menus, popovers, dialogs and enlarged images stack up. Escape and clicks
+// outside go to the topmost only, a modal one keeps the keyboard (Tab stays
+// inside, the page behind takes no shortcuts), and closing one gives the
+// focus back to where it was.
+
+interface Layer {
+    el: HTMLElement;
+    close(): void;
+    modal: boolean;
+    /** Clicks here do not count as outside (the button that opened it). */
+    keep?(target: Node): boolean;
+    back: Element | null;
+}
+
+const layers: Layer[] = [];
+
+/** Puts an overlay on top; the returned function takes it off (call it from its close). */
+function pushLayer(layer: Omit<Layer, 'back'>): () => void {
+    const l: Layer = { ...layer, back: document.activeElement };
+    layers.push(l);
+    return () => {
+        const i = layers.indexOf(l);
+        if (i < 0) return;
+        layers.splice(i, 1);
+        const focus = document.activeElement;
+        if (l.back instanceof HTMLElement && l.back.isConnected && (!focus || focus === document.body || !focus.isConnected || l.el.contains(focus))) l.back.focus({ preventScroll: true });
+    };
+}
+
+/** A dialog or an enlarged image is open: the page behind it takes no shortcuts. */
+export function modalOpen(): boolean {
+    return layers.some((l) => l.modal);
+}
+
+const FOCUSABLE = 'button:not([disabled]), [href], input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])';
+
+document.addEventListener(
+    'keydown',
+    (e) => {
+        const top = layers[layers.length - 1];
+        if (!top) return;
+        if (e.key === 'Escape') {
+            e.preventDefault();
+            e.stopPropagation();
+            top.close();
+        } else if (e.key === 'Tab' && top.modal) {
+            const items = Array.from(top.el.querySelectorAll<HTMLElement>(FOCUSABLE)).filter((x) => x.offsetParent !== null);
+            const first = items[0];
+            const last = items[items.length - 1];
+            const at = document.activeElement;
+            if (first && (!top.el.contains(at) || (e.shiftKey ? at === first : at === last))) {
+                e.preventDefault();
+                (e.shiftKey ? last : first).focus();
+            }
+        }
+    },
+    true,
+);
+
+document.addEventListener(
+    'pointerdown',
+    (e) => {
+        // Every open menu or popover the click is outside of closes, down to a modal layer.
+        const t = e.target as Node;
+        for (let i = layers.length - 1; i >= 0; i--) {
+            const l = layers[i];
+            if (l.modal || l.el.contains(t) || l.keep?.(t)) break;
+            l.close();
+        }
+    },
+    true,
+);
+
 // ------------------------------------------------------------------ menus
 
 export interface MenuItem {
@@ -21,16 +96,37 @@ export function closeMenus() {
     openMenu = null;
 }
 
-document.addEventListener('pointerdown', (e) => {
-    if (openMenu && !openMenu.el.contains(e.target as Node) && !(e.target as HTMLElement).closest?.('.menubar-item')) {
-        closeMenus();
-    }
-}, true);
 window.addEventListener('blur', () => closeMenus());
 window.addEventListener('resize', () => closeMenus());
 
+/** Arrow keys move through a menu's items; right and left open and leave a submenu. */
+function menuKeys(box: HTMLElement, list: HTMLElement) {
+    list.addEventListener('keydown', (e) => {
+        const items = Array.from(list.children).filter((c): c is HTMLButtonElement => c instanceof HTMLButtonElement && !c.disabled);
+        const at = items.indexOf(document.activeElement as HTMLButtonElement);
+        const sub = (document.activeElement as HTMLElement | null)?.querySelector<HTMLElement>(':scope > .submenu');
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') items[(at + (e.key === 'ArrowDown' ? 1 : items.length - 1)) % items.length]?.focus();
+        else if (e.key === 'ArrowRight' && sub) {
+            (document.activeElement as HTMLElement).dispatchEvent(new PointerEvent('pointerenter'));
+            sub.querySelector<HTMLElement>('button:not([disabled])')?.focus();
+        } else if (e.key === 'ArrowLeft' && box.classList.contains('submenu')) {
+            box.style.display = '';
+            (box.parentElement as HTMLElement).focus();
+        } else return;
+        e.preventDefault();
+        e.stopPropagation();
+    });
+}
+
+/**
+ * A menu: a (glass) box around a list that scrolls. A box that blurs what is
+ * behind it is the containing block of its fixed submenus, so it must not
+ * scroll too, or it would clip them.
+ */
 function renderItems(items: MenuItem[], close: () => void): HTMLElement {
-    const list = h('div', { class: 'menu', attrs: { role: 'menu' } });
+    const list = h('div', { class: 'menu-list', attrs: { role: 'menu' } });
+    const box = h('div', { class: 'menu' }, list);
+    menuKeys(box, list);
     for (const item of items) {
         if (item.separator) {
             list.appendChild(h('div', { class: 'menu-sep' }));
@@ -54,6 +150,31 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
             const sub = renderItems(item.submenu, close);
             sub.classList.add('submenu');
             el.appendChild(sub);
+            // Next to its item, flipped or shifted to stay on screen. It is
+            // fixed, so the menu around it can scroll without clipping it.
+            // Touch has no hover: a tap opens it (only once the tap is over, which a submenu
+            // flipped over its item would take otherwise), and it stays until another opens.
+            const open = () => {
+                for (const other of list.querySelectorAll<HTMLElement>(':scope > .has-sub > .submenu')) if (other !== sub) other.style.display = '';
+                sub.style.display = 'flex';
+                // Measured at 0, 0 of its containing block: the window, or the glass menu around it.
+                sub.style.left = sub.style.top = '0px';
+                const o = sub.getBoundingClientRect();
+                const r = el.getBoundingClientRect();
+                const x = r.right + o.width + 6 <= window.innerWidth ? r.right : Math.max(6, r.left - o.width);
+                const y = Math.max(6, Math.min(r.top - 6, window.innerHeight - o.height - 6));
+                sub.style.left = x - o.left + 'px';
+                sub.style.top = y - o.top + 'px';
+            };
+            el.addEventListener('pointerenter', (e) => {
+                if (e.pointerType !== 'touch') open();
+            });
+            el.addEventListener('click', (e) => {
+                if (!sub.contains(e.target as Node)) open();
+            });
+            el.addEventListener('pointerleave', (e) => {
+                if (e.pointerType !== 'touch') sub.style.display = '';
+            });
         } else if (enabled) {
             el.addEventListener('click', () => {
                 close();
@@ -62,7 +183,7 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
         }
         list.appendChild(el);
     }
-    return list;
+    return box;
 }
 
 /** Shows a floating menu at a screen position (context menus). */
@@ -70,24 +191,27 @@ export function showMenu(items: MenuItem[], x: number, y: number) {
     closeMenus();
     const close = () => {
         el.remove();
+        pop();
         if (openMenu?.el === el) openMenu = null;
     };
     const el = renderItems(items, close);
     el.classList.add('floating');
     document.body.appendChild(el);
+    const pop = pushLayer({ el, close, modal: false });
     const r = el.getBoundingClientRect();
-    el.style.left = Math.min(x, window.innerWidth - r.width - 6) + 'px';
-    el.style.top = Math.min(y, window.innerHeight - r.height - 6) + 'px';
+    el.style.left = Math.max(6, Math.min(x, window.innerWidth - r.width - 6)) + 'px';
+    el.style.top = Math.max(6, Math.min(y, window.innerHeight - r.height - 6)) + 'px';
     openMenu = { el, close };
 }
 
 export function menubar(menus: { label: string; items: () => MenuItem[] }[]): HTMLElement {
     const bar = h('nav', { class: 'menubar', attrs: { role: 'menubar' } });
     let active: HTMLElement | null = null;
-    const open = (btn: HTMLElement, items: MenuItem[]) => {
+    const open = (btn: HTMLElement, items: MenuItem[], keyboard = false) => {
         closeMenus();
         const close = () => {
             el.remove();
+            pop();
             btn.classList.remove('open');
             if (openMenu?.el === el) openMenu = null;
             active = null;
@@ -95,18 +219,22 @@ export function menubar(menus: { label: string; items: () => MenuItem[] }[]): HT
         const el = renderItems(items, close);
         el.classList.add('floating', 'dropdown');
         document.body.appendChild(el);
+        const pop = pushLayer({ el, close, modal: false, keep: (t) => bar.contains(t) });
         const r = btn.getBoundingClientRect();
-        el.style.left = r.left + 'px';
+        el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - el.offsetWidth - 6)) + 'px';
         el.style.top = r.bottom + 2 + 'px';
+        el.style.maxHeight = window.innerHeight - r.bottom - 8 + 'px';
         btn.classList.add('open');
         active = btn;
         openMenu = { el, close };
+        if (keyboard) el.querySelector<HTMLElement>('button:not([disabled])')?.focus();
     };
     for (const m of menus) {
-        const btn = h('button', { class: 'menubar-item', text: m.label, attrs: { type: 'button' } });
-        btn.addEventListener('click', () => {
+        const btn = h('button', { class: 'menubar-item', text: m.label, attrs: { type: 'button', 'aria-haspopup': 'menu' } });
+        btn.addEventListener('click', (e) => {
             if (active === btn) closeMenus();
-            else open(btn, m.items());
+            // Opened with the keyboard (Enter, Space): the first item takes the focus.
+            else open(btn, m.items(), e.detail === 0);
         });
         btn.addEventListener('pointerenter', () => {
             if (active && active !== btn) open(btn, m.items());
@@ -160,23 +288,16 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
         );
         backdrop.appendChild(box);
         const done = (v: string | null) => {
-            document.removeEventListener('keydown', onKey, true);
             backdrop.remove();
+            pop();
             resolve(v);
         };
-        const onKey = (e: KeyboardEvent) => {
-            if (e.key !== 'Escape') return;
-            // Only the topmost dialog closes (a question asked over another dialog).
-            const open = document.querySelectorAll('.dialog-backdrop');
-            if (open[open.length - 1] !== backdrop) return;
-            e.stopPropagation();
-            done(null);
-        };
-        document.addEventListener('keydown', onKey, true);
+        const pop = pushLayer({ el: backdrop, close: () => done(null), modal: true });
         backdrop.addEventListener('pointerdown', (e) => {
             if (e.target === backdrop) done(null);
         });
         let focus: HTMLButtonElement | null = null;
+        let safe: HTMLButtonElement | null = null;
         for (const b of buttons) {
             const btn = h('button', {
                 class: 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : ''),
@@ -185,10 +306,13 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
                 on: { click: () => done(b.value ?? b.label) },
             });
             if (b.primary) focus = btn;
+            else if (!b.danger) safe ??= btn;
             footer.appendChild(btn);
         }
         document.body.appendChild(backdrop);
-        (focus ?? footer.lastElementChild as HTMLElement | null)?.focus();
+        // A destructive choice is never the default: Enter in a danger dialog cancels.
+        const danger = buttons.some((b) => b.danger);
+        (focus ?? (danger ? safe : null) ?? (footer.lastElementChild as HTMLElement | null))?.focus();
     });
 }
 
@@ -220,21 +344,14 @@ export function modal(title: string, content: Node, opts: { cls?: string; canClo
         footer,
     );
     backdrop.appendChild(box);
-    const onKey = (e: KeyboardEvent) => {
-        if (e.key !== 'Escape') return;
-        const open = document.querySelectorAll('.dialog-backdrop');
-        if (open[open.length - 1] !== backdrop) return;
-        e.stopPropagation();
-        tryClose();
-    };
     const close = () => {
         if (closed) return;
         closed = true;
-        document.removeEventListener('keydown', onKey, true);
         backdrop.remove();
+        pop();
         opts.onClose?.();
     };
-    document.addEventListener('keydown', onKey, true);
+    const pop = pushLayer({ el: backdrop, close: tryClose, modal: true });
     document.body.appendChild(backdrop);
     return {
         box,
@@ -252,15 +369,10 @@ export function lightbox(src: string, caption = '') {
     const el = h('div', { class: 'lightbox', attrs: { role: 'dialog', 'aria-label': caption || 'Image' } }, img, caption ? h('div', { class: 'lightbox-caption', text: caption }) : null);
     const close = () => {
         el.remove();
-        document.removeEventListener('keydown', onKey, true);
+        pop();
     };
-    const onKey = (e: KeyboardEvent) => {
-        if (e.key !== 'Escape') return;
-        e.stopPropagation();
-        close();
-    };
+    const pop = pushLayer({ el, close, modal: true });
     el.addEventListener('click', close);
-    document.addEventListener('keydown', onKey, true);
     document.body.appendChild(el);
 }
 
@@ -287,26 +399,16 @@ export function popover(anchor: HTMLElement, content: HTMLElement, cls = '', onC
     const pr = el.getBoundingClientRect();
     el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pr.width - 6)) + 'px';
     el.style.top = Math.min(r.bottom + 4, window.innerHeight - pr.height - 6) + 'px';
-    const onDown = (e: PointerEvent) => {
-        if (!el.contains(e.target as Node) && !anchor.contains(e.target as Node)) close();
-    };
-    const onKey = (e: KeyboardEvent) => {
-        if (e.key === 'Escape') close();
-    };
     let closed = false;
     const close = () => {
         if (closed) return;
         closed = true;
         el.remove();
-        document.removeEventListener('pointerdown', onDown, true);
-        document.removeEventListener('keydown', onKey, true);
+        pop();
         if (openPopover?.el === el) openPopover = null;
         onClose?.();
     };
-    setTimeout(() => {
-        document.addEventListener('pointerdown', onDown, true);
-        document.addEventListener('keydown', onKey, true);
-    });
+    const pop = pushLayer({ el, close, modal: false, keep: (t) => anchor.contains(t) });
     openPopover = { el, close };
     return close;
 }

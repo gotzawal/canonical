@@ -26,7 +26,8 @@ export class Checkpoints {
     constructor(private editor: Editor, private agent: Agent) {
         const store = editor.store;
         store.on('commit', (label) => {
-            if (store.playing || /^(AI[: ]|Undo |Redo |Patch$)/.test(label)) return;
+            // The assistant's edits make their own checkpoint when its request ends.
+            if (store.playing || store.batch || /^(Undo |Redo |Patch$)/.test(label)) return;
             this.edits.push(label);
             if (this.edits.length >= EDIT_COUNT && Date.now() - this.lastAt >= EDIT_INTERVAL) this.run('edits');
         });

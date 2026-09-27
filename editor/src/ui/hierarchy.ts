@@ -74,7 +74,7 @@ export class HierarchyPanel {
         );
 
         store.on('change', () => this.render());
-        store.on('selection', () => this.render(true));
+        store.on('selection', () => this.reveal(store.primary?.id));
         editor.on('isolate', () => this.render(true));
         editor.sync.on('model', () => this.render(true));
         this.render(true);
@@ -119,6 +119,14 @@ export class HierarchyPanel {
             this.tree.appendChild(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
         }
         this.tree.scrollTop = scroll;
+    }
+
+    /** Shows the row of an object selected elsewhere (the viewport): its parents open, scrolled into view. */
+    private reveal(id: string | undefined) {
+        const store = this.editor.store;
+        for (let n = store.node(store.node(id)?.parent); n; n = store.node(n.parent)) this.collapsed.delete(n.id);
+        this.render(true);
+        if (id) this.tree.querySelector<HTMLElement>(`.tree-row[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
     }
 
     private isolationBanner(root: NodeDoc): HTMLElement {
@@ -356,14 +364,15 @@ export class HierarchyPanel {
                   { separator: true },
                   { label: 'Make Prefab', icon: 'prefab', enabled: () => !node.prefabChild, action: () => editor.createPrefab() },
               ];
+        const cmd = (id: string, patch?: Partial<MenuItem>) => editor.commands.item(id, patch);
         return [
-            { label: 'Rename', icon: 'dots', shortcut: 'F2', action: () => this.startRename(node.id) },
-            { label: 'Duplicate', icon: 'copy', shortcut: 'Mod+D', action: () => editor.duplicateSelection() },
-            { label: 'Delete', icon: 'trash', shortcut: 'Del', action: () => editor.deleteSelection() },
+            cmd('edit.rename', { icon: 'dots', action: () => this.startRename(node.id) }),
+            cmd('edit.duplicate'),
+            cmd('edit.delete'),
             { separator: true },
-            { label: 'Frame', icon: 'focus', shortcut: 'F', action: () => editor.viewport.frameNodes(editor.store.selection) },
-            { label: node.visible ? 'Hide' : 'Show', icon: node.visible ? 'eyeOff' : 'eye', shortcut: 'H', action: () => editor.toggleVisibility(editor.store.selection) },
-            { label: 'Group Selection', icon: 'layers', shortcut: 'Mod+G', action: () => editor.groupSelection() },
+            cmd('view.frame', { label: 'Frame' }),
+            cmd('edit.hide', { label: node.visible ? 'Hide' : 'Show', icon: node.visible ? 'eyeOff' : 'eye' }),
+            cmd('edit.group', { label: 'Group Selection' }),
             { label: 'Create Child Empty', icon: 'empty', action: () => editor.createEmpty(node.id) },
             { separator: true },
             { label: 'Move to Root', icon: 'home', enabled: () => !!node.parent, action: () => editor.moveNodes(editor.store.selectionRoots(), null, null) },

@@ -52,7 +52,7 @@ export class AIPanel {
         this.usageLabel = h('span', { class: 'ai-usage' });
         this.modelLabel.addEventListener('click', () => void this.openSettings());
         this.attachStrip = h('div', { class: 'ai-attachments', attrs: { hidden: true } });
-        this.compactBtn = iconButton('history', 'Compact the conversation: summarize the earlier messages', () => void this.agent.compact().then(() => this.render()));
+        this.compactBtn = iconButton('history', 'Compact the conversation: summarize the earlier messages', () => void this.agent.compact());
         const attachBtn = iconButton('attach', 'Attach images (or paste / drop them here)', async () => {
             const files = await pickFiles('image/*,.md,.txt,text/plain,text/markdown', true);
             await this.addFiles(files);
@@ -154,7 +154,13 @@ export class AIPanel {
         const attachments = this.attachments;
         this.attachments = [];
         this.renderAttachments();
-        void this.agent.send(text, attachments);
+        void this.agent.send(text, attachments).then((started) => {
+            // Nothing was sent (no model picked yet): the text comes back to be sent again.
+            if (started || this.input.value) return;
+            this.input.value = text;
+            this.attachments = attachments;
+            this.renderAttachments();
+        });
     }
 
     /** Sends a prompt as if typed (used by the pipeline's buttons). */
@@ -274,17 +280,30 @@ export class AIPanel {
         this.list.scrollTop = this.list.scrollHeight;
     }
 
+    /** Redraws one turn (null: the whole conversation changed). */
     private update(turn: AgentTurn | null) {
         this.renderControls();
-        if (!turn || !this.views.size || !this.agent.turns.includes(turn)) {
+        const old = turn && this.views.get(turn.id);
+        // Gone from the conversation: a dropped bubble, or a turn of a conversation left behind.
+        if (turn && !this.agent.turns.includes(turn)) {
+            old?.remove();
+            this.views.delete(turn.id);
+            return;
+        }
+        // The first turn takes the place of the welcome text.
+        if (!turn || (!old && !this.views.size)) {
             this.render();
             return;
         }
+        // The list follows new content only when the reader is at its end.
         const nearBottom = this.list.scrollHeight - this.list.scrollTop - this.list.clientHeight < 80;
         const next = this.turnView(turn);
-        const old = this.views.get(turn.id);
-        if (old) old.replaceWith(next);
-        else this.list.appendChild(next);
+        if (old) {
+            // What the user opened stays open.
+            const open = [...old.querySelectorAll('details')].map((d) => d.open);
+            next.querySelectorAll('details').forEach((d, i) => (d.open = !!open[i]));
+            old.replaceWith(next);
+        } else this.list.appendChild(next);
         if (nearBottom) this.list.scrollTop = this.list.scrollHeight;
     }
 

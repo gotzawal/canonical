@@ -175,3 +175,8 @@ export function modelOption<T = unknown>(m: Pick<AiModelDoc, 'kind' | 'options'>
 export function modelFingerprint(m: Pick<AiModelDoc, 'kind' | 'url' | 'file'>): string {
     return `${m.kind}|${m.url}|${m.file}`;
 }
+
+/** Tells what a model answers apart: its files and its options (a prompt, labels...). */
+export function modelRevision(m: Pick<AiModelDoc, 'kind' | 'url' | 'file' | 'options'>): string {
+    return `${modelFingerprint(m)}|${JSON.stringify(m.options ?? {})}`;
+}

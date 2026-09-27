@@ -23,6 +23,7 @@ import { ModelsEditor, modelStateText } from './modelsEditor';
 import { Outliner, type FocusPart } from './outliner';
 import { PropertiesPanel } from './properties';
 import { SchemaEditor } from './schemaEditor';
+import { readLocal, writeLocal } from '../../core/local';
 
 type Mode = 'tree' | 'schema' | 'memory' | 'models';
 
@@ -45,6 +46,8 @@ export class BehaviorPanel {
     private modelChip: HTMLElement;
     private visible = false;
     private agentId: string | null = null;
+    /** The debug view's agent picker, and the agents it lists. */
+    private agentPick: { key: string; field: SelectField<string>; ticks: HTMLElement; head: HTMLElement } | null = null;
     private timer = 0;
     private issueCache: { key: string; issues: Issue[] } = { key: '', issues: [] };
 
@@ -75,11 +78,6 @@ export class BehaviorPanel {
             },
             part: () => this.part,
             apply: (ops, label) => this.apply(ops, label),
-            renamed: (from, to) => {
-                this.outliner.selection = this.outliner.selection.map((x) => (x === from ? to : x));
-                this.outliner.render(true);
-                this.props.render();
-            },
             focusPart: (part) => {
                 this.part = part;
                 this.props.render();
@@ -107,7 +105,7 @@ export class BehaviorPanel {
         this.el = h('div', { class: 'bt-panel' }, this.toolbar, this.body);
 
         const store = editor.store;
-        store.on('change', () => this.refresh());
+        store.on('change', (hint) => this.refresh(hint?.renamed));
         store.on('load', () => {
             this.treeId = null;
             this.outliner.select([]);
@@ -176,26 +174,22 @@ export class BehaviorPanel {
     }
 
     private save() {
-        try {
-            localStorage.setItem(STATE_KEY, JSON.stringify({ tree: this.treeId, mode: this.mode }));
-        } catch { /* ignore */ }
+        writeLocal(STATE_KEY, { tree: this.treeId, mode: this.mode });
     }
 
     private restore() {
-        try {
-            const s = JSON.parse(localStorage.getItem(STATE_KEY) || '{}');
-            if (typeof s.tree === 'string') this.treeId = s.tree;
-            if (s.mode === 'tree' || s.mode === 'schema' || s.mode === 'memory' || s.mode === 'models') this.mode = s.mode;
-        } catch { /* ignore */ }
+        const s = readLocal<any>(STATE_KEY, {});
+        if (typeof s?.tree === 'string') this.treeId = s.tree;
+        if (s?.mode === 'tree' || s?.mode === 'schema' || s?.mode === 'memory' || s?.mode === 'models') this.mode = s.mode;
     }
 
     // ---------------------------------------------------------- rendering
 
-    private refresh() {
+    private refresh(renamed?: Map<string, Map<string, string>>) {
         if (!this.visible) return;
         this.renderToolbar();
         if (this.mode === 'tree') {
-            this.outliner.prune();
+            this.outliner.prune(renamed?.get(`t:${this.tree()?.id}`));
             this.outliner.render();
             this.props.refresh();
         } else if (this.mode === 'schema') this.schemaEditor.render();
@@ -496,17 +490,27 @@ export class BehaviorPanel {
         const el = this.debugEl;
         const list = this.agents();
         const agent = this.agent();
-        clear(el);
         if (!list.length) {
-            el.appendChild(h('div', { class: 'empty-hint', text: 'No object runs this tree in this Play session.' }));
+            el.replaceChildren(h('div', { class: 'empty-hint', text: 'No object runs this tree in this Play session.' }));
             return;
         }
-        const pick = new SelectField(list.map((a) => ({ value: a.id, label: a.name })), agent?.id ?? '', (id) => {
-            this.agentId = id;
-            this.renderDebug();
-            this.outliner.render(true);
-        });
-        el.appendChild(h('div', { class: 'bt-debug-head' }, icon('agent', 14), pick.el, h('span', { class: 'muted small', text: agent ? `${agent.tree.ticks} ticks` : '' })));
+        // The agent picker stays while the agents stay the same: a drop-down that is rebuilt closes.
+        const options = list.map((a) => ({ value: a.id, label: a.name }));
+        const key = JSON.stringify(options);
+        if (this.agentPick?.key !== key) {
+            const field = new SelectField(options, agent?.id ?? '', (id) => {
+                this.agentId = id;
+                this.renderDebug();
+                this.outliner.render(true);
+            });
+            const ticks = h('span', { class: 'muted small' });
+            this.agentPick = { key, field, ticks, head: h('div', { class: 'bt-debug-head' }, icon('agent', 14), field.el, ticks) };
+        }
+        const { head, field, ticks } = this.agentPick;
+        field.set(agent?.id ?? '');
+        ticks.textContent = agent ? `${agent.tree.ticks} ticks` : '';
+        for (const c of Array.from(el.childNodes)) if (c !== head) c.remove();
+        if (head.parentNode !== el) el.prepend(head);
         if (!agent) return;
         const dbg = this.editor.player.agents.debug(agent);
         const now = this.editor.player.time.elapsed;

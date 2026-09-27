@@ -84,7 +84,20 @@ export class BriefScreen {
         const store = editor.store;
         store.on('load', () => {
             this.dismissed = false;
+            // What the card shows belongs to the previous project: never save it into this one.
+            if (!this.el.hidden) this.hide();
             this.update();
+        });
+        // Play shows the game: the card steps aside and comes back at Stop, text kept.
+        let stepAside = false;
+        store.on('playing', (playing) => {
+            if (playing && !this.el.hidden) {
+                stepAside = true;
+                this.el.hidden = true;
+            } else if (!playing && stepAside) {
+                stepAside = false;
+                this.el.hidden = false;
+            }
         });
         store.on('change', () => {
             if (this.el.hidden) return;

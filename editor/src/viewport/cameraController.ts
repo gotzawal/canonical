@@ -42,6 +42,12 @@ export class CameraController {
         return add(state.target, scale(dir, state.distance));
     }
 
+    /** Puts the engine camera back on the stored view, also when something else moved it (a script in Play). */
+    reapply() {
+        this.applied = '';
+        this.apply();
+    }
+
     apply() {
         const s = this.state;
         const key = `${s.target.join(',')}|${s.yaw}|${s.pitch}|${s.distance}|${s.fov}`;
@@ -126,7 +132,9 @@ export class CameraController {
         }
         const center: Vec3 = [(box.min[0] + box.max[0]) / 2, (box.min[1] + box.max[1]) / 2, (box.min[2] + box.max[2]) / 2];
         const radius = Math.max(0.25, len(sub(box.max, box.min)) / 2);
-        const distance = radius / Math.sin((s.fov * DEG) / 2) * 1.1;
+        // Fit the narrower field of view: the horizontal one in a portrait viewport.
+        const half = Math.atan(Math.tan((s.fov * DEG) / 2) * Math.min(1, this.runtime.camera.aspect));
+        const distance = radius / Math.sin(half) * 1.1;
         this.animateTo({ ...s, target: center, distance });
     }
 

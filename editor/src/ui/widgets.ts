@@ -1,6 +1,8 @@
-import { h } from './dom';
+import { h, pressable } from './dom';
 import { icon } from './icons';
 import { normalizeHex } from '../engine/color';
+import type { Store } from '../core/store';
+import { readLocal, writeLocal } from '../core/local';
 
 export function formatNumber(v: number, precision = 3): string {
     if (!Number.isFinite(v)) return '0';
@@ -8,12 +10,72 @@ export function formatNumber(v: number, precision = 3): string {
     return s.includes('.') ? s.replace(/\.?0+$/, '') || '0' : s;
 }
 
-/** Live-edit callbacks. `begin`/`end` bracket a continuous edit (drag). */
+/**
+ * Live-edit callbacks. `begin`/`end` bracket a continuous edit (drag).
+ * Vector fields also pass which component changed.
+ */
 export interface EditHooks<T> {
     begin?(): void;
-    input?(v: T): void;
+    input?(v: T, part?: number): void;
     end?(): void;
-    commit?(v: T): void;
+    commit?(v: T, part?: number): void;
+}
+
+/** When a field may write (checked as a change or a drag starts), and what runs after it. */
+export interface FieldGuard {
+    allow?(): boolean;
+    after?(): void;
+}
+
+/**
+ * The undo steps of a panel's fields: dragging or typing in a field is one
+ * step, a one-off change one commit. close() ends the steps of fields a
+ * rebuilding panel tore down mid-drag.
+ */
+export class FieldSteps {
+    private open = 0;
+
+    constructor(private store: Store) {}
+
+    /** Hooks writing each value with `write`; a refused change writes nothing and still runs `after`. */
+    hooks<T>(label: string, write: (v: T, part?: number) => void, { allow, after }: FieldGuard = {}): Required<EditHooks<T>> {
+        const allowed = () => !allow || allow();
+        // Whether the drag in progress may write (null: no drag).
+        let held: boolean | null = null;
+        return {
+            begin: () => {
+                held = allowed();
+                if (!held) return;
+                this.open++;
+                this.store.begin(label);
+            },
+            input: (v, part) => {
+                if (held ?? allowed()) write(v, part);
+            },
+            end: () => {
+                const wrote = held;
+                held = null;
+                if (wrote && this.open > 0) {
+                    this.open--;
+                    this.store.end();
+                }
+                after?.();
+            },
+            commit: (v, part) => {
+                if (allowed()) this.store.transact(label, () => write(v, part));
+                after?.();
+            },
+        };
+    }
+
+    /** A field is being dragged or typed in. */
+    get active(): boolean {
+        return this.open > 0;
+    }
+
+    close() {
+        for (; this.open > 0; this.open--) this.store.end();
+    }
 }
 
 export interface NumberOpts extends EditHooks<number> {
@@ -115,17 +177,28 @@ export class NumberField {
         el.addEventListener('pointerup', finish);
         el.addEventListener('pointercancel', finish);
 
+        // Only typed text is committed: leaving the field untouched, or with
+        // Escape, keeps the value as it is (it may have more digits than
+        // shown, or have changed elsewhere meanwhile).
+        let shown = '';
+        let settled = false;
         el.addEventListener('focus', () => {
             el.value = formatNumber(this.value, 6);
+            shown = el.value;
+            settled = false;
         });
-        el.addEventListener('blur', () => this.commitText());
+        el.addEventListener('blur', () => {
+            if (!settled && el.value !== shown) this.commitText();
+            else this.render();
+        });
         el.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter') {
-                this.commitText();
+                if (el.value !== shown) this.commitText();
+                settled = true;
                 el.blur();
             } else if (e.key === 'Escape') {
-                this.render();
+                settled = true;
                 el.blur();
             } else if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
                 e.preventDefault();
@@ -133,6 +206,7 @@ export class NumberField {
                 const next = this.clamp(round(this.value + (e.key === 'ArrowUp' ? step : -step), this.opts.precision ?? 3));
                 this.value = next;
                 el.value = formatNumber(next, 6);
+                shown = el.value;
                 this.opts.commit?.(next);
             }
         });
@@ -236,12 +310,12 @@ export class Vec3Field {
                     begin: () => opts.begin?.(),
                     input: (v) => {
                         this.value[i] = v;
-                        opts.input?.([...this.value] as [number, number, number]);
+                        opts.input?.([...this.value] as [number, number, number], i);
                     },
                     end: () => opts.end?.(),
                     commit: (v) => {
                         this.value[i] = v;
-                        opts.commit?.([...this.value] as [number, number, number]);
+                        opts.commit?.([...this.value] as [number, number, number], i);
                     },
                 }),
         );
@@ -284,12 +358,12 @@ export class Vec2Field {
                     begin: () => opts.begin?.(),
                     input: (v) => {
                         this.value[i] = v;
-                        opts.input?.([...this.value] as [number, number]);
+                        opts.input?.([...this.value] as [number, number], i);
                     },
                     end: () => opts.end?.(),
                     commit: (v) => {
                         this.value[i] = v;
-                        opts.commit?.([...this.value] as [number, number]);
+                        opts.commit?.([...this.value] as [number, number], i);
                     },
                 }),
         );
@@ -316,7 +390,7 @@ export class ColorField {
     private text: HTMLInputElement;
     private live = false;
 
-    constructor(private opts: ColorOpts) {
+    constructor(opts: ColorOpts) {
         this.picker = h('input', { class: 'color-swatch', attrs: { type: 'color' } });
         this.text = h('input', { class: 'color-hex', attrs: { type: 'text', spellcheck: 'false', maxlength: 7 } });
         this.el = h('div', { class: 'color-field' }, this.picker, this.text);
@@ -420,12 +494,19 @@ export class SliderField {
             this.num.set(v);
             opts.input?.(v);
         });
-        this.range.addEventListener('change', () => {
-            if (this.live) {
-                this.live = false;
-                opts.end?.();
-            }
-        });
+        // A drag that ends where it started fires no change event: pointerup
+        // (and losing focus) end the edit too, so its transaction never stays open.
+        const finish = () => {
+            if (!this.live) return;
+            this.live = false;
+            // Without live hooks the value is committed when the drag ends.
+            if (!opts.input) opts.commit?.(parseFloat(this.range.value));
+            opts.end?.();
+        };
+        this.range.addEventListener('change', finish);
+        this.range.addEventListener('pointerup', finish);
+        this.range.addEventListener('pointercancel', finish);
+        this.range.addEventListener('blur', finish);
         this.el = h('div', { class: 'slider-field' }, this.range, this.num.el);
     }
 
@@ -505,33 +586,32 @@ export function row(label: string, control: Node, hint?: string): HTMLElement {
 }
 
 const COLLAPSE_KEY = 'canonical-editor/collapsed';
-let collapsed: Record<string, boolean> = {};
-try {
-    collapsed = JSON.parse(localStorage.getItem(COLLAPSE_KEY) || '{}');
-} catch { /* ignore */ }
+const collapsed = readLocal<Record<string, boolean>>(COLLAPSE_KEY, {});
 
 /** Collapsible inspector section; remembers its open state. */
 export function section(key: string, title: string, iconName: string | null, body: Node[], actions: Node[] = []): HTMLElement {
     const el = h('section', { class: 'section' + (collapsed[key] ? ' collapsed' : '') });
-    const header = h(
-        'header',
-        {
-            class: 'section-header',
-            on: {
-                click: (e) => {
-                    if ((e.target as HTMLElement).closest('.section-actions')) return;
-                    el.classList.toggle('collapsed');
-                    collapsed[key] = el.classList.contains('collapsed');
-                    try {
-                        localStorage.setItem(COLLAPSE_KEY, JSON.stringify(collapsed));
-                    } catch { /* ignore */ }
+    const header = pressable(
+        h(
+            'header',
+            {
+                class: 'section-header',
+                attrs: { 'aria-expanded': String(!collapsed[key]) },
+                on: {
+                    click: (e) => {
+                        if ((e.target as HTMLElement).closest('.section-actions')) return;
+                        el.classList.toggle('collapsed');
+                        collapsed[key] = el.classList.contains('collapsed');
+                        header.setAttribute('aria-expanded', String(!collapsed[key]));
+                        writeLocal(COLLAPSE_KEY, collapsed);
+                    },
                 },
             },
-        },
-        icon('chevronDown', 14, 'section-caret'),
-        iconName ? icon(iconName, 15) : null,
-        h('span', { class: 'section-title', text: title }),
-        h('div', { class: 'section-actions' }, actions),
+            icon('chevronDown', 14, 'section-caret'),
+            iconName ? icon(iconName, 15) : null,
+            h('span', { class: 'section-title', text: title }),
+            h('div', { class: 'section-actions' }, actions),
+        ),
     );
     el.append(header, h('div', { class: 'section-body' }, body));
     return el;

@@ -37,6 +37,16 @@ interface Plan {
 
 export const round4 = (x: number) => Math.round(x * 1e4) / 1e4;
 
+/**
+ * Options in the order an object with their values as keys lists them
+ * (integer-like values first, ascending): the order the model scores them
+ * in, since a question passes its options as such an object. The answers
+ * are mapped back in the same order.
+ */
+function keyOrder<T extends { value: string }>(options: T[]): T[] {
+    return Object.keys(Object.fromEntries(options.map((o) => [o.value, 0]))).map((v) => options.find((o) => o.value === v)!);
+}
+
 /** Characters of the context pool an Ask shows its model (about 400 tokens, within Laya's 512). */
 const CONTEXT_CHARS = 1500;
 
@@ -92,7 +102,7 @@ export class AskRunner {
             }
             const text = fillTemplate(q.text, get, agent.context);
             if (key.type === 'probability') plans.push({ key, format: 'noul', text, options: null });
-            else if (key.type === 'enum' && doc.choices !== 'memory') plans.push({ key, format: 'choice', text, options: (key.values ?? []).map((v) => ({ value: v.value, text: v.description })) });
+            else if (key.type === 'enum' && doc.choices !== 'memory') plans.push({ key, format: 'choice', text, options: keyOrder((key.values ?? []).map((v) => ({ value: v.value, text: v.description }))) });
             else if (key.type === 'string' && doc.choices === 'memory') plans.push({ key, format: 'choice', text, options: null });
             else agent.warn(doc.id, `Ask "${doc.id}": the ${key.type} key "${key.name}" cannot be asked${key.type === 'string' ? ' without memory choices' : ''}.`);
         }
@@ -150,7 +160,7 @@ export class AskRunner {
             void this.memoryOptions(agent, doc).then((options) => {
                 post(() => {
                     if (agent.removed) return;
-                    for (const p of fromMemory) p.options = options;
+                    for (const p of fromMemory) p.options = keyOrder(options);
                     submit();
                 });
             });

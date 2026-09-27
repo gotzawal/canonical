@@ -1,6 +1,6 @@
 import {
-    Quat, closestOnLine, cross, dot, eulerFromQuat, getColumn, invert, len, mat4, normalize, quatAxisAngle,
-    quatFromMatrix, quatInvert, quatMul, rayAt, rayPlane, scale, snap, sub, add, tidy, tidy3, transformPoint, DEG,
+    closestOnLine, cross, det3, dot, eulerFromQuat, getColumn, invert, len, mat4, normalize, quatAxisAngle,
+    quatFromEuler, quatMul, quatRotate, rayAt, rayPlane, scale, snap, sub, add, tidy, tidy3, transformDir, transformPoint, DEG,
 } from '../core/math';
 import type { Store, Tool } from '../core/store';
 import type { Vec3 } from '../core/types';
@@ -29,10 +29,10 @@ interface Layout {
 interface DragItem {
     id: string;
     invParent: Float64Array;
-    parentRot: Quat;
     worldPos: Vec3;
-    worldRot: Quat;
     scale: Vec3;
+    /** The node's own transform when the drag started, put back by cancel(). */
+    start: { position: Vec3; rotation: Vec3; scale: Vec3 };
 }
 
 interface Drag {
@@ -101,29 +101,30 @@ export class Gizmo {
 
     // ------------------------------------------------------------ hit test
 
-    hitTest(x: number, y: number): Handle | null {
+    /** The handle at a point; `slop` widens the reach (a finger is less precise than a mouse). */
+    hitTest(x: number, y: number, slop = 1): Handle | null {
         const L = this.layout();
         if (!L) return null;
         const c = L.center;
         if (L.mode === 'translate') {
-            if (Math.hypot(x - c.x, y - c.y) < 9) return 'view';
+            if (Math.hypot(x - c.x, y - c.y) < 9 * slop) return 'view';
             for (const p of PLANES) {
                 const quad = this.planeQuad(L, p.a, p.b);
                 if (quad && pointInPoly(x, y, quad)) return p.handle;
             }
             for (let i = 0; i < 3; i++) {
                 const end = this.axisEnd(L, i);
-                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8) return AXIS_HANDLES[i];
+                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8 * slop) return AXIS_HANDLES[i];
             }
         } else if (L.mode === 'scale') {
-            if (Math.abs(x - c.x) < 9 && Math.abs(y - c.y) < 9) return 'uniform';
+            if (Math.abs(x - c.x) < 9 * slop && Math.abs(y - c.y) < 9 * slop) return 'uniform';
             for (let i = 0; i < 3; i++) {
                 const end = this.axisEnd(L, i);
-                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8) return AXIS_HANDLES[i];
+                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8 * slop) return AXIS_HANDLES[i];
             }
         } else {
             let best: Handle | null = null;
-            let bestD = 8;
+            let bestD = 8 * slop;
             for (let i = 0; i < 3; i++) {
                 const d = this.ringDistance(L, i, x, y);
                 if (d < bestD) {
@@ -133,7 +134,7 @@ export class Gizmo {
             }
             if (best) return best;
             const r = this.viewRingRadius(L);
-            if (Math.abs(Math.hypot(x - c.x, y - c.y) - r) < 7) return 'view';
+            if (Math.abs(Math.hypot(x - c.x, y - c.y) - r) < 7 * slop) return 'view';
         }
         return null;
     }
@@ -207,10 +208,9 @@ export class Gizmo {
             items.push({
                 id,
                 invParent,
-                parentRot: parentWorld ? quatFromMatrix(parentWorld) : [0, 0, 0, 1],
                 worldPos: [world[12], world[13], world[14]],
-                worldRot: quatFromMatrix(world),
                 scale: [...node.scale] as Vec3,
+                start: { position: [...node.position] as Vec3, rotation: [...node.rotation] as Vec3, scale: [...node.scale] as Vec3 },
             });
         }
         if (!items.length) return false;
@@ -330,9 +330,11 @@ export class Gizmo {
                 for (const it of d.items) {
                     const node = doc.nodes.find((n) => n.id === it.id);
                     if (!node) continue;
-                    const world = quatMul(dq, it.worldRot);
-                    const local = quatMul(quatInvert(it.parentRot), world);
-                    node.rotation = tidy3(eulerFromQuat(local), 4);
+                    // Turn the object's own rotation by the turn seen from its parent (a mirroring
+                    // parent reverses it): the rotation of a mirrored matrix cannot be read back.
+                    const turn = quatAxisAngle(normalize(transformDir(it.invParent, d.rotAxis)), det3(it.invParent) < 0 ? -angle : angle);
+                    node.rotation = tidy3(eulerFromQuat(quatMul(turn, quatFromEuler(it.start.rotation))), 4);
+                    node.position = aroundPivot(it, L.pivot, (o) => quatRotate(dq, o));
                 }
             }, { nodes: ids });
             d.info = `${fmt(angle / DEG, 1)}°`;
@@ -357,6 +359,8 @@ export class Gizmo {
                     let s: Vec3 = [it.scale[0] * factors[0], it.scale[1] * factors[1], it.scale[2] * factors[2]];
                     if (snapping) s = s.map((v, k) => (factors[k] !== 1 ? snap(v, prefs.snapScale) || prefs.snapScale : v)) as Vec3;
                     node.scale = tidy3(s, 4);
+                    // Origins spread from the pivot along the scaled axes.
+                    node.position = aroundPivot(it, L.pivot, (o) => L.axes.reduce((v, a, k) => add(v, scale(a, (factors[k] - 1) * dot(o, a))), o));
                 }
             }, { nodes: ids });
             const shown = d.handle === 'uniform' ? factors[0] : factors[AXIS_HANDLES.indexOf(d.handle)];
@@ -386,9 +390,21 @@ export class Gizmo {
     }
 
     cancel() {
-        if (!this.drag) return;
+        const d = this.drag;
+        if (!d) return;
         this.drag = null;
-        this.store.cancel();
+        // Put back only what this drag moved. The drag may run inside a longer
+        // transaction (an AI request), whose own edits have to stay.
+        this.store.update((doc) => {
+            for (const it of d.items) {
+                const node = doc.nodes.find((n) => n.id === it.id);
+                if (!node) continue;
+                node.position = [...it.start.position] as Vec3;
+                node.rotation = [...it.start.rotation] as Vec3;
+                node.scale = [...it.start.scale] as Vec3;
+            }
+        }, { nodes: d.items.map((i) => i.id) });
+        this.store.end();
     }
 
     // ---------------------------------------------------------------- draw
@@ -517,7 +533,7 @@ export class Gizmo {
                 ctx.moveTo(c.x, c.y);
                 for (let k = 0; k <= steps; k++) {
                     const q = quatAxisAngle(d.rotAxis, (d.angle * k) / steps);
-                    const v = rotate(q, d.startVec);
+                    const v = quatRotate(q, d.startVec);
                     const p = this.picker.project(add(L.pivot, scale(v, L.length)));
                     if (p.visible) ctx.lineTo(p.x, p.y);
                 }
@@ -530,18 +546,11 @@ export class Gizmo {
     }
 }
 
-function rotate(q: Quat, v: Vec3): Vec3 {
-    const [qx, qy, qz, qw] = q;
-    const [x, y, z] = v;
-    const w1 = -qx * x - qy * y - qz * z;
-    const x1 = qw * x + qy * z - qz * y;
-    const y1 = qw * y - qx * z + qz * x;
-    const z1 = qw * z + qx * y - qy * x;
-    return [
-        -w1 * qx + x1 * qw - y1 * qz + z1 * qy,
-        -w1 * qy + x1 * qz + y1 * qw - z1 * qx,
-        -w1 * qz - x1 * qy + y1 * qx + z1 * qw,
-    ];
+/** Local position of a dragged object whose offset from the pivot `move` maps; one at the pivot keeps its own. */
+function aroundPivot(it: DragItem, pivot: Vec3, move: (offset: Vec3) => Vec3): Vec3 {
+    const offset = sub(it.worldPos, pivot);
+    if (len(offset) < 1e-9) return [...it.start.position] as Vec3;
+    return tidy3(transformPoint(it.invParent, add(pivot, move(offset))));
 }
 
 function fmt(v: number, digits = 2): string {
