@@ -3,7 +3,7 @@
 // keeps each model's state by id and forwards jobs.
 
 import wasmUrl from 'onnxruntime-web/ort-wasm-simd-threaded.asyncify.wasm?url';
-import { modelFingerprint } from '../../core/behavior/models';
+import { modelFingerprint, modelRevision } from '../../core/behavior/models';
 import { Emitter } from '../../core/events';
 import type { AiModelDoc } from '../../core/types';
 import type { WorkerIn, WorkerOut } from './inference.worker';
@@ -28,6 +28,7 @@ const CHUNK = 16;
 
 interface Entry extends ModelStatus {
     fingerprint: string;
+    revision: string;
     model: AiModelDoc;
 }
 
@@ -46,17 +47,30 @@ export class InferenceClient extends Emitter<{ status: string }> {
         super();
     }
 
-    /** A model's state; a model whose files changed (another URL or file) starts over. */
+    /**
+     * A model's state. A model whose files changed (another URL or file)
+     * starts over; one with other options keeps running with them.
+     */
     status(m: AiModelDoc): ModelStatus {
         return this.entry(m);
     }
 
     private entry(m: AiModelDoc): Entry {
         const fingerprint = modelFingerprint(m);
+        const revision = modelRevision(m);
         let e = this.entries.get(m.id);
         if (!e || e.fingerprint !== fingerprint) {
-            e = { state: 'unknown', fingerprint, model: m };
+            e = { state: 'unknown', fingerprint, revision, model: m };
             this.entries.set(m.id, e);
+        } else if (e.revision !== revision) {
+            e.revision = revision;
+            e.model = m;
+            if (e.state === 'ready') {
+                void this.call({ type: 'options', id: ++this.serial, model: this.resolved(m) }).then(
+                    (r) => this.set(m.id, { info: r.result }),
+                    () => {},
+                );
+            }
         }
         return e;
     }

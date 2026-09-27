@@ -5,7 +5,7 @@
 // editor asks before the first download; a built game downloads what its
 // scene needs.
 
-import { findModel, type BuiltinModel } from '../../core/behavior/models';
+import { findModel, modelRevision, type BuiltinModel } from '../../core/behavior/models';
 import { Emitter } from '../../core/events';
 import type { AiModelDoc } from '../../core/types';
 import type { Runtime } from '../../engine/runtime';
@@ -45,6 +45,10 @@ export class ModelServices extends Emitter<{ status: string; needed: string }> i
         const client = (this.client = new InferenceClient(opts.backend ?? 'auto'));
         const provider: ModelProvider = {
             ready: (id) => client.ready(id),
+            revision: (id) => {
+                const m = this.model(id);
+                return m ? modelRevision(m) : id;
+            },
             name: (id) => `${this.model(id)?.kind ?? id}/${client.backendOf(id) ?? 'none'}`,
             gpu: (id) => client.backendOf(id) !== 'wasm',
             run: (id, inputs) => client.run(id, inputs, PRIORITY.batch),
