@@ -3131,7 +3131,8 @@ kbd {
 
 .notices {
     position: fixed;
-    top: 90px;
+    /* Below the toolbar: the cards covered Play, Pause and Build. */
+    top: 122px;
     right: calc(var(--right-w, 0px) + 18px);
     z-index: 950;
     display: flex;
