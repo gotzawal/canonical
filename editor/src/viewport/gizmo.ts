@@ -1,6 +1,6 @@
 import {
-    Quat, closestOnLine, cross, dot, eulerFromQuat, getColumn, invert, len, mat4, normalize, quatAxisAngle,
-    quatFromMatrix, quatInvert, quatMul, rayAt, rayPlane, scale, snap, sub, add, tidy, tidy3, transformPoint, DEG,
+    Quat, closestOnLine, cross, det3, dot, eulerFromQuat, getColumn, invert, len, mat4, normalize, quatAxisAngle,
+    quatFromEuler, quatMul, rayAt, rayPlane, scale, snap, sub, add, tidy, tidy3, transformDir, transformPoint, DEG,
 } from '../core/math';
 import type { Store, Tool } from '../core/store';
 import type { Vec3 } from '../core/types';
@@ -29,9 +29,7 @@ interface Layout {
 interface DragItem {
     id: string;
     invParent: Float64Array;
-    parentRot: Quat;
     worldPos: Vec3;
-    worldRot: Quat;
     scale: Vec3;
     /** The node's own transform when the drag started, put back by cancel(). */
     start: { position: Vec3; rotation: Vec3; scale: Vec3 };
@@ -209,9 +207,7 @@ export class Gizmo {
             items.push({
                 id,
                 invParent,
-                parentRot: parentWorld ? quatFromMatrix(parentWorld) : [0, 0, 0, 1],
                 worldPos: [world[12], world[13], world[14]],
-                worldRot: quatFromMatrix(world),
                 scale: [...node.scale] as Vec3,
                 start: { position: [...node.position] as Vec3, rotation: [...node.rotation] as Vec3, scale: [...node.scale] as Vec3 },
             });
@@ -328,14 +324,14 @@ export class Gizmo {
             }
             let angle = d.angle;
             if (snapping) angle = snap(angle / DEG, prefs.snapRotate) * DEG;
-            const dq = quatAxisAngle(d.rotAxis, angle);
             this.store.update((doc) => {
                 for (const it of d.items) {
                     const node = doc.nodes.find((n) => n.id === it.id);
                     if (!node) continue;
-                    const world = quatMul(dq, it.worldRot);
-                    const local = quatMul(quatInvert(it.parentRot), world);
-                    node.rotation = tidy3(eulerFromQuat(local), 4);
+                    // Turn the object's own rotation by the turn seen from its parent (a mirroring
+                    // parent reverses it): the rotation of a mirrored matrix cannot be read back.
+                    const turn = quatAxisAngle(normalize(transformDir(it.invParent, d.rotAxis)), det3(it.invParent) < 0 ? -angle : angle);
+                    node.rotation = tidy3(eulerFromQuat(quatMul(turn, quatFromEuler(it.start.rotation))), 4);
                 }
             }, { nodes: ids });
             d.info = `${fmt(angle / DEG, 1)}°`;

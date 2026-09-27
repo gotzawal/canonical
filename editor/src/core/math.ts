@@ -37,12 +37,6 @@ export function mat4(): Mat4 {
     return m;
 }
 
-export function mat4From(src: ArrayLike<number>): Mat4 {
-    const m = new Float64Array(16);
-    for (let i = 0; i < 16; i++) m[i] = src[i];
-    return m;
-}
-
 /** out = a * b (column-major, applies b first). */
 export function mul(a: ArrayLike<number>, b: ArrayLike<number>, out: Mat4 = new Float64Array(16)): Mat4 {
     const r = new Float64Array(16);
@@ -96,6 +90,11 @@ export function invert(m: ArrayLike<number>, out: Mat4 = new Float64Array(16)): 
     out[14] = (a31 * b01 - a30 * b03 - a32 * b00) * det;
     out[15] = (a20 * b03 - a21 * b01 + a22 * b00) * det;
     return out;
+}
+
+/** Determinant of the 3x3 part; negative when the matrix mirrors. */
+export function det3(m: ArrayLike<number>): number {
+    return m[0] * (m[5] * m[10] - m[9] * m[6]) - m[4] * (m[1] * m[10] - m[9] * m[2]) + m[8] * (m[1] * m[6] - m[5] * m[2]);
 }
 
 export function transformPoint(m: ArrayLike<number>, p: Vec3): Vec3 {
@@ -214,9 +213,9 @@ export function eulerFromQuat(q: Quat): Vec3 {
     return [x / DEG, y / DEG, z / DEG];
 }
 
-/** Rotation part of an (orthogonal, possibly scaled) matrix. */
+/** Rotation part of an (orthogonal, possibly scaled) matrix; a mirroring one counts as mirrored along x, as in decompose. */
 export function quatFromMatrix(m: ArrayLike<number>): Quat {
-    const sx = Math.hypot(m[0], m[1], m[2]) || 1;
+    const sx = (Math.hypot(m[0], m[1], m[2]) || 1) * (det3(m) < 0 ? -1 : 1);
     const sy = Math.hypot(m[4], m[5], m[6]) || 1;
     const sz = Math.hypot(m[8], m[9], m[10]) || 1;
     const m11 = m[0] / sx, m12 = m[4] / sy, m13 = m[8] / sz;
@@ -279,19 +278,10 @@ export function compose(p: Vec3, q: Quat, s: Vec3, out: Mat4 = new Float64Array(
 }
 
 export function decompose(m: ArrayLike<number>): { position: Vec3; rotation: Quat; scale: Vec3 } {
-    let sx = Math.hypot(m[0], m[1], m[2]);
+    const sx = Math.hypot(m[0], m[1], m[2]) * (det3(m) < 0 ? -1 : 1);
     const sy = Math.hypot(m[4], m[5], m[6]);
     const sz = Math.hypot(m[8], m[9], m[10]);
-    const det =
-        m[0] * (m[5] * m[10] - m[9] * m[6]) -
-        m[4] * (m[1] * m[10] - m[9] * m[2]) +
-        m[8] * (m[1] * m[6] - m[5] * m[2]);
-    if (det < 0) sx = -sx;
-    const r = mat4From(m);
-    r[0] /= sx; r[1] /= sx; r[2] /= sx;
-    r[4] /= sy; r[5] /= sy; r[6] /= sy;
-    r[8] /= sz; r[9] /= sz; r[10] /= sz;
-    return { position: [m[12], m[13], m[14]], rotation: quatFromMatrix(r), scale: [sx, sy, sz] };
+    return { position: [m[12], m[13], m[14]], rotation: quatFromMatrix(m), scale: [sx, sy, sz] };
 }
 
 export function localMatrix(position: Vec3, rotation: Vec3, s: Vec3): Mat4 {
