@@ -42,6 +42,14 @@ export interface PointerEventInfo {
 }
 
 /** A request to the language model (this.chat). */
+/** A memory remembered while playing, as saveMemories() returns it (vector: int8, base64). */
+export interface SavedMemory {
+    id: string;
+    text: string;
+    tags: string[];
+    vector?: string;
+}
+
 export interface ChatRequest {
     /** The user message, or the whole conversation. */
     prompt: string | { role: 'system' | 'user' | 'assistant'; content: string }[];
@@ -82,6 +90,8 @@ export interface PlayApi {
     setPlayer(obj: Object3D | null): void;
     remember(text: string, tags: string[]): string | null;
     memory(id: string): { id: string; text: string; tags: string[] } | null;
+    saveMemories(): SavedMemory[];
+    loadMemories(items: unknown): number;
     say(owner: Script, text: string, opts?: SayOptions): Promise<void>;
     chat(owner: Script, req: ChatRequest): Promise<string>;
 }
@@ -278,7 +288,7 @@ export class Script {
         this.api.setPlayer(obj);
     }
 
-    /** Adds a memory that Recall and Ask can find for the rest of the game (kept in saves). Returns its id. */
+    /** Adds a memory that Recall and Ask can find for the rest of the session (saveMemories() keeps it in a game save). Returns its id. */
     remember(text: string, tags: string[] = []): string | null {
         return this.api.remember(text, tags);
     }
@@ -286,6 +296,16 @@ export class Script {
     /** A memory item by id (e.g. the one an Ask picked into a key): { id, text, tags }, or null. */
     memory(id: string): { id: string; text: string; tags: string[] } | null {
         return this.api.memory(id);
+    }
+
+    /** The memories remembered while playing, as JSON to keep in a game save. */
+    saveMemories(): SavedMemory[] {
+        return this.api.saveMemories();
+    }
+
+    /** Puts memories from saveMemories() back (after loading a save); returns how many. */
+    loadMemories(saved: unknown): number {
+        return this.api.loadMemories(saved);
     }
 
     /** Speaks a line, one sentence at a time. Resolves when it has been spoken; a task's signal stops it. */

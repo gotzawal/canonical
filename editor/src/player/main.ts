@@ -6,6 +6,7 @@
 import './player.css';
 import { GAME_FILE, PREVIEW_KEY, type GameFile, type PreviewData } from '../build/gameFile';
 import { setAssetResolver } from '../core/assets';
+import { sceneModelsNeeded } from '../core/behavior/format';
 import { Store } from '../core/store';
 import type { CameraState, SceneDoc } from '../core/types';
 import { Picker } from '../engine/picking';
@@ -115,6 +116,10 @@ async function main() {
 
     const debug = game.preview || new URLSearchParams(location.search).has('debug');
     if (debug) showIssues(root, player, !game.trusted && game.doc.scripts.length > 0);
+    // Agents that ask or recall get their models in the background; they
+    // play with the blackboard defaults until the models are ready.
+    const needs = sceneModelsNeeded(store.doc);
+    if (needs.decision || needs.embedder) await startModels(root, runtime, player, store.doc.memory.embedder);
     player.play();
     bindInput(canvas, player, view);
     addFullscreenButton(root);
@@ -122,6 +127,54 @@ async function main() {
     setTimeout(() => loading.remove(), 400);
     canvas.focus({ preventScroll: true });
     (window as any).__player = { runtime, store, sync, player };
+}
+
+/**
+ * The decision and embedding models of the scene's agents: ONNX Runtime
+ * and the inference worker load only here, and the models download into
+ * the browser's cache on first play (with Save-Data on, a button offers the
+ * download instead). A chip in the corner shows the progress.
+ */
+async function startModels(root: HTMLElement, runtime: Runtime, player: Player, embedder: string) {
+    let services: typeof import('../play/ai/services');
+    try {
+        services = await import('../play/ai/services');
+    } catch (e) {
+        console.warn('[ai] the model services could not be loaded; the agents use their defaults', e);
+        return;
+    }
+    const saveData = !!(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
+    const models = new services.ModelServices(runtime, player.speech, { policy: saveData ? 'ask' : 'auto', embedder });
+    player.aiServices = () => models;
+    const chip = h('button', { class: 'player-models', attrs: { type: 'button', hidden: true } });
+    chip.addEventListener('click', () => {
+        for (const kind of Array.from(models.needed)) void models.download(kind);
+    });
+    const update = () => {
+        const statuses = (['decision', 'embedder'] as const).map((k) => models.status(k));
+        const busy = statuses.find((s) => s.state === 'downloading' || s.state === 'loading');
+        if (busy) {
+            const pct = busy.total ? Math.min(100, Math.round(((busy.loaded ?? 0) / busy.total) * 100)) : 0;
+            chip.textContent = busy.state === 'downloading' ? `AI model ${pct}%` : 'Starting AI...';
+            chip.title = `${busy.source.label}. The characters use their default behavior until it is ready.`;
+            chip.disabled = true;
+            chip.hidden = false;
+            return;
+        }
+        if (models.needed.size) {
+            const size = Array.from(models.needed).reduce((n, k) => n + models.status(k).source.size, 0);
+            chip.textContent = `Download AI (${Math.round(size / 1e6)} MB)`;
+            chip.title = 'The characters use their default behavior without it. It is downloaded once into this browser.';
+            chip.disabled = false;
+            chip.hidden = false;
+            return;
+        }
+        chip.hidden = true;
+    };
+    models.on('status', update);
+    models.on('needed', update);
+    root.append(chip);
+    (window as any).__models = models;
 }
 
 function nextFrames(runtime: Runtime, count: number): Promise<void> {

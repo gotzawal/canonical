@@ -653,6 +653,14 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         return e ? { id: e.id, text: e.text, tags: e.tags.slice() } : null;
     }
 
+    saveMemories() {
+        return this.agents.saveMemories();
+    }
+
+    loadMemories(items: unknown): number {
+        return this.agents.loadMemories(items);
+    }
+
     say(owner: Script, text: string, opts: SayOptions = {}): Promise<void> {
         return this.speech.say(String(text ?? ''), opts);
     }

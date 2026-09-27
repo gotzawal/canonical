@@ -13,7 +13,7 @@ import { designSummary, memoLines, pipelineSummary } from './design/context';
 import { createMenu, menuDefinitions, showShortcuts } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
-import { ModelServices } from './play/ai/services';
+import { ModelServices, savedBackend } from './play/ai/services';
 import type { ModelKind } from './play/ai/models';
 import { scriptChat } from './ai/scriptChat';
 import { formatBytes } from './core/assets';
@@ -134,7 +134,7 @@ async function main() {
     const graph = new RenderGraphController(runtime, store, shaders, sync);
     const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
     // Agent models: the editor loads cached copies by itself and asks before downloading.
-    const models = new ModelServices(runtime, player.speech, { policy: 'ask' });
+    const models = new ModelServices(runtime, player.speech, { policy: 'ask', backend: savedBackend() });
     editor.models = models;
     player.aiServices = () => models;
     player.chatModel = scriptChat;

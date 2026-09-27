@@ -9,7 +9,8 @@
 //    Ask's priority);
 // 5. GPU time is budgeted: 150 ms per second to start, adjusted between 50
 //    and 400 ms by the frame time (a token bucket: a batch goes out when
-//    the time it is expected to take has accrued, and pays what it took);
+//    the time it is expected to take has accrued, and pays what it took).
+//    A model on the CPU (WebAssembly) takes no GPU time and is not budgeted;
 // 6. a batch is filled: while the queue is short and its oldest request has
 //    waited less than 50 ms, up to 2 more frames are collected;
 // 7. at most 10 questions go out at a time, and only one batch is in flight;
@@ -55,6 +56,12 @@ export interface DecisionProvider {
     run(items: { state: string; questions: LayaQuestion[] }[]): Promise<{ probabilities: number[][][]; ms: number }>;
     /** Tokenizes a request ahead, while the GPU runs the batch before it. */
     prepare?(items: { state: string; questions: LayaQuestion[] }[]): void;
+    /**
+     * False when the model runs on the CPU (WebAssembly in the worker): it
+     * does not take GPU time from the frames, so the GPU budget does not
+     * apply (one batch at a time still does).
+     */
+    readonly gpu?: boolean;
 }
 
 interface Waiter {
@@ -229,7 +236,7 @@ export class Scheduler {
             if (questions >= max) break;
         }
         const estimate = this.estimate(questions);
-        if (this.tokens < estimate && this.tokens < cap) return;
+        if (this.provider.gpu !== false && this.tokens < estimate && this.tokens < cap) return;
         this.dispatch(batch, questions);
     }
 
@@ -245,7 +252,8 @@ export class Scheduler {
             this.inFlight = null;
             const end = performance.now();
             if (ms > 0) {
-                this.tokens -= ms;
+                // CPU inference does not use the frames' GPU time.
+                if (this.provider.gpu !== false) this.tokens -= ms;
                 this.spent.push({ at: end, ms });
                 // Moving averages of the batch cost, for the next estimate.
                 const per = Math.max(1, (ms - this.msPerBatch) / Math.max(1, questions));

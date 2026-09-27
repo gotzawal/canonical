@@ -99,6 +99,39 @@ export function schemaOf(schemas: BlackboardSchemaDoc[], tree: BehaviorTreeDoc |
     return tree ? schemas.find((s) => s.id === tree.schema) : undefined;
 }
 
+export interface ModelNeeds {
+    /** Ask nodes: the decision model. */
+    decision: boolean;
+    /** Recall and choices from memory, when the memory has embeddings: the embedding model. */
+    embedder: boolean;
+}
+
+/** The models some trees use (without embedded memory, search matches shared words and needs no model). */
+export function modelsNeeded(trees: BehaviorTreeDoc[], memoryEmbedded: boolean): ModelNeeds {
+    const needs: ModelNeeds = { decision: false, embedder: false };
+    const visit = (item: BtNodeDoc | BtServiceDoc) => {
+        if (item.type === 'ask') {
+            needs.decision = true;
+            if (item.choices === 'memory') needs.embedder = true;
+        }
+        if (item.type === 'recall') needs.embedder = true;
+    };
+    for (const t of trees) {
+        walkNodes(t.root, (n) => {
+            visit(n);
+            for (const s of n.services ?? []) visit(s);
+        });
+    }
+    if (!memoryEmbedded) needs.embedder = false;
+    return needs;
+}
+
+/** The models the enabled agents of a scene use. */
+export function sceneModelsNeeded(doc: { nodes: { agent?: AgentDoc }[]; behaviors: BehaviorTreeDoc[]; memory: MemoryDoc }): ModelNeeds {
+    const used = new Set(doc.nodes.filter((n) => n.agent?.enabled).map((n) => n.agent!.tree));
+    return modelsNeeded(doc.behaviors.filter((t) => used.has(t.id)), doc.memory.items.some((m) => !!m.vector));
+}
+
 // ---------------------------------------------------------------- factories
 
 export function newSchema(name: string, keys: BlackboardKeyDoc[] = []): BlackboardSchemaDoc {

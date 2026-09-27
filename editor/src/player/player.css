@@ -121,6 +121,29 @@ body {
     opacity: 0.85;
 }
 
+/* The agents' models while they download (or a button to download them). */
+.player-models {
+    position: absolute;
+    left: max(12px, env(safe-area-inset-left));
+    bottom: max(12px, env(safe-area-inset-bottom));
+    padding: 4px 11px;
+    border: 1px solid var(--border);
+    border-radius: 14px;
+    background: var(--panel);
+    color: var(--muted);
+    font: 12px/1.5 var(--font);
+    cursor: pointer;
+    opacity: 0.85;
+}
+
+.player-models:disabled {
+    cursor: default;
+}
+
+.player-models:not(:disabled):hover {
+    color: var(--text-strong);
+}
+
 .player-fullscreen:hover {
     opacity: 1;
 }

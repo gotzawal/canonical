@@ -333,6 +333,9 @@ export class BehaviorPanel {
             { label: `Download (${formatBytes(s.source.size)})`, icon: 'save', enabled: () => s.state !== 'ready' && s.state !== 'downloading' && s.state !== 'loading', action: () => void this.downloadDecision() },
             { label: 'Check this Browser\'s Copy', icon: 'refresh', enabled: () => s.state !== 'downloading' && s.state !== 'loading', action: () => void m.client.load('decision', false) },
             { separator: true },
+            { label: 'Run on the GPU when possible', checked: () => m.backend === 'auto', action: () => m.setBackend('auto') },
+            { label: 'Run on the CPU (WebAssembly)', checked: () => m.backend === 'wasm', action: () => m.setBackend('wasm') },
+            { separator: true },
             { label: 'Remove from this Browser', icon: 'trash', enabled: () => s.state === 'ready' || s.state === 'missing' || s.state === 'error', action: () => void m.client.forget('decision') },
         ];
         showMenu(items, r.right - 260, r.bottom + 4);

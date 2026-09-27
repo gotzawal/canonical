@@ -57,8 +57,10 @@ const SCRIPT_API: [string, string][] = [
     ['onTaskAbort(task)', 'A running task of this script was aborted.'],
     ['this.say(text, options?)', 'Speaks a line one sentence at a time; resolves when done. Options: voice, lang, rate, pitch, volume, signal.'],
     ['this.chat(prompt, options?)', 'Asks the language model (OpenRouter, in the editor); resolves with the text.'],
-    ['this.remember(text, tags?)', 'Adds a memory for Recall and memory choices (kept in saves).'],
+    ['this.remember(text, tags?)', 'Adds a memory for Recall and memory choices for the rest of the session (saveMemories() puts it into a game save).'],
     ['this.memory(id)', 'A memory item by id: { id, text, tags }.'],
+    ['this.saveMemories()', 'The memories remembered while playing, as JSON for a game save (with their embeddings).'],
+    ['this.loadMemories(saved)', 'Puts saved memories back, replacing the ones remembered so far; returns how many.'],
     ['this.setPlayer(obj?)', 'Agents nearest to this object get answers first (the camera by default).'],
 ];
 

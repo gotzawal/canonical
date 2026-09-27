@@ -46,6 +46,24 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
         this.set(kind, { state: 'unknown', source });
     }
 
+    get computeBackend(): 'auto' | 'webgpu' | 'wasm' {
+        return this.backend;
+    }
+
+    /** Runs the models on another backend: the worker starts again and loaded models load again (from the cache). */
+    setBackend(backend: 'auto' | 'webgpu' | 'wasm') {
+        if (backend === this.backend) return;
+        this.backend = backend;
+        const kinds: ModelKind[] = ['decision', 'embedder'];
+        const reload = kinds.filter((k) => this.status[k].state === 'ready');
+        this.worker?.terminate();
+        this.worker = null;
+        for (const p of this.pending.values()) p.reject(Object.assign(new Error('The inference worker was restarted.'), { code: 'restart' }));
+        this.pending.clear();
+        for (const k of kinds) this.set(k, { state: 'unknown', backend: undefined, loaded: undefined, total: undefined, message: undefined });
+        for (const k of reload) void this.load(k, false);
+    }
+
     private set(kind: ModelKind, s: Partial<ModelStatus>) {
         this.status[kind] = { ...this.status[kind], ...s };
         this.emit('status', kind);
@@ -126,6 +144,8 @@ export class InferenceClient extends Emitter<{ status: ModelKind }> {
             this.set(kind, { state: 'ready', backend: result.backend });
             return true;
         } catch (e: any) {
+            // A restart (another backend) set the state already.
+            if (e?.code === 'restart') return false;
             this.set(kind, { state: e?.code === 'not-cached' ? 'missing' : 'error', message: e?.message || String(e) });
             return false;
         }

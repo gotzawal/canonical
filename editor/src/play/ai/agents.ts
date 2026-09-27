@@ -14,17 +14,17 @@
 // request scheduler runs separately, right after the engine drew a frame.
 
 import type { Camera3D, Object3D } from '@orillusion/core';
-import { schemaOf } from '../../core/behavior/format';
+import { modelsNeeded, schemaOf, type ModelNeeds } from '../../core/behavior/format';
 import { Emitter } from '../../core/events';
 import type {
-    AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, RecallServiceDoc,
-    SceneDoc, ScriptTaskDoc,
+    AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, MemoryItemDoc,
+    RecallServiceDoc, SceneDoc, ScriptTaskDoc,
 } from '../../core/types';
 import type { Script } from '../script';
 import { AskRunner, fillTemplate } from './ask';
 import { Blackboard, BlackboardError, type AnswerMeta, type RuntimeValue } from './blackboard';
 import { DecisionLog } from './log';
-import { MemoryIndex, type RecallContext } from './memory';
+import { decodeVector, MemoryIndex, norm, type MemoryEntry, type RecallContext } from './memory';
 import type { Scheduler } from './scheduler';
 import { TreeInstance, type AskHandle, type TaskHandle, type TreeDebug, type TreeHost } from './tree';
 
@@ -53,8 +53,11 @@ export interface AIServices {
     readonly scheduler: Scheduler;
     readonly embedderReady: boolean;
     embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[] | null>;
-    /** Starts loading what the scene needs (the decision model when it has Ask nodes). */
-    prepare(needs: { decision: boolean; embedder: boolean }): void;
+    /**
+     * Starts loading what the scene needs: the decision model for Ask nodes,
+     * the embedding model its memory was embedded with (`embedder`, a model id).
+     */
+    prepare(needs: ModelNeeds, embedder: string): void;
 }
 
 /** The blackboard as scripts see it: every key can be read, fact keys written. */
@@ -241,23 +244,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             this.agents.push(agent);
         });
         if (this.agents.length) {
-            const needs = { decision: false, embedder: false };
-            const visit = (item: any) => {
-                if (item.type === 'ask') {
-                    needs.decision = true;
-                    if (item.choices === 'memory') needs.embedder = true;
-                }
-                if (item.type === 'recall') needs.embedder = true;
-            };
-            const walk = (n: any) => {
-                visit(n);
-                for (const s of n.services ?? []) visit(s);
-                for (const c of n.children ?? []) walk(c);
-            };
-            for (const a of this.agents) walk(a.treeDoc.root);
-            // Without embedded memory, search falls back to shared words: no model needed.
-            if (!this.memory.embedded) needs.embedder = false;
-            if (needs.decision || needs.embedder) this.services()?.prepare(needs);
+            const needs = modelsNeeded(Array.from(new Set(this.agents.map((a) => a.treeDoc))), this.memory.embedded);
+            if (needs.decision || needs.embedder) this.services()?.prepare(needs, this.host.doc().memory.embedder);
         }
         this.emit('started', undefined);
     }
@@ -408,20 +396,56 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         void this.embed(text, 'query').then((v) => this.post(() => run(v)));
     }
 
-    /** Adds a memory while playing (kept in saves). */
+    /** Adds a memory while playing (saveMemories() puts it into a game save). */
     remember(text: string, tags: string[] = []): string | null {
         const memory = this.memory;
         if (!memory || !text.trim()) return null;
         const entry = memory.add({ text: text.trim(), tags }, null);
-        if (memory.embedded) void this.embed(entry.text, 'passage').then((v) => this.post(() => {
-            if (v) {
-                entry.vector = v;
-                let s = 0;
-                for (let i = 0; i < v.length; i++) s += v[i] * v[i];
-                entry.norm = Math.sqrt(s);
-            }
-        }));
+        this.embedLater(entry);
         return entry.id;
+    }
+
+    /** Embeds a play memory when the scene's memory is embedded and the model is there. */
+    private embedLater(entry: MemoryEntry) {
+        if (!this.memory?.embedded) return;
+        void this.embed(entry.text, 'passage').then((v) => this.post(() => {
+            if (!v) return;
+            entry.vector = v;
+            entry.norm = norm(v);
+        }));
+    }
+
+    /** The memories added while playing, as JSON for a game save. */
+    saveMemories(): MemoryItemDoc[] {
+        return this.memory?.playItems() ?? [];
+    }
+
+    /**
+     * Puts saved play memories back (the ones added so far this session are
+     * replaced). Returns how many were loaded.
+     */
+    loadMemories(items: unknown): number {
+        const memory = this.memory;
+        if (!memory || !Array.isArray(items)) return 0;
+        memory.clearPlay();
+        const dims = memory.entries.find((e) => e.vector)?.vector?.length ?? 0;
+        let n = 0;
+        for (const raw of items.slice(0, 5000)) {
+            if (!raw || typeof raw !== 'object' || typeof raw.text !== 'string' || !raw.text.trim()) continue;
+            let vector: Int8Array | null = null;
+            try {
+                vector = typeof raw.vector === 'string' ? decodeVector(raw.vector) : null;
+            } catch {
+                vector = null;
+            }
+            // A vector from another embedding model does not compare: embed the text again.
+            if (vector && vector.length !== dims) vector = null;
+            const tags = Array.isArray(raw.tags) ? raw.tags.filter((t: unknown): t is string => typeof t === 'string') : [];
+            const entry = memory.add({ id: typeof raw.id === 'string' ? raw.id : undefined, text: raw.text.slice(0, 4000), tags }, vector);
+            if (!vector) this.embedLater(entry);
+            n++;
+        }
+        return n;
     }
 
     // ---------------------------------------------------------------- debug

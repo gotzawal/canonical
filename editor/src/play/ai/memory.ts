@@ -16,7 +16,7 @@ export interface MemoryEntry {
     /** Embedding (int8 from the scene, float for play memories), or null. */
     vector: Int8Array | Float32Array | null;
     norm: number;
-    /** Added while playing (kept in saves). */
+    /** Added while playing (saveMemories() puts it into a game save). */
     play: boolean;
 }
 
@@ -114,19 +114,25 @@ export class MemoryIndex {
         return this.entries.find((e) => e.id === id);
     }
 
-    /** Adds a memory while playing; `vector` comes from the embedding model when it is loaded. */
-    add(item: { id?: string; text: string; tags?: string[] }, vector: Float32Array | null): MemoryEntry {
+    /** Adds a memory while playing; `vector` comes from the embedding model when it is loaded (or from a save). */
+    add(item: { id?: string; text: string; tags?: string[] }, vector: Int8Array | Float32Array | null): MemoryEntry {
         const base = item.id || `memory_${this.entries.length + 1}`;
         let id = base;
         for (let i = 2; this.get(id); i++) id = `${base}_${i}`;
         const entry: MemoryEntry = { id, text: item.text, tags: item.tags ?? [], vector, norm: vector ? norm(vector) : 0, play: true };
         this.entries.push(entry);
+        this.wordCache.delete(entry);
         return entry;
     }
 
-    /** Memories added while playing, as items for a save. */
+    /** Memories added while playing, as items for a save (vectors as int8, like the scene's). */
     playItems(): MemoryItemDoc[] {
-        return this.entries.filter((e) => e.play).map((e) => ({ id: e.id, text: e.text, tags: e.tags, ...(e.vector ? { vector: encodeVector(e.vector) } : {}) }));
+        return this.entries.filter((e) => e.play).map((e) => ({ id: e.id, text: e.text, tags: e.tags.slice(), ...(e.vector ? { vector: encodeVector(e.vector) } : {}) }));
+    }
+
+    /** Drops the memories added while playing (before a save is loaded). */
+    clearPlay() {
+        for (let i = this.entries.length - 1; i >= 0; i--) if (this.entries[i].play) this.entries.splice(i, 1);
     }
 
     /** Items with one of the tags (all without tags), best matches first. */

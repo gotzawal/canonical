@@ -49,7 +49,7 @@ interface Loaded {
     backend: 'webgpu' | 'wasm';
 }
 
-let decision: (Loaded & { config: LayaConfig; ids: SpecialIds }) | null = null;
+let decision: DecisionModel | null = null;
 let embedder: Loaded | null = null;
 const loading = new Map<ModelKind, Promise<void>>();
 
@@ -193,18 +193,28 @@ async function ownDevice(): Promise<GPUDevice | null> {
     }
 }
 
-async function session(bytes: Uint8Array): Promise<{ session: Ort.InferenceSession; backend: 'webgpu' | 'wasm' }> {
+/**
+ * A session on the worker's WebGPU device, else on WebAssembly. Some models
+ * only fail once they run (fp16 parts on a device without shader-f16), so a
+ * WebGPU session must pass `warm` (one small run, which also compiles the
+ * shaders before the first real request) or WASM is used.
+ */
+async function session(bytes: Uint8Array, warm: (s: Ort.InferenceSession) => Promise<unknown>): Promise<{ session: Ort.InferenceSession; backend: 'webgpu' | 'wasm' }> {
     const o = await runtime();
     const gpu = await ownDevice();
     if (gpu && !lost) {
+        let s: Ort.InferenceSession | null = null;
         try {
             o.env.webgpu.device = gpu as any;
-            return { session: await o.InferenceSession.create(bytes, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all' }), backend: 'webgpu' };
+            s = await o.InferenceSession.create(bytes, { executionProviders: ['webgpu'], graphOptimizationLevel: 'all', logSeverityLevel: 3 });
+            await warm(s);
+            return { session: s, backend: 'webgpu' };
         } catch (e) {
             console.warn('[ai] the model does not run on WebGPU here, using WASM', e);
+            await s?.release().catch(() => {});
         }
     }
-    return { session: await o.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }), backend: 'wasm' };
+    return { session: await o.InferenceSession.create(bytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all', logSeverityLevel: 3 }), backend: 'wasm' };
 }
 
 function specialIds(config: any, tok: Tokenizer): SpecialIds {
@@ -230,7 +240,6 @@ async function load(src: ModelSource, download: boolean): Promise<{ backend: str
     const run = (async () => {
         const files = await fetchModel(src, download);
         const tokenizer = new Tokenizer(files.tokenizer, files.tokenizerConfig ?? {});
-        const s = await session(files.bytes);
         if (src.kind === 'decision') {
             const c = files.config ?? {};
             const config: LayaConfig = {
@@ -239,8 +248,11 @@ async function load(src: ModelSource, download: boolean): Promise<{ backend: str
                 temperature: c.temperature ?? [1, 1, 1],
                 temperature_by_options: c.temperature_by_options ?? {},
             };
-            decision = { source: src, tokenizer, config, ids: specialIds(c, tokenizer), ...s };
+            const ids = specialIds(c, tokenizer);
+            const s = await session(files.bytes, (session) => runDecision({ source: src, session, tokenizer, config, ids, backend: 'webgpu' }, WARM_UP));
+            decision = { source: src, tokenizer, config, ids, ...s };
         } else {
+            const s = await session(files.bytes, (session) => runEmbed({ source: src, session, tokenizer, backend: 'webgpu' }, ['warm up'], 'query'));
             embedder = { source: src, tokenizer, ...s };
         }
     })();
@@ -274,8 +286,12 @@ function encoder(tok: Tokenizer): (text: string) => number[] {
     };
 }
 
-function sequences(items: { state: string; questions: LayaQuestion[] }[]) {
-    const d = decision!;
+type DecisionModel = Loaded & { config: LayaConfig; ids: SpecialIds };
+
+/** One small question, run once on a new WebGPU session. */
+const WARM_UP: { state: string; questions: LayaQuestion[] }[] = [{ state: '{"ready": true}', questions: [{ type: 'noul', instructions: 'Is it ready?' }] }];
+
+function sequences(d: DecisionModel, items: { state: string; questions: LayaQuestion[] }[]) {
     const encode = encoder(d.tokenizer);
     const rows: { ids: number[]; markers: number[]; q: LayaQuestion }[] = [];
     for (const it of items) {
@@ -292,8 +308,12 @@ function sequences(items: { state: string; questions: LayaQuestion[] }[]) {
 async function ask(items: { state: string; questions: LayaQuestion[] }[]): Promise<number[][][]> {
     const d = decision;
     if (!d || lost) throw new Error(lost ? 'The GPU device was lost.' : 'The decision model is not loaded.');
+    return runDecision(d, items);
+}
+
+async function runDecision(d: DecisionModel, items: { state: string; questions: LayaQuestion[] }[]): Promise<number[][][]> {
     const o = await runtime();
-    const rows = sequences(items);
+    const rows = sequences(d, items);
     const n = rows.length;
     const L = Math.max(...rows.map((r) => r.ids.length));
     const K = Math.max(2, ...rows.map((r) => r.markers.length));
@@ -334,6 +354,10 @@ async function ask(items: { state: string; questions: LayaQuestion[] }[]): Promi
 async function embed(texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
     const e = embedder;
     if (!e || lost) throw new Error(lost ? 'The GPU device was lost.' : 'The embedding model is not loaded.');
+    return runEmbed(e, texts, kind);
+}
+
+async function runEmbed(e: Loaded, texts: string[], kind: 'query' | 'passage'): Promise<Float32Array[]> {
     const o = await runtime();
     const src = e.source;
     const prefix = (kind === 'query' ? src.queryPrefix : src.passagePrefix) ?? '';
@@ -456,7 +480,7 @@ self.onmessage = (ev: MessageEvent<WorkerIn>) => {
         case 'prepare':
             if (decision) {
                 try {
-                    sequences(m.items);
+                    sequences(decision, m.items);
                 } catch { /* tokenized again when asked */ }
             }
             return;
