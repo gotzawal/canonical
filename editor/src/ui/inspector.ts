@@ -19,7 +19,7 @@ import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
-    CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
+    CheckboxField, ColorField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
     iconButton, row, section,
 } from './widgets';
 
@@ -76,8 +76,7 @@ export class InspectorPanel {
     private body: HTMLElement;
     private syncs: (() => void)[] = [];
     private shape = '';
-    /** Continuous edits begun by widgets that have not ended yet. */
-    private open = 0;
+    private steps: FieldSteps;
     private openSlots = new Set<string>();
     private openParts = new Set<string>();
     private partFilter = '';
@@ -88,6 +87,7 @@ export class InspectorPanel {
         this.body = h('div', { class: 'panel-body inspector-body' });
         this.el = h('div', { class: 'panel inspector' }, this.body);
         const store = editor.store;
+        this.steps = new FieldSteps(store);
         store.on('selection', () => this.render());
         store.on('change', () => {
             if (this.shapeKey() !== this.shape) this.render();
@@ -185,11 +185,7 @@ export class InspectorPanel {
     }
 
     render() {
-        // A widget being torn down mid-drag must not leave its transaction open.
-        while (this.open > 0) {
-            this.open--;
-            this.store.end();
-        }
+        this.steps.close();
         this.shape = this.shapeKey();
         this.syncs = [];
         const scroll = this.body.scrollTop;
@@ -254,26 +250,7 @@ export class InspectorPanel {
                 }
             }, { nodes: ids });
         };
-        return {
-            begin: () => {
-                this.open++;
-                store.begin(label);
-            },
-            input: (v, part) => write(v, part),
-            end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                store.end();
-            },
-            commit: (v, part) => {
-                store.begin(label);
-                try {
-                    write(v, part);
-                } finally {
-                    store.end();
-                }
-            },
-        };
+        return this.steps.hooks(label, write);
     }
 
     private watch(fn: () => void) {
@@ -1396,19 +1373,7 @@ export class InspectorPanel {
                 const label = `Agent Value ${key.name}`;
                 const write = (v: unknown) =>
                     this.applyAgent(sameTree().map((n) => ({ op: 'set_agent', object: n.id, values: { ...n.agent!.values, [key.name]: v } })), label);
-                const control = valueControl(key, Object.hasOwn(agent.values, key.name) ? agent.values[key.name] : key.default, ctx, {
-                    commit: write,
-                    begin: () => {
-                        this.open++;
-                        store.begin(`Behavior: ${label}`);
-                    },
-                    input: write,
-                    end: () => {
-                        if (this.open <= 0) return;
-                        this.open--;
-                        store.end();
-                    },
-                });
+                const control = valueControl(key, Object.hasOwn(agent.values, key.name) ? agent.values[key.name] : key.default, ctx, this.steps.hooks(`Behavior: ${label}`, write));
                 const reset = iconButton('undo', `Back to the schema default (${formatValue(key.default)})`, () =>
                     this.applyAgent(
                         sameTree()

@@ -9,7 +9,7 @@ import type { AiModelDoc, BlackboardKeyDoc, BlackboardSchemaDoc, BlackboardValue
 import { clear, h } from '../dom';
 import { icon } from '../icons';
 import { pretty } from '../paramFields';
-import { CheckboxField, NumberField, SelectField, SliderField, TextField, row } from '../widgets';
+import { CheckboxField, NumberField, SelectField, SliderField, TextField, row, type EditHooks } from '../widgets';
 
 export interface FieldContext {
     schema: BlackboardSchemaDoc | undefined;
@@ -20,12 +20,7 @@ export interface FieldContext {
 }
 
 /** How a field writes: one-shot changes, or a begin / input / end bracket (scrubbing a number). */
-export interface FieldEdit {
-    commit(value: unknown): void;
-    begin(): void;
-    input(value: unknown): void;
-    end(): void;
-}
+export type FieldEdit = Required<EditHooks<unknown>>;
 
 export interface FieldRow {
     el: HTMLElement;

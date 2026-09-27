@@ -1,6 +1,7 @@
 import { h } from './dom';
 import { icon } from './icons';
 import { normalizeHex } from '../engine/color';
+import type { Store } from '../core/store';
 
 export function formatNumber(v: number, precision = 3): string {
     if (!Number.isFinite(v)) return '0';
@@ -17,6 +18,47 @@ export interface EditHooks<T> {
     input?(v: T, part?: number): void;
     end?(): void;
     commit?(v: T, part?: number): void;
+}
+
+/**
+ * The undo steps of a panel's fields: dragging or typing in a field is one
+ * step, a one-off change one commit. close() ends the steps of fields a
+ * rebuilding panel tore down mid-drag.
+ */
+export class FieldSteps {
+    private open = 0;
+
+    constructor(private store: Store) {}
+
+    /** Hooks writing each value with `write`; `after` runs when a change or a drag ends. */
+    hooks<T>(label: string, write: (v: T, part?: number) => void, after?: () => void): Required<EditHooks<T>> {
+        return {
+            begin: () => {
+                this.open++;
+                this.store.begin(label);
+            },
+            input: write,
+            end: () => {
+                if (this.open <= 0) return;
+                this.open--;
+                this.store.end();
+                after?.();
+            },
+            commit: (v, part) => {
+                this.store.transact(label, () => write(v, part));
+                after?.();
+            },
+        };
+    }
+
+    /** A field is being dragged or typed in. */
+    get active(): boolean {
+        return this.open > 0;
+    }
+
+    close() {
+        for (; this.open > 0; this.open--) this.store.end();
+    }
 }
 
 export interface NumberOpts extends EditHooks<number> {

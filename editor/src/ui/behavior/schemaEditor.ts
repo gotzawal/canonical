@@ -10,7 +10,7 @@ import type { BlackboardKeyDoc, BlackboardSchemaDoc, EnumValueDoc } from '../../
 import type { Editor } from '../../editor';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
-import { SelectField, TextField, TextAreaField, button, iconButton, row } from '../widgets';
+import { FieldSteps, SelectField, TextField, TextAreaField, button, iconButton, row } from '../widgets';
 import { keyTypeText, valueControl } from './fields';
 
 export interface SchemaHost {
@@ -27,8 +27,10 @@ export class SchemaEditor {
     private detail: HTMLElement;
     private selected: string | null = null;
     private key = '';
+    private steps: FieldSteps;
 
     constructor(private host: SchemaHost) {
+        this.steps = new FieldSteps(host.editor.store);
         this.list = h('div', { class: 'bt-keys' });
         this.detail = h('div', { class: 'bt-props' });
         this.el = h('div', { class: 'bt-split' }, h('div', { class: 'bt-split-main' }, this.list), h('div', { class: 'bt-split-side' }, this.detail));
@@ -98,6 +100,7 @@ export class SchemaEditor {
     }
 
     private renderDetail() {
+        this.steps.close();
         clear(this.detail);
         const s = this.host.schema();
         const k = s?.keys.find((x) => x.name === this.selected);
@@ -118,15 +121,12 @@ export class SchemaEditor {
         type.el.title = KEY_TYPES.map((t) => `${t.label}: ${t.description}`).join('\n');
         const owner = new SelectField(KEY_OWNERS.map((o) => ({ value: o.owner, label: o.label })), k.owner, (v) => set({ owner: v }, 'Key Owner'));
         owner.el.title = KEY_OWNERS.find((o) => o.owner === k.owner)?.description ?? '';
-        const def = valueControl(k, k.default, { schema: s, objects: () => this.host.editor.store.doc.nodes.map((n) => ({ id: n.id, name: n.name })) }, {
-            commit: (v) => set({ default: v }, 'Key Default'),
-            begin: () => this.host.editor.store.begin('Behavior: Key Default'),
-            input: (v) => this.host.apply([{ op: 'update_key', schema: s.id, key: k.name, set: { default: v } }], 'Key Default'),
-            end: () => {
-                this.host.editor.store.end();
-                this.render(true);
-            },
-        });
+        const def = valueControl(
+            k,
+            k.default,
+            { schema: s, objects: () => this.host.editor.store.doc.nodes.map((n) => ({ id: n.id, name: n.name })) },
+            this.steps.hooks('Behavior: Key Default', (v) => this.host.apply([{ op: 'update_key', schema: s.id, key: k.name, set: { default: v } }], 'Key Default'), () => this.render(true)),
+        );
         const desc = new TextAreaField(k.description, (v) => set({ description: v }, 'Key Description'), 'What the key means', 2);
         const remove = button('Delete Key', () => {
             if (this.host.apply([{ op: 'delete_key', schema: s.id, key: k.name }], 'Delete Key')) this.selected = null;

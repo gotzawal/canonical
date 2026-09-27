@@ -10,7 +10,7 @@ import type { BehaviorTreeDoc, BlackboardSchemaDoc, BtDecoratorDoc, BtNodeDoc, B
 import type { Editor } from '../../editor';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
-import { TextField, button, iconButton, row } from '../widgets';
+import { FieldSteps, TextField, button, iconButton, row } from '../widgets';
 import { fieldRow, type FieldContext, type FieldEdit } from './fields';
 import type { FocusPart } from './outliner';
 
@@ -32,11 +32,11 @@ export class PropertiesPanel {
     readonly el: HTMLElement;
     private syncs: (() => void)[] = [];
     private shape = '';
-    /** Continuous edits (a number being dragged) that have not ended. */
-    private open = 0;
+    private steps: FieldSteps;
 
     constructor(private host: PropertiesHost) {
         this.el = h('div', { class: 'bt-props' });
+        this.steps = new FieldSteps(host.editor.store);
     }
 
     private shapeKey(): string {
@@ -61,16 +61,13 @@ export class PropertiesPanel {
 
     /** Called after any change: rebuilds when the shape changed, otherwise updates the values. */
     refresh() {
-        if (this.open > 0) return;
+        if (this.steps.active) return;
         if (this.shapeKey() !== this.shape) this.render();
         else for (const s of this.syncs) s();
     }
 
     render() {
-        while (this.open > 0) {
-            this.open--;
-            this.host.editor.store.end();
-        }
+        this.steps.close();
         this.shape = this.shapeKey();
         this.syncs = [];
         const scroll = this.el.scrollTop;
@@ -90,7 +87,7 @@ export class PropertiesPanel {
         body.append(this.header(tree, node, def));
         const mine = this.host.issues().filter((i) => i.node === node.id);
         if (mine.length) body.append(this.issueList(mine));
-        if (def) for (const f of def.fields) body.append(this.field(f, () => this.host.node(), (set, label, cont) => this.edit({ op: 'update_node', tree: tree.id, node: node.id, set }, label, cont), def));
+        if (def) for (const f of def.fields) body.append(this.field(f, () => this.host.node(), (set, label) => this.edit({ op: 'update_node', tree: tree.id, node: node.id, set }, label), def));
         body.append(this.decorators(tree, node));
         body.append(this.services(tree, node));
         this.el.scrollTop = scroll;
@@ -101,26 +98,12 @@ export class PropertiesPanel {
     // ------------------------------------------------------------ editing
 
     /** A one-shot edit, or part of a continuous one (inside begin / end). */
-    private edit(op: BehaviorOp, label: string, _continuous = false) {
+    private edit(op: BehaviorOp, label: string) {
         this.host.apply([op], label);
     }
 
-    private editHooks(send: (value: unknown, cont: boolean) => void, label: string): FieldEdit {
-        const store = this.host.editor.store;
-        return {
-            commit: (v) => send(v, false),
-            begin: () => {
-                this.open++;
-                store.begin(`Behavior: ${label}`);
-            },
-            input: (v) => send(v, true),
-            end: () => {
-                if (this.open <= 0) return;
-                this.open--;
-                store.end();
-                this.refresh();
-            },
-        };
+    private editHooks(send: (value: unknown) => void, label: string): FieldEdit {
+        return this.steps.hooks(`Behavior: ${label}`, send, () => this.refresh());
     }
 
     private context(): FieldContext {
@@ -132,9 +115,9 @@ export class PropertiesPanel {
     }
 
     /** A field row that writes `{ [field]: value }` (with fixes for the fields that depend on a key). */
-    private field(f: FieldDef, get: () => any, write: (set: Record<string, unknown>, label: string, cont: boolean) => void, def: ItemTypeDef): HTMLElement {
+    private field(f: FieldDef, get: () => any, write: (set: Record<string, unknown>, label: string) => void, def: ItemTypeDef): HTMLElement {
         const label = `${def.label} ${f.label}`;
-        const hooks = this.editHooks((value, cont) => write(this.withDependents(get(), f, value), label, cont), label);
+        const hooks = this.editHooks((value) => write(this.withDependents(get(), f, value), label), label);
         const r = fieldRow(f, get, this.context(), hooks);
         this.syncs.push(() => {
             if (get()) r.sync();
