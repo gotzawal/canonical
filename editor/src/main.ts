@@ -460,24 +460,45 @@ function aiContext(editor: Editor, dock: Dock): string {
     return lines.join('\n');
 }
 
+/** A dialog or an enlarged image is open: the scene behind it takes no shortcuts. */
+function modalOpen(): boolean {
+    return !!document.querySelector('.dialog-backdrop, .lightbox');
+}
+
 function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
     const store = editor.store;
     const player = editor.player;
+    // Play, the code panel, save and open work everywhere, also from text
+    // fields and the code editor. Those stop their keys from bubbling, so
+    // these run in the capture phase.
+    document.addEventListener(
+        'keydown',
+        (e) => {
+            if (e.defaultPrevented || !(e.ctrlKey || e.metaKey) || e.altKey || modalOpen()) return;
+            const key = e.key.toLowerCase();
+            const typing = isTyping(e.target);
+            // Mod+S in the code editor applies the file (codeEditor.ts).
+            const codeSave = key === 's' && !e.shiftKey && !!(e.target as HTMLElement | null)?.closest?.('.code-editor');
+            if (key === 'p') {
+                if (e.shiftKey) editor.pausePlay();
+                else editor.togglePlay();
+            } else if (key === 'j' || key === '`') {
+                dock.toggle();
+            } else if ((key === 's' && !codeSave) || (key === 'o' && !e.shiftKey)) {
+                // Leaving the field first commits what was typed in it.
+                if (typing) (e.target as HTMLElement).blur();
+                if (key === 'o') void editor.openSceneFile();
+                else void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
+            } else return;
+            e.preventDefault();
+            e.stopPropagation();
+        },
+        true,
+    );
     document.addEventListener('keydown', (e) => {
-        if (e.defaultPrevented) return;
+        if (e.defaultPrevented || modalOpen()) return;
         const mod = e.ctrlKey || e.metaKey;
         const key = e.key.toLowerCase();
-        if (mod && key === 'p') {
-            e.preventDefault();
-            if (e.shiftKey) editor.pausePlay();
-            else editor.togglePlay();
-            return;
-        }
-        if (mod && (key === 'j' || key === '`')) {
-            e.preventDefault();
-            dock.toggle();
-            return;
-        }
         // While playing, keys pressed with the viewport focused belong to the scripts.
         if (player.state !== 'stopped' && !isTyping(e.target) && (e.target === editor.viewport.overlay || e.target === document.body)) {
             player.keyEvent(e, true);
@@ -486,21 +507,12 @@ function installShortcuts(editor: Editor, rename: () => void, dock: Dock) {
                 return;
             }
         }
-        if (isTyping(e.target)) {
-            // Save / open still work from text fields; everything else types.
-            if (mod && (key === 's' || key === 'o')) {
-                e.preventDefault();
-                (e.target as HTMLElement).blur();
-                if (key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
-                else void editor.openSceneFile();
-            }
-            return;
-        }
+        if (isTyping(e.target)) return;
+        // Holding a toggle key does not flip it on and off.
+        if (e.repeat && !mod && (key === 'h' || key === 'v' || key === 'g' || key === 'x')) return;
         let handled = true;
         if (mod && key === 'z') e.shiftKey ? store.redo() : store.undo();
         else if (mod && key === 'y') store.redo();
-        else if (mod && key === 's') void (e.shiftKey ? editor.saveProjectFile() : editor.saveSceneFile());
-        else if (mod && key === 'o') void editor.openSceneFile();
         else if (mod && key === 'b') showBuildDialog(editor);
         else if (mod && key === 'd') editor.duplicateSelection();
         else if (mod && key === 'a') editor.selectAll();

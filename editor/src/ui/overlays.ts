@@ -166,9 +166,10 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
         };
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape') return;
-            // Only the topmost dialog closes (a question asked over another dialog).
+            // Only the topmost dialog closes (a question asked over another
+            // dialog); an enlarged image over it closes first.
             const open = document.querySelectorAll('.dialog-backdrop');
-            if (open[open.length - 1] !== backdrop) return;
+            if (open[open.length - 1] !== backdrop || document.querySelector('.lightbox')) return;
             e.stopPropagation();
             done(null);
         };
@@ -177,6 +178,7 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
             if (e.target === backdrop) done(null);
         });
         let focus: HTMLButtonElement | null = null;
+        let safe: HTMLButtonElement | null = null;
         for (const b of buttons) {
             const btn = h('button', {
                 class: 'btn' + (b.primary ? ' primary' : '') + (b.danger ? ' danger' : ''),
@@ -185,10 +187,13 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
                 on: { click: () => done(b.value ?? b.label) },
             });
             if (b.primary) focus = btn;
+            else if (!b.danger) safe ??= btn;
             footer.appendChild(btn);
         }
         document.body.appendChild(backdrop);
-        (focus ?? footer.lastElementChild as HTMLElement | null)?.focus();
+        // A destructive choice is never the default: Enter in a danger dialog cancels.
+        const danger = buttons.some((b) => b.danger);
+        (focus ?? (danger ? safe : null) ?? (footer.lastElementChild as HTMLElement | null))?.focus();
     });
 }
 
@@ -223,7 +228,7 @@ export function modal(title: string, content: Node, opts: { cls?: string; canClo
     const onKey = (e: KeyboardEvent) => {
         if (e.key !== 'Escape') return;
         const open = document.querySelectorAll('.dialog-backdrop');
-        if (open[open.length - 1] !== backdrop) return;
+        if (open[open.length - 1] !== backdrop || document.querySelector('.lightbox')) return;
         e.stopPropagation();
         tryClose();
     };

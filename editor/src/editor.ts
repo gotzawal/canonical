@@ -1300,10 +1300,15 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ---------------------------------------------------------------- files
 
+    /** Asks before the current scene is replaced; true when nothing would be lost or the user agrees. */
+    private async confirmReplace(title: string, ok: string, what = 'Discard the current scene?'): Promise<boolean> {
+        const d = this.store.doc;
+        const empty = !d.nodes.length && !d.scripts.length && !d.shaders.length && !d.design.brief.text.trim() && !d.design.concepts.length && !d.design.areas.length;
+        return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
+    }
+
     async newScene(kind: 'default' | 'empty' | 'showcase' | 'guard' = 'default') {
-        if (this.store.doc.nodes.length && !(await confirmDialog('New scene', 'Discard the current scene? It is only kept in this browser unless you saved a file.', 'Discard', true))) {
-            return;
-        }
+        if (!(await this.confirmReplace('New scene', 'Discard'))) return;
         const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : newScene();
         const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
         this.loadDoc(doc, camera);
@@ -1366,6 +1371,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     private async openSceneFromFile(file: File) {
+        if (!(await this.confirmReplace('Open scene', 'Open', `Replace the current scene with ${file.name}?`))) return;
         try {
             const { doc, camera } = file.name.toLowerCase().endsWith('.zip') ? await importProject(file) : await importSceneFile(await file.text());
             this.loadDoc(doc, camera ?? defaultCamera(), false);
