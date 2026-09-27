@@ -216,7 +216,8 @@ export class RenderGraphPanel {
     // ------------------------------------------------------------------ side
 
     private renderSide() {
-        this.steps.close();
+        // Each step of a drag changes the graph: the field being dragged stays, and the panel is rebuilt when it ends.
+        if (this.steps.active) return;
         clear(this.side);
         const pass = this.info.passes.find((p) => p.name === this.selected);
         if (pass) this.side.appendChild(this.passDetails(pass));
@@ -342,7 +343,7 @@ export class RenderGraphPanel {
                 if (p) p.params = { ...p.params, [name]: v };
             }, { env: true });
             this.editor.graph.apply();
-        });
+        }, { after: () => this.renderSide() });
     }
 
     private addMenu(e: MouseEvent) {
