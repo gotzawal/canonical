@@ -41,6 +41,8 @@ export interface Prefs {
     helpers: boolean;
     /** Show a sphere per GI probe with the light it captured. */
     giProbes: boolean;
+    /** Glass surfaces; null follows the system's transparency setting (ui/theme.ts). */
+    glass: boolean | null;
 }
 
 interface Snapshot {
@@ -85,6 +87,7 @@ function defaultPrefs(): Prefs {
         grid: true,
         helpers: true,
         giProbes: false,
+        glass: null,
     };
 }
 

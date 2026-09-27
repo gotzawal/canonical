@@ -33,6 +33,7 @@ import { closeMenus, dialog, menubar, showMenu, toast } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
 import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
+import { applyTheme } from './ui/theme';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
@@ -59,6 +60,8 @@ async function main() {
     const saved = readAutosave();
     const store = new Store(saved?.doc ?? newScene());
     if (saved?.camera) store.camera = { ...store.camera, ...saved.camera };
+    applyTheme(store.prefs);
+    store.on('prefs', applyTheme);
 
     // ------------------------------------------------------------ shell
     const canvas = h('canvas', { class: 'gpu', style: 'width:100%;height:100%' });
@@ -95,7 +98,7 @@ async function main() {
             { class: 'workspace' },
             left,
             h('div', { class: 'splitter', dataset: { side: 'left' } }),
-            h('section', { class: 'center' }, toolbarSlot, viewportEl, h('div', { class: 'splitter horizontal dock-splitter', dataset: { side: 'dock' } }), dockSlot),
+            h('section', { class: 'center' }, h('div', { class: 'stage' }, toolbarSlot, viewportEl), h('div', { class: 'splitter horizontal dock-splitter', dataset: { side: 'dock' } }), dockSlot),
             h('div', { class: 'splitter', dataset: { side: 'right' } }),
             right,
         ),
@@ -593,23 +596,34 @@ function restoreLayout(app: HTMLElement) {
     } catch { /* ignore */ }
 }
 
+type Split = 'left' | 'right' | 'assets' | 'dock';
+
+/** What each splitter sizes, within the window or the panel holding it. */
+const SPLITS: Record<Split, { prop: string; holder: string; min: number; max: (holder: DOMRect) => number }> = {
+    left: { prop: '--left-w', holder: '.workspace', min: 180, max: () => window.innerWidth * 0.4 },
+    right: { prop: '--right-w', holder: '.workspace', min: 240, max: () => window.innerWidth * 0.5 },
+    assets: { prop: '--assets-h', holder: '.side.left', min: 60, max: (r) => r.height - 120 },
+    dock: { prop: '--dock-h', holder: '.center', min: 120, max: (r) => r.height - 140 },
+};
+
+function setSize(app: HTMLElement, split: Split, px: number) {
+    const { prop, holder, min, max } = SPLITS[split];
+    const box = app.querySelector(holder)!.getBoundingClientRect();
+    // A hidden holder (a closed drawer) has no size to fit in.
+    if (box.height) app.style.setProperty(prop, clampPx(px, min, Math.max(min, max(box))));
+}
+
 /** Keeps panel sizes (saved on a larger window, say) within the window, as the splitters do. */
 function clampLayout(app: HTMLElement) {
-    const fit = (k: string, min: number, max: number) => {
-        const v = parseFloat(app.style.getPropertyValue(k));
-        if (Number.isFinite(v)) app.style.setProperty(k, clampPx(v, min, Math.max(min, max)));
-    };
-    fit('--left-w', 180, window.innerWidth * 0.4);
-    fit('--right-w', 240, window.innerWidth * 0.5);
-    const center = app.querySelector('.center')?.getBoundingClientRect();
-    if (center?.height) fit('--dock-h', 120, center.height - 140);
-    const left = app.querySelector('.side.left')?.getBoundingClientRect();
-    if (left?.height) fit('--assets-h', 60, left.height - 120);
+    for (const split of Object.keys(SPLITS) as Split[]) {
+        const v = parseFloat(app.style.getPropertyValue(SPLITS[split].prop));
+        if (Number.isFinite(v)) setSize(app, split, v);
+    }
 }
 
 function saveLayout(app: HTMLElement) {
     const out: Record<string, string> = {};
-    for (const k of ['--left-w', '--right-w', '--assets-h', '--dock-h']) {
+    for (const { prop: k } of Object.values(SPLITS)) {
         const v = app.style.getPropertyValue(k);
         if (v) out[k] = v;
     }
@@ -625,18 +639,13 @@ function installSplitters(app: HTMLElement) {
             e.preventDefault();
             sp.setPointerCapture(e.pointerId);
             sp.classList.add('active');
-            const side = sp.dataset.side;
-            const move = (ev: PointerEvent) => {
-                if (side === 'left') app.style.setProperty('--left-w', clampPx(ev.clientX, 180, window.innerWidth * 0.4));
-                else if (side === 'right') app.style.setProperty('--right-w', clampPx(window.innerWidth - ev.clientX, 240, window.innerWidth * 0.5));
-                else if (side === 'assets') {
-                    const panel = sp.parentElement!.getBoundingClientRect();
-                    app.style.setProperty('--assets-h', clampPx(panel.bottom - ev.clientY, 60, panel.height - 120));
-                } else if (side === 'dock') {
-                    const center = sp.parentElement!.getBoundingClientRect();
-                    app.style.setProperty('--dock-h', clampPx(center.bottom - ev.clientY, 120, center.height - 140));
-                }
-            };
+            const split = sp.dataset.side as Split;
+            // Sizes from the holder's inner edge, keeping the pointer in the middle of the gap.
+            const box = sp.parentElement!.getBoundingClientRect();
+            const vertical = split === 'left' || split === 'right';
+            const inset = (parseFloat(getComputedStyle(sp.parentElement!).paddingLeft) || 0) + (vertical ? sp.offsetWidth : sp.offsetHeight) / 2;
+            const move = (ev: PointerEvent) =>
+                setSize(app, split, split === 'left' ? ev.clientX - box.left - inset : split === 'right' ? box.right - inset - ev.clientX : box.bottom - inset - ev.clientY);
             const up = () => {
                 sp.classList.remove('active');
                 sp.removeEventListener('pointermove', move);
