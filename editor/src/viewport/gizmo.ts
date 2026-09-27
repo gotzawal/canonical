@@ -33,6 +33,8 @@ interface DragItem {
     worldPos: Vec3;
     worldRot: Quat;
     scale: Vec3;
+    /** The node's own transform when the drag started, put back by cancel(). */
+    start: { position: Vec3; rotation: Vec3; scale: Vec3 };
 }
 
 interface Drag {
@@ -211,6 +213,7 @@ export class Gizmo {
                 worldPos: [world[12], world[13], world[14]],
                 worldRot: quatFromMatrix(world),
                 scale: [...node.scale] as Vec3,
+                start: { position: [...node.position] as Vec3, rotation: [...node.rotation] as Vec3, scale: [...node.scale] as Vec3 },
             });
         }
         if (!items.length) return false;
@@ -386,9 +389,21 @@ export class Gizmo {
     }
 
     cancel() {
-        if (!this.drag) return;
+        const d = this.drag;
+        if (!d) return;
         this.drag = null;
-        this.store.cancel();
+        // Put back only what this drag moved. The drag may run inside a longer
+        // transaction (an AI request), whose own edits have to stay.
+        this.store.update((doc) => {
+            for (const it of d.items) {
+                const node = doc.nodes.find((n) => n.id === it.id);
+                if (!node) continue;
+                node.position = [...it.start.position] as Vec3;
+                node.rotation = [...it.start.rotation] as Vec3;
+                node.scale = [...it.start.scale] as Vec3;
+            }
+        }, { nodes: d.items.map((i) => i.id) });
+        this.store.end();
     }
 
     // ---------------------------------------------------------------- draw

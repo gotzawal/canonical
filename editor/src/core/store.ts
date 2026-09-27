@@ -178,10 +178,15 @@ export class Store extends Emitter<StoreEvents> {
     update(fn: (doc: SceneDoc) => void, hint?: ChangeHint) {
         const auto = !this.txn;
         if (auto) this.begin('Edit');
-        fn(this.doc);
-        this.reindex();
-        this.emit('change', hint);
-        if (auto) this.end();
+        try {
+            fn(this.doc);
+        } finally {
+            // Also when `fn` throws half way: the views follow what it changed
+            // (an undoable step), and the transaction opened here is closed.
+            this.reindex();
+            this.emit('change', hint);
+            if (auto) this.end();
+        }
     }
 
     commit(label: string, fn: (doc: SceneDoc) => void, hint?: ChangeHint) {
@@ -221,14 +226,6 @@ export class Store extends Emitter<StoreEvents> {
         this.reindex();
         this.emit('change', hint);
         this.emit('commit', 'Patch');
-    }
-
-    /** Abort the open transaction and restore the document it started from. */
-    cancel() {
-        const txn = this.txn;
-        if (!txn) return;
-        this.txn = null;
-        this.restore(txn.base);
     }
 
     get inTransaction(): boolean {
