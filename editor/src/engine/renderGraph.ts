@@ -93,12 +93,20 @@ export class RenderGraphController extends Emitter<GraphEvents> {
         const graph = this.graph;
         if (!graph) return;
         const off = new Set(disabled);
-        const errors: string[] = [];
-        for (const pass of graph.passes) {
-            const want = !off.has(pass.name) || ESSENTIAL.has(pass.name);
-            if (pass.enabled === want) continue;
-            const err = this.trySet(graph, pass.name, want);
-            if (err) errors.push(err);
+        const want = (pass: RenderGraphPass) => !off.has(pass.name) || ESSENTIAL.has(pass.name);
+        // The graph compiles after each switch, so the order matters: a pass
+        // goes off only after the passes reading it. Rounds until none moves.
+        let pending = graph.passes.filter((p) => p.enabled !== want(p));
+        let errors: string[] = [];
+        while (pending.length) {
+            errors = [];
+            const left = pending.filter((pass) => {
+                const err = this.trySet(graph, pass.name, want(pass));
+                if (err) errors.push(err);
+                return !!err;
+            });
+            if (left.length === pending.length) break;
+            pending = left;
         }
         this.error = errors.join('\n');
     }
