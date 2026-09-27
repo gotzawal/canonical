@@ -313,13 +313,15 @@ function buildService(input: unknown, taken: Set<string>, at: Partial<OpError>):
 function buildNode(input: unknown, taken: Set<string>, at: Partial<OpError>, isRoot = false, depth = 0): BtNodeDoc {
     if (!isObj(input)) throw new OpFail('A node must be an object like { "type": "sequence", "id": "patrol" }.', at);
     if (depth > 64) throw new OpFail('The tree is too deep.', at);
+    // Errors before the id is checked still name the node it claims to be.
+    const named = typeof input.id === 'string' && input.id ? { ...at, node: input.id } : at;
     const def = nodeType(String(input.type));
-    if (!def) throw new OpFail(`Unknown node type ${JSON.stringify(input.type)}; use ${NODE_TYPES.map((d) => d.type).join(', ')}.`, { ...at, field: 'type' });
+    if (!def) throw new OpFail(`Unknown node type ${JSON.stringify(input.type)}; use ${NODE_TYPES.map((d) => d.type).join(', ')}.`, { ...named, field: 'type' });
     const allowed = new Set(['id', 'type', 'note', 'decorators', 'services', 'children', ...def.fields.map((f) => f.name)]);
     for (const k of Object.keys(input)) {
-        if (!allowed.has(k)) throw new OpFail(`${def.label} has no field "${k}"; its fields are ${fieldNames(def)} (plus id, note, decorators, services${def.category === 'composite' ? ', children' : ''}).`, { ...at, field: k });
+        if (!allowed.has(k)) throw new OpFail(`${def.label} has no field "${k}"; its fields are ${fieldNames(def)} (plus id, note, decorators, services${def.category === 'composite' ? ', children' : ''}).`, { ...named, field: k });
     }
-    if (def.category !== 'composite' && input.children !== undefined) throw new OpFail(`A ${def.label} has no children; only Selector and Sequence do.`, { ...at, field: 'children' });
+    if (def.category !== 'composite' && input.children !== undefined) throw new OpFail(`A ${def.label} has no children; only Selector and Sequence do.`, { ...named, field: 'children' });
     const id = input.id === undefined ? newItemId(def.type, taken) : readableId(input.id, taken, at);
     taken.add(id);
     const here = { ...at, node: id };
@@ -1040,15 +1042,36 @@ export function applyBehaviorOps(doc: SceneDoc, input: unknown, mode: OpsMode): 
     result.issues = after;
     result.added = after.filter((i) => i.severity === 'error' && !before.has(issueKey(i)));
     result.created = d.created;
-    result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
     if (mode === 'strict' && result.added.length) {
+        result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
         result.errors = result.added.map((i) => ({ op: -1, name: 'validate', message: i.message, tree: i.tree, schema: i.schema, node: i.node, field: i.field }));
         return result;
     }
-    // Every edited tree and schema gets a new revision (new ones start at 1).
+    // Every tree and schema whose content changed gets a new revision (new
+    // ones start at 1); an edit that ends where it started changes nothing.
     const created = new Set(d.created.filter((c) => c.kind === 'tree' || c.kind === 'schema').map((c) => c.id));
-    for (const t of d.behaviors) if (d.trees.has(t.id) && !created.has(t.id)) t.version++;
-    for (const s of d.blackboards) if (d.schemas.has(s.id) && !created.has(s.id)) s.version++;
+    const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+    const unchanged = <T extends { id: string; version: number }>(list: T[], cur: T) => {
+        const orig = list.find((x) => x.id === cur.id);
+        return !!orig && same({ ...orig, version: 0 }, { ...cur, version: 0 });
+    };
+    for (const t of d.behaviors) {
+        if (!d.trees.has(t.id) || created.has(t.id)) continue;
+        if (unchanged(doc.behaviors, t)) d.trees.delete(t.id);
+        else t.version++;
+    }
+    for (const s of d.blackboards) {
+        if (!d.schemas.has(s.id) || created.has(s.id)) continue;
+        if (unchanged(doc.blackboards, s)) d.schemas.delete(s.id);
+        else s.version++;
+    }
+    for (const [id, agent] of Array.from(d.agents)) {
+        if (!same(agent ?? null, liveAgent(id) ?? null)) continue;
+        d.agents.delete(id);
+        d.objects.delete(id);
+    }
+    if (d.memoryTouched && same(d.memory, doc.memory)) d.memoryTouched = false;
+    result.touched = { trees: Array.from(d.trees), schemas: Array.from(d.schemas), objects: Array.from(d.objects), memory: d.memoryTouched };
     result.ok = true;
     const changed = d.trees.size || d.schemas.size || d.objects.size || d.memoryTouched;
     result.changes = changed ? { blackboards: d.blackboards, behaviors: d.behaviors, memory: d.memory, agents: d.agents } : null;

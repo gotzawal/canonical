@@ -102,10 +102,12 @@ export class AskRunner {
                 })
                 .then((result) => this.sys.post(() => finish(result)));
         };
-        if (plans.some((p) => !p.options)) {
+        // Choices from memory get their options (the best matching items) first.
+        const fromMemory = plans.filter((p) => p.format === 'choice' && !p.options);
+        if (fromMemory.length) {
             void this.memoryOptions(agent, doc).then((options) => {
                 this.sys.post(() => {
-                    for (const p of plans) if (!p.options) p.options = options;
+                    for (const p of fromMemory) p.options = options;
                     submit();
                 });
             });

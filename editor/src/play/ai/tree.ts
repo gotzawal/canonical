@@ -8,7 +8,10 @@
 //   aborted and the higher one runs (lower priority). "Start to pass" means
 //   the result changed from false to true, so a higher branch that just
 //   failed for another reason does not take over again on every tick.
-// - Services run only while the node they are attached to is active.
+// - Services run only while the node they are attached to is active. The
+//   root is active as long as the tree runs: when the tree finishes and
+//   starts over on the next tick, the root's services are not activated
+//   again (an Ask triggered on activate asks once, not on every loop).
 // - Aborted tasks get their abort hook (scripts: onTaskAbort and the task's
 //   AbortSignal).
 //
@@ -377,6 +380,8 @@ export class TreeInstance {
         this.ticks++;
         this.entries = 0;
         if (!this.root.active) {
+            // The tree starts over; the root's services stay on through it.
+            for (const s of this.root.services) if (s.active) s.tick(now);
             const st = this.enter(this.root, now);
             if (st !== 'running') this.root.last = { status: st, at: now };
             return;
@@ -389,6 +394,7 @@ export class TreeInstance {
     /** Aborts everything (Play stops or the agent is removed). */
     stop() {
         if (this.root.active) this.abort(this.root, this.host.now());
+        for (const s of this.root.services) s.deactivate();
     }
 
     // --------------------------------------------------------------- entry
@@ -413,7 +419,7 @@ export class TreeInstance {
             return 'failure';
         }
         n.active = true;
-        for (const s of n.services) s.activate(now);
+        for (const s of n.services) if (!s.active) s.activate(now);
         let st: Status;
         if (n.composite) st = this.runChildren(n, 0, now);
         else {
@@ -444,7 +450,8 @@ export class TreeInstance {
         n.current = -1;
         n.task = null;
         n.last = { status: st, at: now };
-        for (const s of n.services) s.deactivate();
+        // The root's services run as long as the tree does (see stop()).
+        if (n !== this.root) for (const s of n.services) s.deactivate();
         for (const c of n.cooldowns) c.until = now + Math.max(0, (c.doc as any).seconds ?? 0);
     }
 
@@ -553,6 +560,7 @@ export class TreeInstance {
         const active: string[] = [];
         let running: string | null = null;
         let n: NodeRt | undefined = this.root;
+        if (!n.active) for (const s of n.services) if (s.active) active.push(s.doc.id);
         while (n && n.active) {
             active.push(n.doc.id);
             for (const s of n.services) if (s.active) active.push(s.doc.id);

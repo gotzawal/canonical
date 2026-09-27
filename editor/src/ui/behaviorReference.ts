@@ -42,7 +42,7 @@ const RULES: [string, string][] = [
     ['Ticks', 'Each agent ticks 10 times a second, spread over the frames. A tick runs between the scripts\' update() and lateUpdate(), after the timers, in play time (pause stops it).'],
     ['Conditions', 'Every tick checks the conditions again; running tasks are not started again. A running branch whose conditions fail is aborted; a higher branch of a Selector whose conditions start to pass aborts the lower one and runs (both are always on).'],
     ['Aborts', 'An aborted script task fires task.signal and calls the script\'s onTaskAbort(task).'],
-    ['Services', 'Run only while the node they are attached to is active, every interval with a random jitter.'],
+    ['Services', 'Run only while the node they are attached to is active, every interval with a random jitter. Services of the root run as long as the tree does, also when it starts over.'],
     ['Ask', 'Every request of an Ask gets a number; only the newest request\'s answers are written. Below minConfidence the old value stays; within minHold a value does not change. Without a model nothing is written: the keys keep their defaults. Answers arrive between ticks and are applied at the start of the agent phase.'],
     ['Confidence', 'The probability of the chosen answer; for Noul the likelier of true and false. Conditions can require a minimum.'],
     ['Scheduler', 'Exact cache, semantic cache (same facts, context at least 0.97 similar), joining identical requests, nearest agent first, a GPU budget of 150 ms per second (50 to 400 by the frame time), batches of up to 10 questions after the frame is drawn, one batch at a time, and no answer after 1.5 s in the queue.'],

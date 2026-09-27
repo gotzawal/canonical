@@ -13,6 +13,10 @@ import { designSummary, memoLines, pipelineSummary } from './design/context';
 import { createMenu, menuDefinitions, showShortcuts } from './menus';
 import { ScriptCompiler } from './play/compiler';
 import { Player } from './play/player';
+import { ModelServices } from './play/ai/services';
+import type { ModelKind } from './play/ai/models';
+import { scriptChat } from './ai/scriptChat';
+import { formatBytes } from './core/assets';
 import { AIPanel } from './ui/aiPanel';
 import { AssetsPanel } from './ui/assetsPanel';
 import { BriefScreen } from './ui/briefScreen';
@@ -129,6 +133,11 @@ async function main() {
     const player = new Player(runtime, store, sync, picker, compiler);
     const graph = new RenderGraphController(runtime, store, shaders, sync);
     const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
+    // Agent models: the editor loads cached copies by itself and asks before downloading.
+    const models = new ModelServices(runtime, player.speech, { policy: 'ask' });
+    editor.models = models;
+    player.aiServices = () => models;
+    player.chatModel = scriptChat;
     const overlayDrawers: ((ctx: CanvasRenderingContext2D) => void)[] = [];
     gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
@@ -321,6 +330,35 @@ async function main() {
             body: d.error ? d.error.slice(0, 200) : first.length > 180 ? first.slice(0, 177) + '...' : first,
             timeout: d.error ? 0 : 9000,
             actions: [{ label: 'Show', run: () => showTab('ai') }],
+        });
+    });
+    // A Play session needed a model this browser does not have: agents keep
+    // their defaults meanwhile. Asked once per page; the Behavior tab keeps a chip.
+    const asked = new Set<ModelKind>();
+    models.on('needed', (kind) => {
+        if (asked.has(kind)) return;
+        asked.add(kind);
+        const src = models.status(kind).source;
+        const decision = kind === 'decision';
+        notices.show({
+            kind: 'model',
+            key: `model-${kind}`,
+            icon: 'sparkle',
+            title: decision ? 'Agents are answering with defaults' : 'Recall is matching by tags only',
+            body: `${decision ? 'Ask nodes keep their keys at the default values' : 'Recall and memory questions skip similarity search'} until ${src.label} (${formatBytes(src.size)}) is downloaded once from ${new URL(src.base).host} into this browser. It runs here; nothing is sent anywhere.`,
+            timeout: 0,
+            actions: [
+                {
+                    label: 'Download',
+                    primary: true,
+                    run: async () => {
+                        dock.show('behavior');
+                        const ok = await models.download(kind);
+                        toast(ok ? `${src.label} is ready.` : `${src.label} could not be loaded: ${models.status(kind).message ?? 'unknown error'}`, ok ? 'success' : 'error', 6000);
+                    },
+                },
+                { label: 'Not now', run: () => {} },
+            ],
         });
     });
     bell.addEventListener('click', () => {

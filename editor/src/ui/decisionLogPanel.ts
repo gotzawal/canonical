@@ -4,13 +4,18 @@
 // model saw and the probability of every option.
 
 import { formatValue } from '../core/behavior/nodeTypes';
-import type { AskOutcome, DecisionLogEntry } from '../core/types';
+import type { AskOutcome, DecisionLogEntry, DecisionQuestion } from '../core/types';
 import type { Editor } from '../editor';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { SelectField, button } from './widgets';
 
 const OUTCOMES: AskOutcome[] = ['written', 'low_confidence', 'superseded', 'held', 'timeout', 'unavailable'];
+
+/** "key=value", or just the key when the model gave no answer. */
+export function answerText(q: DecisionQuestion): string {
+    return q.probabilities ? `${q.key}=${formatValue(q.value)}` : q.key;
+}
 
 export class DecisionLogPanel {
     readonly el: HTMLElement;
@@ -83,7 +88,8 @@ export class DecisionLogPanel {
         this.filters.append(nodePick.el, agentPick.el, outcomePick.el);
         const shown = log.query({ node: this.node || undefined, agent: this.agent || undefined, outcome: (this.outcome || undefined) as AskOutcome | undefined });
         const counts = log.outcomes(shown);
-        this.summary.textContent = `${shown.length} of ${all.length} requests · ${OUTCOMES.filter((o) => counts[o]).map((o) => `${counts[o]} ${o.replace('_', ' ')}`).join(', ') || 'none yet'}`;
+        const answers = OUTCOMES.filter((o) => counts[o]).map((o) => `${counts[o]} ${o.replace('_', ' ')}`).join(', ');
+        this.summary.textContent = `${shown.length} of ${all.length} requests${answers ? ` · answers: ${answers}` : ''}`;
         const scroll = this.list.scrollTop;
         clear(this.list);
         if (!all.length) {
@@ -107,7 +113,7 @@ export class DecisionLogPanel {
             h(
                 'span',
                 { class: 'bt-log-answers' },
-                e.questions.map((q) => h('span', { class: 'bt-log-answer' }, h('span', { class: 'mono', text: `${q.key}=${formatValue(q.value)}` }), q.confidence !== null ? h('span', { class: 'muted', text: `${Math.round(q.confidence * 100)}%` }) : null, h('span', { class: 'bt-outcome ' + q.outcome, text: q.outcome.replace('_', ' ') }))),
+                e.questions.map((q) => h('span', { class: 'bt-log-answer' }, h('span', { class: 'mono', text: answerText(q) }), q.confidence !== null ? h('span', { class: 'muted', text: `${Math.round(q.confidence * 100)}%` }) : null, h('span', { class: 'bt-outcome ' + q.outcome, text: q.outcome.replace('_', ' ') }))),
             ),
             h('span', { class: 'muted small', text: `${e.cache !== 'none' ? `${e.cache} cache · ` : ''}${e.latency} ms` }),
         );

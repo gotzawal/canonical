@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { applyBehaviorOps } from '../core/behavior/ops';
 import { validateTree } from '../core/behavior/validate';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES, className } from '../core/templates';
 import type { BehaviorTreeDoc, ScriptDoc, ShaderDoc } from '../core/types';
@@ -190,27 +191,43 @@ export class CodePanel {
     }
 
     /**
-     * Saves the JSON view: it goes through the same edit operation and
-     * validation as every other edit. Structural errors refuse it (with the
-     * line); problems such as a missing key are saved and shown.
+     * Problems of a tree's JSON: its syntax, then a dry run of the edit
+     * operation Apply uses, so typing shows what Apply would say. Structural
+     * errors come back without an operation (Apply refuses them); problems
+     * such as a missing key are listed and can be saved.
      */
-    private applyTree(value: string) {
+    private treeDraft(value: string): { list: Diagnostic[]; op: Record<string, unknown> | null } {
         let parsed: any;
         try {
             parsed = JSON.parse(value);
         } catch (e: any) {
             const msg = String(e?.message || e);
             const pos = /position (\d+)/.exec(msg);
-            this.draftDiagnostics = [{ line: pos ? lineAt(value, Number(pos[1])) : 0, column: 1, message: `Not valid JSON: ${msg}`, severity: 'error' }];
+            return { list: [{ line: pos ? lineAt(value, Number(pos[1])) : 0, column: 1, message: `Not valid JSON: ${msg}`, severity: 'error' }], op: null };
+        }
+        if (!parsed || typeof parsed !== 'object' || !parsed.root) return { list: [{ line: 1, column: 1, message: 'The JSON needs a "root" node.', severity: 'error' }], op: null };
+        const op = { op: 'replace_tree', tree: this.id, root: parsed.root, name: parsed.name, schema: parsed.schema };
+        const r = applyBehaviorOps(this.editor.store.doc, [op], 'lenient');
+        if (!r.ok) return { list: r.errors.map((e) => ({ line: idLine(value, e.node), column: 1, message: `${e.node ? `${e.node}: ` : ''}${e.field ? `${e.field}: ` : ''}${e.message}`, severity: 'error' })), op: null };
+        const list: Diagnostic[] = r.issues
+            .filter((i) => i.tree === this.id)
+            .map((i) => ({ line: idLine(value, i.node), column: 1, message: `${i.node ? `${i.node}: ` : ''}${i.field ? `${i.field}: ` : ''}${i.message}`, severity: i.severity }));
+        return { list, op };
+    }
+
+    /**
+     * Saves the JSON view: it goes through the same edit operation and
+     * validation as every other edit. Structural errors refuse it (with the
+     * line); problems such as a missing key are saved and shown.
+     */
+    private applyTree(value: string) {
+        const draft = this.treeDraft(value);
+        if (!draft.op) {
+            this.draftDiagnostics = draft.list;
             this.refreshStatus();
             return;
         }
-        if (!parsed || typeof parsed !== 'object' || !parsed.root) {
-            this.draftDiagnostics = [{ line: 1, column: 1, message: 'The JSON needs a "root" node.', severity: 'error' }];
-            this.refreshStatus();
-            return;
-        }
-        const r = this.editor.applyBehaviorOps([{ op: 'replace_tree', tree: this.id, root: parsed.root, name: parsed.name, schema: parsed.schema }], { label: 'Edit Tree JSON' });
+        const r = this.editor.applyBehaviorOps([draft.op], { label: 'Edit Tree JSON' });
         if (!r.ok) {
             this.draftDiagnostics = r.errors.map((e) => ({ line: idLine(value, e.node), column: 1, message: `${e.node ? `${e.node}: ` : ''}${e.field ? `${e.field}: ` : ''}${e.message}`, severity: 'error' }));
             this.refreshStatus();
@@ -262,13 +279,7 @@ export class CodePanel {
         }
         let list: Diagnostic[];
         if (this.kind === 'behavior') {
-            try {
-                JSON.parse(code);
-                list = [];
-            } catch (e: any) {
-                const pos = /position (\d+)/.exec(String(e?.message));
-                list = [{ line: pos ? lineAt(code, Number(pos[1])) : 0, column: 1, message: `Not valid JSON: ${e?.message || e}`, severity: 'error' }];
-            }
+            list = this.treeDraft(code).list;
         } else if (this.kind === 'script') {
             const c = this.editor.compiler.compile({ ...(doc as ScriptDoc), code });
             list = c.error && !c.paused ? [{ line: c.error.line, column: c.error.column, message: c.error.message, severity: 'error' }] : [];

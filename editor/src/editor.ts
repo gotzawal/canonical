@@ -1174,6 +1174,37 @@ export class Editor extends Emitter<EditorEvents> {
         this.emit('show-behavior', target);
     }
 
+    /**
+     * Creates a behavior tree whose default branch waits (a blackboard schema
+     * too when the scene has none) and makes `assign` objects run it.
+     * Returns the id of the tree, or null when it was refused.
+     */
+    newBehaviorTree(opts: { schema?: string; assign?: string[] } = {}): string | null {
+        const doc = this.store.doc;
+        const free = (list: { name: string }[], base: string) => {
+            const taken = new Set(list.map((x) => x.name.toLowerCase()));
+            let n = list.length + 1;
+            while (taken.has(`${base} ${n}`.toLowerCase())) n++;
+            return `${base} ${n}`;
+        };
+        const name = free(doc.behaviors, 'Behavior');
+        const ops: unknown[] = [];
+        let schema = opts.schema ?? doc.blackboards[0]?.id;
+        if (!schema) {
+            schema = free(doc.blackboards, 'Blackboard');
+            ops.push({ op: 'create_schema', name: schema });
+        }
+        ops.push({ op: 'create_tree', name, schema, root: { id: 'root', type: 'selector', children: [{ id: 'idle', type: 'wait', seconds: 1, note: 'Default behavior: replace me.' }] } });
+        for (const id of opts.assign ?? []) ops.push({ op: 'set_agent', object: id, tree: name, enabled: true });
+        const r = this.applyBehaviorOps(ops, { label: 'New Behavior Tree' });
+        if (!r.ok) {
+            const e = r.errors[0];
+            toast(e ? `${e.node ? `${e.node}: ` : ''}${e.message}` : 'Could not create the tree.', 'error', 6000);
+            return null;
+        }
+        return r.created.find((c) => c.kind === 'tree')?.id ?? null;
+    }
+
     // ----------------------------------------------------------------- play
 
     togglePlay() {

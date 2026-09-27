@@ -79,7 +79,8 @@ function entryText(e: DecisionLogEntry): string {
     const qs = e.questions
         .map((q) => {
             const probs = q.probabilities ? (q.format === 'noul' ? '' : ` [${(q.options ?? []).map((o, i) => `${o.value} ${q.probabilities![i]}`).join(', ')}]`) : '';
-            return `${q.key}=${formatValue(q.value)}${q.confidence !== null ? ` conf ${q.confidence}` : ''} ${q.outcome}${probs}`;
+            const answer = q.probabilities ? `${q.key}=${formatValue(q.value)}` : `${q.key} (no answer)`;
+            return `${answer}${q.confidence !== null ? ` conf ${q.confidence}` : ''} ${q.outcome}${probs}`;
         })
         .join('; ');
     return `${e.time}s ${e.agentName} ${e.node}#${e.seq}: facts {${facts}}${e.context.length ? ` context [${e.context.join(', ')}]` : ''} -> ${qs} (${e.provider}${e.cache !== 'none' ? `, ${e.cache} cache` : ''}, ${e.latency} ms)`;

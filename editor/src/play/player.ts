@@ -98,6 +98,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private pointerTarget: { obj: Object3D; x: number; y: number } | null = null;
     private gameCamera: Camera3D | null = null;
     private listeners: [EventTarget, string, EventListener][] = [];
+    private chats = new Set<AbortController>();
 
     constructor(
         private runtime: Runtime,
@@ -168,6 +169,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         // Running tasks are aborted first (their scripts get onTaskAbort), then scripts get onDestroy.
         this.agents.stop();
         this.speech.cancelAll();
+        for (const c of this.chats) c.abort();
+        this.chats.clear();
         for (const inst of this.instances) {
             if (!inst.destroyed) this.call(inst, 'onDestroy');
         }
@@ -656,7 +659,13 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     chat(owner: Script, req: ChatRequest): Promise<string> {
         if (!this.chatModel) return Promise.reject(new Error('No language model is set up here: this.chat() works in the editor with an OpenRouter key.'));
-        return this.chatModel(req);
+        // Stop cancels the requests still open, along with the signal a task passed.
+        const ctl = new AbortController();
+        const outer = req.signal;
+        if (outer?.aborted) ctl.abort();
+        else outer?.addEventListener('abort', () => ctl.abort(), { once: true });
+        this.chats.add(ctl);
+        return this.chatModel({ ...req, signal: ctl.signal }).finally(() => this.chats.delete(ctl));
     }
 
     timer(owner: Script, seconds: number, fn: () => void, repeat: boolean): () => void {

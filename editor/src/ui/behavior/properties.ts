@@ -85,10 +85,8 @@ export class PropertiesPanel {
         const locked = this.host.locked();
         const body = h('div', { class: 'bt-props-body' + (locked ? ' locked' : '') });
         if (locked) body.setAttribute('inert', '');
-        this.el.append(
-            locked ? h('div', { class: 'bt-banner' }, icon('lock', 13), h('span', { text: 'Playing: the tree is shown as it runs. Stop to edit it.' })) : null,
-            body,
-        );
+        if (locked) this.el.append(h('div', { class: 'bt-banner' }, icon('lock', 13), h('span', { text: 'Playing: the tree is shown as it runs. Stop to edit it.' })));
+        this.el.append(body);
         body.append(this.header(tree, node, def));
         const mine = this.host.issues().filter((i) => i.node === node.id);
         if (mine.length) body.append(this.issueList(mine));

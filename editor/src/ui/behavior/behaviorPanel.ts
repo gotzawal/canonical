@@ -3,7 +3,8 @@
 // playing a debug view (the chosen agent's active path, blackboard and the
 // latest answers). Every edit goes through the edit operation layer.
 
-import { findNode, newItemId } from '../../core/behavior/format';
+import { formatBytes } from '../../core/assets';
+import { findNode } from '../../core/behavior/format';
 import { formatValue } from '../../core/behavior/nodeTypes';
 import type { BehaviorOp } from '../../core/behavior/ops';
 import { describeIssue, validateSchema, validateTree, type Issue } from '../../core/behavior/validate';
@@ -11,6 +12,7 @@ import type { BehaviorTreeDoc, BlackboardSchemaDoc } from '../../core/types';
 import type { Editor } from '../../editor';
 import type { Agent } from '../../play/ai/agents';
 import { encodeVector } from '../../play/ai/memory';
+import { answerText } from '../decisionLogPanel';
 import { clear, h } from '../dom';
 import { icon } from '../icons';
 import { confirmDialog, showMenu, toast, type MenuItem } from '../overlays';
@@ -23,10 +25,6 @@ import { SchemaEditor } from './schemaEditor';
 type Mode = 'tree' | 'schema' | 'memory';
 
 const STATE_KEY = 'canonical-editor/behavior';
-
-function formatBytes(n: number): string {
-    return n >= 1e9 ? `${(n / 1e9).toFixed(1)} GB` : `${Math.round(n / 1e6)} MB`;
-}
 
 export class BehaviorPanel {
     readonly el: HTMLElement;
@@ -317,7 +315,7 @@ export class BehaviorPanel {
                 cls = 'error';
                 break;
             default:
-                text = 'Laya';
+                text = 'Laya not loaded';
         }
         this.modelChip.hidden = false;
         this.modelChip.className = 'bt-model-chip ' + cls;
@@ -363,27 +361,9 @@ export class BehaviorPanel {
 
     private newTree() {
         if (this.locked()) return;
-        const doc = this.editor.store.doc;
-        let n = doc.behaviors.length + 1;
-        const taken = new Set(doc.behaviors.map((t) => t.name.toLowerCase()));
-        while (taken.has(`behavior ${n}`)) n++;
-        const name = `Behavior ${n}`;
-        const ops: BehaviorOp[] = [];
-        let schema = this.schema()?.id ?? doc.blackboards[0]?.id;
-        if (!schema) {
-            let s = 1;
-            const names = new Set(doc.blackboards.map((x) => x.name.toLowerCase()));
-            while (names.has(`blackboard ${s}`)) s++;
-            ops.push({ op: 'create_schema', name: `Blackboard ${s}` });
-            schema = `Blackboard ${s}`;
-        }
-        ops.push({ op: 'create_tree', name, schema, root: { id: 'root', type: 'selector', children: [{ id: newItemId('wait', new Set()), type: 'wait', seconds: 1, note: 'Default behavior: replace me.' }] } });
-        const r = this.editor.applyBehaviorOps(ops, { label: 'New Behavior Tree' });
-        if (!r.ok) {
-            toast(r.errors[0]?.message ?? 'Could not create the tree.', 'error');
-            return;
-        }
-        this.treeId = r.created.find((c) => c.kind === 'tree')?.id ?? this.treeId;
+        const id = this.editor.newBehaviorTree({ schema: this.schema()?.id });
+        if (!id) return;
+        this.treeId = id;
         this.mode = 'tree';
         this.outliner.select(['root']);
         this.save();
@@ -568,7 +548,7 @@ export class BehaviorPanel {
         if (lastAnswers.length) {
             el.appendChild(h('div', { class: 'bt-group-title' }, h('span', { text: 'Latest answers' })));
             for (const e of lastAnswers) {
-                el.appendChild(h('div', { class: 'bt-answer' }, h('span', { class: 'mono', text: `${e.node}#${e.seq}` }), h('span', { text: e.questions.map((q) => `${q.key}=${formatValue(q.value)} ${q.outcome}`).join(', ') }), h('span', { class: 'muted', text: `${e.time.toFixed(1)}s` })));
+                el.appendChild(h('div', { class: 'bt-answer' }, h('span', { class: 'mono', text: `${e.node}#${e.seq}` }), h('span', { text: e.questions.map((q) => `${answerText(q)} ${q.outcome.replace('_', ' ')}`).join(', ') }), h('span', { class: 'muted', text: `${e.time.toFixed(1)}s` })));
             }
         }
         if (stats) el.appendChild(h('div', { class: 'muted small pad', text: `Scheduler: ${stats.queued} waiting (${stats.questions} questions), ${stats.inFlight ? 'a batch running' : 'idle'}, budget ${stats.budget} ms/s, ${stats.batches} batches, ${stats.cacheHits} cache hits` }));

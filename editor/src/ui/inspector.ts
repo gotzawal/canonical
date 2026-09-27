@@ -10,9 +10,13 @@ import type {
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
+import { schemaOf } from '../core/behavior/format';
+import { formatValue, keyTypeInfo } from '../core/behavior/nodeTypes';
+import { validateAgent } from '../core/behavior/validate';
+import { valueControl } from './behavior/fields';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
-import { MenuItem, showMenu } from './overlays';
+import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import {
     CheckboxField, ColorField, EditHooks, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
@@ -96,6 +100,9 @@ export class InspectorPanel {
         editor.compiler.on('compiled', () => {
             if (this.shapeKey() !== this.shape) this.render();
         });
+        editor.player.on('state', () => {
+            if (this.shapeKey() !== this.shape) this.render();
+        });
         editor.on('focus-part', ({ node, path }) => {
             if (node !== store.primary?.id || !path) return;
             this.openParts.add(path);
@@ -130,6 +137,7 @@ export class InspectorPanel {
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
             n.model ? Object.values(n.model.materials ?? {}).map((o) => (o.shading ?? '') + (o.alphaMode ?? '') + (o.shader ?? '') + this.propsKey(o.shader ?? '')).join(',') : '',
             (n.scripts ?? []).map((r) => r.script + ':' + this.scriptKey(r.script)).join(','),
+            this.agentKey(n),
             this.store.doc.assets.length,
             this.store.doc.scripts.map((s) => s.id + s.name).join(','),
             this.store.doc.shaders.map((s) => s.id + s.name + s.kind + s.lighting).join(','),
@@ -139,6 +147,20 @@ export class InspectorPanel {
     private propsKey(shaderId: string): string {
         if (!shaderId) return '';
         return this.editor.shaders.props(shaderId).map((p) => p.name + p.type).join(',') + ':' + this.editor.shaders.status(shaderId).state;
+    }
+
+    /** The tree and keys an agent section shows (values and overrides update in place). */
+    private agentKey(n: NodeDoc): string {
+        if (!n.agent) return '-';
+        const doc = this.store.doc;
+        const tree = doc.behaviors.find((t) => t.id === n.agent!.tree);
+        const schema = schemaOf(doc.blackboards, tree);
+        return [
+            n.agent.tree,
+            doc.behaviors.map((t) => t.id + '=' + t.name).join(','),
+            schema ? schema.id + ':' + schema.keys.map((k) => `${k.name}/${k.type}/${k.owner}/${(k.values ?? []).map((v) => v.value).join('.')}`).join(',') : '',
+            this.editor.player.state === 'stopped' ? 'edit' : 'play',
+        ].join(';');
     }
 
     private scriptKey(id: string): string {
@@ -186,6 +208,7 @@ export class InspectorPanel {
         if (node.camera) this.body.append(this.cameraSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
+        if (node.agent) this.body.append(this.agentSection(node));
         this.body.append(this.addComponent(node));
         this.body.scrollTop = scroll;
     }
@@ -1281,6 +1304,135 @@ export class InspectorPanel {
         return section(`script-${index}`, title, 'script', rows, [enabled.el, edit, menu]);
     }
 
+    // ---------------------------------------------------------------- agent
+
+    /** Behavior edits of the section: through the edit operation layer, like every behavior edit. */
+    private applyAgent(ops: unknown[], label: string) {
+        if (!ops.length) return;
+        const r = this.editor.applyBehaviorOps(ops, { label });
+        if (!r.ok) {
+            const e = r.errors[0];
+            toast(e ? e.message : 'The change was refused.', 'error', 6000);
+        }
+    }
+
+    private agentSection(node: NodeDoc): HTMLElement {
+        const store = this.store;
+        const doc = store.doc;
+        const agent = node.agent!;
+        const tree = doc.behaviors.find((t) => t.id === agent.tree);
+        const schema = schemaOf(doc.blackboards, tree);
+        const locked = this.editor.player.state !== 'stopped';
+        /** Selected objects with an agent running the same tree (starting values only make sense there). */
+        const peers = () => store.selection.map((id) => store.node(id)).filter((n): n is NodeDoc => !!n?.agent);
+        const sameTree = () => peers().filter((n) => n.agent!.tree === this.node.agent?.tree);
+        const rows: HTMLElement[] = [];
+        if (locked) rows.push(h('div', { class: 'bt-banner' }, icon('lock', 13), h('span', { text: 'Playing: the Behavior tab shows the live blackboard. Stop to change the agent.' })));
+
+        const treeOpts = doc.behaviors.map((t) => ({ value: t.id, label: t.name }));
+        if (!tree) treeOpts.unshift({ value: agent.tree, label: `${agent.tree} (missing)` });
+        const treePick = new SelectField(treeOpts, agent.tree, (id) => this.applyAgent(peers().map((n) => ({ op: 'set_agent', object: n.id, tree: id })), 'Agent Tree'));
+        const show = iconButton('behavior', 'Show the tree in the Behavior tab', () => this.editor.showBehavior({ tree: this.node.agent?.tree }));
+        rows.push(row('Tree', h('div', { class: 'inline grow' }, treePick.el, show), 'The behavior tree this object runs while playing, at 10 ticks a second.'));
+        if (schema) rows.push(row('Blackboard', h('div', { class: 'readonly muted', text: `${schema.name} (${schema.keys.length} key${schema.keys.length === 1 ? '' : 's'})` })));
+
+        const issues = h('div', { class: 'agent-issues' });
+        rows.push(issues);
+        const showIssues = () => {
+            const n = this.node;
+            clear(issues);
+            if (!n.agent) return;
+            for (const i of validateAgent(n.id, n.agent, store.doc)) {
+                issues.appendChild(h('div', { class: 'bt-issue ' + i.severity }, icon('alert', 12), h('span', { text: i.message })));
+            }
+        };
+        showIssues();
+
+        if (schema?.keys.length) {
+            rows.push(h('div', { class: 'agent-values-title muted small', text: 'Starting values (the schema default unless set here)' }));
+            const ctx = { schema, objects: () => store.doc.nodes.filter((n) => !n.prefabChild).map((n) => ({ id: n.id, name: n.name })) };
+            for (const key of schema.keys) {
+                const label = `Agent Value ${key.name}`;
+                const write = (v: unknown) =>
+                    this.applyAgent(sameTree().map((n) => ({ op: 'set_agent', object: n.id, values: { ...n.agent!.values, [key.name]: v } })), label);
+                const control = valueControl(key, key.name in agent.values ? agent.values[key.name] : key.default, ctx, {
+                    commit: write,
+                    begin: () => {
+                        this.open++;
+                        store.begin(`Behavior: ${label}`);
+                    },
+                    input: write,
+                    end: () => {
+                        if (this.open <= 0) return;
+                        this.open--;
+                        store.end();
+                    },
+                });
+                const reset = iconButton('undo', `Back to the schema default (${formatValue(key.default)})`, () =>
+                    this.applyAgent(
+                        sameTree()
+                            .filter((n) => key.name in n.agent!.values)
+                            .map((n) => {
+                                const values = { ...n.agent!.values };
+                                delete values[key.name];
+                                return { op: 'set_agent', object: n.id, values };
+                            }),
+                        `Reset ${key.name}`,
+                    ),
+                );
+                const el = row(key.name, h('div', { class: 'inline grow' }, h('span', { class: 'bt-owner ' + key.owner, text: key.owner }), control.el, reset), `${keyTypeInfo(key.type).label}, ${key.owner === 'ai' ? 'written by one Ask' : key.owner === 'fact' ? 'written by scripts' : 'written by the tree'}. ${key.description}`);
+                const sync = () => {
+                    const a = this.node.agent;
+                    if (!a) return;
+                    const set = key.name in a.values;
+                    control.set(set ? a.values[key.name] : key.default);
+                    reset.hidden = !set;
+                    el.classList.toggle('overridden', set);
+                };
+                sync();
+                this.watch(sync);
+                rows.push(el);
+            }
+        } else if (schema) {
+            rows.push(h('div', { class: 'muted small pad', text: 'The blackboard schema has no keys yet.' }));
+        }
+
+        const enabled = new CheckboxField(agent.enabled, (v) => this.applyAgent(peers().map((n) => ({ op: 'set_agent', object: n.id, enabled: v })), v ? 'Enable Agent' : 'Disable Agent'));
+        enabled.el.title = 'Runs its tree while playing';
+        this.watch(() => {
+            const a = this.node.agent;
+            if (!a) return;
+            enabled.set(a.enabled);
+            treePick.set(a.tree);
+            showIssues();
+        });
+        const menu = iconButton('dots', 'Agent options', (e) => {
+            const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+            showMenu(
+                [
+                    { label: 'Show in Behavior Tab', icon: 'behavior', action: () => this.editor.showBehavior({ tree: this.node.agent?.tree }) },
+                    {
+                        label: 'Reset Starting Values',
+                        icon: 'undo',
+                        enabled: () => !locked && sameTree().some((n) => Object.keys(n.agent!.values).length > 0),
+                        action: () => this.applyAgent(sameTree().filter((n) => Object.keys(n.agent!.values).length).map((n) => ({ op: 'set_agent', object: n.id, values: {} })), 'Reset Agent Values'),
+                    },
+                    { separator: true },
+                    { label: 'Remove Agent', icon: 'trash', enabled: () => !locked, action: () => this.applyAgent(peers().map((n) => ({ op: 'remove_agent', object: n.id })), 'Remove Agent') },
+                ],
+                r.left - 180,
+                r.bottom + 4,
+            );
+        });
+        const out = section('agent', 'Agent', 'agent', rows, [enabled.el, menu]);
+        if (locked) {
+            treePick.el.disabled = true;
+            enabled.el.setAttribute('inert', '');
+            out.querySelectorAll('.row').forEach((r) => r.setAttribute('inert', ''));
+        }
+        return out;
+    }
+
     private addComponent(node: NodeDoc): HTMLElement {
         const items: MenuItem[] = [];
         if (!node.mesh && !node.model && !node.camera) {
@@ -1320,6 +1472,31 @@ export class InspectorPanel {
             });
         }
         if (items.length) items.push({ separator: true });
+        if (!node.agent) {
+            const stopped = () => this.editor.player.state === 'stopped';
+            const trees = this.store.doc.behaviors;
+            items.push({
+                label: 'Agent (Behavior Tree)',
+                icon: 'agent',
+                enabled: stopped,
+                submenu: [
+                    ...trees.map((t) => ({
+                        label: t.name,
+                        icon: 'behavior',
+                        action: () => this.applyAgent(this.store.selection.map((id) => ({ op: 'set_agent', object: id, tree: t.id, enabled: true })), 'Add Agent'),
+                    })),
+                    ...(trees.length ? [{ separator: true } as MenuItem] : []),
+                    {
+                        label: 'New Behavior Tree',
+                        icon: 'plus',
+                        action: () => {
+                            const id = this.editor.newBehaviorTree({ assign: this.store.selection });
+                            if (id) this.editor.showBehavior({ tree: id });
+                        },
+                    },
+                ],
+            });
+        }
         const scripts = this.store.doc.scripts;
         items.push({
             label: 'Script',
