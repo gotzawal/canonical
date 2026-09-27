@@ -74,7 +74,8 @@ async function playerFiles(title: string, ai: boolean): Promise<ZipEntry[]> {
         const r = await fetch(new URL(file, root), { cache: 'no-cache' });
         if (!r.ok) throw new Error(`Could not read ${file} of the player app (${r.status}).`);
         if (file === manifest.html) {
-            const html = (await r.text()).replace(/<title>[^<]*<\/title>/i, `<title>${escapeHtml(title)}</title>`);
+            // A function, so a $ in the title is not read as a replacement pattern.
+            const html = (await r.text()).replace(/<title>[^<]*<\/title>/i, () => `<title>${escapeHtml(title)}</title>`);
             out.push({ path: 'index.html', data: html });
         } else {
             out.push({ path: file, data: await r.blob() });

@@ -144,7 +144,7 @@ export class DecisionLogPanel {
                               (q.options ?? (q.format === 'noul' ? [{ value: 'false', text: '' }, { value: 'true', text: '' }] : [])).map((o, i) =>
                                   h(
                                       'div',
-                                      { class: 'bt-prob' + (o.value === String(q.value) || (q.format === 'noul' && i === 1) ? ' chosen' : '') },
+                                      { class: 'bt-prob' + (o.value === String(q.value) || (q.format === 'noul' && i === ((q.probabilities![1] ?? 0) >= 0.5 ? 1 : 0)) ? ' chosen' : '') },
                                       h('span', { class: 'mono bt-prob-label', text: o.value, title: o.text }),
                                       h('span', { class: 'bt-prob-bar' }, h('span', { style: { width: `${Math.round((q.probabilities![i] ?? 0) * 100)}%` } })),
                                       h('span', { class: 'mono', text: (q.probabilities![i] ?? 0).toFixed(3) }),

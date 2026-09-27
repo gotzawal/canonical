@@ -456,7 +456,15 @@ export function exampleGuard(): SceneDoc {
                                     note: 'Only a stranger judged a threat is chased.',
                                     decorators: [{ type: 'condition', key: 'response', op: 'eq', value: 'chase' }, { type: 'condition', key: 'threat', op: 'ge', value: 0.5 }],
                                 },
-                                { id: 'warn', type: 'script', method: 'warn' },
+                                {
+                                    id: 'warning',
+                                    type: 'sequence',
+                                    note: 'After the warning the guard waits for an answer before it warns again.',
+                                    children: [
+                                        { id: 'warn', type: 'script', method: 'warn' },
+                                        { id: 'listen', type: 'wait', seconds: 5, deviation: 1 },
+                                    ],
+                                },
                             ],
                         },
                         { id: 'halt', type: 'script', method: 'halt', decorators: [{ type: 'condition', key: 'dist', op: 'eq', value: 'near' }, { type: 'cooldown', seconds: 8 }] },

@@ -39,7 +39,7 @@ async function deflate(data: Uint8Array): Promise<Uint8Array | null> {
     }
 }
 
-const COMPRESSIBLE = /\.(html?|js|mjs|css|json|txt|svg|wgsl|gltf|obj|md)$/i;
+const COMPRESSIBLE = /\.(html?|js|mjs|css|json|txt|svg|wgsl|gltf|obj|md|wasm)$/i;
 
 function dosDateTime(d: Date): { time: number; date: number } {
     const time = (d.getHours() << 11) | (d.getMinutes() << 5) | Math.floor(d.getSeconds() / 2);
