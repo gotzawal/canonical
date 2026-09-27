@@ -90,10 +90,15 @@ const MORE_KEYS: [string, string][] = [
     ['Mod+/ in the code editor', 'Comment or uncomment lines'],
 ];
 
-/** "Mod+Shift+Z" for a key event: digits by position (so Shift+1 is not "!"), other symbols as typed. */
+/**
+ * "Mod+Shift+Z" for a key event: digits by position (so Shift+1 is not
+ * "!"), letters as typed, or by position when the layout types another
+ * script (Korean, Cyrillic: W stays W), other symbols as typed.
+ */
 function comboOf(e: KeyboardEvent): string {
     const digit = /^(?:Digit|Numpad)(\d)$/.exec(e.code)?.[1];
-    const key = digit ?? (e.key.length === 1 ? e.key.toUpperCase() : e.key);
+    const letter = /^Key([A-Z])$/.exec(e.code)?.[1];
+    const key = digit ?? (letter && !/^[a-z]$/i.test(e.key) ? letter : e.key.length === 1 ? e.key.toUpperCase() : e.key);
     // A typed symbol ("?") already says whether Shift was held.
     const shift = e.shiftKey && (digit !== undefined || key.length > 1 || /^[A-Z]$/.test(key));
     return `${e.ctrlKey || e.metaKey ? 'Mod+' : ''}${e.altKey ? 'Alt+' : ''}${shift ? 'Shift+' : ''}${key}`;
