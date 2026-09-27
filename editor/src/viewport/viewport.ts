@@ -408,7 +408,8 @@ export class Viewport {
         if (this.store.prefs.helpers) this.drawGIVolume();
         for (const node of this.store.doc.nodes) {
             const entry = this.sync.entries.get(node.id);
-            if (!entry) continue;
+            // Helper icons are click targets too, so the scene isolation hides gets none.
+            if (!entry || !this.sync.inView(node.id)) continue;
             const isSel = selected.has(node.id);
             if (this.store.prefs.helpers || isSel) this.drawHelper(node, isSel, entry.visible);
             if (isSel) this.drawSelection(node);
