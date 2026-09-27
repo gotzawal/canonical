@@ -7,7 +7,7 @@ import { aiSettings } from '../ai/settings';
 import { roomSample, useSwatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import {
-    deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
+    deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
 } from '../design/swatches';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -240,7 +240,7 @@ class SwatchDialog {
         const img = h('img', { attrs: { src: url, alt: s.name, draggable: 'false' } });
         img.addEventListener('click', () => lightbox(url, `${s.name} (${s.tile} m per tile)`));
         const slot = this.slot;
-        const inUse = !!slot?.swatch && this.editor.store.doc.assets.find((a) => a.id === slot.swatch)?.name.includes(`.${s.id}.`);
+        const inUse = !!slot?.swatch && swatchIdOf(this.editor.store.doc.assets.find((a) => a.id === slot.swatch)) === s.id;
         const use = slot
             ? inUse
                 ? h('span', { class: 'shot-badge ok', text: 'in use' })
