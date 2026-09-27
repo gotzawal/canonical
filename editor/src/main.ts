@@ -109,9 +109,17 @@ async function main() {
     clampLayout(app);
     window.addEventListener('resize', () => clampLayout(app));
     installSplitters(app);
-    const toggle = (cls: string) => app.classList.toggle(cls);
-    leftToggle.addEventListener('click', () => toggle(isNarrow() ? 'show-left' : 'hide-left'));
-    rightToggle.addEventListener('click', () => toggle(isNarrow() ? 'show-right' : 'hide-right'));
+    /** Opens, closes or (without `open`) toggles a side panel: a column, or on narrow screens a drawer, one at a time. */
+    const setPanel = (side: 'left' | 'right', open?: boolean) => {
+        if (isNarrow()) {
+            const shown = app.classList.toggle(`show-${side}`, open);
+            if (shown) app.classList.remove(`show-${side === 'left' ? 'right' : 'left'}`);
+        } else app.classList.toggle(`hide-${side}`, open === undefined ? undefined : !open);
+        leftToggle.setAttribute('aria-pressed', String(app.classList.contains('show-left')));
+        rightToggle.setAttribute('aria-pressed', String(app.classList.contains('show-right')));
+    };
+    leftToggle.addEventListener('click', () => setPanel('left'));
+    rightToggle.addEventListener('click', () => setPanel('right'));
 
     // ----------------------------------------------------------- engine
     let runtime: Runtime;
@@ -299,10 +307,7 @@ async function main() {
         scenePanel.el.hidden = tab !== 'scene';
         designPanel.el.hidden = tab !== 'design';
         aiPanel.el.hidden = tab !== 'ai';
-        if (tab === 'ai' || tab === 'design') {
-            app.classList.remove('hide-right');
-            if (isNarrow()) app.classList.add('show-right');
-        }
+        if (tab === 'ai' || tab === 'design') setPanel('right', true);
         if (tab === 'ai') aiPanel.focus();
         if (tab === 'design') designPanel.shown();
     };
@@ -317,8 +322,7 @@ async function main() {
     editor.on('show-design', () => showTab('design'));
     editor.on('show-scene', () => {
         showTab('scene');
-        app.classList.remove('hide-right');
-        if (isNarrow()) app.classList.add('show-right');
+        setPanel('right', true);
     });
     editor.on('show-brief', () => brief.open());
     showTab('inspector');
@@ -407,8 +411,8 @@ async function main() {
     menuSlot.append(
         menubar(
             menuDefinitions(editor, {
-                toggleLeft: () => void toggle(isNarrow() ? 'show-left' : 'hide-left'),
-                toggleRight: () => void toggle(isNarrow() ? 'show-right' : 'hide-right'),
+                toggleLeft: () => setPanel('left'),
+                toggleRight: () => setPanel('right'),
                 showGraph: () => dock.show('graph'),
                 showAI: () => showTab('ai'),
             }),

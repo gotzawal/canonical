@@ -65,6 +65,7 @@ export class Viewport {
     private icons: IconHit[] = [];
     private pointers = new Map<number, { x: number; y: number }>();
     private pinchDist = 0;
+    private holdTimer = 0;
     private axisWidget: { x: number; y: number; r: number; yaw: number; pitch: number }[] = [];
 
     constructor(
@@ -118,6 +119,7 @@ export class Viewport {
     }
 
     private onDown(e: PointerEvent) {
+        clearTimeout(this.holdTimer);
         if (this.hooks.captured?.()) return;
         this.overlay.focus({ preventScroll: true });
         const [x, y] = this.local(e);
@@ -152,12 +154,21 @@ export class Viewport {
         this.downY = this.lastY = y;
         this.downButton = e.button;
         if (e.button === 0 && !e.altKey) {
-            const handle = this.gizmo.hitTest(x, y);
+            const touch = e.pointerType === 'touch';
+            const handle = this.gizmo.hitTest(x, y, touch ? 2.5 : 1);
             if (handle && this.gizmo.begin(handle, x, y)) {
                 this.mode = 'gizmo';
                 return;
             }
             this.mode = 'pending';
+            // Touch has no right button: a finger held still opens the context menu.
+            if (touch) {
+                this.holdTimer = window.setTimeout(() => {
+                    if (this.mode !== 'pending') return;
+                    this.mode = 'none';
+                    this.contextMenu(x, y, e.clientX, e.clientY);
+                }, 550);
+            }
         } else if (e.button === 0 && e.altKey) {
             this.mode = 'orbit';
         } else if (e.button === 1 || e.button === 2) {
@@ -221,6 +232,7 @@ export class Viewport {
     }
 
     private onUp(e: PointerEvent, cancelled = false) {
+        clearTimeout(this.holdTimer);
         const [x, y] = this.local(e);
         this.pointers.delete(e.pointerId);
         const mode = this.mode;
@@ -241,13 +253,16 @@ export class Viewport {
         if (mode === 'pending' && !cancelled && !this.playing) {
             this.picker.update();
             if (this.downButton === 0) this.clickSelect(x, y, e.shiftKey || e.ctrlKey || e.metaKey);
-            else if (this.downButton === 2) {
-                const raw = this.hitId(x, y);
-                const id = raw && this.hooks.selectable ? this.hooks.selectable(raw) : raw;
-                if (id && !this.store.selection.includes(id)) this.store.select([id]);
-                this.hooks.onContextMenu(x, y, e.clientX, e.clientY, id);
-            }
+            else if (this.downButton === 2) this.contextMenu(x, y, e.clientX, e.clientY);
         }
+    }
+
+    /** The context menu of what is at a point, which is selected first. */
+    private contextMenu(x: number, y: number, clientX: number, clientY: number) {
+        const raw = this.hitId(x, y);
+        const id = raw && this.hooks.selectable ? this.hooks.selectable(raw) : raw;
+        if (id && !this.store.selection.includes(id)) this.store.select([id]);
+        this.hooks.onContextMenu(x, y, clientX, clientY, id);
     }
 
     /** Escape during a drag restores the state from before the drag. */

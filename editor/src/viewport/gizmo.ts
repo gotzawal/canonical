@@ -101,29 +101,30 @@ export class Gizmo {
 
     // ------------------------------------------------------------ hit test
 
-    hitTest(x: number, y: number): Handle | null {
+    /** The handle at a point; `slop` widens the reach (a finger is less precise than a mouse). */
+    hitTest(x: number, y: number, slop = 1): Handle | null {
         const L = this.layout();
         if (!L) return null;
         const c = L.center;
         if (L.mode === 'translate') {
-            if (Math.hypot(x - c.x, y - c.y) < 9) return 'view';
+            if (Math.hypot(x - c.x, y - c.y) < 9 * slop) return 'view';
             for (const p of PLANES) {
                 const quad = this.planeQuad(L, p.a, p.b);
                 if (quad && pointInPoly(x, y, quad)) return p.handle;
             }
             for (let i = 0; i < 3; i++) {
                 const end = this.axisEnd(L, i);
-                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8) return AXIS_HANDLES[i];
+                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8 * slop) return AXIS_HANDLES[i];
             }
         } else if (L.mode === 'scale') {
-            if (Math.abs(x - c.x) < 9 && Math.abs(y - c.y) < 9) return 'uniform';
+            if (Math.abs(x - c.x) < 9 * slop && Math.abs(y - c.y) < 9 * slop) return 'uniform';
             for (let i = 0; i < 3; i++) {
                 const end = this.axisEnd(L, i);
-                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8) return AXIS_HANDLES[i];
+                if (end && distToSegment(x, y, c.x, c.y, end.x, end.y) < 8 * slop) return AXIS_HANDLES[i];
             }
         } else {
             let best: Handle | null = null;
-            let bestD = 8;
+            let bestD = 8 * slop;
             for (let i = 0; i < 3; i++) {
                 const d = this.ringDistance(L, i, x, y);
                 if (d < bestD) {
@@ -133,7 +134,7 @@ export class Gizmo {
             }
             if (best) return best;
             const r = this.viewRingRadius(L);
-            if (Math.abs(Math.hypot(x - c.x, y - c.y) - r) < 7) return 'view';
+            if (Math.abs(Math.hypot(x - c.x, y - c.y) - r) < 7 * slop) return 'view';
         }
         return null;
     }

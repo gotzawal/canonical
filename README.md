@@ -219,6 +219,8 @@ Check a change with `pnpm run editor:typecheck` and `pnpm run editor:build`, the
 ### Browser support
 The editor needs WebGPU: Chrome or Edge 113+ on Windows, macOS and ChromeOS, Chrome 121+ on Android, Safari 26+, and Firefox 141+ on Windows. On Linux, Chrome may need `chrome://flags/#enable-unsafe-webgpu` and Vulkan.
 
+On tablets and phones the side panels open from the top bar as drawers, or as sheets over the lower half of the view on a phone held upright. In the viewport one finger orbits, two fingers pan and pinch to zoom, and a long press opens the context menu.
+
 ## Contributing
 Issues and pull requests are welcome. Commit messages follow the [commit convention](.github/commit-convention.md), for example `feat(editor): ...`. For the engine's internals, scripts and samples, see the [Orillusion contributing guide](.github/contributing.md).
 

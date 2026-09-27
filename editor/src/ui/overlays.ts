@@ -152,7 +152,10 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
             el.appendChild(sub);
             // Next to its item, flipped or shifted to stay on screen. It is
             // fixed, so the menu around it can scroll without clipping it.
+            // Touch has no hover: a tap opens it (only once the tap is over, which a submenu
+            // flipped over its item would take otherwise), and it stays until another opens.
             const open = () => {
+                for (const other of list.querySelectorAll<HTMLElement>(':scope > .has-sub > .submenu')) if (other !== sub) other.style.display = '';
                 sub.style.display = 'flex';
                 // Measured at 0, 0 of its containing block: the window, or the glass menu around it.
                 sub.style.left = sub.style.top = '0px';
@@ -163,8 +166,15 @@ function renderItems(items: MenuItem[], close: () => void): HTMLElement {
                 sub.style.left = x - o.left + 'px';
                 sub.style.top = y - o.top + 'px';
             };
-            el.addEventListener('pointerenter', open);
-            el.addEventListener('pointerleave', () => (sub.style.display = ''));
+            el.addEventListener('pointerenter', (e) => {
+                if (e.pointerType !== 'touch') open();
+            });
+            el.addEventListener('click', (e) => {
+                if (!sub.contains(e.target as Node)) open();
+            });
+            el.addEventListener('pointerleave', (e) => {
+                if (e.pointerType !== 'touch') sub.style.display = '';
+            });
         } else if (enabled) {
             el.addEventListener('click', () => {
                 close();
