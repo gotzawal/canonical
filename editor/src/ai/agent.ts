@@ -103,7 +103,7 @@ export class Agent extends Emitter<AgentEvents> {
     private placeholders = new Map<ChatMessage, string>();
     private abort: AbortController | null = null;
     busy = false;
-    /** Compaction or memo refresh running (the Send button waits). */
+    /** Compaction running (the Send button waits). */
     working = false;
     usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
     lastModel = '';
@@ -117,6 +117,8 @@ export class Agent extends Emitter<AgentEvents> {
     private loading: Promise<void> = Promise.resolve();
     /** Counts conversation switches (New conversation, another project): a request of an earlier one stops writing. */
     private generation = 0;
+    /** The memo refresh running, and the work it takes in (see refreshMemo). */
+    private refreshing: { session: string; recent: string; abort: AbortController } | null = null;
 
     constructor(private editor: Editor, private context: () => string) {
         super();
@@ -499,7 +501,6 @@ export class Agent extends Emitter<AgentEvents> {
         const cut = starts[starts.length - KEEP_REQUESTS];
         const older = this.history.slice(0, cut);
         const note = this.push({ role: 'note', text: auto ? 'The conversation is long: compacting the earlier messages...' : 'Compacting the earlier messages...' });
-        const wasWorking = this.working;
         // Another conversation can be opened while the model summarizes: this one is not about it.
         const gen = this.generation;
         this.working = true;
@@ -544,7 +545,7 @@ export class Agent extends Emitter<AgentEvents> {
             this.trimHistory(COMPACT_CHARS);
             return false;
         } finally {
-            this.working = wasWorking;
+            this.working = false;
             this.emit('busy', this.busy);
         }
     }
@@ -579,6 +580,10 @@ export class Agent extends Emitter<AgentEvents> {
      * Rewrites the scene memo (DesignDoc.memo) from the old memo, the state
      * of the project and what happened since: the assistant's long-term
      * context for this scene. Returns false when it could not run.
+     *
+     * It runs in the background: requests do not wait for it. A refresh
+     * still running when the next one starts is stopped, and the next one
+     * takes over its work, so an older answer never replaces a newer memo.
      */
     async refreshMemo(recent: string): Promise<boolean> {
         const cred = this.credentials();
@@ -587,25 +592,27 @@ export class Agent extends Emitter<AgentEvents> {
         const doc = store.doc;
         // The project the memo is for: another one can be opened while the model writes.
         const session = this.sessionKey;
+        const before = this.refreshing;
+        before?.abort.abort();
+        if (before?.session === session) recent = `${before.recent}\n${recent}`;
+        const job = (this.refreshing = { session, recent, abort: new AbortController() });
         const state = [
             `Scene "${doc.name}": ${doc.nodes.length} objects, ${doc.prefabs.length} prefabs, ${doc.scripts.length} scripts, ${doc.shaders.length} shaders.`,
             ...pipelineSummary(doc),
             ...designSummary(doc),
         ].join('\n');
-        this.working = true;
-        this.emit('busy', this.busy);
         try {
             const res = await chat(cred.key, {
                 model: cred.model,
                 messages: [
                     { role: 'system', content: MEMO_PROMPT },
-                    { role: 'user', content: `Current memo:\n${doc.design.memo.text.trim() || '(empty)'}\n\nProject state:\n${state}\n\nRecent work:\n${recent.slice(0, 12000) || '(no details)'}` },
+                    { role: 'user', content: `Current memo:\n${doc.design.memo.text.trim() || '(empty)'}\n\nProject state:\n${state}\n\nRecent work:\n${recent.slice(-12000) || '(no details)'}` },
                 ],
                 temperature: 0.2,
                 max_tokens: 800,
                 ...this.cacheRequest,
                 cacheable: false,
-            });
+            }, { signal: job.abort.signal });
             if (this.sessionKey !== session) return false;
             this.addUsage(res.usage);
             this.saveSession();
@@ -615,12 +622,11 @@ export class Agent extends Emitter<AgentEvents> {
                 d.design.memo = { text: text.slice(0, 6000), at: new Date().toISOString() };
             }, { design: true });
             return true;
-        } catch (e) {
-            console.warn('[ai] memo refresh failed', e);
+        } catch (e: any) {
+            if (e?.name !== 'AbortError') console.warn('[ai] memo refresh failed', e);
             return false;
         } finally {
-            this.working = false;
-            this.emit('busy', this.busy);
+            if (this.refreshing === job) this.refreshing = null;
         }
     }
 }
