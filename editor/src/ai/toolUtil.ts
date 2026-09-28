@@ -1,16 +1,95 @@
-// Argument parsing shared by the assistant's tools.
+// What the assistant's tools are made of (ai/registry.ts lists them): the
+// tool entry, what a tool gets and returns, and argument parsing.
 
 import { tidy } from '../core/math';
 import { InputError as ToolError } from '../core/schema';
-import type { ToolDef } from './openrouter';
-import type { NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/types';
+import type { Store } from '../core/store';
+import type { DetailLevel, NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/types';
+import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
+import type { Editor } from '../editor';
 import { normalizeHex } from '../engine/color';
+import type { ToolDef } from './openrouter';
 
 export type Json = Record<string, any>;
 
-/** A tool the model can call: its name, what it does and its arguments (a JSON schema). */
-export function def(name: string, description: string, properties: Json = {}, required: string[] = []): ToolDef {
-    return { type: 'function', function: { name, description, parameters: { type: 'object', properties, required } } };
+export interface ToolEnv {
+    editor: Editor;
+    allowPlay(): boolean;
+    screenshots(): boolean;
+    /** The pipeline stage limits the tools. */
+    stageTools(): boolean;
+    /** Tools may spend credits on images. */
+    allowImages(): boolean;
+    /** Aborts long tools (image generation) when the request is stopped. */
+    signal?: AbortSignal;
+}
+
+export interface ToolResult {
+    /** JSON-able result sent back to the model. */
+    data: unknown;
+    /** A data: URL image to show the model (vision models only). */
+    image?: string;
+    /** More images to show the model. */
+    images?: string[];
+    /** Short line for the chat log. */
+    summary?: string;
+    /** Buttons for the user to answer with in the chat (the assistant waits for the answer). */
+    choice?: ToolChoice;
+}
+
+/** A question with buttons shown in the chat; a button sends its label as the user's answer. */
+export interface ToolChoice {
+    /** What picking an option also sets: 'detail' sets the plan's detail level to the option's value. */
+    kind: 'detail';
+    question: string;
+    options: { value: string; label: string }[];
+}
+
+/** What a tool's handler gets: its arguments, the editor and the request's settings. */
+export interface ToolCall {
+    args: Json;
+    env: ToolEnv;
+    ed: Editor;
+    store: Store;
+    /** The document now (every commit replaces it). */
+    doc(): SceneDoc;
+}
+
+/** One tool of the assistant: what the model is told about it, when it is offered, and what it does. */
+export interface Tool {
+    name: string;
+    description: string;
+    /** The arguments' properties (JSON schema) and the required ones. */
+    params?: Json;
+    required?: string[];
+    /**
+     * Pipeline groups that offer it (see design/stages.ts): a tool is offered
+     * when the current stage allows one of them; 'read' is in every stage.
+     */
+    groups: ToolGroup[];
+    /** Offered only when the AI settings allow playing, screenshots, or image generation (costs credits). */
+    needs?: 'play' | 'screenshots' | 'images';
+    /** Offered only at this detail level: questions when the user refines, own judgments when the assistant decides. */
+    detail?: DetailLevel;
+    run(call: ToolCall): ToolResult | Promise<ToolResult>;
+}
+
+/** A module's tools, by name. */
+export const tools = (byName: Record<string, Omit<Tool, 'name'>>): Tool[] => Object.entries(byName).map(([name, t]) => ({ name, ...t }));
+
+/** The definition the model gets. */
+export const definition = (t: Tool): ToolDef => ({
+    type: 'function',
+    function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.params ?? {}, required: t.required ?? [] } },
+});
+
+/** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
+export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
+    if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
+    const design = env.editor.pipeline.design;
+    // Working without a brief: the pipeline has not started, so the Brief stage limits nothing.
+    if (design.stage === 'brief' && design.brief.skipped) return new Set(ALL_TOOL_GROUPS);
+    return new Set(stageDef(design.stage).tools);
 }
 
 /** An error the model caused (bad arguments); its message goes back to the model. */

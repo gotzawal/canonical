@@ -67,3 +67,11 @@ test('tells the assistant which argument does not fit', async () => {
     expect((result as { error: string }).error).toMatch(/character\.speed/);
     expect(await node('Crate')).toBeUndefined();
 });
+
+test('offers only the tools the AI settings allow and refuses the others', async () => {
+    const [result] = await ask([[{ name: 'play', args: {} }]]);
+    expect((result as { error: string }).error).toBe('Play is turned off in the AI settings.');
+    const names = (assistant.sent[assistant.sent.length - 1].tools as { function: { name: string } }[]).map((t) => t.function.name);
+    expect(names).toContain('get_scene');
+    for (const off of ['play', 'run_play_test', 'capture_viewport', 'generate_swatch', 'generate_concept']) expect(names).not.toContain(off);
+});

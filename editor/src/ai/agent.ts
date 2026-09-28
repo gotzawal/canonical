@@ -8,7 +8,8 @@ import { cacheStyle } from './caching';
 import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from './openrouter';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { aiSettings } from './settings';
-import { runTool, toolDefs, type ToolChoice, type ToolEnv } from './tools';
+import { runTool, toolDefs } from './registry';
+import type { ToolChoice, ToolEnv } from './toolUtil';
 
 export interface ToolTurn {
     name: string;

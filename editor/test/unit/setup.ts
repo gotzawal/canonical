@@ -21,4 +21,6 @@ g.removeEventListener ??= () => {};
 g.document ??= {
     createElement: () => ({ textContent: '', remove() {} }),
     head: { appendChild() {} },
+    addEventListener() {},
+    removeEventListener() {},
 };
