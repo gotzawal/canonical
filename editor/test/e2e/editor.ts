@@ -74,7 +74,13 @@ export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedC
     });
     await page.route('**/api/v1/models', (route) =>
         route.fulfill({
-            json: { data: [{ id: 'test/model', name: 'Test Model', context_length: 200000, supported_parameters: ['tools'], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } }] },
+            json: {
+                data: [
+                    { id: 'test/model', name: 'Test Model', context_length: 200000, supported_parameters: ['tools'], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
+                    { id: 'acme/fast', name: 'Acme Fast', context_length: 100000, supported_parameters: ['tools'], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
+                    { id: 'acme/plain', name: 'Acme Plain', context_length: 100000, supported_parameters: [], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
+                ],
+            },
         }),
     );
     await page.route('**/api/v1/chat/completions', (route) => {

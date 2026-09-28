@@ -14,7 +14,7 @@ import { icon } from './icons';
 import { optionField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, showMenu, toast, type MenuItem, type Modal } from './overlays';
-import { button, iconButton } from './widgets';
+import { button, iconButton, suggestions } from './widgets';
 
 /** A generation in progress; it keeps running when the dialog closes. */
 interface Job {
@@ -59,7 +59,6 @@ class PaintoverDialog {
     private models: ImageModel[] = [];
     private modelInput: HTMLInputElement;
     private modelInfo: HTMLElement;
-    private datalist: HTMLDataListElement;
     private optionsEl: HTMLElement;
     private params: Record<string, ParamValue> = {};
     private prompt: HTMLTextAreaElement;
@@ -92,11 +91,16 @@ class PaintoverDialog {
         const resetPrompt = h('button', { class: 'link-btn', text: 'Reset to the default', attrs: { type: 'button' } });
         resetPrompt.addEventListener('click', () => (this.prompt.value = defaultPaintoverPrompt(editor.store.doc.design, this.shot!)));
 
-        this.modelInput = h('input', { class: 'text', attrs: { type: 'text', list: 'po-models', spellcheck: 'false', placeholder: 'provider/model' } });
+        this.modelInput = h('input', { class: 'text', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', placeholder: 'provider/model' } });
         this.modelInput.value = model;
         this.modelInput.addEventListener('keydown', (e) => e.stopPropagation());
         this.modelInput.addEventListener('change', () => this.modelChanged());
-        this.datalist = h('datalist', { attrs: { id: 'po-models' } });
+        // Models that take reference images first.
+        const modelList = suggestions(this.modelInput, () =>
+            [...this.models]
+                .sort((a, b) => Number(takesImages(b)) - Number(takesImages(a)) || a.id.localeCompare(b.id))
+                .map((m) => ({ value: m.id, label: `${m.name}${takesImages(m) ? '' : ' (no reference images)'}` })),
+        );
         this.modelInfo = h('div', { class: 'muted small' });
         this.optionsEl = h('div', { class: 'po-options' });
 
@@ -122,7 +126,7 @@ class PaintoverDialog {
             this.prompt,
             h('div', { class: 'group-label', text: 'Image model' }),
             this.modelInput,
-            this.datalist,
+            modelList,
             this.modelInfo,
             this.optionsEl,
             h('div', { class: 'po-row' }, h('label', { class: 'po-field' }, h('span', { text: 'Images' }), this.count), this.countHint, h('div', { class: 'spacer' }), this.seedRow),
@@ -146,7 +150,6 @@ class PaintoverDialog {
         void listImageModels()
             .then((list) => {
                 this.models = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
-                this.fillModels();
                 this.modelChanged(last.params);
             })
             .catch(() => (this.modelInfo.textContent = 'The image model list is unavailable (offline?). Type a model id.'));
@@ -177,12 +180,6 @@ class PaintoverDialog {
     }
 
     // ------------------------------------------------------------ models
-
-    private fillModels() {
-        clear(this.datalist);
-        const sorted = [...this.models].sort((a, b) => Number(takesImages(b)) - Number(takesImages(a)) || a.id.localeCompare(b.id));
-        for (const m of sorted) this.datalist.appendChild(h('option', { attrs: { value: m.id }, text: `${m.name}${takesImages(m) ? '' : ' (no reference images)'}` }));
-    }
 
     /** Rebuilds the options for the chosen model, keeping values it still takes. */
     private modelChanged(start?: Record<string, ParamValue>) {

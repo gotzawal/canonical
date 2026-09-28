@@ -12,7 +12,7 @@ import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { dialog, toast } from './overlays';
-import { CheckboxField, NumberField, SliderField, button, iconButton, row } from './widgets';
+import { CheckboxField, NumberField, SliderField, button, iconButton, row, suggestions } from './widgets';
 
 const SUGGESTIONS = [
     'Build a small park: grass ground, a few trees made of primitives, benches and a warm sunset.',
@@ -440,28 +440,27 @@ export class AIPanel {
         key.addEventListener('keydown', (e) => e.stopPropagation());
         const show = iconButton('eye', 'Show key', () => (key.type = key.type === 'password' ? 'text' : 'password'));
         const remember = new CheckboxField(s.remember, () => {}, 'Remember on this device');
-        const modelInput = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-models', spellcheck: 'false', placeholder: 'provider/model' } });
+        const modelInput = h('input', { class: 'text', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', placeholder: 'provider/model' } });
         modelInput.value = s.model;
         modelInput.addEventListener('keydown', (e) => e.stopPropagation());
-        const datalist = h('datalist', { attrs: { id: 'ai-models' } });
+        const usable = () => this.models.filter(supportsTools).sort((a, b) => a.id.localeCompare(b.id));
+        const modelList = suggestions(modelInput, () => usable().map((m) => ({ value: m.id, label: m.name })));
         const modelInfo = h('div', { class: 'muted small' });
-        const fillModels = () => {
-            clear(datalist);
-            const usable = this.models.filter(supportsTools).sort((a, b) => a.id.localeCompare(b.id));
-            for (const m of usable) datalist.appendChild(h('option', { attrs: { value: m.id }, text: m.name }));
+        const describeModel = () => {
             const cur = this.models.find((m) => m.id === modelInput.value.trim());
             modelInfo.textContent = !this.models.length
                 ? 'Model list unavailable (offline?). Type a model id.'
                 : cur
                   ? `${cur.name}${cur.context_length ? ` · ${Math.round(cur.context_length / 1000)}k context` : ''}${supportsImages(cur) ? ' · sees images' : ''}${supportsTools(cur) ? '' : ' · no tool support, pick another'}${cur.pricing?.prompt ? ` · $${(Number(cur.pricing.prompt) * 1e6).toFixed(2)} / $${(Number(cur.pricing.completion) * 1e6).toFixed(2)} per M tokens` : ''} · ${describeCache(cur.id, cur.pricing)}${Number(cur.pricing?.input_cache_read) > 0 ? ` ($${(Number(cur.pricing!.input_cache_read) * 1e6).toFixed(2)} per M cached)` : ''}`
-                  : `${usable.length} models with tool support. Type to search.`;
+                  : `${usable().length} models with tool support. Type to search.`;
         };
-        modelInput.addEventListener('input', fillModels);
-        fillModels();
-        void this.ensureModels().then(fillModels);
+        modelInput.addEventListener('input', describeModel);
+        modelInput.addEventListener('change', describeModel);
+        describeModel();
+        void this.ensureModels().then(describeModel);
         const refresh = iconButton('refresh', 'Reload the model list', async () => {
             await this.loadModels(true);
-            fillModels();
+            describeModel();
         });
         const temperature = new SliderField({ value: s.temperature, min: 0, max: 1.5, step: 0.05, precision: 2 });
         const steps = new NumberField({ value: s.maxSteps, min: 1, max: 60, step: 0.25, precision: 0 });
@@ -471,12 +470,12 @@ export class AIPanel {
         const stageTools = new CheckboxField(s.stageTools, () => {}, 'The pipeline stage decides which tools the assistant gets');
         const cacheLong = new CheckboxField(s.cacheLong, () => {}, 'Keep the prompt cache for an hour (Claude)');
         const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (concepts, paintovers, swatches)');
-        const imageModel = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-image-models', spellcheck: 'false', placeholder: DEFAULT_IMAGE_MODEL } });
+        const imageModel = h('input', { class: 'text', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', placeholder: DEFAULT_IMAGE_MODEL } });
         imageModel.value = s.imageModel;
         imageModel.addEventListener('keydown', (e) => e.stopPropagation());
-        const imageList = h('datalist', { attrs: { id: 'ai-image-models' } });
         const imageInfo = h('div', { class: 'muted small', text: 'Used for concepts, paintovers and swatches, by you and the assistant.' });
         let imageModels: ImageModel[] = [];
+        const imageList = suggestions(imageModel, () => imageModels.map((m) => ({ value: m.id, label: m.name })));
         const describeImageModel = () => {
             const id = imageModel.value.trim() || DEFAULT_IMAGE_MODEL;
             const m = imageModels.find((x) => x.id === id);
@@ -486,10 +485,10 @@ export class AIPanel {
                 : `"${id}" is not in the list of ${imageModels.length} image models.`;
         };
         imageModel.addEventListener('input', describeImageModel);
+        imageModel.addEventListener('change', describeImageModel);
         void listImageModels()
             .then((list) => {
                 imageModels = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
-                for (const m of imageModels) imageList.appendChild(h('option', { attrs: { value: m.id }, text: m.name }));
                 describeImageModel();
             })
             .catch(() => (imageInfo.textContent = 'Image model list unavailable (offline?). Type a model id.'));
@@ -499,18 +498,16 @@ export class AIPanel {
             row('API key', h('div', { class: 'inline' }, key, show)),
             row('', remember.el),
             row('', h('div', { class: 'inline' }, button('Connect with OpenRouter', () => void startOAuth(), 'small', 'link'), h('a', { class: 'small', text: 'Get a key', attrs: { href: 'https://openrouter.ai/keys', target: '_blank', rel: 'noopener' } }))),
-            row('Model', h('div', { class: 'inline' }, modelInput, refresh)),
+            row('Model', h('div', null, h('div', { class: 'inline' }, modelInput, refresh), modelList)),
             row('', modelInfo),
-            datalist,
             row('', cacheLong.el, 'Claude keeps cached prompts for five minutes; an hour keeps the conversation cached while you look at the result between requests. Writing the cache costs 2x the input price instead of 1.25x, reading it 0.1x either way.'),
             row('Temperature', temperature.el),
             row('Max steps', steps.el, 'Model calls per request'),
             row('', allowPlay.el),
             row('', shots.el),
             row('', images.el),
-            row('Image model', imageModel),
+            row('Image model', h('div', null, imageModel, imageList)),
             row('', imageInfo),
-            imageList,
             row('', stageTools.el),
             row('', memo.el, 'The memo is a few lines about the scene stored in the project, so a new conversation (or another session) knows where the work stands.'),
             h('p', { class: 'muted small', text: 'Messages, tool results (scene data, code), images and screenshots are sent to OpenRouter and the model provider you choose. Each project keeps its conversation in this browser; long conversations are compacted into a summary. Requests carry a session id (random, per conversation) so OpenRouter keeps a conversation with one provider and its prompt cache. The key is stored in this browser only.' }),

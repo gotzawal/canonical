@@ -551,6 +551,56 @@ export class SelectField<T extends string> {
     }
 }
 
+/**
+ * Suggestions under a text field as it is typed in: the entries of `list()`
+ * whose value or label holds the text, up to 50. A click, or the arrow keys
+ * and Enter, put one in the field, which then fires 'change'. It stands in
+ * for a <datalist>, which stalls iOS Safari when it is long or changes while
+ * its field has the focus.
+ */
+export function suggestions(input: HTMLInputElement, list: () => { value: string; label: string }[]): HTMLElement {
+    const box = h('div', { class: 'suggestions', attrs: { role: 'listbox', hidden: true } });
+    let active = -1;
+    const items = () => Array.from(box.children) as HTMLElement[];
+    const show = () => {
+        const q = input.value.trim().toLowerCase();
+        const hits = list()
+            .filter((o) => !q || o.value.toLowerCase().includes(q) || o.label.toLowerCase().includes(q))
+            .slice(0, 50);
+        box.replaceChildren(...hits.map((o) => h('div', { class: 'suggestion', attrs: { role: 'option' }, dataset: { value: o.value } }, h('span', { text: o.label }), h('span', { class: 'muted', text: o.value }))));
+        active = -1;
+        box.hidden = !hits.length;
+    };
+    const pick = (el: HTMLElement | null | undefined) => {
+        if (!el) return;
+        input.value = el.dataset.value!;
+        box.hidden = true;
+        input.dispatchEvent(new Event('change'));
+    };
+    input.addEventListener('focus', show);
+    input.addEventListener('input', show);
+    // After a click on a suggestion has landed.
+    input.addEventListener('blur', () => setTimeout(() => (box.hidden = true), 150));
+    input.addEventListener('keydown', (e) => {
+        const n = items().length;
+        if (box.hidden || !n) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            items()[active]?.classList.remove('active');
+            active = e.key === 'ArrowDown' ? (active + 1) % n : active <= 0 ? n - 1 : active - 1;
+            items()[active].classList.add('active');
+            items()[active].scrollIntoView({ block: 'nearest' });
+        } else if (e.key === 'Enter' && active >= 0) {
+            e.preventDefault();
+            pick(items()[active]);
+        }
+    });
+    // A mouse keeps the focus in the field while choosing.
+    box.addEventListener('mousedown', (e) => e.preventDefault());
+    box.addEventListener('click', (e) => pick((e.target as HTMLElement).closest<HTMLElement>('.suggestion')));
+    return box;
+}
+
 export class TextField {
     readonly el: HTMLInputElement;
 

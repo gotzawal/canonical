@@ -414,6 +414,50 @@ a {
     background: var(--border);
 }
 
+/* Suggestions under a text field (widgets.ts suggestions). */
+.suggestions {
+    max-height: min(240px, 40vh);
+    overflow-y: auto;
+    margin-top: 4px;
+    padding: 4px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius);
+    background: var(--surface-float);
+}
+
+.suggestion {
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    padding: 5px 8px;
+    border-radius: 5px;
+    cursor: pointer;
+}
+
+.suggestion .muted {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+}
+
+/* The label of a field stays by the field while its suggestions are open. */
+.row:has(.suggestions:not([hidden])) .row-label {
+    align-self: start;
+    padding-top: 6px;
+}
+
+.suggestion:hover,
+.suggestion.active {
+    background: var(--accent);
+    color: #fff;
+}
+
+.suggestion:hover .muted,
+.suggestion.active .muted {
+    color: rgba(255, 255, 255, 0.8);
+}
+
 .submenu {
     display: none;
     /* Placed by overlays.ts next to its item. */

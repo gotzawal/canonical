@@ -78,3 +78,22 @@ test('offers only the tools the AI settings allow and refuses the others', async
     expect(names).toContain('get_scene');
     for (const off of ['play', 'run_play_test', 'capture_viewport', 'generate_swatch', 'generate_concept']) expect(names).not.toContain(off);
 });
+
+test('picks a model from the suggestions of the AI settings', async () => {
+    const page = editor.page();
+    // Clicks in the page: SwiftShader can stall the frames Playwright's actionability checks wait for.
+    const click = (selector: string, text?: string) =>
+        page.evaluate(([s, t]) => Array.from(document.querySelectorAll<HTMLElement>(s!)).find((el) => !t || el.textContent?.trim() === t)!.click(), [selector, text]);
+    await click('.ai-model');
+    const input = page.locator('.ai-settings input[placeholder="provider/model"]');
+    await input.fill('acme');
+    // Only models with tool support are offered.
+    const offered = page.locator('.ai-settings .suggestions .suggestion');
+    await expect(offered).toHaveCount(1);
+    await expect(offered).toContainText('Acme Fast');
+    await click('.ai-settings .suggestion');
+    await expect(input).toHaveValue('acme/fast');
+    await expect(page.locator('.ai-settings .suggestions').first()).toBeHidden();
+    await click('.dialog button', 'Save');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('canonical-editor/ai')!).model)).toBe('acme/fast');
+});
