@@ -651,9 +651,10 @@ function drawMap(
     ctx.fillRect(0, 0, cw, ch);
     const s = g.step * scale;
     for (const col of g.columns) {
-        // The lowest place to stand shows; upper floors draw over it.
-        for (const c of [...col].sort((a, b) => a.y - b.y)) {
-            if (!c.walk) continue;
+        // The lowest place to stand shows; upper floors draw over it, roofs nobody reaches do not.
+        const list = col.filter((c) => c.walk).sort((a, b) => a.y - b.y);
+        for (const c of list) {
+            if (c !== list[0] && !c.reached && c.head >= ROOF) continue;
             const roofed = c.head < ROOF;
             ctx.fillStyle = c.reached ? (roofed ? MAP_COLORS.reachedRoofed : MAP_COLORS.reached) : roofed ? MAP_COLORS.roofed : MAP_COLORS.floor;
             ctx.fillRect(px(c.x) - s / 2, pz(c.z) - s / 2, s + 0.5, s + 0.5);
