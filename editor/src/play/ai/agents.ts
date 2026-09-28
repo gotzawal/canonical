@@ -29,7 +29,7 @@ import { InferRunner, type InferHandle } from './infer';
 import { DecisionLog } from './log';
 import { decodeVector, MemoryIndex, norm, type MemoryEntry } from './memory';
 import type { Scheduler } from './scheduler';
-import { TreeInstance, type AskHandle, type TaskHandle, type TreeDebug, type TreeHost } from './tree';
+import { TreeInstance, type AskHandle, type TaskHandle, type TreeDebug, type TreeHost, type Walker } from './tree';
 
 /** Seconds between two ticks of one agent (10 Hz). */
 export const TICK_INTERVAL = 0.1;
@@ -51,6 +51,8 @@ export interface AgentHost {
     warn(text: string): void;
     /** Speaks a line for an object (a Model task with Speak). */
     speak?(text: string, obj: Object3D): void;
+    /** The character of an object (Move To). */
+    character(obj: Object3D): Walker | null;
 }
 
 /** The models of the scene (they outlive Play sessions). */
@@ -172,6 +174,10 @@ export class Agent implements TreeHost {
 
     recall(doc: RecallServiceDoc) {
         this.sys.recall(this, doc);
+    }
+
+    character(): Walker | null {
+        return this.sys.host.character(this.obj);
     }
 
     warn(node: string, message: string) {

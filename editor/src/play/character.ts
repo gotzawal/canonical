@@ -1,0 +1,327 @@
+// Characters (NodeDoc.character): the bodies the player and the NPCs walk
+// through the level with. As with a pawn in Unreal, a character does what
+// its controller asks each frame (the player's keys and camera, a behavior
+// tree's Move To, a script): walk this way, run, jump, go to that object.
+// Then all characters move at once, after the scripts' update, against one
+// shared view of the level, and each stands in the others' way as an upright
+// capsule. What they did is their state (velocity, on the ground, the mode,
+// jump and land events) for whoever follows them: the player's camera,
+// scripts, and animators, any number of them on each character.
+
+import type { Object3D } from '@orillusion/core';
+import { Emitter } from '../core/events';
+import { add, DEG, invert, normalize, scale, transformPoint } from '../core/math';
+import type { Store } from '../core/store';
+import type { CharacterDoc, Vec3 } from '../core/types';
+import type { Picker } from '../engine/picking';
+import type { SceneSync } from '../engine/sync';
+import { CharacterMotor, LevelRays, type CastFn } from './motor';
+
+/** How fast the body turns toward where it goes, per second. */
+const TURN_RATE = 12;
+/** A fall this far below the start puts the character back at the start. */
+const FALL_LIMIT = 60;
+/** A walk to a target gives up when it got no closer for this long, seconds. */
+const STUCK_TIME = 2;
+
+/** What a character is doing: standing, walking or running on the ground, going up or coming down in the air. */
+export type CharacterMode = 'idle' | 'walk' | 'run' | 'jump' | 'fall';
+
+export interface CharacterEvents {
+    /** Took off. */
+    jump: void;
+    /** Came down on something, at this speed (m/s). */
+    land: number;
+    mode: CharacterMode;
+}
+
+interface Goal {
+    target: Object3D | Vec3;
+    radius: number;
+    run: boolean;
+    best: number;
+    since: number;
+    done(arrived: boolean): void;
+}
+
+/** From angle a to angle b, degrees in -180..180. */
+const turn = (a: number, b: number) => ((((b - a) % 360) + 540) % 360) - 180;
+/** World yaw of a matrix's forward axis (+z), degrees. */
+const yawOf = (m: ArrayLike<number>) => (Math.hypot(m[8], m[10]) > 1e-6 ? Math.atan2(m[8], m[10]) / DEG : 0);
+
+export class Character extends Emitter<CharacterEvents> {
+    readonly motor: CharacterMotor;
+    /** Runs instead of walking (kept until changed). */
+    run = false;
+    /** The way to face, degrees around y; null faces the way it walks. */
+    face: number | null = null;
+    /** The way the body faces, degrees around y (its +z points there). */
+    facing: number;
+    /** Movement in the last frame, m/s. */
+    readonly velocity: Vec3 = [0, 0, 0];
+    mode: CharacterMode = 'idle';
+    /** Height of the object's origin above the feet. */
+    readonly offset: number;
+    private wish: [number, number] = [0, 0];
+    private jumpWanted = false;
+    private goal: Goal | null = null;
+    private clock = 0;
+    private start: Vec3;
+
+    /** `bottom`: the lowest point of the object's meshes (null without meshes: its origin is the feet). */
+    constructor(readonly obj: Object3D, readonly doc: CharacterDoc, cast: CastFn, bottom: number | null) {
+        super();
+        const m = obj.transform.worldMatrix.rawData;
+        this.offset = bottom === null ? 0 : Math.max(0, m[13] - bottom);
+        this.facing = yawOf(m);
+        this.motor = new CharacterMotor(cast, doc, [m[12], m[13] - this.offset, m[14]]);
+        // Standing where it was placed: onto the ground under it.
+        const feet = this.motor.feet;
+        const ground = doc.collide ? this.motor.groundAt([feet[0], feet[1] + doc.stepHeight + 0.3, feet[2]], doc.stepHeight + 1.3) : null;
+        if (ground !== null) {
+            feet[1] = ground;
+            this.motor.grounded = true;
+        }
+        this.start = [...feet] as Vec3;
+        this.place();
+    }
+
+    get grounded(): boolean {
+        return this.motor.grounded;
+    }
+
+    /** Speed over the ground, m/s. */
+    get speed(): number {
+        return Math.hypot(this.velocity[0], this.velocity[2]);
+    }
+
+    /** Bottom center of the body, world space. */
+    get feet(): Vec3 {
+        return this.motor.feet;
+    }
+
+    /** Walks this way this frame: a world direction (x, z) whose length is the share of full speed (up to 1). */
+    move(x: number, z: number) {
+        this.wish[0] += x;
+        this.wish[1] += z;
+    }
+
+    /** Jumps when it stands on something. */
+    jump() {
+        this.jumpWanted = true;
+    }
+
+    /**
+     * Walks to an object (following it) or a point until within `radius`,
+     * straight at it: walls make it slide along or stop. Resolves true on
+     * arrival, false when it got stuck, was stopped or got another target.
+     */
+    moveTo(target: Object3D | Vec3, opts: { radius?: number; run?: boolean; signal?: AbortSignal } = {}): Promise<boolean> {
+        this.stop();
+        return new Promise((resolve) => {
+            const goal: Goal = {
+                target,
+                radius: Math.max(0.05, opts.radius ?? 1),
+                run: !!opts.run,
+                best: Infinity,
+                since: this.clock,
+                done: (arrived) => {
+                    if (this.goal === goal) this.goal = null;
+                    resolve(arrived);
+                },
+            };
+            this.goal = goal;
+            if (opts.signal?.aborted) goal.done(false);
+            opts.signal?.addEventListener('abort', () => goal.done(false), { once: true });
+        });
+    }
+
+    /** Stops walking to a target. */
+    stop() {
+        this.goal?.done(false);
+    }
+
+    /** Turns the body to a point now; it keeps facing there until it walks. */
+    lookAt(point: Vec3) {
+        const f = this.motor.feet;
+        if (Math.hypot(point[0] - f[0], point[2] - f[2]) > 1e-6) this.facing = (Math.atan2(point[0] - f[0], point[2] - f[2]) / DEG + 360) % 360;
+    }
+
+    /** One frame: moves as asked, then updates the state (Characters.update). */
+    update(dt: number) {
+        const d = this.doc;
+        const motor = this.motor;
+        const feet = motor.feet;
+        // A script may have moved the object (a teleport): the body is where its object is.
+        const m = this.obj.transform.worldMatrix.rawData;
+        feet[0] = m[12];
+        feet[2] = m[14];
+        if (Math.abs(m[13] - this.offset - feet[1]) > 1e-4) {
+            feet[1] = m[13] - this.offset;
+            motor.vy = 0;
+        }
+        const before: Vec3 = [feet[0], feet[1], feet[2]];
+        this.clock += dt;
+
+        let run = this.run;
+        const g = this.goal;
+        if (g) {
+            let to = g.target as Vec3;
+            if (!Array.isArray(g.target)) {
+                const w = g.target.transform.worldPosition;
+                to = [w.x, w.y, w.z];
+            }
+            const dx = to[0] - feet[0];
+            const dz = to[2] - feet[2];
+            const dist = Math.hypot(dx, dz);
+            if (dist <= g.radius) g.done(true);
+            else {
+                this.move(dx / dist, dz / dist);
+                run ||= g.run;
+                if (dist < g.best - 0.1) {
+                    g.best = dist;
+                    g.since = this.clock;
+                } else if (this.clock - g.since > STUCK_TIME) g.done(false);
+            }
+        }
+
+        const [wx, wz] = this.wish;
+        const len = Math.hypot(wx, wz);
+        const k = ((run ? d.runSpeed : d.speed) * dt) / Math.max(1, len);
+        const jump = this.jumpWanted && d.jump > 0 ? d.jump : 0;
+        const wasGrounded = motor.grounded;
+        const falling = -motor.vy;
+        this.wish = [0, 0];
+        this.jumpWanted = false;
+        if (d.collide) {
+            motor.step(dt, [wx * k, 0, wz * k], d.gravity, jump);
+            if (feet[1] < this.start[1] - FALL_LIMIT) {
+                feet.splice(0, 3, ...this.start);
+                motor.vy = 0;
+            }
+        } else {
+            feet[0] += wx * k;
+            feet[2] += wz * k;
+        }
+
+        // The body turns toward the way it is told to face, else where it walks.
+        const want = this.face ?? (len > 1e-6 && k > 0 ? Math.atan2(wx, wz) / DEG : null);
+        if (want !== null) this.facing = (this.facing + turn(this.facing, want) * Math.min(1, TURN_RATE * dt) + 360) % 360;
+
+        for (let i = 0; i < 3; i++) this.velocity[i] = dt > 0 ? (feet[i] - before[i]) / dt : 0;
+        const mode: CharacterMode = motor.grounded || !d.collide ? (this.speed < 0.1 ? 'idle' : this.speed > d.speed + 0.1 ? 'run' : 'walk') : motor.vy > 0 ? 'jump' : 'fall';
+        if (jump && motor.vy === jump) this.emit('jump', undefined);
+        if (!wasGrounded && motor.grounded && d.collide) this.emit('land', Math.max(0, falling));
+        if (mode !== this.mode) {
+            this.mode = mode;
+            this.emit('mode', mode);
+        }
+        this.place();
+    }
+
+    /** Puts the object where the body is, turned the way it faces (in its parent's space). */
+    private place() {
+        const f = this.motor.feet;
+        let p: Vec3 = [f[0], f[1] + this.offset, f[2]];
+        let yaw = this.facing;
+        const parent = this.obj.transform.parent?.object3D;
+        if (parent && parent.transform.parent) {
+            const pm = parent.transform.worldMatrix.rawData;
+            const inv = invert(pm);
+            if (inv) p = transformPoint(inv, p);
+            yaw -= yawOf(pm);
+        }
+        this.obj.x = p[0];
+        this.obj.y = p[1];
+        this.obj.z = p[2];
+        this.obj.rotationY = yaw;
+    }
+}
+
+/** Where a ray meets a character's body (an upright cylinder) within `max`, or null. */
+function hitBody(o: Vec3, dir: Vec3, c: Character, max: number): number | null {
+    const d = normalize(dir);
+    const f = c.feet;
+    const r = c.doc.radius;
+    const top = f[1] + c.doc.height;
+    const ox = o[0] - f[0];
+    const oz = o[2] - f[2];
+    let best: number | null = null;
+    // Its side, from outside.
+    const a = d[0] * d[0] + d[2] * d[2];
+    const b = ox * d[0] + oz * d[2];
+    const disc = b * b - a * (ox * ox + oz * oz - r * r);
+    if (a > 1e-9 && disc >= 0) {
+        const t = (-b - Math.sqrt(disc)) / a;
+        const y = o[1] + t * d[1];
+        if (t >= 0 && t <= max && y >= f[1] && y <= top) best = t;
+    }
+    // Its top and bottom, for rays from above (standing on a head) or below.
+    if (Math.abs(d[1]) > 1e-9) {
+        for (const y of [top, f[1]]) {
+            const t = (y - o[1]) / d[1];
+            const x = ox + t * d[0];
+            const z = oz + t * d[2];
+            if (t >= 0 && t <= max && (best === null || t < best) && x * x + z * z <= r * r) best = t;
+        }
+    }
+    return best;
+}
+
+/**
+ * The characters of a Play session. Their controllers go first (the
+ * player's before the scripts' update; behavior trees and scripts during
+ * it), then update() moves them all, before the scripts' lateUpdate.
+ */
+export class Characters {
+    readonly list: Character[] = [];
+    readonly rays: LevelRays;
+    /** Nodes of the characters (and under them): the level leaves them out, their bodies stand in. */
+    private own = new Set<string>();
+
+    constructor(picker: Picker, sync: SceneSync, store: Store) {
+        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id));
+    }
+
+    /** Ray casts against the level without the characters (for cameras). */
+    readonly level: CastFn = (o, d, m) => this.rays.cast(o, d, m);
+
+    /** The character of an object; `nodes`: its node and the nodes under it. */
+    add(obj: Object3D, doc: CharacterDoc, nodes: string[], bottom: number | null): Character {
+        for (const id of nodes) this.own.add(id);
+        this.rays.refresh(1);
+        const cast: CastFn = (o, d, max) => {
+            let best: { distance: number; point: Vec3 } | null = this.rays.cast(o, d, max);
+            for (const other of this.list) {
+                const t = other.obj === obj ? null : hitBody(o, d, other, best?.distance ?? max);
+                if (t !== null) best = { distance: t, point: add(o, scale(normalize(d), t)) };
+            }
+            return best;
+        };
+        const c = new Character(obj, doc, cast, bottom);
+        this.list.push(c);
+        return c;
+    }
+
+    /** The character of an object, or of the nearest object above it that has one. */
+    of(obj: Object3D | null): Character | null {
+        for (let o = obj; o; o = o.transform.parent?.object3D ?? null) {
+            const c = this.list.find((x) => x.obj === o);
+            if (c) return c;
+        }
+        return null;
+    }
+
+    /** Destroyed objects take their characters with them. */
+    remove(gone: Set<Object3D>) {
+        for (const c of this.list.filter((x) => gone.has(x.obj))) {
+            c.stop();
+            this.list.splice(this.list.indexOf(c), 1);
+        }
+    }
+
+    update(dt: number) {
+        this.rays.refresh();
+        for (const c of this.list) c.update(dt);
+    }
+}

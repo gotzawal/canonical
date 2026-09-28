@@ -3,10 +3,11 @@ import { getAssetUrl, putDesignImage } from '../core/assets';
 import { areaName, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
 import { download, pickFiles } from '../core/persistence';
-import type { AreaDoc, AssetMeta, DesignDoc, MaterialSlotDoc, ShotDoc, StageId, Vec3 } from '../core/types';
+import type { AreaDoc, AssetMeta, DesignDoc, DetailLevel, MaterialSlotDoc, ShotDoc, StageId, Vec3 } from '../core/types';
 import { STAGE_PROMPTS, structurePrompt } from '../design/prompts';
 import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
+import { openLevelCheck } from './levelCheckDialog';
 import { generating, openPaintoverDialog, paintoverJobs } from './paintoverDialog';
 import { openSwatchDialog } from './swatchDialog';
 import { PARTICLE_PRESETS, sceneParticles } from '../core/particles';
@@ -124,6 +125,19 @@ export class DesignPanel {
             h('div', { class: 'stage-title', text: def.long }),
             h('p', { class: 'stage-desc', text: def.description }),
         );
+        const detail = new SelectField<string>(
+            [
+                { value: '', label: 'The assistant judges from your words' },
+                { value: 'quick', label: 'Decide for me and move on' },
+                { value: 'detailed', label: 'Work out the details with me' },
+            ],
+            d.detail ?? '',
+            (v) => this.edit('Detail Level', (dd) => {
+                if (v) dd.detail = v as DetailLevel;
+                else delete dd.detail;
+            }),
+        );
+        rows.push(row('Details', detail.el, 'Deciding for you, the assistant asks nothing small, chooses paintovers, judges the shots and completes stages whose checklist is done. Working them out with you, it asks about what matters, each question with what it assumes meanwhile.'));
         const rechecks = STAGE_IDS.filter((s) => d.stages[s].recheck && d.stages[s].status === 'recheck');
         for (const s of rechecks) rows.push(h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: `${stageDef(s).title} needs a recheck: ${d.stages[s].recheck}` })));
         const rework = d.areas.filter((a) => a.rework);
@@ -171,6 +185,18 @@ export class DesignPanel {
         } else actions.append(h('span', { class: 'muted small', text: 'Every stage is complete. Reopen a stage from the pipeline bar to change it.' }));
         if (id === 'brief') actions.append(button('Open brief', () => this.hooks.showBrief(), 'small', 'open'));
         rows.push(actions);
+        // Without a brief the level is built right away: its checks are here from the start.
+        if ((id === 'level' && st.status !== 'done') || (id === 'brief' && d.brief.skipped)) {
+            rows.push(
+                h(
+                    'div',
+                    { class: 'design-actions' },
+                    button('Check the level', () => void openLevelCheck(this.editor), 'small', 'walk'),
+                    button(this.store.doc.nodes.some((n) => n.player) ? 'Select the player' : 'Add the player', () => this.editor.createPlayer(), 'small', 'walk'),
+                    button('Play', () => this.editor.play(), 'small', 'play'),
+                ),
+            );
+        }
         if ((id === 'effects' || id === 'finish') && st.status !== 'done') {
             const particles = sceneParticles(this.store.doc.nodes);
             rows.push(
@@ -288,7 +314,31 @@ export class DesignPanel {
             }));
             const img = this.thumb(c.asset, 'concept-img');
             img.addEventListener('click', () => this.preview(c.asset));
-            grid.appendChild(h('div', { class: 'concept-tile' }, img, h('div', { class: 'concept-meta' }, sel.el, remove)));
+            const proposed = c.review === 'proposed';
+            const review = proposed
+                ? h(
+                      'div',
+                      { class: 'concept-review' },
+                      button('Approve', () => this.edit('Approve Concept', (dd) => {
+                          const cc = dd.concepts.find((x) => x.asset === c.asset);
+                          if (cc) cc.review = 'approved';
+                      }), 'small primary', 'check'),
+                      button('Reject', () => this.edit('Reject Concept', (dd) => {
+                          dd.concepts = dd.concepts.filter((x) => x.asset !== c.asset);
+                      }), 'small', 'close'),
+                      button('Redo...', () => this.editor.askAI(`Make a new concept image to replace ${c.asset}${c.area ? ` for ${areaName(d, c.area)}` : ''} (generate_concept), then remove the old one with update_design. What to change: `), 'small', 'refresh'),
+                  )
+                : null;
+            grid.appendChild(
+                h(
+                    'div',
+                    { class: 'concept-tile' + (proposed ? ' proposed' : ''), title: c.prompt ? `Generated from: ${c.prompt.slice(0, 300)}` : '' },
+                    img,
+                    proposed ? h('span', { class: 'concept-badge', text: 'Proposed' }) : null,
+                    h('div', { class: 'concept-meta' }, sel.el, remove),
+                    review,
+                ),
+            );
         }
         const add = h('button', { class: 'concept-add', attrs: { type: 'button' } }, icon('plus', 18), h('span', { text: 'Concept images' }));
         add.addEventListener('click', async () => {
@@ -297,6 +347,17 @@ export class DesignPanel {
         });
         grid.appendChild(add);
         rows.push(h('div', { class: 'group-label', text: `Concepts (${d.concepts.length})` }), grid);
+        const waiting = d.concepts.filter((c) => c.review === 'proposed').length;
+        rows.push(
+            h(
+                'div',
+                { class: 'design-actions' },
+                button('Draw concepts with AI', () => this.hooks.ask('Draw concept images of the plan with the image model (generate_concept) for review: for every area without a concept one view that shows how it will look, closed and at a compact, believable scale. Show me the results.'), 'small', 'sparkle'),
+                waiting ? button(`Approve all ${waiting}`, () => this.edit('Approve Concepts', (dd) => {
+                    for (const c of dd.concepts) if (c.review === 'proposed') c.review = 'approved';
+                }), 'small', 'check') : null,
+            ),
+        );
         return section('design-brief', 'Brief & Concepts', 'open', rows);
     }
 
@@ -399,7 +460,13 @@ export class DesignPanel {
                     if (qq) qq.answer = v.trim();
                 }), 'Your answer', 2);
                 const remove = iconButton('close', 'Remove question', () => this.edit('Remove Question', (dd) => (dd.questions = dd.questions.filter((x) => x.id !== q.id))));
-                rows.push(h('div', { class: 'design-question' + (q.answer.trim() ? ' answered' : '') }, h('div', { class: 'design-line' }, h('span', { class: 'design-q', text: q.text }), remove), answer.el));
+                const assumed = q.assumed && !q.answer.trim() ? h('div', { class: 'design-assumed', text: `Going ahead with: ${q.assumed}` }) : null;
+                rows.push(h('div', { class: 'design-question' + (q.answer.trim() ? ' answered' : '') }, h('div', { class: 'design-line' }, h('span', { class: 'design-q', text: q.text }), remove), assumed, answer.el));
+            }
+            if (d.questions.some((q) => q.assumed && !q.answer.trim())) {
+                rows.push(button('Keep the assumptions', () => this.edit('Keep Assumptions', (dd) => {
+                    for (const q of dd.questions) if (q.assumed && !q.answer.trim()) q.answer = q.assumed;
+                }), 'small', 'check'));
             }
             if (d.questions.some((q) => q.answer.trim())) {
                 rows.push(button('Send the answers to the assistant', () => this.hooks.ask('I answered the questions in the design panel (see the answered questions in the context). Update the structure with update_design accordingly.'), 'small', 'send'));

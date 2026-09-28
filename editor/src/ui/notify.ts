@@ -10,12 +10,13 @@ import { icon } from './icons';
 import { toast } from './overlays';
 import { readLocal, writeLocal } from '../core/local';
 
-export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'model';
+export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'review' | 'model';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
     { kind: 'ai-done', label: 'AI finished', hint: 'When the assistant finishes a request' },
     { kind: 'checkpoint', label: 'Save checkpoints', hint: 'Asks to save the project after a stretch of work' },
     { kind: 'stage', label: 'Stage proposals', hint: 'When the assistant proposes completing a stage' },
+    { kind: 'review', label: 'Images to review', hint: 'When the assistant drew concept images for you to review' },
     { kind: 'model', label: 'AI models', hint: 'When agents need a model that is not downloaded yet' },
 ];
 

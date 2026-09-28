@@ -5,7 +5,7 @@
 import { uid } from './ids';
 import type {
     AreaDoc, CameraState, CheckItemDoc, ConceptDoc, DesignDoc, EffectItemDoc, LayoutDoc, MaterialSlotDoc, MoodDoc,
-    PaintoverDoc, ParamValue, PlayDoc, QuestionDoc, RoutePointDoc, ShotCaptureDoc, ShotDoc, SightlineDoc,
+    PaintoverDoc, ParamValue, PlayDoc, QuestionDoc, RoutePointDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SightlineDoc,
     SnapshotDoc, SpecsDoc, StageDoc, StageId, StageStatus, Vec3,
 } from './types';
 
@@ -181,7 +181,13 @@ export function sanitizeDesign(input: any): DesignDoc {
     out.concepts = list(input.concepts)
         .filter((c) => isObj(c) && typeof c.asset === 'string' && c.asset)
         .filter((c) => !seenConcepts.has(c.asset) && seenConcepts.add(c.asset))
-        .map((c): ConceptDoc => ({ asset: c.asset, area: areaRef(c.area), ...(typeof c.note === 'string' && c.note ? { note: c.note.slice(0, 2000) } : {}) }));
+        .map((c): ConceptDoc => ({
+            asset: c.asset,
+            area: areaRef(c.area),
+            ...(typeof c.note === 'string' && c.note ? { note: c.note.slice(0, 2000) } : {}),
+            ...(c.review === 'proposed' || c.review === 'approved' ? { review: c.review } : {}),
+            ...(typeof c.prompt === 'string' && c.prompt ? { prompt: c.prompt.slice(0, 8000) } : {}),
+        }));
 
     const s = isObj(input.specs) ? input.specs : {};
     const ds = defaultSpecs();
@@ -274,6 +280,7 @@ export function sanitizeDesign(input: any): DesignDoc {
             const item: QuestionDoc = { id: str(q.id, '', 64), text: str(q.text, '', 2000), answer: str(q.answer, '', 8000) };
             const area = areaRef(q.area);
             if (area) item.area = area;
+            if (typeof q.assumed === 'string' && q.assumed.trim()) item.assumed = q.assumed.slice(0, 2000);
             return item;
         }),
         'q',
@@ -375,6 +382,11 @@ export function sanitizeDesign(input: any): DesignDoc {
     out.memo = { text: str(memo.text, '', 12000) };
     if (typeof memo.at === 'string') out.memo.at = memo.at;
     if (input.unlocked === true) out.unlocked = true;
+    if (input.detail === 'quick' || input.detail === 'detailed') out.detail = input.detail;
+    const check = isObj(input.levelCheck) ? input.levelCheck : null;
+    if (check && typeof check.signature === 'string') {
+        out.levelCheck = { at: str(check.at, '', 64), ok: check.ok === true, signature: check.signature.slice(0, 200), summary: str(check.summary, '', 2000) };
+    }
     return out;
 }
 
@@ -399,6 +411,14 @@ export function designAssetIds(design: DesignDoc): Set<string> {
         for (const a of sn.assets) out.add(a);
     }
     return out;
+}
+
+/** A signature of the level's geometry: when it changes, a level check is stale. */
+export function levelSignature(doc: SceneDoc): string {
+    let h = 5381;
+    const text = JSON.stringify(doc.nodes.map((n) => [n.id, n.parent, n.visible, n.position, n.rotation, n.scale, n.mesh?.geometry ?? null, n.model?.asset ?? null, n.model?.parts ?? null]));
+    for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
+    return `${doc.nodes.length}:${h.toString(36)}`;
 }
 
 export function areaName(design: DesignDoc, id: string | null | undefined): string {

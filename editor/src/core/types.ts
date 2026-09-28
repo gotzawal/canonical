@@ -248,6 +248,54 @@ export interface ParticlesDoc {
     prewarm: number;
 }
 
+/**
+ * A character (see play/character.ts): a standing body that walks, runs,
+ * jumps and falls through the level, standing on the scene's meshes,
+ * climbing steps and stopping at walls and at other characters. It moves
+ * the way its controller tells it: the player (NodeDoc.player), a behavior
+ * tree (Move To) or a script (this.character). Sizes are in meters.
+ */
+export interface CharacterDoc {
+    height: number;
+    radius: number;
+    /** Eyes above the feet: the first person view. */
+    eyeHeight: number;
+    /** The highest step it climbs. */
+    stepHeight: number;
+    /** Walking and running speed, m/s. */
+    speed: number;
+    runSpeed: number;
+    /** Take-off speed of a jump, m/s; 0 turns jumping off. */
+    jump: number;
+    /** Downward acceleration, m/s^2. */
+    gravity: number;
+    /** Walls stop it and it stands on floors; off, it moves freely at its height. */
+    collide: boolean;
+}
+
+/**
+ * How the player's view follows its character: 'third' orbits a camera
+ * behind it, 'first' looks from its eyes, 'scene' keeps the scene's camera
+ * node (the player walks relative to it).
+ */
+export type PlayerView = 'third' | 'first' | 'scene';
+
+/**
+ * The player controls the character of its object (see
+ * play/playerController.ts): WASD or the arrow keys (an on-screen joystick
+ * on touch screens) walk, Shift runs, Space jumps, and the camera turns
+ * with a mouse drag or a finger.
+ */
+export interface PlayerDoc {
+    view: PlayerView;
+    /** Third person: how far the camera stays behind the player. */
+    distance: number;
+    /** Look speed factor for mouse drags and fingers (1 = default). */
+    lookSpeed: number;
+    /** Dragging up looks down. */
+    invertY: boolean;
+}
+
 export interface NodeDoc {
     id: string;
     name: string;
@@ -263,6 +311,10 @@ export interface NodeDoc {
     model?: ModelDoc;
     camera?: CameraDoc;
     particles?: ParticlesDoc;
+    /** A character: the object walks through the level in Play mode. */
+    character?: CharacterDoc;
+    /** The player controls the object's character in Play mode. */
+    player?: PlayerDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
     agent?: AgentDoc;
@@ -482,7 +534,7 @@ export interface BlackboardSchemaDoc {
 }
 
 export type BtCompositeType = 'selector' | 'sequence';
-export type BtTaskType = 'script' | 'wait' | 'set_key' | 'ask' | 'infer';
+export type BtTaskType = 'script' | 'wait' | 'set_key' | 'move_to' | 'ask' | 'infer';
 export type BtNodeType = BtCompositeType | BtTaskType;
 export type BtDecoratorType = 'condition' | 'cooldown';
 export type BtServiceType = 'recall' | 'ask';
@@ -572,6 +624,15 @@ export interface WaitTaskDoc extends BtNodeBase {
     deviation: number;
 }
 
+/** Walks the agent's character to the object in an object key. */
+export interface MoveToTaskDoc extends BtNodeBase {
+    type: 'move_to';
+    target: string;
+    /** Arrived this close, meters. */
+    radius: number;
+    run: boolean;
+}
+
 export interface SetKeyTaskDoc extends BtNodeBase {
     type: 'set_key';
     key: string;
@@ -609,7 +670,7 @@ export interface InferTaskDoc extends BtNodeBase {
     timeout: number;
 }
 
-export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | AskTaskDoc | InferTaskDoc;
+export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | MoveToTaskDoc | AskTaskDoc | InferTaskDoc;
 export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc;
 
 interface BtServiceBase {
@@ -871,6 +932,13 @@ export interface ConceptDoc {
     asset: string;
     area?: string | null;
     note?: string;
+    /**
+     * Concepts the image model made: 'proposed' until the user approves one
+     * (rejecting removes it). Concepts the user gave need no review.
+     */
+    review?: 'proposed' | 'approved';
+    /** The instruction a generated concept was made from. */
+    prompt?: string;
 }
 
 export interface PaintoverDoc {
@@ -952,6 +1020,25 @@ export interface QuestionDoc {
     text: string;
     answer: string;
     area?: string | null;
+    /** What the assistant goes ahead with while the question is open; a question with one does not hold up the stage. */
+    assumed?: string;
+}
+
+/**
+ * How much the user wants to settle themselves: 'quick' lets the assistant
+ * decide the details and move on, 'detailed' works them out with the user.
+ * Missing until the assistant judged it from the user's words or asked.
+ */
+export type DetailLevel = 'quick' | 'detailed';
+
+/** The last level check (design/levelCheck.ts), for the level as it was then. */
+export interface LevelCheckDoc {
+    at: string;
+    ok: boolean;
+    /** The level it checked (levelSignature): once the level changes, the result is stale. */
+    signature: string;
+    /** Findings in a line, e.g. "2 seams, 1 route point out of reach". */
+    summary: string;
 }
 
 export interface DesignDoc {
@@ -984,6 +1071,10 @@ export interface DesignDoc {
     memo: { text: string; at?: string };
     /** Placement stays editable in the stages that lock it. */
     unlocked?: boolean;
+    /** How much of the detail the assistant decides itself. */
+    detail?: DetailLevel;
+    /** The last level check. */
+    levelCheck?: LevelCheckDoc | null;
 }
 
 /** Build & Deploy settings of a project (File > Build & Deploy). */

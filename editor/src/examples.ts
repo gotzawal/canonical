@@ -2,6 +2,7 @@ import {
     defaultEnvironment, defaultMaterial, defaultRenderGraph, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
 import { defaultMemory } from './core/behavior/format';
+import { defaultCharacter, defaultPlayer } from './core/character';
 import { applyBehaviorOps, writeBehaviorChanges } from './core/behavior/ops';
 import { defaultDesign } from './core/design';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
@@ -139,24 +140,13 @@ export function exampleShowcase(): SceneDoc {
 }
 
 const GUARD_SCRIPT = `// The guard's senses and hands. The behavior tree (Behavior tab) decides
-// what the guard does; this script writes what the guard perceives into
-// fact keys and carries out the tasks the tree calls.
+// what the guard does and walks its character (Move To); this script writes
+// what the guard perceives into fact keys and carries out the other tasks.
 export default class Guard extends Script {
-    walkSpeed = 1.8;
-    chaseSpeed = 4;
-
     start() {
         this.player = this.find('Player');
         this.points = ['Waypoint A', 'Waypoint B', 'Waypoint C'].map((n) => this.find(n)).filter(Boolean);
         this.next = 0;
-        this.move = null;
-        this.last = this.player ? this.flat(this.player) : null;
-        this.pace = 0;
-    }
-
-    flat(obj) {
-        const p = obj.transform.worldPosition;
-        return { x: p.x, z: p.z };
     }
 
     /** Writes a fact key once the value held for \`hold\` seconds. */
@@ -170,47 +160,15 @@ export default class Guard extends Script {
         if (this.time.elapsed - s.since >= hold) this.blackboard.set(key, value);
     }
 
-    update(dt) {
-        const bb = this.blackboard;
-        if (bb && this.player && dt > 0) {
-            // Facts in categories, written once they held for half a second:
-            // every change of a fact asks the model again.
-            const me = this.flat(this.object3D);
-            const p = this.flat(this.player);
-            const d = Math.hypot(p.x - me.x, p.z - me.z);
-            this.pace = this.pace * 0.9 + (Math.hypot(p.x - this.last.x, p.z - this.last.z) / dt) * 0.1;
-            this.last = p;
-            this.fact('dist', d < 3 ? 'near' : d < 8 ? 'mid' : 'far');
-            this.fact('player_moving', this.pace < 0.3 ? 'still' : this.pace < 3 ? 'walking' : 'running');
-        }
-        const m = this.move;
-        if (!m) return;
-        const me = this.flat(this.object3D);
-        const goal = this.flat(m.target);
-        const dx = goal.x - me.x;
-        const dz = goal.z - me.z;
-        const d = Math.hypot(dx, dz);
-        if (d <= m.stop) {
-            this.move = null;
-            m.done(true);
-            return;
-        }
-        const step = Math.min(d - m.stop, m.speed * dt);
-        this.object3D.x += (dx / d) * step;
-        this.object3D.z += (dz / d) * step;
-        this.object3D.rotationY = (Math.atan2(dx, dz) * 180) / Math.PI;
-    }
-
-    /** Walks to an object; resolves true on arrival, false when the task is aborted. */
-    moveTo(target, speed, signal, stop = 0.2) {
-        this.move?.done(false);
-        return new Promise((resolve) => {
-            this.move = { target, speed, stop, done: resolve };
-            signal.addEventListener('abort', () => {
-                if (this.move?.done === resolve) this.move = null;
-                resolve(false);
-            }, { once: true });
-        });
+    update() {
+        const me = this.character;
+        const player = this.player && this.getCharacter(this.player);
+        if (!this.blackboard || !me || !player) return;
+        // Facts in categories, written once they held for half a second:
+        // every change of a fact asks the model again.
+        const d = Math.hypot(player.feet[0] - me.feet[0], player.feet[2] - me.feet[2]);
+        this.fact('dist', d < 3 ? 'near' : d < 8 ? 'mid' : 'far');
+        this.fact('player_moving', player.mode === 'run' ? 'running' : player.mode === 'idle' ? 'still' : 'walking');
     }
 
     // Tasks of the tree (Script Task nodes name these methods).
@@ -219,11 +177,6 @@ export default class Guard extends Script {
         if (!this.points.length) return false;
         task.set('patrol_target', this.points[this.next++ % this.points.length]);
         return true;
-    }
-
-    walkToTarget(task) {
-        const target = task.get('patrol_target');
-        return target ? this.moveTo(target, this.walkSpeed, task.signal) : false;
     }
 
     halt(task) {
@@ -239,7 +192,7 @@ export default class Guard extends Script {
 
     chase(task) {
         this.setEmissive('#ff3b30', 1);
-        return this.player ? this.moveTo(this.player, this.chaseSpeed, task.signal, 1.2) : false;
+        return this.player ? this.character.moveTo(this.player, { radius: 1.2, run: true, signal: task.signal }) : false;
     }
 
     onTaskAbort() {
@@ -248,31 +201,17 @@ export default class Guard extends Script {
 }
 `;
 
-const PLAYER_SCRIPT = `// Click the viewport in Play mode, then walk with WASD / arrows; hold Shift to run.
+const PLAYER_SCRIPT = `// The player walks with the built-in Player Controller (WASD / arrows, Shift runs).
 // Keys 1 to 3 say a line to the guard: it goes into the guard's context pool
 // (the "dialogue" slot), which the guard's Ask shows the model.
-export default class PlayerController extends Script {
-    speed = 2.5;
-    runSpeed = 6;
+export default class PlayerTalk extends Script {
     lines = [
         "Good evening. I'm the miller's son, fetching water.",
         'Open the gate, or you will regret it!',
         "I carry the captain's seal.",
     ];
 
-    start() {
-        // Agents nearest to the player get their questions answered first.
-        this.setPlayer();
-    }
-
-    update(dt) {
-        const o = this.object3D;
-        const x = this.input.axis('horizontal');
-        const z = -this.input.axis('vertical');
-        const speed = this.input.key('shift') ? this.runSpeed : this.speed;
-        o.x += x * speed * dt;
-        o.z += z * speed * dt;
-        if (x || z) o.rotationY = (Math.atan2(x, z) * 180) / Math.PI;
+    update() {
         this.lines.forEach((text, i) => {
             if (!this.input.keyDown(String(i + 1))) return;
             this.say(text).catch(() => {});
@@ -311,7 +250,7 @@ export default class AlarmBell extends Script {
 export function exampleGuard(): SceneDoc {
     const nodes: NodeDoc[] = [];
     const guardScript: ScriptDoc = { id: uid('s'), name: 'Guard.js', code: GUARD_SCRIPT };
-    const playerScript: ScriptDoc = { id: uid('s'), name: 'PlayerController.js', code: PLAYER_SCRIPT };
+    const playerScript: ScriptDoc = { id: uid('s'), name: 'PlayerTalk.js', code: PLAYER_SCRIPT };
     const bellScript: ScriptDoc = { id: uid('s'), name: 'AlarmBell.js', code: BELL_SCRIPT };
 
     const sun = makeLightNode('directional');
@@ -361,6 +300,7 @@ export function exampleGuard(): SceneDoc {
     guard.name = 'Guard';
     guard.position = [0, 0.9, -2.5];
     guard.mesh.material = { ...defaultMaterial('#b8483e'), roughness: 0.6 };
+    guard.character = { ...defaultCharacter(), speed: 1.8, runSpeed: 4 };
     attach(guard, guardScript);
     nodes.push(guard);
 
@@ -368,6 +308,9 @@ export function exampleGuard(): SceneDoc {
     player.name = 'Player';
     player.position = [0, 0.9, 7];
     player.mesh.material = { ...defaultMaterial('#3f6fd8'), roughness: 0.6 };
+    // The player walks under the gate's camera, which stays (view 'scene').
+    player.character = { ...defaultCharacter(), speed: 2.5, runSpeed: 6 };
+    player.player = { ...defaultPlayer(), view: 'scene' };
     attach(player, playerScript);
     nodes.push(player);
 
@@ -473,7 +416,7 @@ export function exampleGuard(): SceneDoc {
                             type: 'sequence',
                             children: [
                                 { id: 'next', type: 'script', method: 'nextPatrolPoint' },
-                                { id: 'walk', type: 'script', method: 'walkToTarget' },
+                                { id: 'walk', type: 'move_to', target: 'patrol_target', radius: 0.3, run: false },
                                 { id: 'look', type: 'wait', seconds: 1.5, deviation: 0.5 },
                             ],
                         },

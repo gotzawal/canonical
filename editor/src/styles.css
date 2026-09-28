@@ -3,21 +3,23 @@
        Effects off, or a system asking for less transparency) makes them
        opaque; everything else is translucent and suits both. */
     --backdrop:
-        radial-gradient(1100px 680px at 8% -12%, rgba(61, 139, 253, 0.17), transparent 62%),
-        radial-gradient(900px 620px at 104% 112%, rgba(146, 96, 255, 0.13), transparent 60%),
-        radial-gradient(700px 480px at 58% 46%, rgba(48, 196, 186, 0.05), transparent 70%),
+        radial-gradient(1100px 680px at 8% -12%, rgba(61, 139, 253, 0.26), transparent 62%),
+        radial-gradient(900px 620px at 104% 112%, rgba(146, 96, 255, 0.2), transparent 60%),
+        radial-gradient(700px 480px at 58% 46%, rgba(48, 196, 186, 0.08), transparent 70%),
         #0c0e12;
     /* Docked panels: the backdrop behind them does not move, so no blur. */
-    --surface: rgba(27, 30, 37, 0.62);
+    --surface: rgba(27, 30, 37, 0.5);
     /* Menus, dialogs, notices and chips over the 3D view: blurred. */
-    --surface-float: rgba(30, 34, 42, 0.78);
-    --surface-hud: rgba(14, 16, 21, 0.58);
+    --surface-float: rgba(28, 32, 40, 0.5);
+    --surface-hud: rgba(14, 16, 21, 0.4);
     /* Panels over the 3D view on narrow screens: large, so not blurred. */
     --surface-sheet: rgba(24, 27, 33, 0.96);
+    /* Light falling on the glass from above. */
+    --glass: linear-gradient(180deg, rgba(255, 255, 255, 0.075), rgba(255, 255, 255, 0.015) 40%, transparent 75%);
     /* Darkened as well, so text stays readable over a bright scene. */
-    --blur: blur(20px) saturate(150%) brightness(0.65);
-    --edge: rgba(255, 255, 255, 0.08);
-    --sheen: inset 0 1px 0 rgba(255, 255, 255, 0.05);
+    --blur: blur(24px) saturate(180%) brightness(0.62);
+    --edge: rgba(255, 255, 255, 0.12);
+    --sheen: inset 0 1px 0 rgba(255, 255, 255, 0.1);
     --shadow-float: 0 18px 48px rgba(0, 0, 0, 0.45);
     --fill: rgba(255, 255, 255, 0.045);
     --fill-strong: rgba(255, 255, 255, 0.085);
@@ -49,6 +51,7 @@
 
 :root.solid {
     --backdrop: #101216;
+    --glass: none;
     --surface: #1b1e23;
     --surface-float: #20242a;
     --surface-hud: rgba(15, 17, 21, 0.92);
@@ -112,7 +115,7 @@ a {
 .side.left > .panel,
 .stage,
 .dock {
-    background: var(--surface);
+    background: var(--glass), var(--surface);
     border: 1px solid var(--edge);
     border-radius: var(--radius-card);
     box-shadow: var(--sheen);
@@ -132,7 +135,7 @@ a {
 .shot-bar,
 .walk-hud,
 .room-hud {
-    background: var(--surface-float);
+    background: var(--glass), var(--surface-float);
     border: 1px solid var(--edge);
     box-shadow: var(--shadow-float), var(--sheen);
     -webkit-backdrop-filter: var(--blur);
@@ -144,7 +147,7 @@ a {
 .shot-bar,
 .walk-hud,
 .room-hud {
-    background: var(--surface-hud);
+    background: var(--glass), var(--surface-hud);
 }
 
 /* ---------------------------------------------------------------- layout */
@@ -793,6 +796,10 @@ a {
 
 .tree-icon.model {
     color: #b58cff;
+}
+
+.tree-icon.walk {
+    color: var(--success);
 }
 
 .tree-icon.cube,
@@ -1590,7 +1597,7 @@ a.status-item:hover {
     align-items: center;
     justify-content: center;
     padding: 16px;
-    background: rgba(5, 6, 8, 0.5);
+    background: rgba(5, 6, 8, 0.2);
 }
 
 .dialog {
@@ -2873,6 +2880,26 @@ kbd {
     color: #ff9c9c;
 }
 
+/* A question the assistant asks with buttons to answer. */
+.ai-msg.choice {
+    gap: 8px;
+    padding: 10px 12px;
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-card);
+    background: var(--fill);
+}
+
+.ai-choice-question {
+    color: var(--text-strong);
+    line-height: 1.45;
+}
+
+.ai-choice-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+
 .ai-undo {
     align-self: flex-start;
 }
@@ -3650,6 +3677,69 @@ kbd {
     color: #f0cf7a;
 }
 
+.design-note.ok {
+    background: rgba(63, 191, 127, 0.1);
+    color: #8fdcb4;
+}
+
+/* What the assistant goes ahead with while a question is open. */
+.design-assumed {
+    margin: 2px 0 4px;
+    color: var(--muted);
+    font-size: 11.5px;
+}
+
+/* Generated concepts waiting for the user's review. */
+.concept-tile.proposed {
+    outline: 2px solid var(--warn);
+    outline-offset: -2px;
+}
+
+.concept-badge {
+    position: absolute;
+    top: 4px;
+    left: 4px;
+    padding: 1px 6px;
+    border-radius: 8px;
+    background: rgba(231, 180, 60, 0.9);
+    color: #1b1e23;
+    font-size: 10.5px;
+    font-weight: 600;
+}
+
+.concept-review {
+    display: flex;
+    gap: 4px;
+}
+
+/* The level check: plan view and findings. */
+.dialog.level-check-dialog {
+    width: min(760px, 100%);
+}
+
+.level-check {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.level-map {
+    max-width: 100%;
+    max-height: 56vh;
+    align-self: center;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    cursor: zoom-in;
+}
+
+.level-findings {
+    margin: 0;
+    padding-left: 18px;
+    line-height: 1.5;
+    max-height: 30vh;
+    overflow: auto;
+}
+
 .design-proposal {
     margin: 6px 0 8px;
     padding: 8px 10px;
@@ -3708,6 +3798,7 @@ kbd {
 }
 
 .concept-tile {
+    position: relative;
     display: flex;
     flex-direction: column;
     gap: 3px;
@@ -3947,7 +4038,7 @@ kbd {
     display: grid;
     place-items: center;
     padding: 18px;
-    background: rgba(8, 9, 11, 0.55);
+    background: rgba(8, 9, 11, 0.2);
 }
 
 .brief-card {

@@ -76,9 +76,9 @@ export class Pipeline extends Emitter<PipelineEvents> {
         return stageDef(this.design.stage).locksPlacement && !this.design.unlocked && this.design.stages[this.design.stage].status !== 'done';
     }
 
-    /** Nodes that keep their place while placement is locked: all but lights, cameras and effects. */
+    /** Nodes that keep their place while placement is locked: all but lights, cameras, effects and the player. */
     isPinned(node: NodeDoc | undefined): boolean {
-        return !!node && !node.light && !node.camera && !node.particles;
+        return !!node && !node.light && !node.camera && !node.particles && !node.player;
     }
 
     /**

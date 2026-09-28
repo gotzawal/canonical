@@ -19,9 +19,10 @@
 // settle between ticks and the next tick sees them.
 
 import { valueFits } from '../../core/behavior/nodeTypes';
+import type { Object3D } from '@orillusion/core';
 import type {
     AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, ConditionDecoratorDoc, InferTaskDoc,
-    RecallServiceDoc, ScriptTaskDoc,
+    MoveToTaskDoc, RecallServiceDoc, ScriptTaskDoc,
 } from '../../core/types';
 import type { Blackboard } from './blackboard';
 import type { InferHandle } from './infer';
@@ -53,6 +54,11 @@ export interface TaskHandle {
     fail(): void;
 }
 
+/** What Move To needs from the agent's character (play/character.ts). */
+export interface Walker {
+    moveTo(target: Object3D, opts: { radius: number; run: boolean; signal: AbortSignal }): Promise<boolean>;
+}
+
 /** What the tree needs from its agent. */
 export interface TreeHost {
     readonly blackboard: Blackboard;
@@ -73,6 +79,8 @@ export interface TreeHost {
     infer(doc: InferTaskDoc): InferHandle;
     /** Runs a Recall service once. */
     recall(doc: RecallServiceDoc): void;
+    /** The agent's character, for Move To; null without one. */
+    character(): Walker | null;
     /** Raised when the context pool changes (an Ask with Use Context treats it like a fact change). */
     readonly contextVersion: number;
     /** A problem worth a warning in the console (reported once per node). */
@@ -187,6 +195,31 @@ class ScriptTask implements TaskRt {
     }
 }
 
+class MoveToTask implements TaskRt {
+    private result: Status = 'running';
+    private controller: AbortController | null = null;
+    constructor(private doc: MoveToTaskDoc, private host: TreeHost) {}
+    start(): Status {
+        const walker = this.host.character();
+        const target = this.host.blackboard.get(this.doc.target) as Object3D | null | undefined;
+        if (!walker) this.host.warn(this.doc.id, 'Move To needs a Character on the agent\'s object (Add Component > Character).');
+        if (!walker || !target) return 'failure';
+        const controller = (this.controller = new AbortController());
+        this.result = 'running';
+        walker.moveTo(target, { radius: this.doc.radius, run: this.doc.run, signal: controller.signal }).then((arrived) => {
+            if (!controller.signal.aborted) this.result = arrived ? 'success' : 'failure';
+        });
+        return 'running';
+    }
+    update(): Status {
+        return this.result;
+    }
+    abort() {
+        this.controller?.abort();
+        this.controller = null;
+    }
+}
+
 class AskTask implements TaskRt {
     private handle: AskHandle | null = null;
     constructor(private doc: AskTaskDoc, private host: TreeHost) {}
@@ -232,6 +265,8 @@ function makeTask(doc: BtNodeDoc, host: TreeHost): TaskRt | null {
             return new SetKeyTask(doc, host);
         case 'script':
             return new ScriptTask(doc, host);
+        case 'move_to':
+            return new MoveToTask(doc, host);
         case 'ask':
             return new AskTask(doc, host);
         case 'infer':

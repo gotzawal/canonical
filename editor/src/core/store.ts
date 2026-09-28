@@ -1,6 +1,7 @@
 import { Emitter } from './events';
 import { readLocal, writeLocal } from './local';
 import { sanitizeParticles } from './particles';
+import { sanitizeCharacter, sanitizePlayer } from './character';
 import {
     defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
 } from './defaults';
@@ -495,6 +496,13 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
         if (p) node.particles = p;
         else delete node.particles;
     }
+    // A player controls a character (an older player carried the body itself).
+    const character = sanitizeCharacter(node.character ?? node.player);
+    const player = character && sanitizePlayer(node.player);
+    if (character) node.character = character;
+    else delete node.character;
+    if (player) node.player = player;
+    else delete node.player;
     if (node.scripts !== undefined) {
         const refs: ScriptRef[] = [];
         for (const r of Array.isArray(node.scripts) ? node.scripts : []) {

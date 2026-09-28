@@ -5,13 +5,15 @@
 import { assetImageDataUrl } from '../core/images';
 import type { ShotDoc } from '../core/types';
 import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
+import { conceptPrompt, generateConcepts, type ConceptView } from '../design/concepts';
+import { notices } from '../ui/notify';
 import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from './images';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
 import { def, num, optStr, ToolError, type Json } from './toolUtil';
 
 /** Tools that spend credits on images; left out when the settings forbid it. */
-export const PAID_IMAGE_TOOLS = new Set(['generate_paintover']);
+export const PAID_IMAGE_TOOLS = new Set(['generate_paintover', 'generate_concept']);
 
 export function imageToolDefs(): ToolDef[] {
     return [
@@ -23,7 +25,16 @@ export function imageToolDefs(): ToolDef[] {
             options: { type: 'object', description: 'Image model options such as aspect_ratio or resolution (image_model_info lists them). Leave it out for the defaults; the aspect ratio follows the shot.' },
             references: { type: 'array', items: { type: 'string' }, description: 'More reference image asset ids (other concepts or paintovers), sent after the capture and the concept.' },
         }, ['shot']),
-        def('choose_paintover', 'Make one of a shot\'s paintovers its target, the image every later comparison of the shot uses. Only when the user asked you to choose; otherwise ask them to pick one (Design tab, the shot\'s Paintover button).', {
+        def('generate_concept', 'Draw concept images of the design with the image model, so the user can review how it will look before and while it is built: an area from outside or inside, an overview of the whole place, or a floor plan. They are added as concepts of the area, proposed until the user approves them in the Design tab; approved concepts are the references for shots and paintovers. With capture, a capture of the greybox (the current view or a shot) is painted over, keeping its shapes. Costs credits: one or two per area.', {
+            area: { type: 'string', description: 'Area id or name; leave out for the whole place.' },
+            view: { type: 'string', enum: ['exterior', 'interior', 'overview', 'plan'], description: 'Default exterior.' },
+            instructions: { type: 'string', description: 'What to show or change, added to the default instruction built from the plan.' },
+            prompt: { type: 'string', description: 'A whole instruction instead of the default.' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'Default 1.' },
+            references: { type: 'array', items: { type: 'string' }, description: 'Image asset ids to match (other concepts, paintovers).' },
+            capture: { type: 'string', description: '"view" for the current view of the greybox, or a shot id or name.' },
+        }),
+        def('choose_paintover', 'Make one of a shot\'s paintovers its target, the image every later comparison of the shot uses. Only when the user asked you to choose or lets you decide the details (detail level quick): then pick the one that keeps the blockout\'s composition best. Otherwise ask them to pick one (Design tab, the shot\'s Paintover button).', {
             shot: { type: 'string', description: 'Shot id or name.' },
             paintover: { type: 'string', description: 'Asset id of the paintover.' },
         }, ['shot', 'paintover']),
@@ -80,12 +91,61 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
                     ...(res.cost != null ? { cost_usd: Number(res.cost.toFixed(4)) } : {}),
                     ...(res.dropped.length ? { options_left_out: res.dropped } : {}),
                     ...(res.errors.length ? { failed_requests: res.errors } : {}),
-                    note: images.length
-                        ? 'The new paintovers are attached in this order. Say which one keeps the blockout\'s composition best; the user chooses the target.'
-                        : 'The user chooses the target in the Design tab.',
+                    note: ed.store.doc.design.detail === 'quick'
+                        ? `${images.length ? 'The new paintovers are attached in this order. ' : ''}The user lets you decide: make the one that keeps the blockout's composition best the target (choose_paintover).`
+                        : images.length
+                          ? 'The new paintovers are attached in this order. Say which one keeps the blockout\'s composition best; the user chooses the target.'
+                          : 'The user chooses the target in the Design tab.',
                 },
                 images,
                 summary: `${res.paintovers.length} for ${shot.name}`,
+            };
+        }
+        case 'generate_concept': {
+            if (!env.allowImages()) throw new ToolError('Image generation is turned off in the AI settings.');
+            const d = ed.store.doc.design;
+            const ref = optStr(args.area, 'area', 200);
+            const area = ref ? d.areas.find((a) => a.id === ref) ?? d.areas.find((a) => a.name.toLowerCase() === ref.toLowerCase()) ?? null : null;
+            if (ref && !area) throw new ToolError(`No area "${ref}". Areas: ${d.areas.map((a) => a.name).join(', ') || 'none yet'}.`);
+            const view = (['exterior', 'interior', 'overview', 'plan'].includes(args.view) ? args.view : 'exterior') as ConceptView;
+            const count = args.count !== undefined ? Math.max(1, Math.min(4, Math.round(num(args.count, 'count')))) : 1;
+            const prompt = optStr(args.prompt, 'prompt', 4000)?.trim() || conceptPrompt(d, area, view, optStr(args.instructions, 'instructions', 2000) ?? '');
+            const references: string[] = (Array.isArray(args.references) ? args.references : []).filter((r: unknown): r is string => typeof r === 'string');
+            for (const r of references) {
+                if (!ed.store.doc.assets.some((a) => a.id === r && a.kind === 'image')) throw new ToolError(`"${r}" is not an image asset.`);
+            }
+            const capture = typeof args.capture === 'string' && args.capture.trim() ? (args.capture.trim() === 'view' ? 'view' : findShot(env, args.capture).id) : null;
+            const res = await generateConcepts(ed, { area, view, prompt, count, references, capture, signal: env.signal });
+            const images: string[] = [];
+            if (env.screenshots()) {
+                for (const c of res.concepts) {
+                    const url = await assetImageDataUrl(c.asset, 1024);
+                    if (url) images.push(url);
+                }
+            }
+            if (res.concepts.length) {
+                notices.show({
+                    kind: 'review',
+                    key: 'concept-review',
+                    icon: 'image',
+                    title: `${res.concepts.length} concept image${res.concepts.length === 1 ? '' : 's'} to review`,
+                    body: `${area ? area.name : 'The whole place'}, ${view}. Approve or reject ${res.concepts.length === 1 ? 'it' : 'them'} in the Design tab.`,
+                    actions: [{ label: 'Review', primary: true, run: () => ed.emit('show-design', undefined) }],
+                });
+            }
+            return {
+                data: {
+                    concepts: res.concepts.map((c) => c.asset),
+                    area: area?.name ?? null,
+                    view,
+                    model: res.model,
+                    ...(res.cost != null ? { cost_usd: Number(res.cost.toFixed(4)) } : {}),
+                    ...(res.dropped.length ? { left_out: res.dropped } : {}),
+                    ...(res.errors.length ? { failed_requests: res.errors } : {}),
+                    note: `${images.length ? 'The images are attached in this order. Say in a line or two what they show and whether they fit the plan. ' : ''}They are proposed: the user approves or rejects them in the Design tab.${d.detail === 'quick' ? ' The user lets you decide, so go on with them meanwhile.' : ''}`,
+                },
+                images,
+                summary: `${res.concepts.length} for ${area?.name ?? 'the whole place'}`,
             };
         }
         case 'choose_paintover': {

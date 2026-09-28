@@ -8,7 +8,7 @@ import { cacheStyle } from './caching';
 import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from './openrouter';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { aiSettings } from './settings';
-import { runTool, toolDefs, type ToolEnv } from './tools';
+import { runTool, toolDefs, type ToolChoice, type ToolEnv } from './tools';
 
 export interface ToolTurn {
     name: string;
@@ -37,6 +37,8 @@ export interface AgentTurn {
     images?: Attachment[];
     /** Longer text a note can expand to (the summary of compacted messages). */
     detail?: string;
+    /** A note asking the user to pick an option (see ToolChoice); `picked` once answered. */
+    choice?: ToolChoice & { picked?: string };
 }
 
 /** What one finished request did, for notifications and checkpoints. */
@@ -223,6 +225,14 @@ export class Agent extends Emitter<AgentEvents> {
         this.abort?.abort();
     }
 
+    /** Records the option the user picked on a choice note (the answer itself is sent as a message). */
+    answerChoice(turn: AgentTurn, value: string) {
+        if (!turn.choice || turn.choice.picked) return;
+        turn.choice.picked = value;
+        this.emit('update', turn);
+        this.saveSession();
+    }
+
     private push(turn: Omit<AgentTurn, 'id'>): AgentTurn {
         const t = { ...turn, id: ++turnId };
         this.turns.push(t);
@@ -389,6 +399,7 @@ export class Agent extends Emitter<AgentEvents> {
                             toolTurn.tool!.image = shown[0];
                             images.push(...shown);
                         }
+                        if (result.choice) this.push({ role: 'note', text: result.choice.question, choice: { ...result.choice, options: result.choice.options.map((o) => ({ ...o })) } });
                     }
                     toolLines.push(`${call.function.name.replace(/_/g, ' ')}${toolTurn.tool!.summary ? `: ${toolTurn.tool!.summary}` : ''}`);
                     if (content.length > MAX_TOOL_RESULT) content = content.slice(0, MAX_TOOL_RESULT) + '... (truncated)';
