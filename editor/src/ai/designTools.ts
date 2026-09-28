@@ -10,6 +10,9 @@ import type { ToolEnv, ToolResult } from './tools';
 import { def, hex, num, optStr, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
+/** Questions per ask_user call, and open questions at once. */
+const MAX_QUESTIONS = 3;
+const MAX_OPEN = 6;
 const SECTIONS = ['all', 'brief', 'layout', 'areas', 'concepts', 'specs', 'mood', 'play', 'effects', 'materials', 'budget', 'questions', 'shots', 'stages', 'snapshots', 'memo'];
 
 export function designToolDefs(): ToolDef[] {
@@ -87,15 +90,36 @@ export function designToolDefs(): ToolDef[] {
                 budget: { type: 'object', properties: { shadow_lights: { type: 'number' }, fps: { type: 'number' } } },
             },
         ),
-        def('ask_user', 'Ask the user about something the brief leaves open instead of guessing. The questions show in the Design tab; answers come back in the editor context.', {
-            questions: { type: 'array', items: { type: 'object', properties: { text: { type: 'string' }, area: { type: 'string' } }, required: ['text'] } },
+        def('ask_user', `Ask the user about something the brief leaves open that changes the plan a lot (the layout, the scale, the look). Decide small things yourself. At most ${MAX_QUESTIONS} questions at a time, each with what you assume meanwhile: you go ahead with that, and the question does not hold up the stage; an answer later changes the plan. The questions show in the Design tab; answers come back in the editor context.`, {
+            questions: {
+                type: 'array',
+                maxItems: MAX_QUESTIONS,
+                items: {
+                    type: 'object',
+                    properties: {
+                        text: { type: 'string' },
+                        area: { type: 'string' },
+                        assumed: { type: 'string', description: 'What you go ahead with until the user answers.' },
+                    },
+                    required: ['text', 'assumed'],
+                },
+            },
             clear_answered: { type: 'boolean', description: 'Remove questions that were answered and used.' },
         }, ['questions']),
+        def('set_detail_level', 'Record how much of the detail the user wants to settle themselves, judged from their words. "quick": short or loose instructions, "you decide", "just make it": decide every detail yourself, ask nothing, write your choices into the plan and move through the stages. "detailed": precise instructions with numbers and specifics, or asking to refine: follow them exactly and work out what matters with the user. The user can change it in the Design tab.', {
+            level: { type: 'string', enum: ['quick', 'detailed'] },
+            reason: { type: 'string', description: 'What in the user\'s words tells, in a few words.' },
+        }, ['level']),
+        def('ask_detail_level', 'When the user\'s words leave open how much detail they want, ask this once before asking about any detail: the chat shows two buttons, one to let you decide and go on, one to refine the details together. Then end your turn with one short line; the answer comes as the next message.', {
+            question: { type: 'string', description: 'The question in the user\'s language.' },
+            quick_label: { type: 'string', description: 'Button to let you decide and move on, in the user\'s language.' },
+            detailed_label: { type: 'string', description: 'Button to work out the details together, in the user\'s language.' },
+        }, ['question']),
         def('update_checklist', 'Tick or untick checklist items of a stage (default: the current one) with a short note on what was checked, or add items. Automatic items follow the project and only take notes.', {
             stage: { type: 'string', enum: STAGE_IDS },
             items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string', description: 'New item (without id).' }, done: { type: 'boolean' }, note: { type: 'string' } } } },
         }, ['items']),
-        def('propose_stage_complete', 'Propose completing the current stage once its checklist is done. The user reviews and approves; completing captures every shot and takes a snapshot.', {
+        def('propose_stage_complete', 'Propose completing the current stage once its checklist is done. The user reviews and approves; with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.', {
             summary: { type: 'string', description: 'What was done and what was checked, a few lines.' },
         }, ['summary']),
         def('apply_key_light', 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the atmospheric sky\'s sun there too. Change the mood first with update_design to use another direction.'),
@@ -356,7 +380,7 @@ function readDesign(env: ToolEnv, section: string): Json {
     if (want('concepts')) {
         out.concepts = d.concepts.map((c) => {
             const meta = doc.assets.find((a) => a.id === c.asset);
-            return { asset: c.asset, name: meta?.name, area: c.area, note: c.note, size: meta?.width ? `${meta.width}x${meta.height}` : undefined };
+            return { asset: c.asset, name: meta?.name, area: c.area, note: c.note, size: meta?.width ? `${meta.width}x${meta.height}` : undefined, ...(c.review ? { review: c.review } : {}) };
         });
     }
     if (want('specs')) out.specs = d.specs;
@@ -429,18 +453,62 @@ export async function runDesignTool(env: ToolEnv, name: string, args: Json): Pro
         case 'ask_user': {
             const list: Json[] = Array.isArray(args.questions) ? args.questions : [];
             if (!list.length && !args.clear_answered) throw new ToolError('questions is empty.');
-            const added: { id: string; text: string }[] = [];
+            if (list.length > MAX_QUESTIONS) throw new ToolError(`At most ${MAX_QUESTIONS} questions at a time: keep the ones that change the plan most and decide the rest yourself.`);
+            const open = store.doc.design.questions.filter((q) => !q.answer.trim()).length;
+            if (list.length && open + list.length > MAX_OPEN) throw new ToolError(`${open} questions are still open. Go ahead with their assumptions and decide the rest yourself instead of asking more.`);
+            // Checked before anything is written.
+            const asked = list.map((q) => {
+                const text = str(q.text, 'question text', 2000).trim();
+                const assumed = str(q.assumed ?? '', 'assumed', 2000).trim();
+                if (!assumed) throw new ToolError(`Say what you assume meanwhile for "${text.slice(0, 60)}" (assumed).`);
+                return { text, assumed, area: q.area ? areaRef(store.doc.design, q.area) : null };
+            });
+            const added: { id: string; text: string; assumed: string }[] = [];
             store.commit('AI: Questions', (d) => {
                 if (args.clear_answered) d.design.questions = d.design.questions.filter((q) => !q.answer.trim());
-                for (const q of list) {
-                    const text = str(q.text, 'question text', 2000).trim();
-                    if (!text || d.design.questions.some((x) => x.text === text)) continue;
-                    const item = { id: uid('q'), text, answer: '', ...(q.area ? { area: areaRef(d.design, q.area) } : {}) };
+                for (const q of asked) {
+                    if (!q.text || d.design.questions.some((x) => x.text === q.text)) continue;
+                    const item = { id: uid('q'), text: q.text, answer: '', assumed: q.assumed, ...(q.area ? { area: q.area } : {}) };
                     d.design.questions.push(item);
-                    added.push({ id: item.id, text });
+                    added.push({ id: item.id, text: q.text, assumed: q.assumed });
                 }
             }, { design: true });
-            return { data: { ok: true, asked: added, note: 'The questions show in the Design tab. Tell the user what you need in your answer too.' }, summary: `${added.length} question${added.length === 1 ? '' : 's'}` };
+            return {
+                data: {
+                    ok: true,
+                    asked: added,
+                    note: 'The questions show in the Design tab. Go ahead with the assumptions now (write them into the plan); an answer that differs changes the plan later. Mention the questions in one line of your answer.',
+                },
+                summary: `${added.length} question${added.length === 1 ? '' : 's'}`,
+            };
+        }
+        case 'set_detail_level': {
+            const level = args.level === 'quick' || args.level === 'detailed' ? args.level : null;
+            if (!level) throw new ToolError('level must be quick or detailed.');
+            store.commit('AI: Detail Level', (d) => {
+                d.design.detail = level;
+            }, { design: true });
+            return {
+                data: {
+                    ok: true,
+                    level,
+                    note: level === 'quick'
+                        ? 'Decide every detail yourself, ask nothing, write your choices into the plan and move on through the stages: when a checklist is done, propose_stage_complete completes the stage.'
+                        : 'Follow the user\'s details exactly; ask (ask_user, with assumptions) only about what changes the plan a lot.',
+                },
+                summary: level,
+            };
+        }
+        case 'ask_detail_level': {
+            const question = str(args.question, 'question', 1000).trim();
+            if (!question) throw new ToolError('question is empty.');
+            const quick = optStr(args.quick_label, 'quick_label', 80)?.trim() || 'Decide yourself and move on';
+            const detailed = optStr(args.detailed_label, 'detailed_label', 80)?.trim() || 'Refine the details with me';
+            return {
+                data: { ok: true, note: 'The user sees the question with two buttons. End your turn now with one short line; the answer comes as the next message.' },
+                choice: { kind: 'detail', question, options: [{ value: 'quick', label: quick }, { value: 'detailed', label: detailed }] },
+                summary: 'asked',
+            };
         }
         case 'update_checklist': {
             const d = store.doc.design;
@@ -489,6 +557,25 @@ export async function runDesignTool(env: ToolEnv, name: string, args: Json): Pro
             const summary = str(args.summary, 'summary', 8000).trim();
             if (!summary) throw new ToolError('summary is empty.');
             const prog = ed.pipeline.progress();
+            // The user lets the assistant decide: a finished checklist moves on by itself.
+            if (store.doc.design.detail === 'quick' && !prog.open.length) {
+                const from = stageDef(store.doc.design.stage);
+                if (await ed.pipeline.complete(true)) {
+                    const now = stageDef(store.doc.design.stage);
+                    const next = ed.pipeline.progress();
+                    return {
+                        data: {
+                            ok: true,
+                            completed: from.title,
+                            ...(now.id !== from.id ? { now: now.long, checklist: next.items.map((i) => ({ id: i.id, text: i.text, done: i.done })) } : {}),
+                            note: now.id !== from.id
+                                ? `The user lets you decide the details, so ${from.title} was completed (shots captured, snapshot taken). Go on with ${now.title} if the request covers it; otherwise tell the user what comes next.`
+                                : 'Every stage is complete.',
+                        },
+                        summary: `${from.title} complete`,
+                    };
+                }
+            }
             ed.pipeline.propose(summary);
             return {
                 data: {

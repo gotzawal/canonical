@@ -1,6 +1,7 @@
 import type { Editor } from '../editor';
 import { add, DEG, normalize, scale } from '../core/math';
 import type { Vec3 } from '../core/types';
+import { CharacterMotor } from '../play/motor';
 import { h } from '../ui/dom';
 import { toast } from '../ui/overlays';
 
@@ -21,10 +22,9 @@ const KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', '
  */
 export class WalkController {
     active = false;
-    private feet: Vec3 = [0, 0, 0];
+    private motor: CharacterMotor;
     private lookYaw = 0;
     private lookPitch = 0;
-    private vy = 0;
     private keys = new Set<string>();
     private last = 0;
     private off: (() => void) | null = null;
@@ -34,6 +34,7 @@ export class WalkController {
     private start: Vec3 = [0, 0, 0];
 
     constructor(private editor: Editor, private overlay: HTMLCanvasElement, viewportEl: HTMLElement) {
+        this.motor = new CharacterMotor((origin, dir, maxDist) => editor.picker.raycast(origin, dir, maxDist), this.body(), [0, 0, 0]);
         this.hudText = h('span');
         this.hud = h('div', { class: 'walk-hud', attrs: { hidden: true } }, this.hudText);
         viewportEl.appendChild(this.hud);
@@ -41,6 +42,16 @@ export class WalkController {
 
     private get specs() {
         return this.editor.store.doc.design.specs;
+    }
+
+    /** The body of the brief's player. */
+    private body() {
+        const s = this.specs;
+        return { height: s.playerHeight, radius: s.playerRadius, stepHeight: s.stepHeight };
+    }
+
+    private get feet(): Vec3 {
+        return this.motor.feet;
     }
 
     toggle() {
@@ -61,12 +72,13 @@ export class WalkController {
         // or ceiling over it, facing the way the view faces. A target below every surface
         // starts on the one above it.
         const target = cam.target;
-        const ground = this.groundAt([target[0], target[1] + this.specs.stepHeight, target[2]], 200) ?? this.groundAt([target[0], target[1] + 50, target[2]], 200);
-        this.feet = [target[0], ground ?? 0, target[2]];
+        this.motor.body = this.body();
+        const ground = this.motor.groundAt([target[0], target[1] + this.specs.stepHeight, target[2]], 200) ?? this.motor.groundAt([target[0], target[1] + 50, target[2]], 200);
+        this.motor.feet = [target[0], ground ?? 0, target[2]];
+        this.motor.vy = 0;
         this.start = [...this.feet] as Vec3;
         this.lookYaw = cam.yaw + 180;
         this.lookPitch = Math.max(-60, Math.min(60, -cam.pitch));
-        this.vy = 0;
         this.keys.clear();
         this.active = true;
         this.last = performance.now();
@@ -137,32 +149,12 @@ export class WalkController {
         return [this.feet[0], this.feet[1] + this.specs.eyeHeight, this.feet[2]];
     }
 
-    /** Height of the ground below `from` within `depth`, or null. */
-    private groundAt(from: Vec3, depth: number): number | null {
-        const hit = this.editor.picker.raycast(from, [0, -1, 0], depth);
-        return hit ? hit.point[1] : null;
-    }
-
-    /** True when a wall is in the way of moving `d` from the current position. */
-    private blocked(d: Vec3): boolean {
-        const dist = Math.hypot(d[0], d[2]);
-        if (dist < 1e-6) return false;
-        const dir: Vec3 = [d[0] / dist, 0, d[2] / dist];
-        const s = this.specs;
-        for (const hgt of [s.stepHeight + 0.05, s.playerHeight * 0.5, Math.max(s.stepHeight + 0.1, s.playerHeight - 0.1)]) {
-            const origin: Vec3 = [this.feet[0], this.feet[1] + hgt, this.feet[2]];
-            if (this.editor.picker.raycast(origin, dir, s.playerRadius + dist)) return true;
-        }
-        return false;
-    }
-
     private tick() {
         const now = performance.now();
         const dt = Math.min(0.1, Math.max(0, (now - this.last) / 1000));
         this.last = now;
         if (!this.active) return;
         this.editor.picker.update();
-        const s = this.specs;
         const k = this.keys;
         const mz = (k.has('w') || k.has('arrowup') ? 1 : 0) - (k.has('s') || k.has('arrowdown') ? 1 : 0);
         const mx = (k.has('d') || k.has('arrowright') ? 1 : 0) - (k.has('a') || k.has('arrowleft') ? 1 : 0);
@@ -175,26 +167,13 @@ export class WalkController {
         let move = add(scale(fwd, mz), scale(right, mx));
         if (mx && mz) move = normalize(move);
         const d = scale(move, speed * dt);
-        // Slide along walls: try each axis on its own.
-        if (d[0] && !this.blocked([d[0], 0, 0])) this.feet[0] += d[0];
-        if (d[2] && !this.blocked([0, 0, d[2]])) this.feet[2] += d[2];
-
-        // Follow the ground: climb steps up to the step height, fall otherwise.
-        const probe = s.stepHeight + 0.3;
-        const ground = this.groundAt([this.feet[0], this.feet[1] + probe, this.feet[2]], probe + Math.max(0.3, -this.vy * dt + 0.05));
-        if (ground !== null && this.vy <= 0) {
-            this.feet[1] = ground;
-            this.vy = 0;
-        } else {
-            this.vy -= GRAVITY * dt;
-            this.feet[1] += this.vy * dt;
-            if (this.feet[1] < this.start[1] - 100) {
-                this.feet = [...this.start] as Vec3;
-                this.vy = 0;
-                toast('Fell out of the level; back to the start.', 'info');
-            }
+        // Walls stop the body, steps and ramps lift it, gravity pulls it down (play/motor.ts).
+        this.motor.step(dt, d, GRAVITY, k.has(' ') ? 3.2 : 0);
+        if (this.feet[1] < this.start[1] - 100) {
+            this.motor.feet = [...this.start] as Vec3;
+            this.motor.vy = 0;
+            toast('Fell out of the level; back to the start.', 'info');
         }
-        if (k.has(' ') && ground !== null) this.vy = 3.2;
 
         const eye = this.eye();
         const look = this.forward();

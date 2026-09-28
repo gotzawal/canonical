@@ -217,11 +217,13 @@ async function main() {
         play: {
             active: () => player.state !== 'stopped',
             gameCamera: () => player.usesGameCamera,
-            pointer: (type, x, y, button) => player.pointerEvent(type, x, y, button),
+            pointer: (type, x, y, button, id, touch) => player.pointerEvent(type, x, y, button, id, touch),
             wheel: (d) => player.wheelEvent(d),
         },
     });
     editor.viewport = viewport;
+    // The player controller's joystick and hints go over the view.
+    player.controlsHost = viewportEl;
     editor.walk = new WalkController(editor, viewport.overlay, viewportEl);
     editor.room = new ReferenceRoom(editor, viewportEl);
     overlayDrawers.push(pipelineOverlay(editor));
@@ -470,7 +472,7 @@ function aiContext(editor: Editor, dock: Dock): string {
     const store = editor.store;
     const lines: string[] = [];
     const sel = store.selection.map((id) => store.node(id)).filter(Boolean).slice(0, 12);
-    lines.push(sel.length ? `Selected: ${sel.map((n) => `${n!.name} (id ${n!.id}, ${nodeIcon(n!) === 'empty' ? 'empty' : nodeIcon(n!)})`).join(', ')}` : 'Selected: nothing');
+    lines.push(sel.length ? `Selected: ${sel.map((n) => `${n!.name} (id ${n!.id}, ${n!.player ? 'player' : nodeIcon(n!)})`).join(', ')}` : 'Selected: nothing');
     const doc = dock.activeDoc();
     if (doc) lines.push(`Open in the code editor: ${doc.name} (${doc.kind} id ${doc.id})`);
     const f = editor.focusedPart;

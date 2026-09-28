@@ -22,6 +22,13 @@ export function pipelineSummary(doc: SceneDoc, fps?: number): string[] {
     if (prog.open.length) lines.push(`Open items: ${prog.open.map((i) => `[${i.id}] ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('; ')}`);
     if (st.proposal) lines.push(`You proposed completing this stage; waiting for the user to approve.`);
     if (design.stage === 'brief' && design.brief.skipped) lines.push('The user works without a brief, so this stage does not limit the tools: work on what the user asks for.');
+    lines.push(
+        design.detail === 'quick'
+            ? 'Detail level: quick. The user wants you to decide the details yourself: ask nothing, write your choices into the plan and move through the stages.'
+            : design.detail === 'detailed'
+              ? 'Detail level: detailed. Follow the user\'s details exactly and work out what matters with them (ask_user, with an assumption for each question).'
+              : 'Detail level: not set. Judge it from the user\'s words (set_detail_level); when they leave it open, ask once (ask_detail_level) before any detail question.',
+    );
     const others = STAGE_IDS.filter((id) => id !== design.stage && design.stages[id].status !== 'todo').map((id) => `${stageDef(id).title} ${design.stages[id].status}${design.stages[id].recheck ? ` (${clip(design.stages[id].recheck!, 80)})` : ''}`);
     if (others.length) lines.push(`Other stages: ${others.join(', ')}`);
     if (def.locksPlacement && !design.unlocked) lines.push('Placement is locked in this stage: only lights, cameras and effects may move.');
@@ -55,7 +62,10 @@ export function designSummary(doc: SceneDoc): string[] {
     }
     if (d.mood.description || d.mood.timeOfDay) lines.push(`Mood: ${clip([d.mood.timeOfDay, d.mood.description].filter(Boolean).join(' - '), 200)}`);
     const unassigned = d.concepts.filter((c) => !c.area).length;
-    if (d.concepts.length) lines.push(`Concept images: ${d.concepts.length}${unassigned ? ` (${unassigned} not mapped to an area)` : ''}.`);
+    const proposed = d.concepts.filter((c) => c.review === 'proposed').length;
+    if (d.concepts.length) {
+        lines.push(`Concept images: ${d.concepts.length}${unassigned ? ` (${unassigned} not mapped to an area)` : ''}${proposed ? `, ${proposed} generated ones waiting for the user's review` : ''}.`);
+    }
     if (d.shots.length) {
         lines.push(
             `Shots: ` +
@@ -67,7 +77,7 @@ export function designSummary(doc: SceneDoc): string[] {
     if (d.materials.length) lines.push(`Material slots: ${d.materials.map((m) => `${m.name} [id ${m.id}${m.swatch ? '' : ', empty'}]`).join('; ')}`);
     const open = d.questions.filter((q) => !q.answer.trim());
     const answered = d.questions.filter((q) => q.answer.trim());
-    if (open.length) lines.push(`Questions waiting for the user: ${open.map((q) => clip(q.text, 100)).join(' | ')}`);
+    if (open.length) lines.push(`Questions waiting for the user: ${open.map((q) => `${clip(q.text, 100)}${q.assumed ? ` (going with: ${clip(q.assumed, 80)})` : ''}`).join(' | ')}`);
     if (answered.length) lines.push(`Answered questions: ${answered.map((q) => `${clip(q.text, 80)} -> ${clip(q.answer, 120)}`).join(' | ')}`);
     return lines;
 }

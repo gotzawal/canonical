@@ -1,4 +1,5 @@
 import { PARTICLE_PRESETS, PARTICLE_SHAPES, particleCount, presetParticles } from '../core/particles';
+import { defaultPlayer, PLAYER_VIEWS } from '../core/player';
 import type { Editor } from '../editor';
 import { unassignSlot } from '../design/materialSlots';
 import { formatBytes } from '../core/assets';
@@ -6,7 +7,7 @@ import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
     AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue,
-    ParticlesDoc, PartOverride, ScriptRef, SlotShading, Vec3,
+    ParticlesDoc, PartOverride, PlayerDoc, PlayerView, ScriptRef, SlotShading, Vec3,
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
@@ -140,6 +141,7 @@ export class InspectorPanel {
             n.light ? n.light.type : '-',
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
+            n.player ? 'player:' + n.player.view : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -222,6 +224,7 @@ export class InspectorPanel {
         if (node.light) this.body.append(this.lightSection());
         if (node.particles) this.body.append(this.particlesSection());
         if (node.camera) this.body.append(this.cameraSection());
+        if (node.player) this.body.append(this.playerSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         if (node.agent) this.body.append(this.agentSection(node));
@@ -915,6 +918,69 @@ export class InspectorPanel {
         return section('camera', 'Camera', 'camera', [row('Main', main.el), row('Field of View', fov.el), row('Near', near.el), row('Far', far.el), row('', actions)], [remove]);
     }
 
+    // --------------------------------------------------------------- player
+
+    private playerSection(): HTMLElement {
+        const has: Filter = (n) => !!n.player;
+        const p = this.node.player!;
+        type P = PlayerDoc;
+        const set = <K extends keyof P>(key: K, label: string) =>
+            this.hooks<P[K]>(label, has, (n, v) => ((n.player as any)[key] = v), (n) => n.player![key]);
+        const meters = (key: 'height' | 'radius' | 'eyeHeight' | 'stepHeight' | 'distance', label: string, min: number, max: number) =>
+            new NumberField({ value: p[key], min, max, step: 0.01, precision: 2, ...set(key, label) });
+        const view = new SelectField<PlayerView>(PLAYER_VIEWS, p.view, (v) => set('view', 'Player View').commit!(v));
+        const speed = new NumberField({ value: p.speed, min: 0, max: 100, step: 0.05, precision: 2, ...set('speed', 'Walk Speed') });
+        const run = new NumberField({ value: p.runSpeed, min: 0, max: 200, step: 0.05, precision: 2, ...set('runSpeed', 'Run Speed') });
+        const jump = new NumberField({ value: p.jump, min: 0, max: 100, step: 0.05, precision: 2, ...set('jump', 'Jump Speed') });
+        const gravity = new NumberField({ value: p.gravity, min: 0, max: 200, step: 0.1, precision: 1, ...set('gravity', 'Gravity') });
+        const height = meters('height', 'Player Height', 0.2, 20);
+        const radius = meters('radius', 'Player Radius', 0.05, 10);
+        const eye = meters('eyeHeight', 'Eye Height', 0.05, 20);
+        const step = meters('stepHeight', 'Step Height', 0, 10);
+        const distance = p.view === 'third' ? meters('distance', 'Camera Distance', 0.5, 100) : null;
+        const look = new NumberField({ value: p.lookSpeed, min: 0.05, max: 10, step: 0.01, precision: 2, ...set('lookSpeed', 'Look Speed') });
+        const invert = new CheckboxField(p.invertY, (v) => set('invertY', 'Invert Look').commit!(v), 'Dragging up looks down');
+        const collide = new CheckboxField(p.collide, (v) => set('collide', 'Player Collisions').commit!(v), 'Walls stop it and it stands on floors');
+        const rows: HTMLElement[] = [
+            h('div', { class: 'muted small pad', text: 'In Play: WASD or the arrow keys move, Shift runs, Space jumps, a drag turns the view and the wheel zooms. Touch screens get a joystick, a jump button and drag to look.' }),
+            row('View', view.el, 'Third person follows behind, first person looks from the eyes, Scene Camera keeps the camera node'),
+            row('Walk Speed', speed.el, 'm/s'),
+            row('Run Speed', run.el, 'm/s with Shift, or the joystick pushed to its edge'),
+            row('Jump', jump.el, 'Take-off speed in m/s; 0 turns jumping off'),
+            row('Gravity', gravity.el, 'm/s\u00b2'),
+            row('Height', height.el, 'Of the body it collides with (m)'),
+            row('Radius', radius.el, 'Of the body (m)'),
+            row('Eye Height', eye.el, 'First person camera height (m)'),
+            row('Step Height', step.el, 'Highest step it climbs without jumping (m)'),
+        ];
+        if (distance) rows.push(row('Distance', distance.el, 'How far the camera stays behind (m)'));
+        rows.push(row('Look Speed', look.el), row('', invert.el), row('', collide.el));
+        const specs = this.store.doc.design.specs;
+        rows.push(row('', button('Body from the Brief', () => this.hooks<null>('Player Size from the Brief', has, (n) => {
+            const d = defaultPlayer(specs);
+            Object.assign(n.player!, { height: d.height, radius: d.radius, eyeHeight: d.eyeHeight, stepHeight: d.stepHeight });
+        }).commit!(null), 'small', 'walk'), `Height ${specs.playerHeight} m, radius ${specs.playerRadius} m, eyes at ${specs.eyeHeight} m, steps up to ${specs.stepHeight} m`));
+        this.watch(() => {
+            const cur = this.node.player;
+            if (!cur) return;
+            view.set(cur.view);
+            speed.set(cur.speed);
+            run.set(cur.runSpeed);
+            jump.set(cur.jump);
+            gravity.set(cur.gravity);
+            height.set(cur.height);
+            radius.set(cur.radius);
+            eye.set(cur.eyeHeight);
+            step.set(cur.stepHeight);
+            distance?.set(cur.distance);
+            look.set(cur.lookSpeed);
+            invert.set(cur.invertY);
+            collide.set(cur.collide);
+        });
+        const remove = iconButton('trash', 'Remove player controller', () => this.hooks<null>('Remove Player Controller', has, (n) => delete n.player).commit!(null));
+        return section('player', 'Player Controller', 'walk', rows, [remove]);
+    }
+
     // ---------------------------------------------------------------- model
 
     /** Selected model nodes of the same model file as the primary one. */
@@ -1485,6 +1551,13 @@ export class InspectorPanel {
             });
         }
         if (items.length) items.push({ separator: true });
+        if (!node.player && !node.light && !node.camera && !node.particles) {
+            items.push({
+                label: 'Player Controller',
+                icon: 'walk',
+                action: () => this.hooks<null>('Add Player Controller', (n) => !n.player, (n) => (n.player = defaultPlayer(this.store.doc.design.specs))).commit!(null),
+            });
+        }
         if (!node.agent) {
             const stopped = () => this.editor.player.state === 'stopped';
             const trees = this.store.doc.behaviors;

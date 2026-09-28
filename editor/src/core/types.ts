@@ -248,6 +248,45 @@ export interface ParticlesDoc {
     prewarm: number;
 }
 
+/**
+ * How the player's view follows it: 'third' orbits a camera behind it,
+ * 'first' looks from its eyes, 'scene' keeps the scene's camera node (the
+ * controller only moves the player).
+ */
+export type PlayerView = 'third' | 'first' | 'scene';
+
+/**
+ * The built-in player controller (see play/playerController.ts): in Play
+ * mode the object walks with WASD or the arrow keys (an on-screen joystick
+ * on touch screens), runs with Shift, jumps with Space and carries the
+ * camera, which a mouse drag or a finger turns. It stands on the scene's
+ * meshes, climbs steps and stops at walls. Sizes are in meters.
+ */
+export interface PlayerDoc {
+    view: PlayerView;
+    /** Walking speed, m/s. */
+    speed: number;
+    /** Speed with Shift held or the joystick pushed to its edge, m/s. */
+    runSpeed: number;
+    /** Take-off speed of a jump, m/s; 0 turns jumping off. */
+    jump: number;
+    /** Downward acceleration, m/s^2. */
+    gravity: number;
+    /** The body the controller collides with: height, radius, eye height and the highest step it climbs. */
+    height: number;
+    radius: number;
+    eyeHeight: number;
+    stepHeight: number;
+    /** Third person: how far the camera stays behind the player. */
+    distance: number;
+    /** Look speed factor for mouse drags and fingers (1 = default). */
+    lookSpeed: number;
+    /** Dragging up looks down. */
+    invertY: boolean;
+    /** Walls stop the player and it stands on floors; off, it moves freely at its height. */
+    collide: boolean;
+}
+
 export interface NodeDoc {
     id: string;
     name: string;
@@ -263,6 +302,8 @@ export interface NodeDoc {
     model?: ModelDoc;
     camera?: CameraDoc;
     particles?: ParticlesDoc;
+    /** The built-in player controller: the object is the player in Play mode. */
+    player?: PlayerDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
     agent?: AgentDoc;
@@ -871,6 +912,13 @@ export interface ConceptDoc {
     asset: string;
     area?: string | null;
     note?: string;
+    /**
+     * Concepts the image model made: 'proposed' until the user approves one
+     * (rejecting removes it). Concepts the user gave need no review.
+     */
+    review?: 'proposed' | 'approved';
+    /** The instruction a generated concept was made from. */
+    prompt?: string;
 }
 
 export interface PaintoverDoc {
@@ -952,6 +1000,25 @@ export interface QuestionDoc {
     text: string;
     answer: string;
     area?: string | null;
+    /** What the assistant goes ahead with while the question is open; a question with one does not hold up the stage. */
+    assumed?: string;
+}
+
+/**
+ * How much the user wants to settle themselves: 'quick' lets the assistant
+ * decide the details and move on, 'detailed' works them out with the user.
+ * Missing until the assistant judged it from the user's words or asked.
+ */
+export type DetailLevel = 'quick' | 'detailed';
+
+/** The last level check (design/levelCheck.ts), for the level as it was then. */
+export interface LevelCheckDoc {
+    at: string;
+    ok: boolean;
+    /** The level it checked (levelSignature): once the level changes, the result is stale. */
+    signature: string;
+    /** Findings in a line, e.g. "2 seams, 1 route point out of reach". */
+    summary: string;
 }
 
 export interface DesignDoc {
@@ -984,6 +1051,10 @@ export interface DesignDoc {
     memo: { text: string; at?: string };
     /** Placement stays editable in the stages that lock it. */
     unlocked?: boolean;
+    /** How much of the detail the assistant decides itself. */
+    detail?: DetailLevel;
+    /** The last level check. */
+    levelCheck?: LevelCheckDoc | null;
 }
 
 /** Build & Deploy settings of a project (File > Build & Deploy). */

@@ -1,6 +1,7 @@
 import { Emitter } from './events';
 import { readLocal, writeLocal } from './local';
 import { sanitizeParticles } from './particles';
+import { sanitizePlayer } from './player';
 import {
     defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
 } from './defaults';
@@ -494,6 +495,11 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
         const p = sanitizeParticles(node.particles);
         if (p) node.particles = p;
         else delete node.particles;
+    }
+    if (node.player !== undefined) {
+        const p = sanitizePlayer(node.player);
+        if (p) node.player = p;
+        else delete node.player;
     }
     if (node.scripts !== undefined) {
         const refs: ScriptRef[] = [];

@@ -1,0 +1,75 @@
+/* On-screen controls of the player controller (play/playControls.ts), in
+   the editor's Play mode and in built games. The layer lets touches through
+   to the view; only the jump button takes them. */
+
+.play-controls {
+    position: absolute;
+    inset: 0;
+    z-index: 4;
+    pointer-events: none;
+    user-select: none;
+    -webkit-user-select: none;
+}
+
+.play-stick {
+    position: absolute;
+    width: 128px;
+    height: 128px;
+    margin: -64px 0 0 -64px;
+    border: 2px solid rgba(255, 255, 255, 0.35);
+    border-radius: 50%;
+    background: rgba(12, 14, 18, 0.25);
+}
+
+.play-stick-knob {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 56px;
+    height: 56px;
+    margin: -28px 0 0 -28px;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.55);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.35);
+}
+
+.play-jump {
+    position: absolute;
+    right: max(24px, env(safe-area-inset-right));
+    bottom: max(28px, env(safe-area-inset-bottom));
+    width: 76px;
+    height: 76px;
+    padding: 0;
+    border: 2px solid rgba(255, 255, 255, 0.4);
+    border-radius: 50%;
+    background: rgba(12, 14, 18, 0.35);
+    color: rgba(255, 255, 255, 0.9);
+    font: 600 13px/1 system-ui, sans-serif;
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+}
+
+.play-jump.down {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.play-hint {
+    position: absolute;
+    left: 50%;
+    top: max(12px, env(safe-area-inset-top));
+    transform: translateX(-50%);
+    max-width: calc(100% - 120px);
+    padding: 6px 12px;
+    border-radius: 10px;
+    background: rgba(14, 16, 21, 0.62);
+    color: #e6eaf0;
+    font: 12px/1.4 system-ui, sans-serif;
+    text-align: center;
+    opacity: 0;
+    transition: opacity 0.4s ease;
+}
+
+.play-hint.visible {
+    opacity: 1;
+}

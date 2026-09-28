@@ -69,9 +69,10 @@ export default class ${name} extends Script {
     },
     {
         id: 'player',
-        label: 'Player Controller',
-        description: 'WASD / arrow keys movement, Space to jump.',
-        code: (name) => `// Click the viewport in Play mode, then use WASD / arrows to move and Space to jump.
+        label: 'Simple Mover',
+        description: 'WASD / arrows or the joystick move it, Space jumps. For the player, use Create > Player.',
+        code: (name) => `// Moves the object with WASD / arrows (or the on-screen joystick) and jumps with Space.
+// For the player with a camera and collisions, use Create > Player instead.
 export default class ${name} extends Script {
     speed = 4;
     jump = 5;

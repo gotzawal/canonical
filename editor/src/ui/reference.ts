@@ -30,7 +30,7 @@ const LIFECYCLE: [string, string][] = [
 const MEMBERS: [string, string][] = [
     ['this.object3D', 'The engine object: x, y, z, rotationX / Y / Z (degrees), scaleX / Y / Z, name, transform.'],
     ['this.time', 'delta, elapsed (seconds) and frame.'],
-    ['this.input', "key(k), keyDown(k), keyUp(k), axis('horizontal' | 'vertical') from WASD and arrows, mouse { x, y, dx, dy, wheel }, mouseButton(b), mouseDown(b), mouseUp(b)."],
+    ['this.input', "key(k), keyDown(k), keyUp(k), axis('horizontal' | 'vertical') from WASD, the arrows and the on-screen joystick, stick { x, y, active }, mouse { x, y, dx, dy, wheel }, mouseButton(b), mouseDown(b), mouseUp(b). On touch screens the jump button presses \"space\" and a tap is a click."],
     ['this.find(name) / this.findAll(name)', 'Objects by name.'],
     ['this.getScript(objOrName, scriptName?)', 'A script instance on another object.'],
     ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs' or 'capsule'. Options: position, rotation, scale, color, parent, name. Spawned objects are removed when Play stops; this.spawned lists them."],
@@ -99,6 +99,10 @@ export function showReference() {
         table(LIFECYCLE),
         h('h4', { text: 'Members' }),
         table(MEMBERS),
+        h('h3', { text: 'The player' }),
+        h('p', {
+            text: 'Create > Player (or Add Component > Player Controller) makes an object the player, a module built into the editor: in Play it walks with WASD or the arrow keys, runs with Shift, jumps with Space, and a mouse drag turns the camera while the wheel zooms. On phones and tablets a joystick appears under the left thumb, a button jumps, and a finger dragged over the rest of the view turns the camera (two fingers zoom). It stands on the scene\'s meshes, climbs steps up to its step height and stops at walls. Its view follows behind (Third Person), looks from its eyes (First Person) or keeps the scene\'s camera node. A scene has one player; scripts find it by name.',
+        }),
         h('h3', { text: 'Materials' }),
         table(MATERIAL_TYPES),
         h('h3', { text: 'Global illumination' }),
@@ -107,7 +111,7 @@ export function showReference() {
         }),
         h('h3', { text: 'Build & Deploy' }),
         h('p', {
-            text: `File > Build & Deploy (${shortcutLabel('Mod+B')}) makes a standalone web game of the scene: Run in New Tab plays it without the editor, Download .zip gives a folder for any static host (it must be served over HTTP), and GitHub Pages publishes it with a personal access token. Games play like Play mode, through the main camera or, without one, from the editor view at build time.`,
+            text: `File > Build & Deploy (${shortcutLabel('Mod+B')}) makes a standalone web game of the scene: Run in New Tab plays it without the editor, Download .zip gives a folder for any static host (it must be served over HTTP), and GitHub Pages publishes it with a personal access token. Games play like Play mode: through the player's camera, else the main camera or, without one, from the editor view at build time. The player's controls work on phones too.`,
         }),
         h('h3', { text: 'Shaders (WGSL)' }),
         h('p', {

@@ -39,7 +39,7 @@ export class BriefScreen {
             ),
             h('p', {
                 class: 'brief-intro',
-                text: 'Give the planning document and the concept images. The assistant first decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements, and asks about anything the plan leaves open.',
+                text: 'Give the planning document and the concept images. The assistant first decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements. What the plan leaves open it decides itself, or asks about when you want to work out the details, and it can draw concept images for you to review.',
             }),
             this.text,
             h('div', { class: 'brief-drop' }, icon('image', 16), h('span', { text: 'Drop concept images here, or' }), this.pickButton()),

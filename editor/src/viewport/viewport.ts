@@ -39,7 +39,8 @@ export interface PlayHooks {
     active(): boolean;
     /** Play renders through a scene camera, so the editor camera controls are off. */
     gameCamera(): boolean;
-    pointer(type: 'down' | 'move' | 'up', x: number, y: number, button: number): void;
+    /** `id` tells pointers apart; `touch` is a finger or a pen. */
+    pointer(type: 'down' | 'move' | 'up' | 'cancel', x: number, y: number, button: number, id: number, touch: boolean): void;
     wheel(delta: number): void;
 }
 
@@ -64,6 +65,8 @@ export class Viewport {
     private downButton = 0;
     private icons: IconHit[] = [];
     private pointers = new Map<number, { x: number; y: number }>();
+    /** Pointers pressed while playing, which belong to the game (several fingers at once). */
+    private playPointers = new Set<number>();
     private pinchDist = 0;
     private holdTimer = 0;
     private axisWidget: { x: number; y: number; r: number; yaw: number; pitch: number }[] = [];
@@ -90,7 +93,8 @@ export class Viewport {
         o.addEventListener('pointerup', (e) => this.onUp(e));
         o.addEventListener('pointercancel', (e) => this.onUp(e, true));
         o.addEventListener('lostpointercapture', (e) => {
-            if (this.mode !== 'none') this.onUp(e as PointerEvent, true);
+            // A pointer onUp already let go of reports this too.
+            if (this.mode !== 'none' && this.pointers.has(e.pointerId)) this.onUp(e as PointerEvent, true);
         });
         o.addEventListener('wheel', (e) => this.onWheel(e), { passive: false });
         o.addEventListener('dblclick', (e) => this.onDoubleClick(e));
@@ -128,12 +132,14 @@ export class Viewport {
         this.picker.update();
 
         if (this.playing) {
-            // Left button (and every button with a scene camera) goes to scripts;
+            // Left button, fingers (and every button with a scene camera) go to the game;
             // otherwise right / middle still move the editor camera.
             const game = this.hooks.play!.gameCamera();
-            if (e.button === 0 || game) {
+            const touch = e.pointerType !== 'mouse';
+            if (e.button === 0 || game || touch) {
                 this.mode = 'play' as DragMode;
-                this.hooks.play!.pointer('down', x, y, e.button);
+                this.playPointers.add(e.pointerId);
+                this.hooks.play!.pointer('down', x, y, e.button, e.pointerId, touch);
                 return;
             }
         }
@@ -186,7 +192,7 @@ export class Viewport {
         }
         if (this.pointers.has(e.pointerId)) this.pointers.set(e.pointerId, { x, y });
 
-        if (this.playing) this.hooks.play!.pointer('move', x, y, e.button);
+        if (this.playing) this.hooks.play!.pointer('move', x, y, e.button, e.pointerId, e.pointerType !== 'mouse');
         if (this.mode === 'play') return;
         if (this.mode === 'none' && this.playing) {
             this.overlay.style.cursor = 'default';
@@ -235,16 +241,17 @@ export class Viewport {
         clearTimeout(this.holdTimer);
         const [x, y] = this.local(e);
         this.pointers.delete(e.pointerId);
+        const play = this.playPointers.delete(e.pointerId);
         const mode = this.mode;
         // Leave the drag state before releasing capture, which may report lostpointercapture.
-        if (mode !== 'pinch' || this.pointers.size === 0) this.mode = 'none';
+        if (play ? !this.playPointers.size : mode !== 'pinch' || this.pointers.size === 0) this.mode = 'none';
         if (this.overlay.hasPointerCapture?.(e.pointerId)) this.overlay.releasePointerCapture(e.pointerId);
-        if (mode === 'pinch') return;
-        this.overlay.style.cursor = 'default';
-        if (mode === 'play') {
-            this.hooks.play?.pointer('up', x, y, e.button);
+        if (play) {
+            this.hooks.play?.pointer(cancelled ? 'cancel' : 'up', x, y, e.button, e.pointerId, e.pointerType !== 'mouse');
             return;
         }
+        if (mode === 'pinch' || mode === 'play') return;
+        this.overlay.style.cursor = 'default';
         if (mode === 'gizmo') {
             if (cancelled) this.gizmo.cancel();
             else this.gizmo.end();

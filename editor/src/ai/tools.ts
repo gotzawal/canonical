@@ -4,6 +4,7 @@ import {
 } from '../core/defaults';
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
+import { defaultPlayer, sanitizePlayer } from '../core/player';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc,
 } from '../core/types';
@@ -17,6 +18,7 @@ import { imageToolDefs, PAID_IMAGE_TOOLS, runImageTool } from './imageTools';
 import { materialToolDefs, PAID_MATERIAL_TOOLS, runMaterialTool } from './materialTools';
 import { effectToolDefs, runEffectTool } from './effectTools';
 import { behaviorToolDefs, runBehaviorTool } from './behaviorTools';
+import { levelToolDefs, runLevelTool } from './levelTools';
 import type { ToolDef } from './openrouter';
 
 export interface ToolResult {
@@ -28,6 +30,16 @@ export interface ToolResult {
     images?: string[];
     /** Short line for the chat log. */
     summary?: string;
+    /** Buttons for the user to answer with in the chat (the assistant waits for the answer). */
+    choice?: ToolChoice;
+}
+
+/** A question with buttons shown in the chat; a button sends its label as the user's answer. */
+export interface ToolChoice {
+    /** What picking an option also sets: 'detail' sets the plan's detail level to the option's value. */
+    kind: 'detail';
+    question: string;
+    options: { value: string; label: string }[];
 }
 
 export interface ToolEnv {
@@ -117,6 +129,25 @@ const objectFields = {
     material: materialSchema,
     light: lightSchema,
     camera: cameraSchema,
+    player: {
+        type: ['object', 'null'],
+        description: 'The built-in player controller (the object walks with WASD / a joystick, jumps with Space, a drag turns its camera); null removes it. One player per scene: place it with place_player.',
+        properties: {
+            view: { type: 'string', enum: ['third', 'first', 'scene'] },
+            speed: { type: 'number' },
+            run_speed: { type: 'number' },
+            jump: { type: 'number', description: 'Take-off speed m/s; 0 turns jumping off.' },
+            gravity: { type: 'number' },
+            height: { type: 'number' },
+            radius: { type: 'number' },
+            eye_height: { type: 'number' },
+            step_height: { type: 'number' },
+            distance: { type: 'number', description: 'Third person camera distance.' },
+            look_speed: { type: 'number' },
+            invert_y: { type: 'boolean' },
+            collide: { type: 'boolean' },
+        },
+    },
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
@@ -127,7 +158,7 @@ const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_lig
 const SCENE_RESULT_CHARS = 28_000;
 
 /** Tools that only read or look: every stage has them. */
-const READ_TOOLS = ['get_scene', 'get_object', 'list_model_parts', 'read_script', 'read_shader', 'get_render_graph', 'get_console', 'capture_viewport', 'view_images', 'select_objects', 'read_design', 'get_behavior_outline', 'validate_behavior', 'get_decision_log'];
+const READ_TOOLS = ['get_scene', 'get_object', 'list_model_parts', 'read_script', 'read_shader', 'get_render_graph', 'get_console', 'capture_viewport', 'view_images', 'select_objects', 'read_design', 'get_behavior_outline', 'validate_behavior', 'get_decision_log', 'check_level'];
 
 /**
  * Tool groups: a tool is offered when the current pipeline stage allows one
@@ -168,6 +199,8 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     check_sightline: ['capture'],
     create_prefab: ['prefabs'],
     place_prefab: ['prefabs'],
+    build_rooms: ['objects'],
+    place_player: ['objects', 'play', 'code'],
     generate_paintover: ['images'],
     choose_paintover: ['images', 'shots'],
     image_model_info: ['images'],
@@ -185,6 +218,10 @@ const TOOL_GROUPS: Record<string, ToolGroup[]> = {
     ask_user: ['design'],
     update_checklist: ['design'],
     propose_stage_complete: ['design'],
+    set_detail_level: ['design'],
+    ask_detail_level: ['design'],
+    mark_shot_matching: ['compare'],
+    generate_concept: ['concepts'],
 };
 
 /** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
@@ -200,9 +237,14 @@ function toolAllowed(name: string, allowed: Set<ToolGroup>): boolean {
     return !!TOOL_GROUPS[name]?.some((g) => allowed.has(g));
 }
 
+/** Tools that depend on the detail level: questions only when the user wants to refine, own judgments only when they want the assistant to decide. */
+const DETAILED_ONLY = new Set(['ask_user']);
+const QUICK_ONLY = new Set(['mark_shot_matching']);
+
 export function toolDefs(env: ToolEnv): ToolDef[] {
     const allowed = allowedGroups(env);
-    return allToolDefs(env).filter((d) => toolAllowed(d.function.name, allowed));
+    const quick = env.editor.store.doc.design.detail === 'quick';
+    return allToolDefs(env).filter((d) => toolAllowed(d.function.name, allowed) && !(quick ? DETAILED_ONLY : QUICK_ONLY).has(d.function.name));
 }
 
 function allToolDefs(env: ToolEnv): ToolDef[] {
@@ -348,6 +390,7 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
     defs.push(...materialToolDefs().filter((d) => env.allowImages() || !PAID_MATERIAL_TOOLS.has(d.function.name)));
     defs.push(...effectToolDefs());
     defs.push(...behaviorToolDefs());
+    defs.push(...levelToolDefs());
     return defs;
 }
 
@@ -408,6 +451,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     }
     if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
     if (n.camera) out.camera = { ...n.camera };
+    if (n.player) {
+        const p = n.player;
+        out.player = { view: p.view, speed: p.speed, run_speed: p.runSpeed, jump: p.jump, height: p.height, radius: p.radius, eye_height: p.eyeHeight, step_height: p.stepHeight, ...(p.view === 'third' ? { distance: p.distance } : {}), ...(p.collide ? {} : { collide: false }) };
+    }
     if (n.particles) {
         const p = n.particles;
         out.particles = { preset: p.preset, rate: p.rate, life: p.life, size: p.size, shape: p.shape, blend: p.blend, colors: [p.colorStart, p.colorEnd], alive_at_most: Math.min(p.max, Math.ceil(p.rate * p.life[1])) };
@@ -492,6 +539,26 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (l.radius !== undefined) n.light.radius = Math.max(0, num(l.radius, 'radius'));
         if (l.angle !== undefined) n.light.outerAngle = Math.min(179, Math.max(1, num(l.angle, 'angle')));
         if (l.inner_angle !== undefined) n.light.innerAngle = Math.min(100, Math.max(0, num(l.inner_angle, 'inner_angle')));
+    }
+    if (spec.player !== undefined) {
+        if (spec.player === null) delete n.player;
+        else {
+            if (n.light || n.camera || n.particles) throw new ToolError(`"${n.name}" cannot be the player (lights, cameras and particles cannot).`);
+            const other = doc.nodes.find((o) => o.player && o.id !== n.id) ?? batch.find((o) => o.player && o !== n);
+            if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
+            const pl = spec.player as Json;
+            const p: Record<string, unknown> = { ...(n.player ?? defaultPlayer(doc.design.specs)) };
+            const fields: [string, string][] = [
+                ['view', 'view'], ['speed', 'speed'], ['run_speed', 'runSpeed'], ['jump', 'jump'], ['gravity', 'gravity'], ['height', 'height'], ['radius', 'radius'],
+                ['eye_height', 'eyeHeight'], ['step_height', 'stepHeight'], ['distance', 'distance'], ['look_speed', 'lookSpeed'], ['invert_y', 'invertY'], ['collide', 'collide'],
+            ];
+            for (const [k, key] of fields) {
+                if (pl[k] === undefined) continue;
+                if (k === 'view' && !['third', 'first', 'scene'].includes(pl[k])) throw new ToolError('player.view must be third, first or scene.');
+                p[key] = typeof pl[k] === 'boolean' || k === 'view' ? pl[k] : num(pl[k], `player.${k}`);
+            }
+            n.player = sanitizePlayer(p)!;
+        }
     }
     if (spec.camera) {
         if (!n.camera) throw new ToolError(`"${n.name}" is not a camera.`);
@@ -657,7 +724,7 @@ class StagePolicy {
 
     /** The stage's tools allow moving or deleting `n`, and the placement lock does (Pipeline.placementBlock). */
     private placement(n: NodeDoc, verb: string): string {
-        const mover = !!n.light || !!n.camera || !!n.particles;
+        const mover = !!n.light || !!n.camera || !!n.particles || !!n.player;
         if (!(mover ? this.any('lights', 'objects', 'shots', 'effects') : this.allowed.has('objects'))) return `"${n.name}" cannot be ${verb} in the ${this.stage} stage.`;
         const why = this.pipeline.placementBlock([n.id]);
         return why ? `"${n.name}": ${why}` : '';
@@ -679,6 +746,7 @@ class StagePolicy {
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
+        if (spec.player !== undefined && !this.any('objects', 'code', 'play')) return `The player cannot be changed in the ${this.stage} stage.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
@@ -706,13 +774,17 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
             const stage = stageDef(ed.pipeline.design.stage);
             throw new ToolError(`${name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`);
         }
+        const quick = ed.store.doc.design.detail === 'quick';
+        if (quick && DETAILED_ONLY.has(name)) throw new ToolError('The user wants you to decide the details yourself: decide, write your choice into the plan and go on.');
+        if (!quick && QUICK_ONLY.has(name)) throw new ToolError('Only the user judges this, unless they let you decide the details (detail level quick).');
         const design =
             (await runDesignTool(env, name, args)) ??
             (await runGreyboxTool(env, name, args)) ??
             (await runImageTool(env, name, args)) ??
             (await runMaterialTool(env, name, args)) ??
             (await runEffectTool(env, name, args)) ??
-            (await runBehaviorTool(env, name, args));
+            (await runBehaviorTool(env, name, args)) ??
+            (await runLevelTool(env, name, args));
         if (design) return design;
         switch (name) {
             case 'get_scene': {

@@ -3,7 +3,7 @@
 // items are computed from the document; the others are ticked by the user
 // or proposed by the assistant.
 
-import { STAGE_IDS, stageIndex } from '../core/design';
+import { levelSignature, STAGE_IDS, stageIndex } from '../core/design';
 import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId } from '../core/types';
 import { hasColorGrade } from './effects';
 
@@ -16,6 +16,7 @@ export type ToolGroup =
     | 'shots'
     | 'capture'
     | 'images'
+    | 'concepts'
     | 'lights'
     | 'environment'
     | 'compare'
@@ -25,7 +26,7 @@ export type ToolGroup =
     | 'play';
 
 export const ALL_TOOL_GROUPS: ToolGroup[] = [
-    'read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'lights', 'environment', 'compare', 'materials', 'effects', 'code', 'play',
+    'read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts', 'lights', 'environment', 'compare', 'materials', 'effects', 'code', 'play',
 ];
 
 export interface CheckResult {
@@ -136,9 +137,9 @@ export const STAGES: StageDef[] = [
         title: 'Brief',
         long: 'Planning input',
         description:
-            'Give the planning document and concept images. The assistant decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements and asks about anything missing.',
+            'Give the planning document and concept images. The assistant decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements. What the plan leaves open it decides, or asks about when you want to work out the details. It can draw concept images for you to review.',
         locksPlacement: false,
-        tools: ['read', 'design'],
+        tools: ['read', 'design', 'concepts'],
         checks: [
             {
                 id: 'brief.layout',
@@ -177,11 +178,24 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'brief.questions',
-                text: 'Open questions are answered',
+                text: 'Open questions are answered (or go ahead with the assistant\'s assumption)',
                 auto: ({ design }) => {
-                    const open = design.questions.filter((q) => !q.answer.trim()).length;
-                    return { done: open === 0, detail: open ? `${open} open` : undefined };
+                    const waiting = design.questions.filter((q) => !q.answer.trim());
+                    const open = waiting.filter((q) => !q.assumed?.trim()).length;
+                    const assumed = waiting.length - open;
+                    const detail = [open ? `${open} open` : '', assumed ? `${assumed} going with an assumption` : ''].filter(Boolean).join(', ');
+                    return { done: open === 0, detail: detail || undefined };
                 },
+            },
+            {
+                id: 'brief.review',
+                text: 'Concept images the assistant made are reviewed',
+                auto: ({ design }) => {
+                    const proposed = design.concepts.filter((c) => c.review === 'proposed').length;
+                    // Letting the assistant decide, the user reviews them when they like.
+                    return { done: !proposed || design.detail === 'quick', detail: proposed ? `${proposed} waiting for review` : undefined };
+                },
+                hint: 'Approve or reject them in the Design tab (Brief & Concepts).',
             },
         ],
     },
@@ -190,9 +204,9 @@ export const STAGES: StageDef[] = [
         title: 'Level',
         long: 'Level (greybox)',
         description:
-            'Block out the level in one mid gray material with primitives and prefabs, ramps, stairs and a player capsule for scale. Frame a shot for every concept, walk the route at eye height, then make a paintover per shot: the chosen one becomes the target image.',
+            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Frame a shot for every concept, walk the route at eye height, then make a paintover per shot: the chosen one becomes the target image.',
         locksPlacement: false,
-        tools: ['read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images'],
+        tools: ['read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts'],
         checks: [
             {
                 id: 'level.objects',
@@ -228,6 +242,17 @@ export const STAGES: StageDef[] = [
                     const ok = v.filter((s) => s.ok === true).length;
                     return { done: ok === v.length, detail: v.length ? count(ok, v.length, 'clear') : 'none listed' };
                 },
+            },
+            {
+                id: 'level.closed',
+                text: 'The level check passes: buildings closed, route walkable, nothing floating',
+                auto: ({ doc, design }) => {
+                    const c = design.levelCheck;
+                    if (!c) return { done: false, detail: 'not checked yet' };
+                    if (c.signature !== levelSignature(doc)) return { done: false, detail: 'the level changed since the last check' };
+                    return { done: c.ok, detail: c.summary };
+                },
+                hint: 'Check the level in the Design tab, or let the assistant run check_level.',
             },
             { id: 'level.play', text: 'Play check passed (scale, paths, heights)' },
             {

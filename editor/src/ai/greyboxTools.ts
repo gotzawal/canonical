@@ -10,6 +10,7 @@ import { assetImageDataUrl } from '../core/images';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
 import { def, node, num, optStr, r3, rv, str, ToolError, v3, type Json } from './toolUtil';
+import { stageDef } from '../design/stages';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 const place = { type: ['array', 'string'], description: '[x, y, z], or the name / id of an object or route point.' };
@@ -42,6 +43,11 @@ export function greyboxToolDefs(): ToolDef[] {
         def('compare_shot', 'Compare a shot with its target paintover without a model call: a fresh capture and the target on a 64 pixel grid in CIE Lab. Returns a score (100 = the same; a reference only), the value structure (correlation of lightness, whatever the exposure), brightness and contrast of both, zones that are darker or brighter, in color mode saturation and color cast, and notes in plain words. The capture (left) and the target (right) are attached side by side, in grayscale for gray mode, with the difference map. Adds the capture to the shot history. The user judges and marks matching shots.', {
             shot: { type: 'string' },
             mode: { type: 'string', enum: ['gray', 'color'], description: 'Default: the stage\'s (gray in Lighting and Effects, color in Materials and Finish).' },
+        }, ['shot']),
+        def('mark_shot_matching', 'Mark a shot as matching its target in this stage, or clear the mark; in the Finish stage this approves the shot. Compare it first (compare_shot) and judge by the look, not only the score. Offered only when the user lets you decide the details; otherwise the user judges.', {
+            shot: { type: 'string' },
+            matching: { type: 'boolean', description: 'Default true.' },
+            note: { type: 'string', description: 'Why, in a few words.' },
         }, ['shot']),
         def('capture_player_view', 'See what the player sees: the camera stands on the ground at `from`, at the brief\'s eye height, and looks at `look_at`.', {
             from: place,
@@ -87,7 +93,7 @@ function areaRef(doc: SceneDoc, ref: unknown): string | null {
 }
 
 /** A point on the ground from [x, y, z], a route point, an area or an object. */
-function resolvePlace(env: ToolEnv, ref: unknown, what: string): { point: Vec3; node?: string } {
+export function resolvePlace(env: ToolEnv, ref: unknown, what: string): { point: Vec3; node?: string } {
     const doc = env.editor.store.doc;
     if (Array.isArray(ref)) return { point: v3(ref, what) };
     if (typeof ref !== 'string' || !ref) throw new ToolError(`${what} must be [x, y, z] or a name.`);
@@ -221,6 +227,26 @@ export async function runGreyboxTool(env: ToolEnv, name: string, args: Json): Pr
                 images,
                 summary: `${shot.name}: score ${r.score}, structure ${r.structure}`,
             };
+        }
+        case 'mark_shot_matching': {
+            const shot = findShot(doc(), args.shot);
+            const on = args.matching !== false;
+            const stage = stageDef(doc().design.stage);
+            const note = optStr(args.note, 'note', 400);
+            if (stage.id === 'finish') {
+                pipeline.updateShot(shot.id, { approved: on }, on ? 'AI: Approve Shot' : 'AI: Unapprove Shot');
+                return { data: { ok: true, shot: shot.name, approved: on, ...(note ? { note } : {}) }, summary: `${shot.name} ${on ? 'approved' : 'not approved'}` };
+            }
+            if (!stage.compare) throw new ToolError(`Shots are not compared in the ${stage.title} stage.`);
+            if (on && !shot.target) throw new ToolError(`${shot.name} has no target paintover yet (choose_paintover first).`);
+            let evidence: { blob: Blob; score: number; mode: 'gray' | 'color' } | undefined;
+            if (on) {
+                // The capture it was judged on stays in the shot's history.
+                const res = await pipeline.compareShot(shot.id, pipeline.compareMode);
+                evidence = { blob: res.blob, score: res.result.score, mode: pipeline.compareMode };
+            }
+            await pipeline.markMatched(shot.id, on, evidence);
+            return { data: { ok: true, shot: shot.name, matching: on, ...(evidence ? { score: evidence.score } : {}), ...(note ? { note } : {}) }, summary: `${shot.name} ${on ? 'matches' : 'does not match'}` };
         }
         case 'capture_player_view': {
             const from = resolvePlace(env, args.from, 'from');

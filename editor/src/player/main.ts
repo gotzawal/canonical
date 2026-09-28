@@ -101,6 +101,8 @@ async function main() {
     const view = new CameraController(runtime, store, picker);
     const compiler = new ScriptCompiler(store, game.trusted);
     const player = new Player(runtime, store, sync, picker, compiler);
+    // The player controller's joystick and hints go over the game.
+    player.controlsHost = root;
     new RenderGraphController(runtime, store, shaders, sync);
     store.on('change', (hint) => sync.sync(hint));
     sync.sync();
@@ -191,43 +193,50 @@ function nextFrames(runtime: Runtime, count: number): Promise<void> {
 }
 
 /**
- * Keys go to the scripts; the left button (every button when the game has a
- * camera node) too. Without a camera node the right button orbits the view,
- * the middle button (or Shift + right) pans and the wheel zooms.
+ * Keys go to the scripts; the left button, fingers (and every button when
+ * the game has a camera of its own) too. Without one the right button
+ * orbits the view, the middle button (or Shift + right) pans and the wheel
+ * zooms. With a player controller, fingers move and look (play/playControls.ts).
  */
 function bindInput(el: HTMLElement, player: Player, view: CameraController) {
     const local = (e: { clientX: number; clientY: number }): [number, number] => {
         const r = el.getBoundingClientRect();
         return [e.clientX - r.left, e.clientY - r.top];
     };
-    let drag: { mode: 'play' | 'orbit' | 'pan'; id: number; x: number; y: number } | null = null;
+    /** Pointers pressed for the game (several fingers at once). */
+    const game = new Set<number>();
+    /** The pointer moving the view, without a camera of the game's own. */
+    let drag: { mode: 'orbit' | 'pan'; id: number; x: number; y: number } | null = null;
 
     el.addEventListener('pointerdown', (e) => {
         el.focus({ preventScroll: true });
-        if (drag) return;
         const [x, y] = local(e);
-        el.setPointerCapture(e.pointerId);
-        if (e.button === 0 || player.usesGameCamera) {
-            drag = { mode: 'play', id: e.pointerId, x, y };
-            player.pointerEvent('down', x, y, e.button);
-        } else {
+        const touch = e.pointerType !== 'mouse';
+        if (e.button === 0 || player.usesGameCamera || touch) {
+            el.setPointerCapture(e.pointerId);
+            game.add(e.pointerId);
+            player.pointerEvent('down', x, y, e.button, e.pointerId, touch);
+        } else if (!drag) {
+            el.setPointerCapture(e.pointerId);
             drag = { mode: e.button === 2 && !e.shiftKey ? 'orbit' : 'pan', id: e.pointerId, x, y };
         }
     });
     el.addEventListener('pointermove', (e) => {
         const [x, y] = local(e);
-        if (!drag || drag.id === e.pointerId) player.pointerEvent('move', x, y, e.button);
-        if (!drag || drag.id !== e.pointerId) return;
+        if (drag?.id !== e.pointerId) {
+            player.pointerEvent('move', x, y, e.button, e.pointerId, e.pointerType !== 'mouse');
+            return;
+        }
         if (drag.mode === 'orbit') view.orbit(x - drag.x, y - drag.y);
-        else if (drag.mode === 'pan') view.pan(drag.x, drag.y, x, y);
+        else view.pan(drag.x, drag.y, x, y);
         drag.x = x;
         drag.y = y;
     });
     const up = (e: PointerEvent) => {
-        if (!drag || drag.id !== e.pointerId) return;
         const [x, y] = local(e);
-        if (drag.mode === 'play') player.pointerEvent('up', x, y, e.button);
-        drag = null;
+        if (game.delete(e.pointerId)) player.pointerEvent(e.type === 'pointercancel' ? 'cancel' : 'up', x, y, e.button, e.pointerId, e.pointerType !== 'mouse');
+        else if (drag?.id === e.pointerId) drag = null;
+        else return;
         if (el.hasPointerCapture(e.pointerId)) el.releasePointerCapture(e.pointerId);
     };
     el.addEventListener('pointerup', up);

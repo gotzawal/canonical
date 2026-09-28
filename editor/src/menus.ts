@@ -22,7 +22,7 @@ export function createMenu(editor: Editor): MenuItem[] {
         { label: 'Ramp', icon: 'ramp', action: () => editor.createPrimitive('ramp') },
         { label: 'Stairs', icon: 'stairs', action: () => editor.createPrimitive('stairs') },
         { label: 'Capsule', icon: 'capsule', action: () => editor.createPrimitive('capsule') },
-        { label: 'Player Capsule', icon: 'capsule', action: () => editor.createPlayerCapsule() },
+        { label: 'Player', icon: 'walk', action: () => editor.createPlayer() },
         { separator: true },
         {
             label: 'Prefab',

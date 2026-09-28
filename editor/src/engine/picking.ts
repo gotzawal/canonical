@@ -145,7 +145,12 @@ export class Picker {
         return best;
     }
 
-    intersectRenderer(r: RenderNode, ray: Ray): number | null {
+    /**
+     * Distance along `ray` to the nearest triangle of a renderer, or null.
+     * With `normal`, the world normal of the triangle hit is written into it
+     * (from the vertex normals where the mesh has them; zero without one).
+     */
+    intersectRenderer(r: RenderNode, ray: Ray, normal?: Vec3): number | null {
         const geo = r.geometry;
         if (!geo || !r.object3D) return null;
         const world = r.object3D.transform.worldMatrix.rawData;
@@ -165,9 +170,11 @@ export class Picker {
         const pos = geo.getAttribute(VertexAttributeName.position)?.data as ArrayLike<number> | undefined;
         const idx = geo.getAttribute(VertexAttributeName.indices)?.data as ArrayLike<number> | undefined;
         const topology = (r.materials?.[0] as any)?.topology;
+        if (normal) normal[0] = normal[1] = normal[2] = 0;
         if (!pos || pos.length < 9 || (topology && topology !== 'triangle-list')) return boxT;
 
         let best: number | null = null;
+        let hitTri: [number, number, number] | null = null;
         const tri = (a: number, b2: number, c: number) => {
             const t = rayTriangle(
                 o[0], o[1], o[2], d[0], d[1], d[2],
@@ -175,7 +182,10 @@ export class Picker {
                 pos[b2 * 3], pos[b2 * 3 + 1], pos[b2 * 3 + 2],
                 pos[c * 3], pos[c * 3 + 1], pos[c * 3 + 2],
             );
-            if (t !== null && (best === null || t < best)) best = t;
+            if (t !== null && (best === null || t < best)) {
+                best = t;
+                if (normal) hitTri = [a, b2, c];
+            }
         };
         const vertexCount = Math.floor(pos.length / 3);
         if (idx && idx.length >= 3) {
@@ -185,6 +195,23 @@ export class Picker {
             }
         } else {
             for (let i = 0; i + 2 < vertexCount; i += 3) tri(i, i + 1, i + 2);
+        }
+        if (normal && hitTri) {
+            const [a, b2, c] = hitTri;
+            const nrm = geo.getAttribute(VertexAttributeName.normal)?.data as ArrayLike<number> | undefined;
+            let n: Vec3;
+            if (nrm && nrm.length >= vertexCount * 3) {
+                n = [nrm[a * 3] + nrm[b2 * 3] + nrm[c * 3], nrm[a * 3 + 1] + nrm[b2 * 3 + 1] + nrm[c * 3 + 1], nrm[a * 3 + 2] + nrm[b2 * 3 + 2] + nrm[c * 3 + 2]];
+            } else {
+                const e1: Vec3 = [pos[b2 * 3] - pos[a * 3], pos[b2 * 3 + 1] - pos[a * 3 + 1], pos[b2 * 3 + 2] - pos[a * 3 + 2]];
+                const e2: Vec3 = [pos[c * 3] - pos[a * 3], pos[c * 3 + 1] - pos[a * 3 + 1], pos[c * 3 + 2] - pos[a * 3 + 2]];
+                n = [e1[1] * e2[2] - e1[2] * e2[1], e1[2] * e2[0] - e1[0] * e2[2], e1[0] * e2[1] - e1[1] * e2[0]];
+            }
+            // Normals go through the inverse transpose of the world matrix.
+            const w = normalize([inv[0] * n[0] + inv[1] * n[1] + inv[2] * n[2], inv[4] * n[0] + inv[5] * n[1] + inv[6] * n[2], inv[8] * n[0] + inv[9] * n[1] + inv[10] * n[2]]);
+            normal[0] = w[0];
+            normal[1] = w[1];
+            normal[2] = w[2];
         }
         return best;
     }
@@ -273,7 +300,7 @@ export class Picker {
 }
 
 /** World axis aligned box of one renderer, or null when it has no usable bounds. */
-function rendererWorldBox(r: RenderNode): Box | null {
+export function rendererWorldBox(r: RenderNode): Box | null {
     const b = r.geometry?.bounds;
     if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) return null;
     const m = r.object3D.transform.worldMatrix.rawData;

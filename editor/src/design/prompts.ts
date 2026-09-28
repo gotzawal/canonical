@@ -13,10 +13,12 @@ export function structurePrompt(restructure: boolean): string {
     }
     return [
         'Structure the planning brief. Read it with read_design (section "brief") and look at the concept images (view_images).',
-        'First decide how the scene is built: the kind of place, its overall size in meters, the ground, where each area sits (bounds) and how the areas connect. Save that as the layout.',
-        'Then list the areas with the objects each one needs, the specs (player height, eye height, door width and height, step height, steepest slope), the mood (time of day, key light direction and color, palette), the play requirements (the route through the level, landmark sight lines, the order of the areas), the effects the brief asks for, and map every concept image to its area.',
-        'Save everything with update_design (from_brief true). Where the brief leaves something open, ask me with ask_user instead of guessing.',
-        'Finish with a short summary. Answer in the language of the brief.',
+        'If the detail level is not set yet, judge it from how the brief is written (set_detail_level); only if you cannot tell, ask me once (ask_detail_level) and stop there.',
+        'First decide how the scene is built: the kind of place, its overall size in meters (compact: no more space than the areas need), the ground, where each area sits (bounds) and how the areas connect. Save that as the layout.',
+        'Then list the areas with the objects each one needs, the specs (player height, eye height, door width and height, step height, steepest slope), the mood (time of day, key light direction and color, palette), the play requirements (the route through the level with positions, landmark sight lines, the order of the areas), the effects the brief asks for, and map every concept image to its area.',
+        'Save everything with update_design (from_brief true). What the brief leaves open: decide it yourself when the detail level is quick; when it is detailed, ask me only what changes the plan a lot (ask_user, at most 3 questions, each with the assumption you go ahead with).',
+        'For areas without a concept image, draw one with generate_concept if you can, so I can review how the design will look.',
+        'When the checklist is done, propose completing the stage. Finish with a short summary. Answer in the language of the brief.',
     ].join(' ');
 }
 
@@ -25,14 +27,15 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     brief: structurePrompt(false),
     level: [
         'Work on the Level stage (greybox). Read the plan with read_design.',
-        'Build the layout in the gray greybox material only (no colors or textures, material slots are fine): ground, floors, walls and openings sized by the specs, ramps and stairs, and every object the areas list, under one group per area named after the area. Reuse repeated objects as prefabs.',
-        'Add a player capsule for scale. Frame a shot for every concept image (create_shot), check the route and the landmark sight lines from the player\'s eye height (capture_player_view, check_sightline) and tick what is done with update_checklist.',
-        'When the route and sight lines pass, make a paintover of every shot (generate_paintover) and ask me to choose the targets. Tell me what is left. Answer in the language of the brief.',
+        'Build the layout in the gray greybox material only (no colors or textures, material slots are fine), under one group per area named after the area: the ground, every building and interior with build_rooms (closed and compact, doors on the route), ramps and stairs, and every object the areas list. Reuse repeated objects as prefabs.',
+        'Place the player where the route starts (place_player). Run check_level and fix what it finds (seams, gaps, holes, floating objects, route points out of reach, rooms without a way in, large empty spaces) until it passes.',
+        'Frame a shot for every concept image (create_shot), check the landmark sight lines from the player\'s eye height (check_sightline), play-test (run_play_test) and tick what is done with update_checklist.',
+        'Then make a paintover of every shot (generate_paintover): when the detail level is quick choose the targets yourself (choose_paintover), otherwise ask me to choose. Tell me what is left. Answer in the language of the brief.',
     ].join(' '),
     light: [
         'Work on the Lighting stage (pass 1). Placement is locked and every surface stays gray, so only the light is judged. Read the mood with read_design.',
         'Set the sky and time of day, the key light (apply_key_light points it the way the mood says), fill and interior lights, exposure and global illumination. Keep the shadow-casting lights within the budget.',
-        'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches; I mark the shots that match. Tick what is done with update_checklist and propose completing the stage when it matches.',
+        'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches; I mark the shots that match (with the detail level quick, you judge them: mark_shot_matching). Tick what is done with update_checklist and propose completing the stage when it matches.',
         'Answer in the language of the brief.',
     ].join(' '),
     material: [
@@ -48,7 +51,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     ].join(' '),
     finish: [
         'Work on the Finish stage: a final lighting pass and polish, then color grading with a lift, gamma, gain and saturation post effect (add_color_grade).',
-        'Compare every shot with its paintover (compare_shot) and tell me which ones look ready to approve.',
+        'Compare every shot with its paintover (compare_shot) and tell me which ones look ready to approve (with the detail level quick, approve them yourself: mark_shot_matching).',
         'Answer in the language of the brief.',
     ].join(' '),
 };

@@ -19,7 +19,7 @@ const SUGGESTIONS = [
     'Write a script that makes the selected object orbit around the origin, and attach it.',
     'Create a glowing hologram shader and use it on the sphere.',
     'Add a vignette and a subtle color grade post effect.',
-    'Make a player cube that moves with WASD and jumps with Space, and a camera that follows it. Test it.',
+    'Build a small two-room house with a door and windows, place the player at the entrance and check the level.',
     'Run the scene, read the errors and fix the scripts.',
 ];
 
@@ -347,6 +347,8 @@ export class AIPanel {
         } else if (t.detail) {
             const details = h('details', { class: 'ai-note-details' }, h('summary', null, icon('history', 13), h('span', { text: t.text })), h('div', { class: 'ai-note-detail', text: t.detail }));
             el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, details);
+        } else if (t.choice) {
+            el = h('div', { class: 'ai-msg choice' }, h('div', { class: 'ai-choice-question', text: t.text }), this.choiceButtons(t));
         } else {
             el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, icon(t.error ? 'alert' : 'info', 13), h('span', { text: t.text }));
         }
@@ -362,6 +364,35 @@ export class AIPanel {
         }
         this.views.set(t.id, el);
         return el;
+    }
+
+    /** The options of a choice note: picking one sets what it stands for and sends its label as the answer. */
+    private choiceButtons(t: AgentTurn): HTMLElement {
+        const c = t.choice!;
+        return h(
+            'div',
+            { class: 'ai-choice-options' },
+            c.options.map((o) => {
+                const picked = c.picked === o.value;
+                const b = button(o.label, () => {
+                    if (c.picked) return;
+                    if (this.agent.busy || this.agent.working) {
+                        toast('The assistant is still working on the last request.', 'info');
+                        return;
+                    }
+                    if (c.kind === 'detail' && (o.value === 'quick' || o.value === 'detailed')) {
+                        const level = o.value;
+                        this.editor.store.commit('Detail Level', (d) => {
+                            d.design.detail = level;
+                        }, { design: true });
+                    }
+                    this.agent.answerChoice(t, o.value);
+                    this.send(o.label);
+                }, picked ? 'small primary' : 'small', picked ? 'check' : undefined);
+                b.disabled = !!c.picked;
+                return b;
+            }),
+        );
     }
 
     private welcome(): HTMLElement {
@@ -439,12 +470,12 @@ export class AIPanel {
         const memo = new CheckboxField(s.memo, () => {}, 'Keep a scene memo up to date at checkpoints');
         const stageTools = new CheckboxField(s.stageTools, () => {}, 'The pipeline stage decides which tools the assistant gets');
         const cacheLong = new CheckboxField(s.cacheLong, () => {}, 'Keep the prompt cache for an hour (Claude)');
-        const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (paintovers, swatches)');
+        const images = new CheckboxField(s.allowImages, () => {}, 'Let the assistant generate images (concepts, paintovers, swatches)');
         const imageModel = h('input', { class: 'text', attrs: { type: 'text', list: 'ai-image-models', spellcheck: 'false', placeholder: DEFAULT_IMAGE_MODEL } });
         imageModel.value = s.imageModel;
         imageModel.addEventListener('keydown', (e) => e.stopPropagation());
         const imageList = h('datalist', { attrs: { id: 'ai-image-models' } });
-        const imageInfo = h('div', { class: 'muted small', text: 'Used for paintovers and swatches, by you and the assistant.' });
+        const imageInfo = h('div', { class: 'muted small', text: 'Used for concepts, paintovers and swatches, by you and the assistant.' });
         let imageModels: ImageModel[] = [];
         const describeImageModel = () => {
             const id = imageModel.value.trim() || DEFAULT_IMAGE_MODEL;

@@ -1,7 +1,9 @@
 /**
- * Keyboard and mouse state for scripts. Key names are lower case and match
- * either KeyboardEvent.key ("w", "arrowup", "shift") or KeyboardEvent.code
- * ("keyw", "digit1"); the space bar is "space".
+ * Keyboard, mouse and touch state for scripts. Key names are lower case and
+ * match either KeyboardEvent.key ("w", "arrowup", "shift") or
+ * KeyboardEvent.code ("keyw", "digit1"); the space bar is "space". On touch
+ * screens the on-screen joystick adds to the axes and its buttons press keys
+ * (the jump button is "space").
  */
 export class Input {
     private held = new Set<string>();
@@ -13,6 +15,12 @@ export class Input {
 
     /** Pointer position in CSS pixels relative to the viewport, and movement this frame. */
     readonly mouse = { x: 0, y: 0, dx: 0, dy: 0, wheel: 0 };
+
+    /** The on-screen joystick, -1..1 (x right, y forward); active while a finger holds it. */
+    readonly stick = { x: 0, y: 0, active: false };
+
+    /** Camera look from fingers this frame: drag in CSS pixels, and pinch zoom (> 0 zooms out). */
+    readonly look = { dx: 0, dy: 0, zoom: 0 };
 
     /** True while the key is held. */
     key(name: string): boolean {
@@ -29,12 +37,15 @@ export class Input {
         return this.released.has(name.toLowerCase());
     }
 
-    /** -1..1 from WASD and the arrow keys: 'horizontal' (A/D, left/right) or 'vertical' (S/W, down/up). */
+    /**
+     * -1..1 from WASD, the arrow keys and the on-screen joystick:
+     * 'horizontal' (A/D, left/right) or 'vertical' (S/W, down/up).
+     */
     axis(name: 'horizontal' | 'vertical'): number {
-        if (name === 'horizontal') {
-            return (this.key('d') || this.key('arrowright') ? 1 : 0) - (this.key('a') || this.key('arrowleft') ? 1 : 0);
-        }
-        return (this.key('w') || this.key('arrowup') ? 1 : 0) - (this.key('s') || this.key('arrowdown') ? 1 : 0);
+        const keys = name === 'horizontal'
+            ? (this.key('d') || this.key('arrowright') ? 1 : 0) - (this.key('a') || this.key('arrowleft') ? 1 : 0)
+            : (this.key('w') || this.key('arrowup') ? 1 : 0) - (this.key('s') || this.key('arrowdown') ? 1 : 0);
+        return Math.max(-1, Math.min(1, keys + (name === 'horizontal' ? this.stick.x : this.stick.y)));
     }
 
     /** True while the mouse button is held (0 left, 1 middle, 2 right). */
@@ -55,16 +66,37 @@ export class Input {
     /** @internal */
     keyEvent(e: KeyboardEvent, down: boolean) {
         const names = keyNames(e);
-        for (const n of names) {
-            if (down) {
-                if (!this.held.has(n)) this.pressed.add(n);
-                this.held.add(n);
-            } else {
-                this.held.delete(n);
-                this.released.add(n);
-            }
-        }
+        for (const n of names) this.setKey(n, down);
         return names[0];
+    }
+
+    /** @internal A key pressed by an on-screen button. */
+    virtualKey(name: string, down: boolean) {
+        this.setKey(name.toLowerCase(), down);
+    }
+
+    private setKey(n: string, down: boolean) {
+        if (down) {
+            if (!this.held.has(n)) this.pressed.add(n);
+            this.held.add(n);
+        } else {
+            this.held.delete(n);
+            this.released.add(n);
+        }
+    }
+
+    /** @internal */
+    setStick(x: number, y: number, active: boolean) {
+        this.stick.x = Math.max(-1, Math.min(1, x));
+        this.stick.y = Math.max(-1, Math.min(1, y));
+        this.stick.active = active;
+    }
+
+    /** @internal */
+    addLook(dx: number, dy: number, zoom = 0) {
+        this.look.dx += dx;
+        this.look.dy += dy;
+        this.look.zoom += zoom;
     }
 
     /** @internal */
@@ -100,6 +132,9 @@ export class Input {
         this.mouse.dx = 0;
         this.mouse.dy = 0;
         this.mouse.wheel = 0;
+        this.look.dx = 0;
+        this.look.dy = 0;
+        this.look.zoom = 0;
     }
 
     /** @internal Releases everything, e.g. when the window loses focus. */
@@ -108,6 +143,7 @@ export class Input {
         this.held.clear();
         for (const b of this.buttons) this.buttonsUp.add(b);
         this.buttons.clear();
+        this.setStick(0, 0, false);
     }
 }
 
