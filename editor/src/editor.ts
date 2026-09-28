@@ -1,6 +1,6 @@
 import { applyBehaviorOps, writeBehaviorChanges, type OpsMode, type OpsResult } from './core/behavior/ops';
 import { PARTICLE_PRESETS, presetParticles } from './core/particles';
-import { makePlayerNode } from './core/player';
+import { makeCharacterNode } from './core/character';
 import { kindOf, putAsset } from './core/assets';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
@@ -737,10 +737,10 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     /**
-     * The player: a capsule the size of the brief's player with the built-in
-     * player controller (it walks, jumps and carries the camera in Play),
-     * standing on the ground under the view. A scene has one player; when it
-     * has one already, that one is selected.
+     * The player: a character the size of the brief's player with the
+     * built-in player controller (it walks, jumps and carries the camera in
+     * Play), standing on the ground under the view. A scene has one player;
+     * when it has one already, that one is selected.
      */
     createPlayer() {
         const existing = this.store.doc.nodes.find((n) => n.player);
@@ -750,12 +750,17 @@ export class Editor extends Emitter<EditorEvents> {
             toast(`The scene has a player already: ${existing.name}. Move it to where the game starts.`, 'info', 4500);
             return;
         }
+        this.createCharacter(true);
+    }
+
+    /** A character at the spawn point: an NPC (walked by a behavior tree or a script), or the player's. */
+    createCharacter(player = false) {
         if (!this.canAddObjects()) return;
-        const node = makePlayerNode(this.store.doc.design.specs);
+        const node = makeCharacterNode(this.store.doc.design.specs, player);
         const p = this.viewport.spawnPoint();
-        node.position = [round(p[0]), round(p[1] + node.player!.height / 2), round(p[2])];
-        node.name = this.uniqueName('Player', null);
-        this.insert([node], 'Create Player');
+        node.position = [round(p[0]), round(p[1] + node.character!.height / 2), round(p[2])];
+        node.name = this.uniqueName(node.name, null);
+        this.insert([node], player ? 'Create Player' : 'Create Character');
     }
 
     // ------------------------------------------------------------- cameras

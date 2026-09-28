@@ -4,11 +4,11 @@
 
 import { makeMeshNode, makeNode } from '../core/defaults';
 import { invert, mat4, transformPoint } from '../core/math';
-import { makePlayerNode } from '../core/player';
+import { makeCharacterNode } from '../core/character';
 import type { NodeDoc, Vec3 } from '../core/types';
 import { runLevelCheck, summarize } from '../design/levelCheck';
 import { assignSlot, upsertSlot } from '../design/materialSlots';
-import { planBuilding, SIDES, type OpeningSpec, type RoomSpec, type Side } from '../design/rooms';
+import { planBuilding, SIDES, snapRooms, type OpeningSpec, type RoomSpec, type Side } from '../design/rooms';
 import type { ToolDef } from './openrouter';
 import { resolvePlace } from './greyboxTools';
 import type { ToolEnv, ToolResult } from './tools';
@@ -89,7 +89,7 @@ export function levelToolDefs(): ToolDef[] {
         ),
         def(
             'place_player',
-            'Place the player: the built-in Player Controller module. In Play it walks with WASD or the arrow keys (an on-screen joystick on touch screens), runs with Shift, jumps with Space, and a drag turns the camera (the wheel or a pinch zooms). It stands on the ground at `at` with the brief\'s body size; a scene has one player, so an existing one moves there. Never write movement or camera scripts for the player; change its options here or with update_objects (the player field).',
+            'Place the player: a character (the brief\'s body size) that the built-in Player Controller moves. In Play it walks with WASD or the arrow keys (an on-screen joystick on touch screens), runs with Shift, jumps with Space, and a drag turns the camera (the wheel or a pinch zooms). It stands on the ground at `at`; a scene has one player, so an existing one moves there. Never write movement or camera scripts for the player; change its options here or with update_objects (the character and player fields).',
             {
                 at: place,
                 facing: { type: ['number', 'array', 'string'], description: 'Degrees around +Y (0 faces +z), or a point / name to face.' },
@@ -131,27 +131,14 @@ function roomsFrom(env: ToolEnv, args: Json): RoomSpec[] {
         if (max[0] - min[0] > 500 || max[1] - min[1] > 500) throw new ToolError(`${name} is larger than 500 m.`);
         const h = r.height !== undefined ? num(r.height, `${name}: height`) : height;
         if (h < 1 || h > 60) throw new ToolError(`${name}: height must be 1 to 60 m.`);
-        const openings: OpeningSpec[] = [];
-        for (const d of Array.isArray(r.doors) ? r.doors : []) {
-            openings.push({
-                side: sideOf(d?.side, `${name}: door side`),
-                kind: 'door',
-                ...(d.at !== undefined ? { at: num(d.at, `${name}: door at`) } : {}),
-                width: d.width !== undefined ? num(d.width, 'door width') : specs.doorWidth,
-                height: d.height !== undefined ? num(d.height, 'door height') : specs.doorHeight,
-                sill: 0,
-            });
-        }
-        for (const w of Array.isArray(r.windows) ? r.windows : []) {
-            openings.push({
-                side: sideOf(w?.side, `${name}: window side`),
-                kind: 'window',
-                ...(w.at !== undefined ? { at: num(w.at, `${name}: window at`) } : {}),
-                width: w.width !== undefined ? num(w.width, 'window width') : 1.2,
-                height: w.height !== undefined ? num(w.height, 'window height') : 1.2,
-                sill: w.sill !== undefined ? num(w.sill, 'window sill') : 0.9,
-            });
-        }
+        // Doors are the brief's size; windows 1.2 m square, 0.9 m above the floor.
+        const opening = (o: Json, kind: 'door' | 'window'): OpeningSpec => {
+            const d = kind === 'door' ? { width: specs.doorWidth, height: specs.doorHeight, sill: 0 } : { width: 1.2, height: 1.2, sill: 0.9 };
+            const val = (k: 'at' | 'width' | 'height' | 'sill') => (o?.[k] !== undefined ? num(o[k], `${name}: ${kind} ${k}`) : undefined);
+            return { side: sideOf(o?.side, `${name}: ${kind} side`), kind, at: val('at'), width: val('width') ?? d.width, height: val('height') ?? d.height, sill: kind === 'door' ? 0 : val('sill') ?? d.sill };
+        };
+        const list = (v: unknown) => (Array.isArray(v) ? v : []);
+        const openings = [...list(r.doors).map((o) => opening(o, 'door')), ...list(r.windows).map((o) => opening(o, 'window'))];
         const holes = (Array.isArray(r.holes) ? r.holes : []).map((hole: unknown) => {
             if (!Array.isArray(hole) || hole.length !== 4) throw new ToolError(`${name}: a hole is [min x, min z, max x, max z].`);
             return hole.map((v) => num(v, `${name}: hole`)) as [number, number, number, number];
@@ -169,31 +156,6 @@ function roomsFrom(env: ToolEnv, args: Json): RoomSpec[] {
             holes,
         };
     });
-}
-
-/**
- * Rooms meant to share a wall whose edges are a little apart would get two
- * walls with a slit between them: edges this close become one line.
- */
-function snapRooms(rooms: RoomSpec[], limit: number): string[] {
-    const notes: string[] = [];
-    for (let i = 0; i < rooms.length; i++) {
-        for (let j = 0; j < rooms.length; j++) {
-            const a = rooms[i], b = rooms[j];
-            if (i === j || Math.abs(a.floorY - b.floorY) > 1e-3) continue;
-            for (const k of [0, 1] as const) {
-                const o = 1 - k;
-                const gap = b.min[k] - a.max[k];
-                const overlap = Math.min(a.max[o], b.max[o]) - Math.max(a.min[o], b.min[o]);
-                if (Math.abs(gap) < 1e-6 || Math.abs(gap) >= limit || overlap <= 0.1) continue;
-                const at = Math.round(((a.max[k] + b.min[k]) / 2) * 1000) / 1000;
-                a.max[k] = at;
-                b.min[k] = at;
-                notes.push(`${a.name} and ${b.name} were ${Math.abs(Math.round(gap * 100) / 100)} m ${gap > 0 ? 'apart' : 'over each other'}: they share the wall at ${k ? 'z' : 'x'} = ${at}.`);
-            }
-        }
-    }
-    return notes;
 }
 
 /** Refuses rooms that overlap (they touch along their edges, the wall between them). */
@@ -334,7 +296,8 @@ export async function runLevelTool(env: ToolEnv, name: string, args: Json): Prom
             const own = new Set(existing ? [existing.id, ...store.descendants(existing.id).map((n) => n.id)] : []);
             ed.picker.update();
             const p = where.point;
-            const hit = ed.picker.raycast([p[0], p[1] + 2, p[2]], [0, -1, 0], 60, (id) => own.has(id));
+            // Down from a little above the point (an object's middle, not over its roof) to what is under it.
+            const hit = ed.picker.raycast([p[0], p[1] + 0.6, p[2]], [0, -1, 0], 60, (id) => own.has(id));
             const feet: Vec3 = [p[0], hit ? hit.point[1] : p[1], p[2]];
             let facing: number | undefined;
             if (args.facing !== undefined) {
@@ -344,20 +307,21 @@ export async function runLevelTool(env: ToolEnv, name: string, args: Json): Prom
                     facing = (Math.atan2(to[0] - feet[0], to[2] - feet[2]) * 180) / Math.PI;
                 }
             }
-            const options = (pl: NonNullable<NodeDoc['player']>) => {
+            const options = (n: NodeDoc) => {
                 if (args.view !== undefined) {
                     if (!['third', 'first', 'scene'].includes(args.view)) throw new ToolError('view must be third, first or scene.');
-                    pl.view = args.view;
+                    n.player!.view = args.view;
                 }
-                if (args.speed !== undefined) pl.speed = Math.max(0, num(args.speed, 'speed'));
-                if (args.run_speed !== undefined) pl.runSpeed = Math.max(0, num(args.run_speed, 'run_speed'));
-                if (args.jump !== undefined) pl.jump = Math.max(0, num(args.jump, 'jump'));
+                const c = n.character!;
+                if (args.speed !== undefined) c.speed = Math.max(0, num(args.speed, 'speed'));
+                if (args.run_speed !== undefined) c.runSpeed = Math.max(0, num(args.run_speed, 'run_speed'));
+                if (args.jump !== undefined) c.jump = Math.max(0, num(args.jump, 'jump'));
             };
             if (existing) {
                 // Its origin keeps its height over its feet.
                 const b = ed.picker.bounds(existing.id);
                 const m = ed.picker.worldMatrix(existing.id);
-                const lift = b && m ? m[13] - b.min[1] : existing.player!.height / 2;
+                const lift = b && m ? m[13] - b.min[1] : (existing.character?.height ?? 1.8) / 2;
                 const world: Vec3 = [feet[0], feet[1] + lift, feet[2]];
                 const parentWorld = existing.parent ? ed.picker.worldMatrix(existing.parent) : null;
                 const local = parentWorld ? transformPoint(invert(parentWorld) ?? mat4(), world) : world;
@@ -365,15 +329,16 @@ export async function runLevelTool(env: ToolEnv, name: string, args: Json): Prom
                     const n = d.nodes.find((x) => x.id === existing.id)!;
                     n.position = [round(local[0]), round(local[1]), round(local[2])];
                     if (facing !== undefined) n.rotation = [n.rotation[0], round(facing), n.rotation[2]];
-                    options(n.player!);
+                    n.character ??= makeCharacterNode(d.design.specs).character;
+                    options(n);
                 }, { nodes: [existing.id] });
                 return { data: { id: existing.id, name: existing.name, moved: true, feet: rv(feet), ...(hit ? {} : { note: 'No ground under that point: the player will fall. Place it over a floor.' }) }, summary: existing.name };
             }
-            const n = makePlayerNode(store.doc.design.specs);
+            const n = makeCharacterNode(store.doc.design.specs, true);
             n.name = ed.uniqueName('Player', null);
-            n.position = [round(feet[0]), round(feet[1] + n.player!.height / 2), round(feet[2])];
+            n.position = [round(feet[0]), round(feet[1] + n.character!.height / 2), round(feet[2])];
             if (facing !== undefined) n.rotation = [0, round(facing), 0];
-            options(n.player!);
+            options(n);
             store.commit('AI: Place Player', (d) => {
                 d.nodes.push(n);
             });

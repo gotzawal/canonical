@@ -4,6 +4,7 @@ import { invert, transformPoint } from '../core/math';
 import type { Vec3 } from '../core/types';
 import type { BlackboardApi } from './ai/agents';
 import type { SayOptions } from './ai/speech';
+import type { Character } from './character';
 import type { Input } from './input';
 
 // Base class of user scripts. Scripts are plain classes:
@@ -88,6 +89,7 @@ export interface PlayApi {
     spawned(owner: Script): Object3D[];
     blackboard(target: Object3D | string): BlackboardApi | null;
     setPlayer(obj: Object3D | null): void;
+    character(target: Object3D | string | null): Character | null;
     remember(text: string, tags: string[]): string | null;
     memory(id: string): { id: string; text: string; tags: string[] } | null;
     saveMemories(): SavedMemory[];
@@ -238,7 +240,7 @@ export class Script {
         this.api.setColor(obj ?? this.object3D, color, true, intensity);
     }
 
-    /** Turns this object so its forward axis points at a position or another object. */
+    /** Turns this object so its forward axis points at a position or another object (a character turns its body). */
     lookAt(target: Object3D | [number, number, number] | { x: number; y: number; z: number }) {
         const t = this.transform;
         if (!t) return;
@@ -248,6 +250,8 @@ export class Script {
             const w = (target as Object3D).transform.worldPosition;
             to = [w.x, w.y, w.z];
         } else to = [(target as any).x, (target as any).y, (target as any).z];
+        const character = this.api.character(this.object3D);
+        if (character?.obj === this.object3D) return character.lookAt(to);
         // Transform.lookAt works in the parent's space.
         const parent = t.parent?.object3D;
         if (parent) {
@@ -281,6 +285,21 @@ export class Script {
     /** The blackboard of another object's behavior tree (by object or name). */
     getBlackboard(target: Object3D | string): BlackboardApi | null {
         return this.api.blackboard(target);
+    }
+
+    /**
+     * This object's character (null without one): move(x, z) each frame,
+     * moveTo(target, { radius, run }) (a Promise), jump(), stop(), run, face,
+     * and its state (velocity, speed, grounded, mode) and events
+     * (on('jump' | 'land' | 'mode', fn)) to animate it by.
+     */
+    get character(): Character | null {
+        return this.api.character(this.object3D);
+    }
+
+    /** Another object's character (by object or name). */
+    getCharacter(target: Object3D | string): Character | null {
+        return this.api.character(target);
     }
 
     /** Agents near this object (the player) get their questions answered first. The camera counts until a script sets one. */

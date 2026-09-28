@@ -18,7 +18,9 @@ export function hasTouch(): boolean {
     return (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches) || (navigator.maxTouchPoints ?? 0) > 0;
 }
 
-interface LookTouch {
+/** A finger on the view: where it is, where and when it came down, and whether it moved (else it may be a tap). */
+interface Touch {
+    id: number;
     x: number;
     y: number;
     x0: number;
@@ -35,8 +37,8 @@ export class PlayControls {
     private knob: HTMLElement;
     private jumpBtn: HTMLButtonElement;
     private hint: HTMLElement;
-    private stick: { id: number; x: number; y: number } | null = null;
-    private looks = new Map<number, LookTouch>();
+    private stick: Touch | null = null;
+    private looks = new Map<number, Touch>();
     private pinch = 0;
     private hintTimer = 0;
     private touchSeen = false;
@@ -127,9 +129,10 @@ export class PlayControls {
             this.showHint();
         }
         if (type === 'down') {
+            const t: Touch = { id, x, y, x0: x, y0: y, at: performance.now(), moved: false };
             const width = this.el.clientWidth || window.innerWidth;
             if (!this.stick && x < width * STICK_ZONE) {
-                this.stick = { id, x, y };
+                this.stick = t;
                 this.base.style.left = `${x}px`;
                 this.base.style.top = `${y}px`;
                 this.knob.style.transform = '';
@@ -137,14 +140,19 @@ export class PlayControls {
                 this.input.setStick(0, 0, true);
                 return;
             }
-            this.looks.set(id, { x, y, x0: x, y0: y, at: performance.now(), moved: false });
+            this.looks.set(id, t);
             this.pinch = this.pinchDistance();
             return;
         }
-        if (this.stick?.id === id) {
+        const s = this.stick?.id === id ? this.stick : null;
+        const t = s ?? this.looks.get(id);
+        if (!t) return;
+        if (type === 'move' && Math.hypot(x - t.x0, y - t.y0) > TAP_PX) t.moved = true;
+        const tapped = type === 'up' && !t.moved && performance.now() - t.at < TAP_MS;
+        if (s) {
             if (type === 'move') {
-                let dx = x - this.stick.x;
-                let dy = y - this.stick.y;
+                let dx = x - s.x0;
+                let dy = y - s.y0;
                 const len = Math.hypot(dx, dy);
                 if (len > STICK_RADIUS) {
                     dx *= STICK_RADIUS / len;
@@ -156,17 +164,15 @@ export class PlayControls {
                 this.stick = null;
                 this.base.hidden = true;
                 this.input.setStick(0, 0, false);
+                if (tapped) this.tap(x, y);
             }
             return;
         }
-        const t = this.looks.get(id);
-        if (!t) return;
         if (type === 'move') {
             const dx = x - t.x;
             const dy = y - t.y;
             t.x = x;
             t.y = y;
-            if (Math.hypot(x - t.x0, y - t.y0) > TAP_PX) t.moved = true;
             if (this.looks.size >= 2) {
                 const dist = this.pinchDistance();
                 if (this.pinch > 0 && dist > 0) this.input.addLook(0, 0, Math.log(this.pinch / dist));
@@ -176,7 +182,7 @@ export class PlayControls {
         }
         this.looks.delete(id);
         this.pinch = this.pinchDistance();
-        if (type === 'up' && !t.moved && performance.now() - t.at < TAP_MS) this.tap(x, y);
+        if (tapped) this.tap(x, y);
     }
 
     private pinchDistance(): number {

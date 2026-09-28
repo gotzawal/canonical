@@ -5,13 +5,11 @@
 // do large empty spaces make it less compact? The level is sampled on a
 // grid of columns with ray casts; the findings come with a plan view.
 
-import type { RenderNode } from '@orillusion/core';
-import { normalize, rayBox, type Ray } from '../core/math';
 import { levelSignature } from '../core/design';
 import type { AreaDoc, Vec3 } from '../core/types';
 import type { Editor } from '../editor';
-import { rendererWorldBox, type Box, type Picker } from '../engine/picking';
-import { CharacterMotor } from '../play/motor';
+import type { Box } from '../engine/picking';
+import { CharacterMotor, LevelRays, type Hit } from '../play/motor';
 
 export interface CheckBody {
     height: number;
@@ -69,20 +67,6 @@ export interface LevelReport {
     notes: string[];
 }
 
-interface Item {
-    r: RenderNode;
-    id: string;
-    box: Box;
-}
-
-interface Hit {
-    distance: number;
-    point: Vec3;
-    id: string;
-    /** World normal of the face hit (zero when unknown). */
-    normal: Vec3;
-}
-
 const DOWN: Vec3 = [0, -1, 0];
 const UP: Vec3 = [0, 1, 0];
 const DIRS8: Vec3[] = Array.from({ length: 8 }, (_, i) => [Math.cos((i * Math.PI) / 4), 0, Math.sin((i * Math.PI) / 4)] as Vec3);
@@ -96,79 +80,6 @@ const EMPTY_INDOOR = 3.5;
 const EMPTY_OUTDOOR = 8;
 /** A check of one building or area grows up to this far (m) to take in the player standing outside it. */
 const REACH_GROW = 15;
-
-/** Ray casts against the level's meshes, with a grid of cells over x and z so short rays test few boxes. */
-class Rays {
-    private grid = new Map<number, number[]>();
-    private stamp: Uint32Array;
-    private tick = 0;
-    private all: number[];
-
-    constructor(private picker: Picker, readonly items: Item[], private cell = 2) {
-        this.stamp = new Uint32Array(items.length);
-        this.all = items.map((_, i) => i);
-        items.forEach((it, i) => {
-            const [x0, x1, z0, z1] = [this.c(it.box.min[0]), this.c(it.box.max[0]), this.c(it.box.min[2]), this.c(it.box.max[2])];
-            if ((x1 - x0 + 1) * (z1 - z0 + 1) > 4096) {
-                // Huge (a ground plane): in a list of its own that every ray tests.
-                this.bucket(1 << 30).push(i);
-                return;
-            }
-            for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) this.bucket(this.key(x, z)).push(i);
-        });
-    }
-
-    private c(v: number): number {
-        return Math.floor(v / this.cell);
-    }
-
-    private key(x: number, z: number): number {
-        return (x + 32768) * 65536 + (z + 32768);
-    }
-
-    private bucket(k: number): number[] {
-        let b = this.grid.get(k);
-        if (!b) this.grid.set(k, (b = []));
-        return b;
-    }
-
-    /** Nearest hit within `maxDist`; `ignore` leaves objects out. */
-    cast(origin: Vec3, dir: Vec3, maxDist: number, ignore?: (id: string) => boolean): Hit | null {
-        const d = normalize(dir);
-        const ray: Ray = { origin, dir: d };
-        const ex = origin[0] + d[0] * maxDist;
-        const ez = origin[2] + d[2] * maxDist;
-        const [x0, x1, z0, z1] = [this.c(Math.min(origin[0], ex)), this.c(Math.max(origin[0], ex)), this.c(Math.min(origin[2], ez)), this.c(Math.max(origin[2], ez))];
-        let list: number[];
-        if ((x1 - x0 + 1) * (z1 - z0 + 1) > 256) list = this.all;
-        else {
-            list = [];
-            const t = ++this.tick;
-            const add = (b: number[] | undefined) => {
-                for (const i of b ?? []) {
-                    if (this.stamp[i] === t) continue;
-                    this.stamp[i] = t;
-                    list.push(i);
-                }
-            };
-            add(this.grid.get(1 << 30));
-            for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) add(this.grid.get(this.key(x, z)));
-        }
-        let best: Hit | null = null;
-        const normal: Vec3 = [0, 0, 0];
-        for (const i of list) {
-            const it = this.items[i];
-            if (ignore?.(it.id)) continue;
-            const near = rayBox(ray, it.box.min, it.box.max);
-            if (near === null || near > maxDist || (best && near > best.distance)) continue;
-            const t = this.picker.intersectRenderer(it.r, ray, normal);
-            if (t !== null && t >= 0 && t <= maxDist && (!best || t < best.distance)) {
-                best = { distance: t, point: [origin[0] + d[0] * t, origin[1] + d[1] * t, origin[2] + d[2] * t], id: it.id, normal: [...normal] as Vec3 };
-            }
-        }
-        return best;
-    }
-}
 
 /** A place to stand: a surface in a column of the grid, with the room above it. */
 interface Cell {
@@ -217,20 +128,14 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
     const body = opts.body;
     const shown = (id: string) => !opts.skip.has(id) && !!sync.entries.get(id)?.visible;
 
-    // The meshes, with world boxes per renderer (for rays) and per object (for seams and support).
-    const items: Item[] = [];
+    // The meshes for rays, and a box per object for seams and support.
+    const rays = new LevelRays(picker, sync, store, (id) => opts.skip.has(id));
+    rays.refresh();
     const objects: { id: string; name: string; box: Box; mesh: boolean }[] = [];
     for (const n of doc.nodes) {
-        if (!shown(n.id)) continue;
-        for (const r of sync.renderersOf(n.id)) {
-            if (!r.enable) continue;
-            const box = rendererWorldBox(r);
-            if (box) items.push({ r, id: n.id, box });
-        }
-        const b = picker.bounds(n.id, false);
+        const b = shown(n.id) ? picker.bounds(n.id, false) : null;
         if (b) objects.push({ id: n.id, name: n.name, box: b, mesh: !!(n.mesh || n.model) });
     }
-    const rays = new Rays(picker, items);
 
     // The region and its grid: coarser when the level is large.
     const box: Box = { min: [...opts.box.min] as Vec3, max: [...opts.box.max] as Vec3 };
@@ -404,14 +309,14 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
         const low = !!(mask & 1), chest = !!(mask & 2), high = !!(mask & 4);
         const kind: OpeningKind = low && chest ? 'passage' : chest ? 'window' : low ? 'gap_low' : high && !chest ? 'gap_high' : 'window';
         const heights = PROBES.filter((_, i) => mask & (1 << i)).map((v) => `${v} m`).join(', ');
-        openings.push({ kind, at: r2([avg(xs), cl[0].y, avg(zs)]), width, heights });
+        openings.push({ kind, at: middle(cl), width, heights });
     }
 
     // 4. Holes: open sky inside a roof, nothing to stand on inside a floor.
     const roofHoles: LevelReport['roofHoles'] = [];
     const roofless = cells.filter((c) => c.walk && !covered(c) && DIRS4.filter(([dx, dz]) => covered(cellAt(c.ix + dx, c.iz + dz, c.y, 0.3))).length >= 3);
     for (const cl of cluster(roofless, (a, b) => Math.abs(a.ix - b.ix) + Math.abs(a.iz - b.iz) === 1 && Math.abs(a.y - b.y) < 0.3)) {
-        roofHoles.push({ at: r2([avg(cl.map((c) => c.x)), cl[0].y, avg(cl.map((c) => c.z))]), area: round(cl.length * step * step, 10) });
+        roofHoles.push({ at: middle(cl), area: round(cl.length * step * step, 10) });
     }
     const floorHoles: LevelReport['floorHoles'] = [];
     const holes: { ix: number; iz: number; x: number; z: number; y: number }[] = [];
@@ -437,7 +342,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
     // A column found from floors at slightly different heights is one hole.
     for (const cl of cluster(holes, (a, b) => Math.abs(a.ix - b.ix) + Math.abs(a.iz - b.iz) <= 1 && Math.abs(a.y - b.y) < 0.3)) {
         const columns = new Set(cl.map((c) => c.iz * nx + c.ix)).size;
-        floorHoles.push({ at: r2([avg(cl.map((c) => c.x)), cl[0].y, avg(cl.map((c) => c.z))]), area: round(columns * step * step, 10) });
+        floorHoles.push({ at: middle(cl), area: round(columns * step * step, 10) });
     }
 
     // 5. Seams: walls, floors and ceilings that stop just short of each other.
@@ -477,7 +382,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
         const inside = cells.filter((c) => c.walk && covered(c) && !c.reached && fits(c));
         for (const cl of cluster(inside, (a, b) => Math.abs(a.ix - b.ix) + Math.abs(a.iz - b.iz) === 1 && Math.abs(a.y - b.y) < body.stepHeight + 0.05)) {
             const area = cl.length * step * step;
-            if (area >= 1 && cl.some((c) => c.indoor)) sealed.push({ at: r2([avg(cl.map((c) => c.x)), cl[0].y, avg(cl.map((c) => c.z))]), area: round(area, 10) });
+            if (area >= 1 && cl.some((c) => c.indoor)) sealed.push({ at: middle(cl), area: round(area, 10) });
         }
     }
 
@@ -507,7 +412,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
         const x0 = Math.max(box.min[0], Math.min(...xs) - margin), x1 = Math.min(box.max[0], Math.max(...xs) + margin);
         const z0 = Math.max(box.min[2], Math.min(...zs) - margin), z1 = Math.min(box.max[2], Math.max(...zs) + margin);
         empty.push({
-            at: r2([avg(xs), cl[0].y, avg(zs)]),
+            at: middle(cl),
             size: [round(x1 - x0, 10), round(z1 - z0, 10)],
             clearance: round(Math.max(...cl.map((c) => c.clear)), 10),
             indoor,
@@ -584,6 +489,11 @@ function boxGap(a: Box, b: Box): { distance: number; at: Vec3 } {
         else p[i] = (Math.max(a.min[i], b.min[i]) + Math.min(a.max[i], b.max[i])) / 2;
     }
     return { distance: Math.sqrt(sum), at: p };
+}
+
+/** The middle of a group of places, at the height of its first. */
+function middle(list: { x: number; y: number; z: number }[]): Vec3 {
+    return r2([avg(list.map((c) => c.x)), list[0].y, avg(list.map((c) => c.z))]);
 }
 
 function avg(v: number[]): number {
@@ -805,10 +715,12 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
     const { store, picker, sync } = editor;
     const doc = store.doc;
     const d = doc.design;
-    const playerNode = doc.nodes.find((n) => n.player && sync.entries.get(n.id)?.visible);
-    const skip = new Set(playerNode ? [playerNode.id, ...store.descendants(playerNode.id).map((n) => n.id)] : []);
-    const p = playerNode?.player;
-    const body: CheckBody = p ? { height: p.height, radius: p.radius, stepHeight: p.stepHeight } : { height: d.specs.playerHeight, radius: d.specs.playerRadius, stepHeight: d.specs.stepHeight };
+    const signature = levelSignature(doc);
+    const playerNode = doc.nodes.find((n) => n.player && n.character && sync.entries.get(n.id)?.visible);
+    // Characters are not the level: they move in Play.
+    const skip = new Set(doc.nodes.filter((n) => n.character).flatMap((n) => [n.id, ...store.descendants(n.id).map((c) => c.id)]));
+    const c = playerNode?.character;
+    const body: CheckBody = c ? { height: c.height, radius: c.radius, stepHeight: c.stepHeight } : { height: d.specs.playerHeight, radius: d.specs.playerRadius, stepHeight: d.specs.stepHeight };
     let start: Vec3 | null = null;
     const pb = playerNode ? picker.bounds(playerNode.id) : null;
     if (pb) start = [(pb.min[0] + pb.max[0]) / 2, pb.min[1], (pb.min[2] + pb.max[2]) / 2];
@@ -857,7 +769,7 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
     if (!scope.object && !scope.area) {
         const summary = summarize(result.report);
         store.patch((dd) => {
-            dd.design.levelCheck = { at: new Date().toISOString(), ok: result.report.ok, signature: levelSignature(dd), summary };
+            dd.design.levelCheck = { at: new Date().toISOString(), ok: result.report.ok, signature, summary };
         }, { design: true });
     }
     return { ...result, scope: label };

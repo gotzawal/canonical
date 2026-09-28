@@ -98,11 +98,11 @@ interface Hole {
     opening: PlacedOpening;
 }
 
-/** A straight stretch of wall with one height. */
+/** A straight stretch of wall with one bottom and top. */
 interface Run {
     axis: 'x' | 'z';
     c: number;
-    y: number;
+    bottom: number;
     top: number;
     /** Centerline extent. */
     a0: number;
@@ -116,6 +116,21 @@ interface Run {
 
 const near = (a: number, b: number) => Math.abs(a - b) < EPS;
 const key = (v: number) => Math.round(v * 1000);
+
+/**
+ * Things on one line in stacks whose heights overlap (lo..hi): a tall hall
+ * next to two stories shares one wall with both. In order of their bottoms,
+ * each overlaps a stack or starts one.
+ */
+function stacks<T>(items: T[], lo: (t: T) => number, hi: (t: T) => number): T[][] {
+    const out: T[][] = [];
+    for (const it of [...items].sort((a, b) => lo(a) - lo(b))) {
+        const s = out.find((g) => g.some((o) => lo(it) < hi(o) - EPS && lo(o) < hi(it) - EPS));
+        if (s) s.push(it);
+        else out.push([it]);
+    }
+    return out;
+}
 
 function edgesOf(r: RoomSpec, i: number): Edge[] {
     const [x0, z0] = r.min;
@@ -139,18 +154,16 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
     const half = t / 2;
     const openings: PlacedOpening[] = [];
 
-    // 1. Wall lines: the room sides on one line and floor, cut where any side
-    //    starts or ends. A stretch is walled when a room has it and none leaves it open.
-    const groups = new Map<string, Edge[]>();
-    rooms.forEach((r, i) => {
-        for (const e of edgesOf(r, i)) {
-            const k = `${e.axis}|${key(e.c)}|${key(e.y)}`;
-            if (!groups.has(k)) groups.set(k, []);
-            groups.get(k)!.push(e);
-        }
-    });
+    // 1. Wall lines: the room sides on one line whose heights overlap, cut
+    //    where any side starts or ends. A stretch is walled when a room has it
+    //    and none leaves it open, from under the lowest floor to the highest ceiling.
+    const lines = new Map<string, Edge[]>();
+    for (const e of rooms.flatMap(edgesOf)) {
+        const k = `${e.axis}|${key(e.c)}`;
+        lines.set(k, [...(lines.get(k) ?? []), e]);
+    }
     const runs: Run[] = [];
-    for (const edges of groups.values()) {
+    for (const edges of [...lines.values()].flatMap((l) => stacks(l, (e) => e.y - s.slab, (e) => e.top))) {
         const cuts = [...new Set(edges.flatMap((e) => [key(e.a0), key(e.a1)]))].sort((a, b) => a - b).map((v) => v / 1000);
         let cur: Run | null = null;
         for (let i = 0; i + 1 < cuts.length; i++) {
@@ -161,15 +174,16 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
                 cur = null;
                 continue;
             }
+            const bottom = Math.min(...on.map((e) => e.y)) - s.slab;
             const top = Math.max(...on.map((e) => e.top));
-            if (cur && near(cur.a1, b0) && near(cur.top, top)) {
+            if (cur && near(cur.a1, b0) && near(cur.top, top) && near(cur.bottom, bottom)) {
                 cur.a1 = b1;
                 cur.s1 = b1;
                 for (const e of on) cur.rooms.add(e.room);
                 continue;
             }
             const e = on[0];
-            cur = { axis: e.axis, c: e.c, y: e.y, top, a0: b0, a1: b1, s0: b0, s1: b1, rooms: new Set(on.map((x) => x.room)), holes: [] };
+            cur = { axis: e.axis, c: e.c, bottom, top, a0: b0, a1: b1, s0: b0, s1: b1, rooms: new Set(on.map((x) => x.room)), holes: [] };
             runs.push(cur);
         }
     }
@@ -179,7 +193,7 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
         for (const o of r.openings) {
             const e = edgesOf(r, i).find((x) => x.side === o.side)!;
             const at = o.at ?? (e.a0 + e.a1) / 2;
-            const run = runs.find((w) => w.axis === e.axis && near(w.c, e.c) && near(w.y, e.y) && w.a0 - EPS <= at && at <= w.a1 + EPS);
+            const run = runs.find((w) => w.axis === e.axis && near(w.c, e.c) && w.bottom < r.floorY && r.floorY < w.top && w.a0 - EPS <= at && at <= w.a1 + EPS);
             if (!run) {
                 warnings.push(`${r.name}: no wall on ${o.side} at ${round(at)} for the ${o.kind} (the side is open or the position is off it).`);
                 continue;
@@ -225,21 +239,23 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
     const zs = runs.filter((r) => r.axis === 'z');
     const covers = (r: Run, a: number) => r.a0 - EPS <= a && a <= r.a1 + EPS;
     const through = (r: Run, a: number) => r.a0 < a - EPS && a < r.a1 - EPS;
-    const junctions = new Map<string, { x: number; z: number; y: number }>();
+    const junctions = new Map<string, { x: number; z: number }>();
     for (const r of xs) {
         for (const w of zs) {
-            if (near(r.y, w.y) && covers(r, w.c) && covers(w, r.c)) junctions.set(`${key(w.c)}|${key(r.c)}|${key(r.y)}`, { x: w.c, z: r.c, y: r.y });
+            if (covers(r, w.c) && covers(w, r.c)) junctions.set(`${key(w.c)}|${key(r.c)}`, { x: w.c, z: r.c });
         }
     }
     const cuts = new Map<Run, number[]>();
-    for (const j of junctions.values()) {
+    const meetings = [...junctions.values()].flatMap((j) =>
+        stacks([...xs.filter((r) => near(r.c, j.z) && covers(r, j.x)), ...zs.filter((r) => near(r.c, j.x) && covers(r, j.z))], (r) => r.bottom, (r) => r.top)
+            .filter((m) => m.some((r) => r.axis === 'x') && m.some((r) => r.axis === 'z'))
+            .map((meeting) => ({ ...j, meeting })),
+    );
+    for (const j of meetings) {
         const along = (r: Run) => (r.axis === 'x' ? j.x : j.z);
-        const meeting = [
-            ...xs.filter((r) => near(r.y, j.y) && near(r.c, j.z) && covers(r, j.x)),
-            ...zs.filter((r) => near(r.y, j.y) && near(r.c, j.x) && covers(r, j.z)),
-        ];
+        const meeting = j.meeting;
         const passing = meeting.filter((r) => through(r, along(r)));
-        const owner = passing[0] ?? meeting.reduce((a, b) => (b.top > a.top + EPS ? b : a));
+        const owner = passing[0] ?? meeting.reduce((a, b) => (b.top - b.bottom > a.top - a.bottom + EPS ? b : a));
         for (const r of meeting) {
             if (r === owner) {
                 // Ending here, it reaches over the square.
@@ -255,8 +271,12 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
             } else if (near(r.a1, along(r))) r.s1 = along(r) - half;
             else r.s0 = along(r) + half;
         }
+        // Posts fill the square where the others reach above or below the one taking it.
         const top = Math.max(...meeting.map((r) => r.top));
-        if (top > owner.top + EPS) fillers.push({ x: j.x, z: j.z, bottom: owner.top, top, rooms: new Set(meeting.flatMap((r) => [...r.rooms])) });
+        const bottom = Math.min(...meeting.map((r) => r.bottom));
+        const rooms = new Set(meeting.flatMap((r) => [...r.rooms]));
+        if (top > owner.top + EPS) fillers.push({ x: j.x, z: j.z, bottom: owner.top, top, rooms });
+        if (bottom < owner.bottom - EPS) fillers.push({ x: j.x, z: j.z, bottom, top: owner.bottom, rooms });
     }
     const walls: Run[] = [];
     for (const r of runs) {
@@ -271,7 +291,7 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
         for (const hole of r.holes) {
             if (!walls.some((w) => w.holes.includes(hole))) warnings.push(`${hole.opening.room}: the ${hole.opening.kind} on ${hole.opening.side} at ${hole.opening.at} is where another wall crosses; it was left out.`);
             // A wall ending in a door or window leaves its end in the opening.
-            else if (junctions.size && [...junctions.values()].some((j) => near(j.y, r.y) && near(r.axis === 'x' ? j.z : j.x, r.c) && hole.a0 - half < (r.axis === 'x' ? j.x : j.z) && (r.axis === 'x' ? j.x : j.z) < hole.a1 + half)) {
+            else if (meetings.some((j) => j.meeting.includes(r) && hole.a0 - half < (r.axis === 'x' ? j.x : j.z) && (r.axis === 'x' ? j.x : j.z) < hole.a1 + half)) {
                 warnings.push(`${hole.opening.room}: the ${hole.opening.kind} on ${hole.opening.side} at ${hole.opening.at} is where another wall meets this one; move it along the wall.`);
             }
         }
@@ -281,7 +301,6 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
 
     // 4. Wall boxes: solid between the openings, a lintel over each one and a sill under windows.
     const pieces: Piece[] = [];
-    const slabBottom = (r: Run) => r.y - s.slab;
     const names = (set: Set<number>) => [...set].map((i) => rooms[i].name);
     const wallBox = (r: Run, a0: number, a1: number, bottom: number, top: number) => {
         if (a1 - a0 < EPS || top - bottom < EPS) return;
@@ -292,7 +311,7 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
     };
     for (const r of walls) {
         let cursor = r.s0;
-        const bottom = slabBottom(r);
+        const bottom = r.bottom;
         for (const hole of [...r.holes].sort((a, b) => a.a0 - b.a0)) {
             wallBox(r, cursor, hole.a0, bottom, r.top);
             // Under a door the floors of both sides meet; a window has a sill.
@@ -318,12 +337,13 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
         }
         if (!r.ceiling) return;
         const top = r.floorY + r.height;
-        const above = rooms.some((o, j) => j !== i && o.floor && near(o.floorY, top + s.slab) && o.min[0] <= x0 + EPS && o.min[1] <= z0 + EPS && o.max[0] >= x1 - EPS && o.max[1] >= z1 - EPS);
-        if (above) return;
+        // The floors of the rooms above (and their walls) take the ceiling's place.
+        const above = rooms.filter((o, j) => j !== i && o.floor && near(o.floorY, top + s.slab)).map((o) => [o.min[0] - half, o.min[1] - half, o.max[0] + half, o.max[1] + half] as [number, number, number, number]);
+        // A ceiling reaches over its walls, but stops where it meets a ceiling of the same height.
         const shared = (side: Side) =>
             r.open.includes(side) ||
             rooms.some((o, j) => {
-                if (j === i || !near(o.floorY, r.floorY)) return false;
+                if (j === i || !o.ceiling || !near(o.floorY + o.height, top)) return false;
                 const [c, a0, a1, oc] =
                     side === 'x_min' ? [x0, z0, z1, o.max[0]] : side === 'x_max' ? [x1, z0, z1, o.min[0]] : side === 'z_min' ? [z0, x0, x1, o.max[1]] : [z1, x0, x1, o.min[1]];
                 const [b0, b1] = side === 'x_min' || side === 'x_max' ? [o.min[1], o.max[1]] : [o.min[0], o.max[0]];
@@ -333,9 +353,49 @@ export function planBuilding(rooms: RoomSpec[], s: BuildSettings): BuildingPlan 
         const ex1 = shared('x_max') ? x1 : x1 + half;
         const ez0 = shared('z_min') ? z0 : z0 - half;
         const ez1 = shared('z_max') ? z1 : z1 + half;
-        pieces.push({ name: `${r.name} Ceiling`, kind: 'ceiling', rooms: [r.name], center: round3([(ex0 + ex1) / 2, top + s.slab / 2, (ez0 + ez1) / 2]), size: round3([ex1 - ex0, s.slab, ez1 - ez0]) });
+        for (const [a, b, c, d] of subtract([ex0, ez0, ex1, ez1], above)) {
+            pieces.push({ name: `${r.name} Ceiling`, kind: 'ceiling', rooms: [r.name], center: round3([(a + c) / 2, top + s.slab / 2, (b + d) / 2]), size: round3([c - a, s.slab, d - b]) });
+        }
     });
     return { pieces, openings: kept, warnings };
+}
+
+/**
+ * Rooms meant to share a wall whose edges are a little apart would get two
+ * walls with a slit between them: edges this close become one line. Sides
+ * joined through several rooms take one coordinate together.
+ */
+export function snapRooms(rooms: RoomSpec[], limit: number): string[] {
+    const notes: string[] = [];
+    for (const k of [0, 1] as const) {
+        const o = 1 - k;
+        // Side 2i is room i's min side along axis k, 2i + 1 its max side.
+        const side = (n: number) => (n % 2 ? rooms[n >> 1].max : rooms[n >> 1].min);
+        const up = rooms.flatMap((_, i) => [2 * i, 2 * i + 1]);
+        const root = (n: number): number => (up[n] === n ? n : (up[n] = root(up[n])));
+        const pairs: [RoomSpec, RoomSpec, number][] = [];
+        rooms.forEach((a, i) => rooms.forEach((b, j) => {
+            const gap = b.min[k] - a.max[k];
+            const overlap = Math.min(a.max[o], b.max[o]) - Math.max(a.min[o], b.min[o]);
+            if (i === j || Math.abs(a.floorY - b.floorY) > 1e-3 || Math.abs(gap) >= limit || overlap <= 0.1) return;
+            // Sides that touch already stay together too.
+            up[root(2 * i + 1)] = root(2 * j);
+            if (Math.abs(gap) > 1e-6) pairs.push([a, b, gap]);
+        }));
+        const sets = new Map<number, number[]>();
+        up.forEach((_, n) => sets.set(root(n), [...(sets.get(root(n)) ?? []), n]));
+        for (const set of sets.values()) {
+            if (set.length < 2) continue;
+            // The median: where most of them are already.
+            const v = set.map((n) => side(n)[k]).sort((a, b) => a - b);
+            const at = Math.round(((v[(v.length - 1) >> 1] + v[v.length >> 1]) / 2) * 1000) / 1000;
+            for (const n of set) side(n)[k] = at;
+        }
+        for (const [a, b, gap] of pairs) {
+            notes.push(`${a.name} and ${b.name} were ${Math.abs(Math.round(gap * 100) / 100)} m ${gap > 0 ? 'apart' : 'over each other'}: they share the wall at ${k ? 'z' : 'x'} = ${a.max[k]}.`);
+        }
+    }
+    return notes;
 }
 
 /** A rectangle [x0, z0, x1, z1] without the holes, as rectangles (rows of grid cells merged). */

@@ -4,7 +4,7 @@ import {
 } from '../core/defaults';
 import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
-import { defaultPlayer, sanitizePlayer } from '../core/player';
+import { defaultCharacter, defaultPlayer, sanitizeCharacter, sanitizePlayer } from '../core/character';
 import type {
     GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc,
 } from '../core/types';
@@ -129,11 +129,10 @@ const objectFields = {
     material: materialSchema,
     light: lightSchema,
     camera: cameraSchema,
-    player: {
+    character: {
         type: ['object', 'null'],
-        description: 'The built-in player controller (the object walks with WASD / a joystick, jumps with Space, a drag turns its camera); null removes it. One player per scene: place it with place_player.',
+        description: 'A character: in Play the object walks the level (stands on floors, walls and other characters stop it). The player controls one (player); an NPC is walked by its behavior tree (Move To) or a script (this.character). null removes it.',
         properties: {
-            view: { type: 'string', enum: ['third', 'first', 'scene'] },
             speed: { type: 'number' },
             run_speed: { type: 'number' },
             jump: { type: 'number', description: 'Take-off speed m/s; 0 turns jumping off.' },
@@ -142,10 +141,17 @@ const objectFields = {
             radius: { type: 'number' },
             eye_height: { type: 'number' },
             step_height: { type: 'number' },
+            collide: { type: 'boolean' },
+        },
+    },
+    player: {
+        type: ['object', 'null'],
+        description: 'The player controls this object\'s character (added when missing): WASD / a joystick walk, Space jumps, a drag turns its camera. null removes it. One player per scene: place it with place_player.',
+        properties: {
+            view: { type: 'string', enum: ['third', 'first', 'scene'] },
             distance: { type: 'number', description: 'Third person camera distance.' },
             look_speed: { type: 'number' },
             invert_y: { type: 'boolean' },
-            collide: { type: 'boolean' },
         },
     },
     cast_shadow: { type: 'boolean' },
@@ -434,6 +440,17 @@ function materialSummary(m: MaterialDoc): Json {
     return out;
 }
 
+/** snake_case tool fields onto a component's camelCase ones (numbers, booleans and the view); returns the component. */
+function assignFields<T extends object>(to: T, from: unknown, what: string): T {
+    for (const [k, v] of Object.entries((from ?? {}) as Json)) {
+        const key = k.replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
+        if (!(key in to) || v === undefined) continue;
+        if (key === 'view' && !['third', 'first', 'scene'].includes(v)) throw new ToolError(`${what}.view must be third, first or scene.`);
+        (to as Record<string, unknown>)[key] = typeof v === 'boolean' || key === 'view' ? v : num(v, `${what}.${k}`);
+    }
+    return to;
+}
+
 function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     const out: Json = { id: n.id, name: n.name, type: n.prefab ? 'prefab_instance' : nodeType(n) };
     if (n.prefab) out.prefab = doc.prefabs.find((p) => p.id === n.prefab)?.name ?? n.prefab;
@@ -451,9 +468,13 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     }
     if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
     if (n.camera) out.camera = { ...n.camera };
+    if (n.character) {
+        const c = n.character;
+        out.character = { speed: c.speed, run_speed: c.runSpeed, jump: c.jump, height: c.height, radius: c.radius, eye_height: c.eyeHeight, step_height: c.stepHeight, ...(c.collide ? {} : { collide: false }) };
+    }
     if (n.player) {
         const p = n.player;
-        out.player = { view: p.view, speed: p.speed, run_speed: p.runSpeed, jump: p.jump, height: p.height, radius: p.radius, eye_height: p.eyeHeight, step_height: p.stepHeight, ...(p.view === 'third' ? { distance: p.distance } : {}), ...(p.collide ? {} : { collide: false }) };
+        out.player = { view: p.view, ...(p.view === 'third' ? { distance: p.distance } : {}) };
     }
     if (n.particles) {
         const p = n.particles;
@@ -540,25 +561,19 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (l.angle !== undefined) n.light.outerAngle = Math.min(179, Math.max(1, num(l.angle, 'angle')));
         if (l.inner_angle !== undefined) n.light.innerAngle = Math.min(100, Math.max(0, num(l.inner_angle, 'inner_angle')));
     }
-    if (spec.player !== undefined) {
-        if (spec.player === null) delete n.player;
-        else {
-            if (n.light || n.camera || n.particles) throw new ToolError(`"${n.name}" cannot be the player (lights, cameras and particles cannot).`);
-            const other = doc.nodes.find((o) => o.player && o.id !== n.id) ?? batch.find((o) => o.player && o !== n);
-            if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
-            const pl = spec.player as Json;
-            const p: Record<string, unknown> = { ...(n.player ?? defaultPlayer(doc.design.specs)) };
-            const fields: [string, string][] = [
-                ['view', 'view'], ['speed', 'speed'], ['run_speed', 'runSpeed'], ['jump', 'jump'], ['gravity', 'gravity'], ['height', 'height'], ['radius', 'radius'],
-                ['eye_height', 'eyeHeight'], ['step_height', 'stepHeight'], ['distance', 'distance'], ['look_speed', 'lookSpeed'], ['invert_y', 'invertY'], ['collide', 'collide'],
-            ];
-            for (const [k, key] of fields) {
-                if (pl[k] === undefined) continue;
-                if (k === 'view' && !['third', 'first', 'scene'].includes(pl[k])) throw new ToolError('player.view must be third, first or scene.');
-                p[key] = typeof pl[k] === 'boolean' || k === 'view' ? pl[k] : num(pl[k], `player.${k}`);
-            }
-            n.player = sanitizePlayer(p)!;
-        }
+    if (spec.character === null) {
+        delete n.character;
+        delete n.player;
+    } else if (spec.character || spec.player) {
+        if (n.light || n.camera || n.particles) throw new ToolError(`"${n.name}" cannot be a character (lights, cameras and particles cannot).`);
+        n.character = sanitizeCharacter(assignFields({ ...(n.character ?? defaultCharacter(doc.design.specs)) }, spec.character, 'character'))!;
+    }
+    if (spec.player === null) delete n.player;
+    else if (spec.player) {
+        const other = doc.nodes.find((o) => o.player && o.id !== n.id) ?? batch.find((o) => o.player && o !== n);
+        if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
+        if (!n.character) throw new ToolError('The player controls a character: give the object one (character) too.');
+        n.player = sanitizePlayer(assignFields({ ...(n.player ?? defaultPlayer()) }, spec.player, 'player'))!;
     }
     if (spec.camera) {
         if (!n.camera) throw new ToolError(`"${n.name}" is not a camera.`);
@@ -746,7 +761,7 @@ class StagePolicy {
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
-        if (spec.player !== undefined && !this.any('objects', 'code', 'play')) return `The player cannot be changed in the ${this.stage} stage.`;
+        if ((spec.player !== undefined || spec.character !== undefined) && !this.any('objects', 'code', 'play')) return `Characters and the player cannot be changed in the ${this.stage} stage.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {

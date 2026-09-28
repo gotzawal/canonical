@@ -60,6 +60,7 @@ function canFail(n: BtNodeDoc): boolean {
         case 'set_key':
             return false;
         case 'script':
+        case 'move_to':
         case 'ask':
         case 'infer':
             return true;

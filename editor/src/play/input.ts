@@ -99,10 +99,12 @@ export class Input {
         this.look.zoom += zoom;
     }
 
-    /** @internal */
-    pointerMove(x: number, y: number) {
-        this.mouse.dx += x - this.mouse.x;
-        this.mouse.dy += y - this.mouse.y;
+    /** @internal `delta` false puts the pointer there without a movement (a tap). */
+    pointerMove(x: number, y: number, delta = true) {
+        if (delta) {
+            this.mouse.dx += x - this.mouse.x;
+            this.mouse.dy += y - this.mouse.y;
+        }
         this.mouse.x = x;
         this.mouse.y = y;
     }

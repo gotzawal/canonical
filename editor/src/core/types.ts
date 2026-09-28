@@ -249,42 +249,51 @@ export interface ParticlesDoc {
 }
 
 /**
- * How the player's view follows it: 'third' orbits a camera behind it,
- * 'first' looks from its eyes, 'scene' keeps the scene's camera node (the
- * controller only moves the player).
+ * A character (see play/character.ts): a standing body that walks, runs,
+ * jumps and falls through the level, standing on the scene's meshes,
+ * climbing steps and stopping at walls and at other characters. It moves
+ * the way its controller tells it: the player (NodeDoc.player), a behavior
+ * tree (Move To) or a script (this.character). Sizes are in meters.
  */
-export type PlayerView = 'third' | 'first' | 'scene';
-
-/**
- * The built-in player controller (see play/playerController.ts): in Play
- * mode the object walks with WASD or the arrow keys (an on-screen joystick
- * on touch screens), runs with Shift, jumps with Space and carries the
- * camera, which a mouse drag or a finger turns. It stands on the scene's
- * meshes, climbs steps and stops at walls. Sizes are in meters.
- */
-export interface PlayerDoc {
-    view: PlayerView;
-    /** Walking speed, m/s. */
+export interface CharacterDoc {
+    height: number;
+    radius: number;
+    /** Eyes above the feet: the first person view. */
+    eyeHeight: number;
+    /** The highest step it climbs. */
+    stepHeight: number;
+    /** Walking and running speed, m/s. */
     speed: number;
-    /** Speed with Shift held or the joystick pushed to its edge, m/s. */
     runSpeed: number;
     /** Take-off speed of a jump, m/s; 0 turns jumping off. */
     jump: number;
     /** Downward acceleration, m/s^2. */
     gravity: number;
-    /** The body the controller collides with: height, radius, eye height and the highest step it climbs. */
-    height: number;
-    radius: number;
-    eyeHeight: number;
-    stepHeight: number;
+    /** Walls stop it and it stands on floors; off, it moves freely at its height. */
+    collide: boolean;
+}
+
+/**
+ * How the player's view follows its character: 'third' orbits a camera
+ * behind it, 'first' looks from its eyes, 'scene' keeps the scene's camera
+ * node (the player walks relative to it).
+ */
+export type PlayerView = 'third' | 'first' | 'scene';
+
+/**
+ * The player controls the character of its object (see
+ * play/playerController.ts): WASD or the arrow keys (an on-screen joystick
+ * on touch screens) walk, Shift runs, Space jumps, and the camera turns
+ * with a mouse drag or a finger.
+ */
+export interface PlayerDoc {
+    view: PlayerView;
     /** Third person: how far the camera stays behind the player. */
     distance: number;
     /** Look speed factor for mouse drags and fingers (1 = default). */
     lookSpeed: number;
     /** Dragging up looks down. */
     invertY: boolean;
-    /** Walls stop the player and it stands on floors; off, it moves freely at its height. */
-    collide: boolean;
 }
 
 export interface NodeDoc {
@@ -302,7 +311,9 @@ export interface NodeDoc {
     model?: ModelDoc;
     camera?: CameraDoc;
     particles?: ParticlesDoc;
-    /** The built-in player controller: the object is the player in Play mode. */
+    /** A character: the object walks through the level in Play mode. */
+    character?: CharacterDoc;
+    /** The player controls the object's character in Play mode. */
     player?: PlayerDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
@@ -523,7 +534,7 @@ export interface BlackboardSchemaDoc {
 }
 
 export type BtCompositeType = 'selector' | 'sequence';
-export type BtTaskType = 'script' | 'wait' | 'set_key' | 'ask' | 'infer';
+export type BtTaskType = 'script' | 'wait' | 'set_key' | 'move_to' | 'ask' | 'infer';
 export type BtNodeType = BtCompositeType | BtTaskType;
 export type BtDecoratorType = 'condition' | 'cooldown';
 export type BtServiceType = 'recall' | 'ask';
@@ -613,6 +624,15 @@ export interface WaitTaskDoc extends BtNodeBase {
     deviation: number;
 }
 
+/** Walks the agent's character to the object in an object key. */
+export interface MoveToTaskDoc extends BtNodeBase {
+    type: 'move_to';
+    target: string;
+    /** Arrived this close, meters. */
+    radius: number;
+    run: boolean;
+}
+
 export interface SetKeyTaskDoc extends BtNodeBase {
     type: 'set_key';
     key: string;
@@ -650,7 +670,7 @@ export interface InferTaskDoc extends BtNodeBase {
     timeout: number;
 }
 
-export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | AskTaskDoc | InferTaskDoc;
+export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | MoveToTaskDoc | AskTaskDoc | InferTaskDoc;
 export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc;
 
 interface BtServiceBase {

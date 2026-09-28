@@ -302,6 +302,21 @@ export const NODE_TYPES: ItemTypeDef[] = [
         brief: (n) => `${formatValue(n.seconds)}s${n.deviation ? ` ±${formatValue(n.deviation)}s` : ''}`,
     },
     {
+        type: 'move_to',
+        category: 'task',
+        label: 'Move To',
+        icon: 'walk',
+        summary: 'Walks the agent\'s character to the object in a key: succeeds on arrival, fails when it gets stuck.',
+        details:
+            'The agent\'s object needs a Character (Add Component > Character). It walks straight at the target and follows it while it moves; walls make it slide along or stop, and after 2 seconds without getting closer the task fails (a Selector can then try another way). Aborting the task stops the walk. Scripts drive the character the same way with this.character.moveTo(target).',
+        fields: [
+            { name: 'target', kind: 'key', label: 'Target', description: 'An object key: where to walk.', default: '', keyTypes: ['object'], required: true },
+            { name: 'radius', kind: 'number', label: 'Radius', description: 'Arrived this close to the target, meters.', default: 1, min: 0.05 },
+            { name: 'run', kind: 'bool', label: 'Run', description: 'Run instead of walking.', default: false },
+        ],
+        brief: (n) => `${n.target || '?'}${n.run ? ', running' : ''}`,
+    },
+    {
         type: 'set_key',
         category: 'task',
         label: 'Set Key',

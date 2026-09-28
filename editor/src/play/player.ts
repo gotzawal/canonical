@@ -13,7 +13,7 @@ import { AgentSystem, type AgentHost, type AIServices, type BlackboardApi } from
 import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
-import { LevelCollider } from './motor';
+import { Characters, type Character } from './character';
 import { PlayControls } from './playControls';
 import { PlayerController } from './playerController';
 import {
@@ -105,8 +105,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private gameCamera: Camera3D | null = null;
     private listeners: [EventTarget, string, EventListener][] = [];
     private chats = new Set<AbortController>();
-    /** The player controller of this session (the first object with one), and what it collides with. */
-    private controller: { ctl: PlayerController; level: LevelCollider } | null = null;
+    /** The characters of this session, and the player's control of one of them. */
+    private characters: Characters | null = null;
+    private controller: PlayerController | null = null;
+    /** The pointer that feeds the mouse of the scripts (the first one down). */
+    private mousePointer: number | null = null;
     /** Element the on-screen controls go into (the view); set by the editor or the game player. */
     controlsHost: HTMLElement | null = null;
     private controls: PlayControls | null = null;
@@ -139,9 +142,9 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         return !!this.gameCamera;
     }
 
-    /** The object of the playing player controller, if any. */
+    /** The object of the player's character, if any. */
     get playerObject(): Object3D | null {
-        return this.controller?.ctl.obj ?? null;
+        return this.controller?.character.obj ?? null;
     }
 
     // --------------------------------------------------------------- control
@@ -160,7 +163,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.time.frame = 0;
         this.sceneChildren = new Set(this.runtime.scene.entityChildren as Object3D[]);
         this.setupCamera();
-        this.setupController();
+        this.setupCharacters();
         this.instantiate();
         // Blackboards exist before awake() / start(), so scripts can write their first facts there.
         try {
@@ -171,7 +174,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             this.warn(`The agents could not start: ${e?.message || e}`);
         }
         // Agents near the player get their questions answered first (a script may name another object).
-        if (this.controller) this.agents.player = this.controller.ctl.obj;
+        if (this.controller) this.agents.player = this.controller.character.obj;
         this.bindInput();
         this.last = performance.now();
         this.offFrame = this.runtime.onBeforeFrame(() => this.tick());
@@ -212,7 +215,9 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.spawnedBy.clear();
         this.pendingDestroy = [];
         this.pointerTarget = null;
+        this.characters = null;
         this.controller = null;
+        this.mousePointer = null;
         this.controls?.stop();
         this.runtime.setActiveCamera(null);
         this.gameCamera = null;
@@ -289,36 +294,31 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     }
 
     /**
-     * The first shown object with a player controller is the player: it
-     * walks with the keys or the on-screen joystick, and its camera takes
-     * over the view (unless it keeps the scene's camera).
+     * Every shown object with a character walks the level; the first one
+     * the player controls is the player's, whose camera takes over the view
+     * (unless it keeps the scene's camera).
      */
-    private setupController() {
-        const nodes = this.store.doc.nodes.filter((n) => n.player && this.sync.entries.get(n.id)?.visible);
-        const node = nodes[0];
-        if (!node) return;
-        const entry = this.sync.entries.get(node.id)!;
-        const own = new Set([node.id, ...this.store.descendants(node.id).map((n) => n.id)]);
-        const level = new LevelCollider(this.picker, this.sync, this.store, (id) => own.has(id));
-        level.refresh();
-        const box = this.picker.bounds(node.id);
+    private setupCharacters() {
+        const nodes = this.store.doc.nodes.filter((n) => n.character && this.sync.entries.get(n.id)?.visible && !this.sync.detached.has(n.id));
+        if (!nodes.length) return;
+        const chars = (this.characters = new Characters(this.picker, this.sync, this.store));
+        const made = nodes.map((n) => chars.add(this.sync.entries.get(n.id)!.obj, n.character!, [n.id, ...this.store.descendants(n.id).map((d) => d.id)], this.picker.bounds(n.id)?.min[1] ?? null));
+        const players = nodes.filter((n) => n.player);
+        if (!players.length) return;
         const cams = this.store.doc.nodes.filter((n) => n.camera);
         const fov = (cams.find((n) => n.camera!.main) ?? cams[0])?.camera?.fov ?? 60;
-        const ctl = new PlayerController(entry.obj, node.player!, { input: this.input, cast: level.cast }, box ? box.min[1] : null, fov);
-        this.controller = { ctl, level };
-        const holder = ctl.cameraObject;
-        if (holder && ctl.camera) {
-            this.runtime.scene.addChild(holder);
-            ctl.hideBody();
+        const ctl = (this.controller = new PlayerController(made[nodes.indexOf(players[0])], players[0].player!, this.input, chars.level, () => this.runtime.activeCamera, fov));
+        if (ctl.camera) {
+            this.runtime.scene.addChild(ctl.camera.object3D);
             ctl.updateCamera();
             this.gameCamera = ctl.camera;
             this.runtime.setActiveCamera(ctl.camera);
         }
         if (this.controlsHost) {
             this.controls ??= new PlayControls(this.controlsHost, this.input, (x, y) => this.tap(x, y));
-            this.controls.start({ jump: node.player!.jump > 0 });
+            this.controls.start({ jump: players[0].character!.jump > 0 });
         }
-        if (nodes.length > 1) this.warn(`One player plays at a time: ${node.name} does, ${nodes.length - 1} more object(s) with a Player Controller stand still.`);
+        if (players.length > 1) this.warn(`One player plays at a time: ${players[0].name} does; ${players.slice(1).map((n) => n.name).join(', ')} stand(s) still.`);
     }
 
     private instantiate() {
@@ -395,20 +395,19 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.time.elapsed += dt;
         this.time.frame++;
 
-        // The player moves first, so scripts see where it is; its camera follows last.
-        if (this.controller) {
-            this.controller.level.refresh();
-            this.controller.ctl.move(dt);
-        }
+        // Controllers first (the player, then scripts and behavior trees), then every
+        // character moves at once; lateUpdate sees where they went, the camera follows last.
+        this.controller?.control(dt);
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'update', dt);
         }
         this.runTimers();
         this.agents.frame();
+        this.characters?.update(dt);
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'lateUpdate', dt);
         }
-        this.controller?.ctl.updateCamera();
+        this.controller?.updateCamera();
         if (this.pendingDestroy.length) {
             const due = this.pendingDestroy.filter((d) => d.at <= this.time.elapsed);
             this.pendingDestroy = this.pendingDestroy.filter((d) => d.at > this.time.elapsed);
@@ -518,6 +517,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             this.controls.pointer(type, id, x, y);
             return;
         }
+        // While a pointer is down it is the scripts' mouse: a second finger does not move it.
+        if (this.mousePointer !== null && id !== this.mousePointer) return;
+        if (type === 'down') this.mousePointer = id;
+        if (type === 'up' || type === 'cancel') this.mousePointer = null;
         if (type === 'cancel') type = 'up';
         this.input.pointerMove(x, y);
         if (type === 'move') return;
@@ -549,10 +552,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         if (this.state !== 'stopped') this.input.wheel(delta);
     }
 
-    /** A tap on a touch screen is a click for the scripts. */
+    /** A tap on a touch screen is a click for the scripts (the mouse jumps there, it does not drag). */
     private tap(x: number, y: number) {
-        this.pointerEvent('down', x, y, 0);
-        this.pointerEvent('up', x, y, 0);
+        this.input.pointerMove(x, y, false);
+        this.pointerEvent('down', x, y, 0, -1);
+        this.pointerEvent('up', x, y, 0, -1);
     }
 
     /** Script instances on an object or its nearest ancestor that has scripts. */
@@ -668,8 +672,9 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         const doomed = new Set<Object3D>();
         obj.traverse((o: Object3D) => doomed.add(o));
         this.agents.removeObjects(doomed);
-        // A destroyed player stops; its camera stays where it was.
-        if (this.controller && doomed.has(this.controller.ctl.obj)) this.controller = null;
+        // Destroyed characters stop; the player's camera stays where it was.
+        this.characters?.remove(doomed);
+        if (this.controller && doomed.has(this.controller.character.obj)) this.controller = null;
         for (const inst of this.instances) {
             if (!inst.destroyed && doomed.has(inst.obj)) {
                 inst.destroyed = true;
@@ -773,6 +778,12 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     setPlayer(obj: Object3D | null) {
         this.agents.player = obj;
+    }
+
+    /** The character of an object (or of the nearest object above it with one). */
+    character(target: Object3D | string | null): Character | null {
+        const obj = typeof target === 'string' ? this.findObject(target) : target;
+        return this.characters?.of(obj) ?? null;
     }
 
     remember(text: string, tags: string[]): string | null {
