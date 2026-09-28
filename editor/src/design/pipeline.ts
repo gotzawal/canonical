@@ -9,12 +9,15 @@ import { makeLightNode } from '../core/defaults';
 import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
+import { confirmDialog, toast } from '../core/messages';
+import type { Store } from '../core/store';
 import type {
     AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
 } from '../core/types';
-import type { Editor } from '../editor';
-import { confirmDialog, toast } from '../ui/overlays';
-import { notices } from '../ui/notify';
+import type { Runtime } from '../engine/runtime';
+import type { ScriptCompiler } from '../play/compiler';
+import type { Player } from '../play/player';
+import type { CameraController } from '../viewport/cameraController';
 import { syncSlots } from './materialSlots';
 import { cameraFov, FRAME_MARGIN, frameFov, frameRect } from './shotCamera';
 import { nextStage, stageDef, stageProgress, type CheckState } from './stages';
@@ -26,6 +29,20 @@ interface PipelineEvents {
     shot: string | null;
     /** Open the comparison of a shot (it is shown first). */
     compare: string;
+    /** The assistant proposes completing the current stage (its summary). */
+    proposed: string;
+    /** A stage was completed; `next` is the new current stage. */
+    completed: { stage: StageId; next: StageId | null };
+}
+
+/** What the pipeline works with. `blocked` tells why the view cannot show the scene now ('' when it can). */
+export interface PipelineHost {
+    store: Store;
+    runtime: Runtime;
+    camera: CameraController;
+    player: Player;
+    compiler: ScriptCompiler;
+    blocked(): string;
 }
 
 /** Snapshot file: the scene without its design section. */
@@ -45,20 +62,20 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** The view's field of view before a shot was shown. */
     private viewFov: number | null = null;
 
-    constructor(private editor: Editor) {
+    constructor(private host: PipelineHost) {
         super();
-        editor.store.on('load', () => {
+        host.store.on('load', () => {
             // The loaded scene comes with its own camera.
             this.viewFov = null;
             this.showShot(null);
         });
-        editor.store.on('change', () => {
+        host.store.on('change', () => {
             if (this.activeShot && !this.shot(this.activeShot)) this.showShot(null);
         });
     }
 
     private get store() {
-        return this.editor.store;
+        return this.host.store;
     }
 
     get design(): DesignDoc {
@@ -66,7 +83,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     progress(stage: StageId = this.design.stage): { done: number; total: number; open: CheckState[]; items: CheckState[] } {
-        return stageProgress({ doc: this.store.doc, design: this.design, fps: this.editor.runtime.fps }, stage);
+        return stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps }, stage);
     }
 
     // --------------------------------------------------------------- locks
@@ -172,14 +189,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.store.commit('Propose Stage Completion', (d) => {
             d.design.stages[stage].proposal = { summary: summary.trim(), at: now() };
         }, { design: true });
-        notices.show({
-            kind: 'stage',
-            key: 'stage-proposal',
-            icon: 'flag',
-            title: `The assistant proposes completing ${stageDef(stage).title}`,
-            body: summary.trim().slice(0, 240),
-            actions: [{ label: 'Review', primary: true, run: () => this.editor.emit('show-design', undefined) }],
-        });
+        this.emit('proposed', summary.trim());
     }
 
     dismissProposal() {
@@ -202,7 +212,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const id = design.stage;
         const def = stageDef(id);
         if (design.stages[id].status === 'done') return false;
-        const block = design.shots.length ? this.captureBlock() : '';
+        const block = design.shots.length ? this.host.blocked() : '';
         if (block) {
             toast(block, 'info', 5000);
             return false;
@@ -213,7 +223,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
             const ok = await confirmDialog(`Complete ${def.title}?`, `${prog.open.length} checklist item${prog.open.length === 1 ? ' is' : 's are'} still open:\n${list}\n\nComplete the stage anyway?`, 'Complete Anyway');
             if (!ok) return false;
         }
-        if (this.editor.player.state !== 'stopped') this.editor.stopPlay();
+        this.host.player.stop();
         this.setBusy(true);
         try {
             const at = now();
@@ -249,8 +259,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
                     delete d.design.unlocked;
                 }
             }, { design: true });
-            notices.show({ kind: 'stage', key: 'stage-proposal', icon: 'check', title: `${def.title} complete`, body: next ? `Next: ${stageDef(next).long}.` : 'Every stage is complete.', timeout: 6000 });
-            this.editor.checkpoints?.stageCompleted(def.title, next ? stageDef(next).title : null);
+            this.emit('completed', { stage: id, next });
             return true;
         } catch (e: any) {
             toast(`Completing the stage failed: ${e?.message || e}`, 'error');
@@ -351,14 +360,14 @@ export class Pipeline extends Emitter<PipelineEvents> {
         if (ask && !(await confirmDialog('Restore snapshot?', `Put the scene back the way it was at "${snap.name}" (${snap.at.slice(0, 16).replace('T', ' ')})? The design section stays as it is; Undo brings the current scene back.`, 'Restore'))) {
             return false;
         }
-        if (this.editor.player.state !== 'stopped') this.editor.stopPlay();
+        this.host.player.stop();
         const s = file.scene;
         // A snapshot can come with an opened file: script code the scene does
         // not have yet stays paused until the user reads and enables it, as
         // for the file itself (compiling runs it). Paused before the commit compiles.
         const known = new Set(this.store.doc.scripts.map((x) => x.code));
-        if (this.editor.compiler.trusted && s.scripts.some((x) => !known.has(x.code))) {
-            this.editor.compiler.setTrusted(false);
+        if (this.host.compiler.trusted && s.scripts.some((x) => !known.has(x.code))) {
+            this.host.compiler.setTrusted(false);
             toast('The snapshot brings back script code: its scripts are paused until you enable them.', 'info', 6000);
         }
         this.store.commit(`Restore Snapshot: ${snap.name}`, (d) => {
@@ -417,7 +426,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
 
     /** Frame of a shot in the viewport, and the camera field of view that shows it. */
     frameFor(aspect: number, margin = FRAME_MARGIN) {
-        const [w, h] = this.editor.runtime.cssSize;
+        const [w, h] = this.host.runtime.cssSize;
         const rect = frameRect(aspect, w, h, margin);
         return { rect, viewH: h };
     }
@@ -502,10 +511,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.activeShot = shot ? shot.id : null;
         if (shot) {
             const cam = this.shotCamera(shot);
-            if (animate) this.editor.camera.animateTo(cam, 320);
-            else this.editor.camera.jump(cam);
+            if (animate) this.host.camera.animateTo(cam, 320);
+            else this.host.camera.jump(cam);
         } else if (this.viewFov !== null) {
-            this.editor.camera.jump({ ...this.store.camera, fov: this.viewFov });
+            this.host.camera.jump({ ...this.store.camera, fov: this.viewFov });
             this.viewFov = null;
         }
         this.emit('shot', this.activeShot);
@@ -528,34 +537,22 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     /**
-     * Why shots cannot be captured now, or '' when they can: the viewport
-     * shows something else in place of the scene, and a capture would too.
-     */
-    captureBlock(): string {
-        const ed = this.editor;
-        if (ed.isolated) return 'The view shows only the prefab being edited. Finish the edit first (Apply or Discard).';
-        if (ed.room?.active) return 'The view shows the reference room. Leave it first.';
-        if (ed.walk?.active) return 'The view follows the walk camera. Stop walking first.';
-        return '';
-    }
-
-    /**
      * Renders a view: `camera` holds the frame's field of view, `aspect` the
      * frame's shape. The editor view comes back afterwards.
      */
     async captureCamera(camera: CameraState, aspect: number, maxWidth = 1600): Promise<Blob> {
-        const block = this.captureBlock();
+        const block = this.host.blocked();
         if (block) throw new Error(block);
-        const runtime = this.editor.runtime;
+        const runtime = this.host.runtime;
         const prev = { ...this.store.camera, target: [...this.store.camera.target] as CameraState['target'] };
         const { rect, viewH } = this.frameFor(aspect, 1);
         runtime.setGridVisible(false);
         runtime.gi.setHelpersVisible(false);
         try {
-            this.editor.camera.jump({ ...camera, target: [...camera.target] as CameraState['target'], fov: cameraFov(camera.fov, rect.h, viewH) });
+            this.host.camera.jump({ ...camera, target: [...camera.target] as CameraState['target'], fov: cameraFov(camera.fov, rect.h, viewH) });
             return await runtime.captureFrame({ crop: rect, maxWidth, frames: 3, type: 'image/jpeg', quality: 0.9 });
         } finally {
-            this.editor.camera.jump(prev);
+            this.host.camera.jump(prev);
             runtime.setGridVisible(this.store.prefs.grid && !this.store.playing);
             runtime.gi.setHelpersVisible(this.store.prefs.giProbes && !this.store.playing);
         }

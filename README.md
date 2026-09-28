@@ -61,6 +61,13 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 - Characters built into the editor (**Create > Character**, or Add Component > Character), as with pawns in Unreal: a body that stands on the scene's meshes, climbs steps, falls and is stopped by walls and other characters, and moves the way its controller says
 - The player controls one (**Create > Player**, or Add Component > Player Controller): WASD or the arrow keys walk, Shift runs, Space jumps, a mouse drag (or Q and E) turns the camera and the wheel zooms; on phones and tablets a joystick appears under the left thumb, a button jumps, a finger turns the camera and two fingers pinch to zoom. The camera follows behind, looks from its eyes or leaves the scene's camera, and walls pull it in front of them. It works the same in built games
 - NPCs are characters driven by their behavior tree (the **Move To** task walks to an object) or by scripts (`this.character`). All characters move together once a frame, and each reports its velocity, mode (idle, walk, run, jump, fall) and jump and landing events, for animation
+- Imported models with animation clips play them in the editor and in Play (Inspector > Animation: clip, speed, crossfade, preview). On a character the mode picks the clip, a clip named for it (Idle, Walk, Run...) unless set, and crossfades as the character stops, walks, runs, jumps and falls; scripts play other clips with `this.animator`
+
+**Physics**
+
+- Rigid bodies simulated by [Rapier](https://rapier.rs) (Add Component > Physics Body): dynamic bodies fall, collide, bounce and tumble, kinematic ones follow their objects as scripts move them and push the dynamic ones, fixed ones stay put. Colliders fit the mesh (exact for primitives, a convex hull or the triangles otherwise) or are a box, sphere or capsule, with mass, friction, bounce, damping, gravity scale, locked rotation and continuous collision detection for fast objects
+- Every shown mesh without a body is part of the level, so what falls lands on it without setting anything up. Characters push dynamic bodies they walk into, and a body marked **Trigger** detects what enters it without stopping anyone
+- Scripts hear `onCollisionEnter` / `onCollisionExit` and `onTriggerEnter` / `onTriggerExit`, move bodies with `this.body` (velocity, impulses, teleport), cast rays with `this.physics.raycast` and spawn objects with bodies. Rapier (2 MB) loads the first time a scene needs it, and built games include it only when they use it
 
 **Scene editing**
 
@@ -131,7 +138,7 @@ export default class Spinner extends Script {
 }
 ```
 
-The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)`, `onPointerDown` / `onPointerUp` / `onClick(e)` and `onTaskAbort(task)` (a behavior tree aborted a script task). Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes that include the on-screen joystick, mouse) and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the player's camera, else the scene's main camera, or the editor view when the scene has neither. The player needs no script: **Create > Player** adds a character with the built-in player controller, whose speeds, jump, body size and view are set in the Inspector. Scripts drive a character with `this.character` (`move`, `moveTo`, `jump`, `stop`) and read its state to animate it. Script errors in the console link to their line.
+The lifecycle methods are `awake`, `start`, `update(dt)`, `lateUpdate(dt)`, `onDestroy`, `onKeyDown` / `onKeyUp(key)`, `onPointerDown` / `onPointerUp` / `onClick(e)`, `onTaskAbort(task)` (a behavior tree aborted a script task) and, for objects with a physics body, `onCollisionEnter` / `onCollisionExit(other)` and `onTriggerEnter` / `onTriggerExit(other)`. Scripts also get `this.time`, `this.input` (keys, WASD / arrow axes that include the on-screen joystick, mouse), `this.body`, `this.physics` and `this.animator`, and helpers such as `find`, `spawn`, `destroy`, `setColor`, `lookAt`, `after` and `every`, and can import from `@orillusion/core`. Play renders through the player's camera, else the scene's main camera, or the editor view when the scene has neither. The player needs no script: **Create > Player** adds a character with the built-in player controller, whose speeds, jump, body size and view are set in the Inspector. Scripts drive a character with `this.character` (`move`, `moveTo`, `jump`, `stop`) and read its state to animate it. Script errors in the console link to their line.
 
 ### Scripts from scene files
 Scripts run JavaScript in the editor page, which also holds your OpenRouter key. When you open a scene file, its scripts stay paused (they are not even compiled) until you choose **Enable Scripts**, so you can read them first. Scenes you make yourself and the built-in example are not affected.
@@ -194,17 +201,25 @@ You need Node.js (CI uses 22) and pnpm.
 pnpm install
 pnpm run editor             # dev server at http://localhost:8100
 pnpm run editor:typecheck   # type check the editor
+pnpm run editor:test        # unit tests of the editor's logic (Vitest, in Node)
 pnpm run editor:build       # static site in editor/dist
+xvfb-run -a pnpm run editor:e2e   # browser tests of the build (Playwright)
 ```
+
+The editor type checks in strict mode. The engine and the particle package, which it imports as source, are a referenced project (`editor/tsconfig.engine.json`) checked as their declarations, so they keep their own, looser settings.
 
 The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.
 
-`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**. `.github/workflows/editor-tests.yml` runs the unit and browser tests.
 
 | Path | Contents |
 |---|---|
 | `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
 | `editor/player.html`, `editor/src/player/` | The game player that Build & Deploy puts into every game |
+| `editor/src/core/model.ts` | The components of objects (material, light, camera, particles, character, player...) and the scene settings as zod schemas: their types, defaults, the repair of opened files, the assistant's tool arguments and the inspector's fields all come from them, so a new setting is one line there plus what the engine does with it |
+| `editor/src/` | Layered: `core/` (data, schemas, store) at the bottom, then `engine/`, `play/` and the pipeline (`design/`); `editor.ts` gets all of them when main.ts makes it; the assistant (`ai/`), the view modes (`viewport/`) and the UI (`ui/`) sit on top. Code below the UI reports to it through events, `core/messages.ts` (toasts, notices, questions) and the editor's own, and `test/unit/layers.test.ts` checks the direction |
+| `editor/src/ai/` | The assistant: its request loop (`agent.ts`), save checkpoints, and its tools. Each `*Tools.ts` module lists its tools by name with their arguments, the pipeline groups that offer them, what they need from the AI settings and their handler; `registry.ts` offers and runs them |
+| `editor/src/openrouter/` | The OpenRouter client, prompt caching, image generation and the AI settings, for the assistant and the pipeline's image steps |
 | `editor/src/core/behavior/` | Behavior formats: node type definitions, edit operations, validation, outlines |
 | `editor/src/play/ai/` | Agents while playing: tree runtime, blackboards, context pool, Ask and Model tasks, scheduler, memory, inference worker and model adapters, speech |
 | `editor/public/` | Favicons and the logo |
@@ -214,14 +229,14 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 | `test/` | Engine tests |
 
 ### Testing
-Check a change with `pnpm run editor:typecheck` and `pnpm run editor:build`, then drive the built editor in a browser: serve it with `npx vite preview --config editor/vite.config.js`, which also serves the player app that Build & Deploy needs. What has worked for scripted runs (Playwright or plain CDP):
+Check a change with `pnpm run editor:typecheck`, `pnpm run editor:test` and `pnpm run editor:build`, then drive the built editor in a browser: `xvfb-run -a pnpm run editor:e2e` runs the Playwright tests in `editor/test/e2e` against `npx vite preview --config editor/vite.config.js`, which also serves the player app that Build & Deploy needs. What has worked for scripted runs (Playwright or plain CDP):
 
-- **WebGPU without a GPU.** Chromium can run WebGPU on the CPU with SwiftShader: `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader`. On a server, run the browser headed under a virtual display (`xvfb-run -a node test.mjs`), which is more reliable than headless.
+- **WebGPU without a GPU.** Chromium can run WebGPU on the CPU with SwiftShader: `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader --disable-gpu-watchdog`. On a server, run the browser headed under a virtual display (`xvfb-run -a node test.mjs`), which is more reliable than headless. Compiling the shaders stalls the first frames of a page for about half a minute; without the GPU watchdog that ends without an "Instance dropped" error, so the browser tests share one page per file.
 - **Start clean.** The editor restores its last scene, layout and settings from localStorage and IndexedDB. Clear both and reload for a new scene. A new scene opens on the brief screen; "Work without a brief" dismisses it.
 - **Wait for state, not time.** The editor is `window.__editor` (its store, pipeline, camera and so on). It is ready when `.viewport canvas.gpu` is there and `.viewport-loading` is gone. SwiftShader can stop drawing frames for many seconds after a load, and waits that poll on animation frames stop with it. So give `waitForFunction` a `{ polling: 100 }` interval, click with `el.click()` inside `page.evaluate` when Playwright's actionability waits time out, and wait for `!__editor.camera.animating` after camera moves.
 - **Keys.** Shortcuts take digits by their position (`Shift+1` is the back view, not `!`), and letters by position too when the layout types another script (Korean, Cyrillic). For a symbol typed with Shift, press the symbol (`?`), not `Shift+/`.
 - **The assistant without an account.** Put a dummy key in `localStorage['canonical-editor/openrouter-key']`. Then answer `https://openrouter.ai/api/v1/models` and `/api/v1/chat/completions` with `context.route`. A chat reply is a `text/event-stream` body of `data: {"choices":[{"delta":...}]}` lines ending with `data: [DONE]`, so a test can script tool calls step by step.
-- **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats and the script compiler, run in Node. Bundle a test with `npx esbuild test.ts --bundle --platform=node --format=esm --outfile=test.mjs`, and stub the few globals they touch (`window`, `document`, `localStorage`).
+- **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats, the script compiler, the room planner and the level check, run in Node: `editor/test/unit` has their Vitest tests. `test/unit/setup.ts` stubs the few globals they touch (`window`, `document`, `localStorage`), and `@orillusion/core` resolves to a stub there. The level check runs on any `LevelScan` (boxes and a ray cast), so tests give it a level made of boxes.
 - **The engine.** `pnpm run test:ci` runs `test/` in Electron with SwiftShader. The same page (`test/?auto` on `pnpm run dev`) also runs in Chromium when `window.electron` is stubbed to collect the results.
 - **Load.** SwiftShader is CPU bound. With several browsers at once, the GPU process can lose its device ("Instance dropped" errors) or time out. Run browser tests one at a time, and rerun a failure on an idle machine before deciding it is not the change.
 

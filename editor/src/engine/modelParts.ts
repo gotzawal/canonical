@@ -1,5 +1,5 @@
 import {
-    BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
+    AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
 import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, Vec3 } from '../core/types';
@@ -72,6 +72,9 @@ export interface ModelSlot {
 export interface ModelInfo {
     parts: ModelPart[];
     slots: ModelSlot[];
+    /** The skeleton's animator and the names of its clips, when the file has them. */
+    animator: AnimatorComponent | null;
+    clips: string[];
     part(path: string): ModelPart | undefined;
     slot(key: string): ModelSlot | undefined;
     /** Part path of a renderer, for viewport picking. */
@@ -243,9 +246,12 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
 
     const partIndex = new Map(parts.map((p) => [p.path, p]));
     const slotIndex = new Map(slots.map((s) => [s.key, s]));
+    const animator = root.getComponentsInChild(AnimatorComponent).find((a) => a.clips?.length) ?? null;
     return {
         parts,
         slots,
+        animator,
+        clips: animator ? animator.clips.map((c) => c.clipName) : [],
         part: (path) => partIndex.get(path),
         slot: (key) => slotIndex.get(key),
         pathOf: (r) => byRenderer.get(r),

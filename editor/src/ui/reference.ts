@@ -25,6 +25,8 @@ const LIFECYCLE: [string, string][] = [
     ['onKeyDown(key) / onKeyUp(key)', 'Key names in lower case: "w", "space", "arrowup", "shift".'],
     ['onPointerDown(e) / onPointerUp(e) / onClick(e)', 'This object was clicked in Play mode. e has x, y, button and point [x, y, z].'],
     ['onTaskAbort(task)', 'A behavior tree aborted a script task of this script (task.signal fired too).'],
+    ['onCollisionEnter(other) / onCollisionExit(other)', 'This object\'s body (or level mesh) started or stopped touching another object.'],
+    ['onTriggerEnter(other) / onTriggerExit(other)', 'Something entered or left a trigger: a body with Trigger on, this one or the other.'],
 ];
 
 const MEMBERS: [string, string][] = [
@@ -32,9 +34,12 @@ const MEMBERS: [string, string][] = [
     ['this.time', 'delta, elapsed (seconds) and frame.'],
     ['this.input', "key(k), keyDown(k), keyUp(k), axis('horizontal' | 'vertical') from WASD, the arrows and the on-screen joystick, stick { x, y, active }, mouse { x, y, dx, dy, wheel }, mouseButton(b), mouseDown(b), mouseUp(b). On touch screens the jump button presses \"space\" and a tap is a click."],
     ['this.character / this.getCharacter(objOrName)', "The object's character (null without one): move(x, z) this frame, moveTo(objOrPoint, { radius, run }) resolving true on arrival, jump(), stop(), run and face; its state velocity, speed, grounded, facing and mode ('idle', 'walk', 'run', 'jump', 'fall') and on('jump' | 'land' | 'mode', fn) to animate it by."],
+    ['this.animator / this.getAnimator(objOrName)', 'The skeletal animation of the object\'s model (null without clips): clips, clip (playing now), speed, and play(clip, fade?) crossfading over fade seconds. A character\'s model changes clip with its mode by itself.'],
+    ['this.body / this.getBody(objOrName)', 'The physics body (null without one): velocity and angularVelocity (degrees per second) to read or set, applyImpulse([x, y, z]), applyTorqueImpulse([x, y, z]), teleport(position, rotation?), type, mass, sleeping, wakeUp().'],
+    ['this.physics', 'The physics world (null when the scene has none): gravity [x, y, z] and raycast(origin, direction, maxDistance?, ignoreObject?) returning { object, point, normal, distance } or null.'],
     ['this.find(name) / this.findAll(name)', 'Objects by name.'],
     ['this.getScript(objOrName, scriptName?)', 'A script instance on another object.'],
-    ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs' or 'capsule'. Options: position, rotation, scale, color, parent, name. Spawned objects are removed when Play stops; this.spawned lists them."],
+    ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs' or 'capsule'. Options: position, rotation, scale, color, parent, name, body (true or body settings for a dynamic body). Spawned objects are removed when Play stops; this.spawned lists them."],
     ['this.destroy(obj?, seconds?)', 'Removes an object (this one by default), optionally after a delay.'],
     ['this.setColor(hex, obj?) / this.setEmissive(hex, intensity, obj?)', 'Changes the material of this or another object.'],
     ['this.lookAt(objOrPoint)', 'Turns the object toward another object or a point.'],

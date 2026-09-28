@@ -6,13 +6,13 @@
 
 import { putDesignImage } from '../core/assets';
 import { assetImageDataUrl, compactImage, imageExt } from '../core/images';
-import type { DesignDoc, PaintoverDoc, ParamValue, ShotDoc } from '../core/types';
+import type { AssetMeta, DesignDoc, PaintoverDoc, ParamValue, ShotDoc } from '../core/types';
 import type { Editor } from '../editor';
 import {
     checkParams, closestAspect, DEFAULT_IMAGE_MODEL, generateImages, listImageModels, modelParams, takesImages,
     type ImageModel,
-} from '../ai/images';
-import { aiSettings } from '../ai/settings';
+} from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 import { patchShot } from './pipeline';
 
 export interface PaintoverSettings {
@@ -171,7 +171,7 @@ export async function generatePaintovers(
     const at = new Date().toISOString();
     const stem = fileStem(shot.name);
     const start = shot.paintovers.length;
-    const metas = [];
+    const metas: AssetMeta[] = [];
     const paintovers: PaintoverDoc[] = [];
     for (let i = 0; i < result.images.length; i++) {
         const img = result.images[i];

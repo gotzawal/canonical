@@ -66,7 +66,8 @@ function shared() {
  * entry chunk, the chunks that imports, CSS and assets, workers and the
  * files their code names, the favicon). `ai` lists the files only agents
  * with models use (the inference worker, ONNX Runtime and its WebAssembly),
- * which games without Ask or Recall leave out.
+ * which games without Ask or Recall leave out; `physics` those of Rapier,
+ * which games without physics bodies leave out.
  */
 function playerManifest() {
     return {
@@ -107,12 +108,11 @@ function playerManifest() {
                 visit(entry.fileName)
                 return seen
             }
-            // The chunk the player imports dynamically for the models (play/ai/services.ts;
-            // Rollup gives it no facade when it holds more modules). Only when nothing
-            // imports it statically from the player page are its files optional.
-            const aiChunk = Object.values(bundle).find(
-                (c) => c.type === 'chunk' && c.moduleIds.some((m) => m.replace(/\\/g, '/').endsWith('/play/ai/services.ts')),
-            )
+            // The chunks the player imports dynamically for the agents' models
+            // (play/ai/services.ts) and for physics (Rapier); Rollup gives a chunk no
+            // facade when it holds more modules. Only when nothing imports one
+            // statically from the player page are its files optional.
+            const chunkOf = (id) => Object.values(bundle).find((c) => c.type === 'chunk' && c.moduleIds.some((m) => m.replace(/\\/g, '/').includes(id)))
             const statics = new Set()
             const visitStatic = (name) => {
                 const item = bundle[name]
@@ -121,15 +121,21 @@ function playerManifest() {
                 for (const n of item.imports) visitStatic(n)
             }
             visitStatic(entry.fileName)
-            const split = aiChunk && !statics.has(aiChunk.fileName)
             const all = reach(null)
-            const core = split ? reach(aiChunk.fileName) : all
+            /** The files only the chunk holding module `id` brings in. */
+            const only = (id) => {
+                const chunk = chunkOf(id)
+                if (!chunk || statics.has(chunk.fileName)) return []
+                const rest = reach(chunk.fileName)
+                return Array.from(all).filter((n) => !rest.has(n)).sort()
+            }
             const files = new Set(['player.html', ...all])
             if (fs.existsSync(path.join(options.dir, 'favicon.svg'))) files.add('favicon.svg')
             const manifest = {
                 html: 'player.html',
                 files: Array.from(files).sort(),
-                ai: Array.from(all).filter((n) => !core.has(n)).sort(),
+                ai: only('/play/ai/services.ts'),
+                physics: only('/@dimforge/rapier3d-compat/'),
             }
             fs.writeFileSync(path.join(options.dir, PLAYER_MANIFEST), JSON.stringify(manifest, null, 1))
         },

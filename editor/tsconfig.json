@@ -8,9 +8,10 @@
         "resolveJsonModule": true,
         "esModuleInterop": true,
         "noEmit": true,
+        "tsBuildInfoFile": "../node_modules/.cache/engine-types/editor.tsbuildinfo",
         "skipLibCheck": true,
         "allowJs": true,
-        "strict": false,
+        "strict": true,
         "experimentalDecorators": true,
         "baseUrl": "./",
         "paths": {
@@ -19,5 +20,7 @@
         },
         "types": ["vite/client", "@webgpu/types"]
     },
-    "include": ["src"]
+    "include": ["src", "test"],
+    // The engine is checked as declarations (not strict): see tsconfig.engine.json.
+    "references": [{ "path": "./tsconfig.engine.json" }]
 }

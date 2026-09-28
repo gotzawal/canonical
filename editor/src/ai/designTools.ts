@@ -3,11 +3,11 @@
 
 import { STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
+import { Specs } from '../core/model';
+import { patch, toolSchema } from '../core/schema';
 import type { AreaDoc, AreaObjectDoc, DesignDoc, StageId, Vec3 } from '../core/types';
 import { evaluateStage, stageDef } from '../design/stages';
-import type { ToolDef } from './openrouter';
-import type { ToolEnv, ToolResult } from './tools';
-import { def, hex, num, optStr, str, ToolError, v3, type Json } from './toolUtil';
+import { hex, num, optStr, str, ToolError, tools, v3, type Json, type ToolEnv } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
 /** Questions per ask_user call, and open questions at once. */
@@ -15,82 +15,99 @@ const MAX_QUESTIONS = 3;
 const MAX_OPEN = 6;
 const SECTIONS = ['all', 'brief', 'layout', 'areas', 'concepts', 'specs', 'mood', 'play', 'effects', 'materials', 'budget', 'questions', 'shots', 'stages', 'snapshots', 'memo'];
 
-export function designToolDefs(): ToolDef[] {
-    return [
-        def('read_design', 'Read the design section: the planning brief, the structure (layout, areas, specs, mood, play requirements, effects, material slots, budget), open questions, shots, the stages with their checklists, snapshots and the scene memo.', {
+export const designTools = tools({
+    read_design: {
+        groups: ['read'],
+        description: 'Read the design section: the planning brief, the structure (layout, areas, specs, mood, play requirements, effects, material slots, budget), open questions, shots, the stages with their checklists, snapshots and the scene memo.',
+        params: {
             section: { type: 'string', enum: SECTIONS, description: 'Default "all" (without the brief text; ask for "brief" to read it).' },
-        }),
-        def(
-            'update_design',
-            'Write the structured plan. Areas are matched by id or name and updated; new names add areas; remove: true deletes one. An area\'s objects list replaces the old one (placed flags of the same names are kept). Route, sight lines and area order replace the old ones when given. Effects are matched by id or name. After the brief stage, areas whose objects, bounds or mood change are flagged for rework.',
-            {
-                from_brief: { type: 'boolean', description: 'This structure comes from the current brief (marks the brief as structured).' },
-                layout: {
-                    type: 'object',
-                    description: 'How the scene is built.',
-                    properties: {
-                        summary: { type: 'string', description: 'Kind of place, overall size, ground, where the areas sit and how they connect.' },
-                        size: { ...vec3, description: 'Overall footprint x, height y, footprint z in meters.' },
-                        connections: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, kind: { type: 'string' }, note: { type: 'string' } }, required: ['from', 'to'] } },
-                    },
+        },
+        run({ env, args }) {
+            const section = typeof args.section === 'string' && SECTIONS.includes(args.section) ? args.section : 'all';
+            return { data: readDesign(env, section), summary: section };
+        },
+    },
+    update_design: {
+        groups: ['design'],
+        description: 'Write the structured plan. Areas are matched by id or name and updated; new names add areas; remove: true deletes one. An area\'s objects list replaces the old one (placed flags of the same names are kept). Route, sight lines and area order replace the old ones when given. Effects are matched by id or name. After the brief stage, areas whose objects, bounds or mood change are flagged for rework.',
+        params: {
+            from_brief: { type: 'boolean', description: 'This structure comes from the current brief (marks the brief as structured).' },
+            layout: {
+                type: 'object',
+                description: 'How the scene is built.',
+                properties: {
+                    summary: { type: 'string', description: 'Kind of place, overall size, ground, where the areas sit and how they connect.' },
+                    size: { ...vec3, description: 'Overall footprint x, height y, footprint z in meters.' },
+                    connections: { type: 'array', items: { type: 'object', properties: { from: { type: 'string' }, to: { type: 'string' }, kind: { type: 'string' }, note: { type: 'string' } }, required: ['from', 'to'] } },
                 },
-                areas: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            id: { type: 'string' },
-                            name: { type: 'string' },
-                            description: { type: 'string' },
-                            objects: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, count: { type: 'number' }, note: { type: 'string' }, placed: { type: 'boolean' } }, required: ['name'] } },
-                            mood: { type: 'string', description: 'Only when it differs from the scene mood.' },
-                            bounds: { type: ['object', 'null'], properties: { center: vec3, size: vec3 }, description: 'Rough placement: center on the ground and size x y z in meters.' },
-                            rework_done: { type: 'boolean', description: 'Clear the rework flag once the area is redone.' },
-                            remove: { type: 'boolean' },
-                        },
-                    },
-                },
-                concepts: {
-                    type: 'array',
-                    description: 'Map concept images (image asset ids) to areas; adds images that are not concepts yet (e.g. ones the user attached).',
-                    items: { type: 'object', properties: { asset: { type: 'string' }, area: { type: ['string', 'null'] }, note: { type: 'string' }, remove: { type: 'boolean' } }, required: ['asset'] },
-                },
-                specs: {
-                    type: 'object',
-                    properties: {
-                        player_height: { type: 'number' },
-                        eye_height: { type: 'number' },
-                        player_radius: { type: 'number' },
-                        door_width: { type: 'number' },
-                        door_height: { type: 'number' },
-                        step_height: { type: 'number' },
-                        max_slope: { type: 'number', description: 'Degrees.' },
-                        notes: { type: 'string' },
-                    },
-                },
-                mood: {
-                    type: 'object',
-                    properties: {
-                        description: { type: 'string' },
-                        time_of_day: { type: 'string' },
-                        key_light: { type: 'object', properties: { azimuth: { type: 'number', description: 'Degrees around +Y from +Z.' }, elevation: { type: 'number' }, color: { type: 'string' }, note: { type: 'string' } } },
-                        palette: { type: 'array', items: { type: 'string' } },
-                    },
-                },
-                play: {
-                    type: 'object',
-                    properties: {
-                        route: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, area: { type: 'string' }, position: vec3, note: { type: 'string' } }, required: ['name'] } },
-                        sightlines: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, note: { type: 'string' }, ok: { type: ['boolean', 'null'] } }, required: ['from', 'to'] } },
-                        area_order: { type: 'array', items: { type: 'string' } },
-                        notes: { type: 'string' },
-                    },
-                },
-                effects: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, area: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' }, remove: { type: 'boolean' } }, required: ['name'] } },
-                budget: { type: 'object', properties: { shadow_lights: { type: 'number' }, fps: { type: 'number' } } },
             },
-        ),
-        def('ask_user', `Ask the user about something the brief leaves open that changes the plan a lot (the layout, the scale, the look). Decide small things yourself. At most ${MAX_QUESTIONS} questions at a time, each with what you assume meanwhile: you go ahead with that, and the question does not hold up the stage; an answer later changes the plan. The questions show in the Design tab; answers come back in the editor context.`, {
+            areas: {
+                type: 'array',
+                items: {
+                    type: 'object',
+                    properties: {
+                        id: { type: 'string' },
+                        name: { type: 'string' },
+                        description: { type: 'string' },
+                        objects: { type: 'array', items: { type: 'object', properties: { name: { type: 'string' }, count: { type: 'number' }, note: { type: 'string' }, placed: { type: 'boolean' } }, required: ['name'] } },
+                        mood: { type: 'string', description: 'Only when it differs from the scene mood.' },
+                        bounds: { type: ['object', 'null'], properties: { center: vec3, size: vec3 }, description: 'Rough placement: center on the ground and size x y z in meters.' },
+                        rework_done: { type: 'boolean', description: 'Clear the rework flag once the area is redone.' },
+                        remove: { type: 'boolean' },
+                    },
+                },
+            },
+            concepts: {
+                type: 'array',
+                description: 'Map concept images (image asset ids) to areas; adds images that are not concepts yet (e.g. ones the user attached).',
+                items: { type: 'object', properties: { asset: { type: 'string' }, area: { type: ['string', 'null'] }, note: { type: 'string' }, remove: { type: 'boolean' } }, required: ['asset'] },
+            },
+            specs: toolSchema(Specs),
+            mood: {
+                type: 'object',
+                properties: {
+                    description: { type: 'string' },
+                    time_of_day: { type: 'string' },
+                    key_light: { type: 'object', properties: { azimuth: { type: 'number', description: 'Degrees around +Y from +Z.' }, elevation: { type: 'number' }, color: { type: 'string' }, note: { type: 'string' } } },
+                    palette: { type: 'array', items: { type: 'string' } },
+                },
+            },
+            play: {
+                type: 'object',
+                properties: {
+                    route: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, area: { type: 'string' }, position: vec3, note: { type: 'string' } }, required: ['name'] } },
+                    sightlines: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, from: { type: 'string' }, to: { type: 'string' }, note: { type: 'string' }, ok: { type: ['boolean', 'null'] } }, required: ['from', 'to'] } },
+                    area_order: { type: 'array', items: { type: 'string' } },
+                    notes: { type: 'string' },
+                },
+            },
+            effects: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, area: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' }, remove: { type: 'boolean' } }, required: ['name'] } },
+            budget: { type: 'object', properties: { shadow_lights: { type: 'number' }, fps: { type: 'number' } } },
+        },
+        run({ env, args, store }) {
+            // Validate on a copy so a bad field changes nothing.
+            const draft = JSON.parse(JSON.stringify(store.doc.design)) as DesignDoc;
+            const result = applyDesign(env, draft, args);
+            store.commit('AI: Update Design', (d) => {
+                d.design = draft;
+            }, { design: true });
+            return {
+                data: {
+                    ok: true,
+                    updated: result.changed,
+                    ...(result.added.length ? { added_areas: result.added } : {}),
+                    ...(result.rework.length ? { flagged_for_rework: result.rework } : {}),
+                    areas: draft.areas.map((a) => ({ id: a.id, name: a.name })),
+                },
+                summary: result.changed.slice(0, 6).join(', ') || 'no change',
+            };
+        },
+    },
+    ask_user: {
+        groups: ['design'],
+        detail: 'detailed',
+        description: `Ask the user about something the brief leaves open that changes the plan a lot (the layout, the scale, the look). Decide small things yourself. At most ${MAX_QUESTIONS} questions at a time, each with what you assume meanwhile: you go ahead with that, and the question does not hold up the stage; an answer later changes the plan. The questions show in the Design tab; answers come back in the editor context.`,
+        params: {
             questions: {
                 type: 'array',
                 maxItems: MAX_QUESTIONS,
@@ -105,26 +122,192 @@ export function designToolDefs(): ToolDef[] {
                 },
             },
             clear_answered: { type: 'boolean', description: 'Remove questions that were answered and used.' },
-        }, ['questions']),
-        def('set_detail_level', 'Record how much of the detail the user wants to settle themselves, judged from their words. "quick": short or loose instructions, "you decide", "just make it": decide every detail yourself, ask nothing, write your choices into the plan and move through the stages. "detailed": precise instructions with numbers and specifics, or asking to refine: follow them exactly and work out what matters with the user. The user can change it in the Design tab.', {
+        },
+        required: ['questions'],
+        run({ args, store }) {
+            const list: Json[] = Array.isArray(args.questions) ? args.questions : [];
+            if (!list.length && !args.clear_answered) throw new ToolError('questions is empty.');
+            if (list.length > MAX_QUESTIONS) throw new ToolError(`At most ${MAX_QUESTIONS} questions at a time: keep the ones that change the plan most and decide the rest yourself.`);
+            const open = store.doc.design.questions.filter((q) => !q.answer.trim()).length;
+            if (list.length && open + list.length > MAX_OPEN) throw new ToolError(`${open} questions are still open. Go ahead with their assumptions and decide the rest yourself instead of asking more.`);
+            // Checked before anything is written.
+            const asked = list.map((q) => {
+                const text = str(q.text, 'question text', 2000).trim();
+                const assumed = str(q.assumed ?? '', 'assumed', 2000).trim();
+                if (!assumed) throw new ToolError(`Say what you assume meanwhile for "${text.slice(0, 60)}" (assumed).`);
+                return { text, assumed, area: q.area ? areaRef(store.doc.design, q.area) : null };
+            });
+            const added: { id: string; text: string; assumed: string }[] = [];
+            store.commit('AI: Questions', (d) => {
+                if (args.clear_answered) d.design.questions = d.design.questions.filter((q) => !q.answer.trim());
+                for (const q of asked) {
+                    if (!q.text || d.design.questions.some((x) => x.text === q.text)) continue;
+                    const item = { id: uid('q'), text: q.text, answer: '', assumed: q.assumed, ...(q.area ? { area: q.area } : {}) };
+                    d.design.questions.push(item);
+                    added.push({ id: item.id, text: q.text, assumed: q.assumed });
+                }
+            }, { design: true });
+            return {
+                data: {
+                    ok: true,
+                    asked: added,
+                    note: 'The questions show in the Design tab. Go ahead with the assumptions now (write them into the plan); an answer that differs changes the plan later. Mention the questions in one line of your answer.',
+                },
+                summary: `${added.length} question${added.length === 1 ? '' : 's'}`,
+            };
+        },
+    },
+    set_detail_level: {
+        groups: ['design'],
+        description: 'Record how much of the detail the user wants to settle themselves, judged from their words. "quick": short or loose instructions, "you decide", "just make it": decide every detail yourself, ask nothing, write your choices into the plan and move through the stages. "detailed": precise instructions with numbers and specifics, or asking to refine: follow them exactly and work out what matters with the user. The user can change it in the Design tab.',
+        params: {
             level: { type: 'string', enum: ['quick', 'detailed'] },
             reason: { type: 'string', description: 'What in the user\'s words tells, in a few words.' },
-        }, ['level']),
-        def('ask_detail_level', 'When the user\'s words leave open how much detail they want, ask this once before asking about any detail: the chat shows two buttons, one to let you decide and go on, one to refine the details together. Then end your turn with one short line; the answer comes as the next message.', {
+        },
+        required: ['level'],
+        run({ args, store }) {
+            const level = args.level === 'quick' || args.level === 'detailed' ? args.level : null;
+            if (!level) throw new ToolError('level must be quick or detailed.');
+            store.commit('AI: Detail Level', (d) => {
+                d.design.detail = level;
+            }, { design: true });
+            return {
+                data: {
+                    ok: true,
+                    level,
+                    note: level === 'quick'
+                        ? 'Decide every detail yourself, ask nothing, write your choices into the plan and move on through the stages: when a checklist is done, propose_stage_complete completes the stage.'
+                        : 'Follow the user\'s details exactly; ask (ask_user, with assumptions) only about what changes the plan a lot.',
+                },
+                summary: level,
+            };
+        },
+    },
+    ask_detail_level: {
+        groups: ['design'],
+        description: 'When the user\'s words leave open how much detail they want, ask this once before asking about any detail: the chat shows two buttons, one to let you decide and go on, one to refine the details together. Then end your turn with one short line; the answer comes as the next message.',
+        params: {
             question: { type: 'string', description: 'The question in the user\'s language.' },
             quick_label: { type: 'string', description: 'Button to let you decide and move on, in the user\'s language.' },
             detailed_label: { type: 'string', description: 'Button to work out the details together, in the user\'s language.' },
-        }, ['question']),
-        def('update_checklist', 'Tick or untick checklist items of a stage (default: the current one) with a short note on what was checked, or add items. Automatic items follow the project and only take notes.', {
+        },
+        required: ['question'],
+        run({ args }) {
+            const question = str(args.question, 'question', 1000).trim();
+            if (!question) throw new ToolError('question is empty.');
+            const quick = optStr(args.quick_label, 'quick_label', 80)?.trim() || 'Decide yourself and move on';
+            const detailed = optStr(args.detailed_label, 'detailed_label', 80)?.trim() || 'Refine the details with me';
+            return {
+                data: { ok: true, note: 'The user sees the question with two buttons. End your turn now with one short line; the answer comes as the next message.' },
+                choice: { kind: 'detail', question, options: [{ value: 'quick', label: quick }, { value: 'detailed', label: detailed }] },
+                summary: 'asked',
+            };
+        },
+    },
+    update_checklist: {
+        groups: ['design'],
+        description: 'Tick or untick checklist items of a stage (default: the current one) with a short note on what was checked, or add items. Automatic items follow the project and only take notes.',
+        params: {
             stage: { type: 'string', enum: STAGE_IDS },
             items: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, text: { type: 'string', description: 'New item (without id).' }, done: { type: 'boolean' }, note: { type: 'string' } } } },
-        }, ['items']),
-        def('propose_stage_complete', 'Propose completing the current stage once its checklist is done. The user reviews and approves; with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.', {
+        },
+        required: ['items'],
+        run({ args, ed, store, doc }) {
+            const d = store.doc.design;
+            const stage: StageId = STAGE_IDS.includes(args.stage) ? args.stage : d.stage;
+            const items: Json[] = Array.isArray(args.items) ? args.items : [];
+            if (!items.length) throw new ToolError('items is empty.');
+            const defs = stageDef(stage).checks;
+            const results: Json[] = [];
+            store.commit('AI: Checklist', (doc) => {
+                const st = doc.design.stages[stage];
+                for (const it of items) {
+                    const note = it.note !== undefined ? optStr(it.note, 'note', 2000) : undefined;
+                    if (!it.id) {
+                        const text = str(it.text, 'item text', 1000).trim();
+                        if (!text) throw new ToolError('A new item needs text.');
+                        const id = uid('ck');
+                        st.checks.push({ id, text, done: it.done === true, by: 'ai', ...(note ? { note } : {}) });
+                        results.push({ id, added: text });
+                        continue;
+                    }
+                    const builtIn = defs.find((c) => c.id === it.id);
+                    const stored = st.checks.find((c) => c.id === it.id);
+                    if (!builtIn && !stored) throw new ToolError(`No checklist item "${it.id}" in ${stage}. Read the stages with read_design.`);
+                    if (builtIn?.userOnly && it.done === true) throw new ToolError(`"${builtIn.text}" can only be ticked by the user.`);
+                    if (builtIn?.auto) {
+                        // Automatic: the project decides; keep the note.
+                        if (note !== undefined) {
+                            if (stored) stored.note = note || undefined;
+                            else st.checks.push({ id: builtIn.id, text: '', done: false, ...(note ? { note } : {}) });
+                        }
+                        results.push({ id: it.id, automatic: true });
+                        continue;
+                    }
+                    if (stored) {
+                        if (it.done !== undefined) stored.done = it.done === true;
+                        stored.by = 'ai';
+                        if (note !== undefined) stored.note = note || undefined;
+                    } else st.checks.push({ id: it.id, text: '', done: it.done === true, by: 'ai', ...(note ? { note } : {}) });
+                    results.push({ id: it.id, done: it.done === true });
+                }
+            }, { design: true });
+            const prog = ed.pipeline.progress(stage);
+            return { data: { ok: true, results, checklist: `${prog.done}/${prog.total}`, open: prog.open.map((i) => ({ id: i.id, text: i.text, detail: i.detail })) }, summary: `${prog.done}/${prog.total} done` };
+        },
+    },
+    propose_stage_complete: {
+        groups: ['design'],
+        description: 'Propose completing the current stage once its checklist is done. The user reviews and approves; with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.',
+        params: {
             summary: { type: 'string', description: 'What was done and what was checked, a few lines.' },
-        }, ['summary']),
-        def('apply_key_light', 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the atmospheric sky\'s sun there too. Change the mood first with update_design to use another direction.'),
-    ];
-}
+        },
+        required: ['summary'],
+        async run({ args, ed, store }) {
+            const summary = str(args.summary, 'summary', 8000).trim();
+            if (!summary) throw new ToolError('summary is empty.');
+            const prog = ed.pipeline.progress();
+            // The user lets the assistant decide: a finished checklist moves on by itself.
+            if (store.doc.design.detail === 'quick' && !prog.open.length) {
+                const from = stageDef(store.doc.design.stage);
+                if (await ed.pipeline.complete(true)) {
+                    const now = stageDef(store.doc.design.stage);
+                    const next = ed.pipeline.progress();
+                    return {
+                        data: {
+                            ok: true,
+                            completed: from.title,
+                            ...(now.id !== from.id ? { now: now.long, checklist: next.items.map((i) => ({ id: i.id, text: i.text, done: i.done })) } : {}),
+                            note: now.id !== from.id
+                                ? `The user lets you decide the details, so ${from.title} was completed (shots captured, snapshot taken). Go on with ${now.title} if the request covers it; otherwise tell the user what comes next.`
+                                : 'Every stage is complete.',
+                        },
+                        summary: `${from.title} complete`,
+                    };
+                }
+            }
+            ed.pipeline.propose(summary);
+            return {
+                data: {
+                    ok: true,
+                    note: 'The user was asked to review and complete the stage.',
+                    ...(prog.open.length ? { still_open: prog.open.map((i) => i.text) } : {}),
+                },
+                summary: stageDef(store.doc.design.stage).title,
+            };
+        },
+    },
+    apply_key_light: {
+        groups: ['lights'],
+        description: 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the atmospheric sky\'s sun there too. Change the mood first with update_design to use another direction.',
+        run({ ed, store }) {
+            const id = ed.pipeline.applyKeyLight();
+            const n = store.node(id);
+            const k = store.doc.design.mood.keyLight;
+            return { data: { ok: true, light: n?.name ?? id, id, rotation: n?.rotation, color: k.color, from: { azimuth: k.azimuth, elevation: k.elevation } }, summary: n?.name ?? id };
+        },
+    },
+});
 
 // ------------------------------------------------------------------ runner
 
@@ -262,13 +445,7 @@ function applyDesign(env: ToolEnv, d: DesignDoc, args: Json): { changed: string[
     }
 
     if (args.specs !== undefined) {
-        const sp = args.specs as Json;
-        const map: [string, keyof DesignDoc['specs']][] = [
-            ['player_height', 'playerHeight'], ['eye_height', 'eyeHeight'], ['player_radius', 'playerRadius'], ['door_width', 'doorWidth'],
-            ['door_height', 'doorHeight'], ['step_height', 'stepHeight'], ['max_slope', 'maxSlope'],
-        ];
-        for (const [k, key] of map) if (sp[k] !== undefined) (d.specs as any)[key] = Math.max(0, num(sp[k], `specs.${k}`));
-        if (sp.notes !== undefined) d.specs.notes = str(sp.notes, 'specs.notes', 8000);
+        d.specs = patch(Specs, d.specs, args.specs, 'specs');
         changed.push('specs');
     }
 
@@ -421,177 +598,4 @@ function readDesign(env: ToolEnv, section: string): Json {
     if (want('memo')) out.memo = d.memo;
     if (want('concepts') || want('shots')) out.asset_names = Object.fromEntries([...d.concepts.map((c) => c.asset), ...d.shots.flatMap((s) => [s.target, s.concept]).filter((x): x is string => !!x)].map((id) => [id, assetName(id)]));
     return out;
-}
-
-/** Runs a design tool; null when `name` is not one. */
-export async function runDesignTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult | null> {
-    const ed = env.editor;
-    const store = ed.store;
-    switch (name) {
-        case 'read_design': {
-            const section = typeof args.section === 'string' && SECTIONS.includes(args.section) ? args.section : 'all';
-            return { data: readDesign(env, section), summary: section };
-        }
-        case 'update_design': {
-            // Validate on a copy so a bad field changes nothing.
-            const draft = JSON.parse(JSON.stringify(store.doc.design)) as DesignDoc;
-            const result = applyDesign(env, draft, args);
-            store.commit('AI: Update Design', (d) => {
-                d.design = draft;
-            }, { design: true });
-            return {
-                data: {
-                    ok: true,
-                    updated: result.changed,
-                    ...(result.added.length ? { added_areas: result.added } : {}),
-                    ...(result.rework.length ? { flagged_for_rework: result.rework } : {}),
-                    areas: draft.areas.map((a) => ({ id: a.id, name: a.name })),
-                },
-                summary: result.changed.slice(0, 6).join(', ') || 'no change',
-            };
-        }
-        case 'ask_user': {
-            const list: Json[] = Array.isArray(args.questions) ? args.questions : [];
-            if (!list.length && !args.clear_answered) throw new ToolError('questions is empty.');
-            if (list.length > MAX_QUESTIONS) throw new ToolError(`At most ${MAX_QUESTIONS} questions at a time: keep the ones that change the plan most and decide the rest yourself.`);
-            const open = store.doc.design.questions.filter((q) => !q.answer.trim()).length;
-            if (list.length && open + list.length > MAX_OPEN) throw new ToolError(`${open} questions are still open. Go ahead with their assumptions and decide the rest yourself instead of asking more.`);
-            // Checked before anything is written.
-            const asked = list.map((q) => {
-                const text = str(q.text, 'question text', 2000).trim();
-                const assumed = str(q.assumed ?? '', 'assumed', 2000).trim();
-                if (!assumed) throw new ToolError(`Say what you assume meanwhile for "${text.slice(0, 60)}" (assumed).`);
-                return { text, assumed, area: q.area ? areaRef(store.doc.design, q.area) : null };
-            });
-            const added: { id: string; text: string; assumed: string }[] = [];
-            store.commit('AI: Questions', (d) => {
-                if (args.clear_answered) d.design.questions = d.design.questions.filter((q) => !q.answer.trim());
-                for (const q of asked) {
-                    if (!q.text || d.design.questions.some((x) => x.text === q.text)) continue;
-                    const item = { id: uid('q'), text: q.text, answer: '', assumed: q.assumed, ...(q.area ? { area: q.area } : {}) };
-                    d.design.questions.push(item);
-                    added.push({ id: item.id, text: q.text, assumed: q.assumed });
-                }
-            }, { design: true });
-            return {
-                data: {
-                    ok: true,
-                    asked: added,
-                    note: 'The questions show in the Design tab. Go ahead with the assumptions now (write them into the plan); an answer that differs changes the plan later. Mention the questions in one line of your answer.',
-                },
-                summary: `${added.length} question${added.length === 1 ? '' : 's'}`,
-            };
-        }
-        case 'set_detail_level': {
-            const level = args.level === 'quick' || args.level === 'detailed' ? args.level : null;
-            if (!level) throw new ToolError('level must be quick or detailed.');
-            store.commit('AI: Detail Level', (d) => {
-                d.design.detail = level;
-            }, { design: true });
-            return {
-                data: {
-                    ok: true,
-                    level,
-                    note: level === 'quick'
-                        ? 'Decide every detail yourself, ask nothing, write your choices into the plan and move on through the stages: when a checklist is done, propose_stage_complete completes the stage.'
-                        : 'Follow the user\'s details exactly; ask (ask_user, with assumptions) only about what changes the plan a lot.',
-                },
-                summary: level,
-            };
-        }
-        case 'ask_detail_level': {
-            const question = str(args.question, 'question', 1000).trim();
-            if (!question) throw new ToolError('question is empty.');
-            const quick = optStr(args.quick_label, 'quick_label', 80)?.trim() || 'Decide yourself and move on';
-            const detailed = optStr(args.detailed_label, 'detailed_label', 80)?.trim() || 'Refine the details with me';
-            return {
-                data: { ok: true, note: 'The user sees the question with two buttons. End your turn now with one short line; the answer comes as the next message.' },
-                choice: { kind: 'detail', question, options: [{ value: 'quick', label: quick }, { value: 'detailed', label: detailed }] },
-                summary: 'asked',
-            };
-        }
-        case 'update_checklist': {
-            const d = store.doc.design;
-            const stage: StageId = STAGE_IDS.includes(args.stage) ? args.stage : d.stage;
-            const items: Json[] = Array.isArray(args.items) ? args.items : [];
-            if (!items.length) throw new ToolError('items is empty.');
-            const defs = stageDef(stage).checks;
-            const results: Json[] = [];
-            store.commit('AI: Checklist', (doc) => {
-                const st = doc.design.stages[stage];
-                for (const it of items) {
-                    const note = it.note !== undefined ? optStr(it.note, 'note', 2000) : undefined;
-                    if (!it.id) {
-                        const text = str(it.text, 'item text', 1000).trim();
-                        if (!text) throw new ToolError('A new item needs text.');
-                        const id = uid('ck');
-                        st.checks.push({ id, text, done: it.done === true, by: 'ai', ...(note ? { note } : {}) });
-                        results.push({ id, added: text });
-                        continue;
-                    }
-                    const builtIn = defs.find((c) => c.id === it.id);
-                    const stored = st.checks.find((c) => c.id === it.id);
-                    if (!builtIn && !stored) throw new ToolError(`No checklist item "${it.id}" in ${stage}. Read the stages with read_design.`);
-                    if (builtIn?.userOnly && it.done === true) throw new ToolError(`"${builtIn.text}" can only be ticked by the user.`);
-                    if (builtIn?.auto) {
-                        // Automatic: the project decides; keep the note.
-                        if (note !== undefined) {
-                            if (stored) stored.note = note || undefined;
-                            else st.checks.push({ id: builtIn.id, text: '', done: false, ...(note ? { note } : {}) });
-                        }
-                        results.push({ id: it.id, automatic: true });
-                        continue;
-                    }
-                    if (stored) {
-                        if (it.done !== undefined) stored.done = it.done === true;
-                        stored.by = 'ai';
-                        if (note !== undefined) stored.note = note || undefined;
-                    } else st.checks.push({ id: it.id, text: '', done: it.done === true, by: 'ai', ...(note ? { note } : {}) });
-                    results.push({ id: it.id, done: it.done === true });
-                }
-            }, { design: true });
-            const prog = ed.pipeline.progress(stage);
-            return { data: { ok: true, results, checklist: `${prog.done}/${prog.total}`, open: prog.open.map((i) => ({ id: i.id, text: i.text, detail: i.detail })) }, summary: `${prog.done}/${prog.total} done` };
-        }
-        case 'propose_stage_complete': {
-            const summary = str(args.summary, 'summary', 8000).trim();
-            if (!summary) throw new ToolError('summary is empty.');
-            const prog = ed.pipeline.progress();
-            // The user lets the assistant decide: a finished checklist moves on by itself.
-            if (store.doc.design.detail === 'quick' && !prog.open.length) {
-                const from = stageDef(store.doc.design.stage);
-                if (await ed.pipeline.complete(true)) {
-                    const now = stageDef(store.doc.design.stage);
-                    const next = ed.pipeline.progress();
-                    return {
-                        data: {
-                            ok: true,
-                            completed: from.title,
-                            ...(now.id !== from.id ? { now: now.long, checklist: next.items.map((i) => ({ id: i.id, text: i.text, done: i.done })) } : {}),
-                            note: now.id !== from.id
-                                ? `The user lets you decide the details, so ${from.title} was completed (shots captured, snapshot taken). Go on with ${now.title} if the request covers it; otherwise tell the user what comes next.`
-                                : 'Every stage is complete.',
-                        },
-                        summary: `${from.title} complete`,
-                    };
-                }
-            }
-            ed.pipeline.propose(summary);
-            return {
-                data: {
-                    ok: true,
-                    note: 'The user was asked to review and complete the stage.',
-                    ...(prog.open.length ? { still_open: prog.open.map((i) => i.text) } : {}),
-                },
-                summary: stageDef(store.doc.design.stage).title,
-            };
-        }
-        case 'apply_key_light': {
-            const id = ed.pipeline.applyKeyLight();
-            const n = store.node(id);
-            const k = store.doc.design.mood.keyLight;
-            return { data: { ok: true, light: n?.name ?? id, id, rotation: n?.rotation, color: k.color, from: { azimuth: k.azimuth, elevation: k.elevation } }, summary: n?.name ?? id };
-        }
-    }
-    return null;
 }

@@ -5,12 +5,11 @@
 // system notification while the tab is in the background.
 
 import { Emitter } from '../core/events';
+import { readLocal, writeLocal } from '../core/local';
+import type { NoticeKind, NoticeOptions } from '../core/messages';
 import { h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
-import { readLocal, writeLocal } from '../core/local';
-
-export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'review' | 'model';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
     { kind: 'ai-done', label: 'AI finished', hint: 'When the assistant finishes a request' },
@@ -19,31 +18,6 @@ export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] =
     { kind: 'review', label: 'Images to review', hint: 'When the assistant drew concept images for you to review' },
     { kind: 'model', label: 'AI models', hint: 'When agents need a model that is not downloaded yet' },
 ];
-
-export interface NoticeAction {
-    label: string;
-    primary?: boolean;
-    run: () => void | Promise<void>;
-}
-
-export interface NoticeOptions {
-    kind: NoticeKind;
-    title: string;
-    body?: string;
-    icon?: string;
-    actions?: NoticeAction[];
-    /** Closes by itself after this many ms; 0 keeps it until answered. */
-    timeout?: number;
-    /** A card with the same key is replaced instead of stacked. */
-    key?: string;
-}
-
-export interface Notice {
-    close(): void;
-    /** Changes the text of an open card. */
-    update(patch: { title?: string; body?: string }): void;
-    readonly closed: boolean;
-}
 
 interface NotifyPrefs {
     disabled: Partial<Record<NoticeKind, boolean>>;
@@ -61,7 +35,8 @@ function loadPrefs(): NotifyPrefs {
 class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
     prefs: NotifyPrefs = loadPrefs();
     private host: HTMLElement | null = null;
-    private open = new Map<string, Notice>();
+    /** Close functions of the open cards with a key. */
+    private open = new Map<string, () => void>();
 
     enabled(kind: NoticeKind): boolean {
         return !this.prefs.disabled[kind];
@@ -103,10 +78,15 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
         this.emit('prefs', prefs);
     }
 
-    /** Shows a notification; null when the user switched this kind off. */
-    show(opts: NoticeOptions): Notice | null {
-        if (!this.enabled(opts.kind)) return null;
-        if (opts.key) this.open.get(opts.key)?.close();
+    /** Closes the card with this key, if one is open. */
+    dismiss(key: string) {
+        this.open.get(key)?.();
+    }
+
+    /** Shows a notification, unless the user switched this kind off. */
+    show(opts: NoticeOptions) {
+        if (!this.enabled(opts.kind)) return;
+        if (opts.key) this.dismiss(opts.key);
         if (!this.host) {
             this.host = h('div', { class: 'notices', attrs: { 'aria-live': 'polite' } });
             // Inside #app the cards can keep clear of the side panel (--right-w).
@@ -130,7 +110,7 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
             clearTimeout(timer);
             card.classList.remove('show');
             setTimeout(() => card.remove(), 180);
-            if (opts.key && this.open.get(opts.key) === notice) this.open.delete(opts.key);
+            if (opts.key && this.open.get(opts.key) === close) this.open.delete(opts.key);
         };
         const actions = h('div', { class: 'notice-actions' });
         for (const a of opts.actions ?? []) {
@@ -150,7 +130,7 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
                 h('button', { class: 'icon-btn notice-close', title: 'Close', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: close } }, icon('close', 14)),
             ),
             body,
-            actions.childElementCount ? actions : null,
+            ...(actions.childElementCount ? [actions] : []),
             mute,
         );
         // Hovering keeps a timed card open.
@@ -161,22 +141,8 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
         this.host.appendChild(card);
         requestAnimationFrame(() => card.classList.add('show'));
         if (opts.timeout) timer = window.setTimeout(close, opts.timeout);
-        const notice: Notice = {
-            close,
-            update: (patch) => {
-                if (patch.title !== undefined) title.textContent = patch.title;
-                if (patch.body !== undefined) {
-                    body.textContent = patch.body;
-                    body.hidden = !patch.body;
-                }
-            },
-            get closed() {
-                return closed;
-            },
-        };
-        if (opts.key) this.open.set(opts.key, notice);
+        if (opts.key) this.open.set(opts.key, close);
         this.system(opts);
-        return notice;
     }
 
     /** A system notification when the page is not in front. */

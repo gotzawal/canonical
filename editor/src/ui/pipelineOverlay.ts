@@ -13,7 +13,7 @@ const DONE = 'rgba(90, 210, 140, 0.95)';
 export function pipelineOverlay(editor: Editor): (ctx: CanvasRenderingContext2D) => void {
     return (ctx) => {
         const store = editor.store;
-        if (!store.prefs.helpers || store.playing || editor.walk?.active) return;
+        if (!store.prefs.helpers || store.playing || editor.view === 'walk') return;
         const d = store.doc.design;
         const picker = editor.picker;
         ctx.save();

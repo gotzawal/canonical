@@ -12,14 +12,14 @@
 //   step of a tool loop reads what the step before it wrote. One-off
 //   requests (summaries) are not marked: a cache write nobody reads back
 //   only costs more. A field a provider refuses is left out for that model
-//   from then on (see chat in openrouter.ts).
+//   from then on (see chat in client.ts).
 //
 // Every request of a conversation carries the same session_id. OpenRouter
 // uses it as the key for sticky routing: the conversation stays on one
 // provider from its first request, so the cache that provider built is the
 // one that is read (otherwise stickiness starts only after a cache hit).
 
-import type { CacheControl, ChatMessage, ContentPart } from './openrouter';
+import type { CacheControl, ChatMessage, ContentPart } from './client';
 
 export type CacheStyle = 'markers' | 'automatic' | 'unknown';
 

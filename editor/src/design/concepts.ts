@@ -6,10 +6,10 @@
 
 import { putDesignImage } from '../core/assets';
 import { assetImageDataUrl, blobToDataUrl, compactImage, imageExt } from '../core/images';
-import type { AreaDoc, ConceptDoc, DesignDoc, ParamValue } from '../core/types';
+import type { AreaDoc, AssetMeta, ConceptDoc, DesignDoc, ParamValue } from '../core/types';
 import type { Editor } from '../editor';
-import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
+import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 import { imageModelId } from './paintover';
 
 export type ConceptView = 'exterior' | 'interior' | 'overview' | 'plan';
@@ -100,7 +100,7 @@ export async function generateConcepts(editor: Editor, s: ConceptSettings): Prom
     const result = await generateImages(key, info, { model, prompt: s.prompt, references, count: s.count, params: checked.params }, { signal: s.signal });
 
     const stem = (s.area?.name ?? 'scene').normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'scene';
-    const metas = [];
+    const metas: AssetMeta[] = [];
     const concepts: ConceptDoc[] = [];
     for (let i = 0; i < result.images.length; i++) {
         const blob = await compactImage(result.images[i].blob);

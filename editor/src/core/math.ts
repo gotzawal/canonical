@@ -7,8 +7,7 @@
 // The engine's Matrix4 allocates a slot in a WASM pool on construction, so
 // the editor never creates Matrix4 instances for scratch math.
 
-import type { Vec3 } from './types';
-
+export type Vec3 = [number, number, number];
 export type Mat4 = Float64Array;
 export type Quat = [number, number, number, number];
 
@@ -291,6 +290,14 @@ export function localMatrix(position: Vec3, rotation: Vec3, s: Vec3): Mat4 {
 // --------------------------------------------------------------------- rays
 
 export interface Ray { origin: Vec3; dir: Vec3; }
+
+/** A ray's nearest hit in the level: the object it hit and the normal of the triangle there. */
+export interface RayHit {
+    distance: number;
+    point: Vec3;
+    id: string;
+    normal: Vec3;
+}
 
 /** Returns distance along the ray, or null when parallel / behind. */
 export function rayPlane(ray: Ray, point: Vec3, normal: Vec3): number | null {

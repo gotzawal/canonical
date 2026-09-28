@@ -1,13 +1,16 @@
-import { PARTICLE_PRESETS, PARTICLE_SHAPES, particleCount, presetParticles } from '../core/particles';
-import { defaultCharacter, defaultPlayer, PLAYER_VIEWS } from '../core/character';
+import type { z } from 'zod';
+import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
+import { defaultCharacter, defaultPlayer } from '../core/character';
+import { Animation, ANIMATION_MODES, Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
+import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import { unassignSlot } from '../design/materialSlots';
 import { formatBytes } from '../core/assets';
 import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
-    AlphaMode, AssetMeta, CharacterDoc, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue,
-    ParticlesDoc, PartOverride, PlayerDoc, PlayerView, ScriptRef, SlotShading, Vec3,
+    AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScriptRef,
+    SlotShading, Vec3,
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
@@ -19,8 +22,10 @@ import { clear, h, pressable } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
+import { schemaRows } from './schemaFields';
+import { clipFor } from '../play/animation';
 import {
-    CheckboxField, ColorField, EditHooks, FieldGuard, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec2Field, Vec3Field, button,
+    CheckboxField, ColorField, EditHooks, FieldGuard, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec3Field, button,
     iconButton, row, section,
 } from './widgets';
 
@@ -68,6 +73,19 @@ const SLOT_SHADING: { value: string; label: string }[] = [
 ];
 
 const MAX_PARTS = 150;
+
+/** Components whose inspector fields come from their schemas, and where they are in a node. */
+const COMPONENTS = {
+    light: [Light, (n: NodeDoc) => n.light],
+    camera: [Camera, (n: NodeDoc) => n.camera],
+    particles: [Particles, (n: NodeDoc) => n.particles],
+    character: [Character, (n: NodeDoc) => n.character],
+    player: [Player, (n: NodeDoc) => n.player],
+    body: [Body, (n: NodeDoc) => n.body],
+    material: [Material, (n: NodeDoc) => n.mesh?.material],
+    // Made on the first edit: every model with clips shows the section.
+    animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
+} as const;
 
 type Filter = (n: NodeDoc) => boolean;
 
@@ -142,6 +160,7 @@ export class InspectorPanel {
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
             (n.character ? 'char' : '-') + (n.player ? ':player:' + n.player.view : ''),
+            n.body ? 'body:' + n.body.type : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -226,6 +245,7 @@ export class InspectorPanel {
         if (node.camera) this.body.append(this.cameraSection());
         if (node.character) this.body.append(this.characterSection());
         if (node.player) this.body.append(this.playerSection());
+        if (node.body) this.body.append(this.physicsSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         if (node.agent) this.body.append(this.agentSection(node));
@@ -270,6 +290,29 @@ export class InspectorPanel {
 
     private get node(): NodeDoc {
         return this.store.primary!;
+    }
+
+    /**
+     * Rows for fields of a component, made from its schema (core/model.ts).
+     * An edit writes the field on the selected objects `filter` passes (those
+     * with the component) and repairs the component with its schema, so it
+     * stays valid (a range in order, a body no thinner than its radius).
+     */
+    private componentRows(comp: keyof typeof COMPONENTS, keys: readonly string[], filter?: Filter): HTMLElement[] {
+        const [schema, get, make] = COMPONENTS[comp] as unknown as [z.ZodObject, (n: NodeDoc) => Record<string, unknown> | undefined, (keyof NodeDoc)?];
+        const value = (n: NodeDoc) => get(n) ?? (make ? defaults(schema) : undefined);
+        const fields = schemaRows(schema, keys, value(this.node)!, (key, label) =>
+            this.hooks(label, filter ?? ((n) => !!get(n)), (n, v) => {
+                const next = schema.parse({ ...get(n), [key]: v });
+                if (get(n)) Object.assign(get(n)!, next);
+                else (n as unknown as Record<string, unknown>)[make!] = next;
+            }, (n) => value(n)?.[key]),
+        );
+        this.watch(() => {
+            const cur = value(this.node);
+            if (cur) fields.set(cur);
+        });
+        return fields.rows;
     }
 
     // -------------------------------------------------------------- header
@@ -522,7 +565,7 @@ export class InspectorPanel {
                     { class: 'design-note' },
                     icon('sliders', 14),
                     h('span', { text: `Follows the material slot ${slot.name}. Change the slot in the Design tab; edits here are replaced when the slot changes.` }),
-                    button('Unlink', () => unassignSlot(this.editor, this.store.selection), 'small'),
+                    button('Unlink', () => unassignSlot(this.store, this.store.selection), 'small'),
                 ),
             );
         }
@@ -542,82 +585,31 @@ export class InspectorPanel {
 
         if (m.type === 'shader') rows.push(...this.shaderRows(m.shader ?? null));
 
-        const color = new ColorField({ value: m.color, ...set('color', 'Color') });
-        rows.push(row('Color', color.el));
-        const opacity = new SliderField({ value: m.opacity, min: 0, max: 1, step: 0.01, ...set('opacity', 'Opacity') });
-        rows.push(row('Opacity', opacity.el));
-        const alpha = new SelectField<AlphaMode>(ALPHA_MODES, m.alphaMode ?? 'auto', (v) => set('alphaMode', 'Alpha Mode').commit!(v === 'auto' ? undefined : v));
-        rows.push(row('Alpha', alpha.el, 'Auto blends when opacity is below 1; Mask cuts out pixels below the cutoff; Additive and Multiply are transparent blending modes'));
-        let cutoff: SliderField | null = null;
-        if (m.alphaMode === 'mask') {
-            cutoff = new SliderField({ value: m.alphaCutoff ?? 0.5, min: 0, max: 1, step: 0.01, ...set('alphaCutoff', 'Alpha Cutoff') });
-            rows.push(row('Cutoff', cutoff.el, 'Pixels with less alpha are cut out'));
-        }
-
-        let metallic: SliderField | null = null, roughness: SliderField | null = null, emissive: ColorField | null = null, emissiveI: NumberField | null = null;
-        if (lit) {
-            metallic = new SliderField({ value: m.metallic, min: 0, max: 1, step: 0.01, ...set('metallic', 'Metallic') });
-            roughness = new SliderField({ value: m.roughness, min: 0, max: 1, step: 0.01, ...set('roughness', 'Roughness') });
-            emissive = new ColorField({ value: m.emissive, ...set('emissive', 'Emissive') });
-            emissiveI = new NumberField({ value: m.emissiveIntensity, step: 0.05, min: 0, precision: 2, ...set('emissiveIntensity', 'Emissive Intensity') });
-            if (m.type !== 'lambert') rows.push(row('Metallic', metallic.el), row('Roughness', roughness.el));
-            rows.push(row('Emissive', emissive.el), row('Emission', emissiveI.el, 'Emissive intensity'));
-        }
-        const doubleSide = new CheckboxField(m.doubleSide, (v) => this.hooks<boolean>('Double Sided', has, (n, b) => (n.mesh!.material.doubleSide = b)).commit!(v));
-        rows.push(row('Double Sided', doubleSide.el));
+        rows.push(...this.componentRows('material', ['color', 'opacity', 'alphaMode', ...(m.alphaMode === 'mask' ? ['alphaCutoff'] : [])]));
+        // Metallic and roughness are PBR; emission is for lit surfaces.
+        if (lit) rows.push(...this.componentRows('material', [...(m.type !== 'lambert' ? ['metallic', 'roughness'] : []), 'emissive', 'emissiveIntensity']));
+        rows.push(...this.componentRows('material', ['doubleSide']));
 
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
         const map = this.textureSelect(m.map ?? null, textures, (v) => this.editor.applyTexture(v));
-        rows.push(row('Texture', map.el, 'Base color map'));
-        const tiling = new Vec2Field({ value: m.tiling ?? [1, 1], step: 0.01, precision: 3, ...set('tiling', 'Texture Tiling') });
-        const offset = new Vec2Field({ value: m.offset ?? [0, 0], step: 0.005, precision: 3, ...set('offset', 'Texture Offset') });
-        rows.push(row('Tiling', tiling.el, 'Texture repeat'), row('Offset', offset.el, 'Texture offset'));
+        rows.push(row('Texture', map.el, 'Base color map'), ...this.componentRows('material', ['tiling', 'offset']));
 
         // PBR extras of the lit material.
-        const extra: { set(md: MaterialDoc): void }[] = [];
+        const maps: { set(md: MaterialDoc): void }[] = [];
         if (pbr) {
             rows.push(h('div', { class: 'group-label', text: 'Maps' }));
             const mapRow = (key: 'normalMap' | 'metalRoughMap' | 'aoMap' | 'emissiveMap', label: string, hint: string) => {
                 const f = this.textureSelect((m[key] as string | null | undefined) ?? null, textures, (v) => set(key, label).commit!(v));
-                extra.push({ set: (md) => f.set((md[key] as string | null | undefined) ?? null) });
+                maps.push({ set: (md) => f.set((md[key] as string | null | undefined) ?? null) });
                 rows.push(row(label, f.el, hint));
             };
             mapRow('normalMap', 'Normal Map', 'Tangent space normal map');
-            const normalScale = new SliderField({ value: m.normalScale ?? 1, min: 0, max: 2, step: 0.01, ...set('normalScale', 'Normal Strength') });
-            extra.push({ set: (md) => normalScale.set(md.normalScale ?? 1) });
-            rows.push(row('Strength', normalScale.el, 'Normal map strength'));
+            rows.push(...this.componentRows('material', ['normalScale']));
             mapRow('metalRoughMap', 'Metal / Rough', 'glTF metallic-roughness map: roughness in green, metallic in blue. Multiplies the sliders.');
             mapRow('aoMap', 'Occlusion', 'Ambient occlusion map (red channel)');
             mapRow('emissiveMap', 'Emission Map', 'Multiplied by the emissive color');
-
-            rows.push(h('div', { class: 'group-label', text: 'Clear Coat' }));
-            const coat = new SliderField({ value: m.clearcoat ?? 0, min: 0, max: 1, step: 0.01, ...set('clearcoat', 'Clear Coat') });
-            const coatR = new SliderField({ value: m.clearcoatRoughness ?? 0, min: 0, max: 1, step: 0.01, ...set('clearcoatRoughness', 'Clear Coat Roughness') });
-            extra.push({ set: (md) => { coat.set(md.clearcoat ?? 0); coatR.set(md.clearcoatRoughness ?? 0); } });
-            rows.push(row('Coat', coat.el, 'Glossy varnish layer (car paint, lacquer)'), row('Coat Rough.', coatR.el, 'Roughness of the clear coat'));
-
-            rows.push(h('div', { class: 'group-label', text: 'Transmission' }));
-            const trans = new SliderField({ value: m.transmission ?? 0, min: 0, max: 1, step: 0.01, ...set('transmission', 'Transmission') });
-            const ior = new SliderField({ value: m.ior ?? 1.5, min: 1, max: 2.5, step: 0.01, ...set('ior', 'IOR') });
-            const thick = new NumberField({ value: m.thickness ?? 0, step: 0.01, min: 0, precision: 3, ...set('thickness', 'Thickness') });
-            const attC = new ColorField({ value: m.attenuationColor ?? '#ffffff', ...set('attenuationColor', 'Attenuation Color') });
-            const attD = new NumberField({ value: m.attenuationDistance ?? 0, step: 0.05, min: 0, precision: 2, ...set('attenuationDistance', 'Attenuation Distance') });
-            extra.push({
-                set: (md) => {
-                    trans.set(md.transmission ?? 0);
-                    ior.set(md.ior ?? 1.5);
-                    thick.set(md.thickness ?? 0);
-                    attC.set(md.attenuationColor ?? '#ffffff');
-                    attD.set(md.attenuationDistance ?? 0);
-                },
-            });
-            rows.push(
-                row('Transmission', trans.el, 'Light passing through the surface: glass, water, gems'),
-                row('IOR', ior.el, 'Index of refraction (glass 1.5, water 1.33, diamond 2.4)'),
-                row('Thickness', thick.el, 'Thickness of the volume behind the surface'),
-                row('Tint', attC.el, 'Color light turns into while it travels through the volume'),
-                row('Tint Distance', attD.el, 'Distance at which light reaches the tint color; 0 means no tint'),
-            );
+            rows.push(h('div', { class: 'group-label', text: 'Clear Coat' }), ...this.componentRows('material', ['clearcoat', 'clearcoatRoughness']));
+            rows.push(h('div', { class: 'group-label', text: 'Transmission' }), ...this.componentRows('material', ['transmission', 'ior', 'thickness', 'attenuationColor', 'attenuationDistance']));
         }
 
         if (m.type === 'shader' && m.shader) {
@@ -649,19 +641,8 @@ export class InspectorPanel {
             const mat = this.node.mesh?.material;
             if (!mat) return;
             type.set(mat.type);
-            color.set(mat.color);
-            opacity.set(mat.opacity);
-            alpha.set(mat.alphaMode ?? 'auto');
-            cutoff?.set(mat.alphaCutoff ?? 0.5);
-            metallic?.set(mat.metallic);
-            roughness?.set(mat.roughness);
-            emissive?.set(mat.emissive);
-            emissiveI?.set(mat.emissiveIntensity);
-            doubleSide.set(mat.doubleSide);
             map.set(mat.map ?? null);
-            tiling.set(mat.tiling ?? [1, 1]);
-            offset.set(mat.offset ?? [0, 0]);
-            for (const e of extra) e.set(mat);
+            for (const f of maps) f.set(mat);
         });
         const presets = iconButton('dots', 'Material presets', (e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
@@ -739,39 +720,13 @@ export class InspectorPanel {
     private lightSection(): HTMLElement {
         const has: Filter = (n) => !!n.light;
         const l = this.node.light!;
-        const rows: HTMLElement[] = [];
         const type = new SelectField(LIGHT_OPTIONS, l.type, (v) => this.hooks<LightType>('Light Type', has, (n, t) => {
             if (n.light!.type !== t) n.light = { ...defaultLight(t), color: n.light!.color };
         }).commit!(v));
-        rows.push(row('Type', type.el));
-        const color = new ColorField({ value: l.color, ...this.hooks<string>('Light Color', has, (n, v) => (n.light!.color = v)) });
-        const intensity = new NumberField({ value: l.intensity, step: 0.05, min: 0, precision: 2, ...this.hooks<number>('Intensity', has, (n, v) => (n.light!.intensity = v)) });
-        const shadow = new CheckboxField(l.castShadow, (v) => this.hooks<boolean>('Cast Shadow', has, (n, b) => (n.light!.castShadow = b)).commit!(v));
-        rows.push(row('Color', color.el), row('Intensity', intensity.el), row('Cast Shadows', shadow.el));
-        let range: NumberField | null = null, radius: NumberField | null = null, angle: SliderField | null = null, inner: SliderField | null = null;
-        if (l.type !== 'directional') {
-            const same: Filter = (n) => n.light?.type === l.type;
-            range = new NumberField({ value: l.range, step: 0.05, min: 0.01, precision: 2, ...this.hooks<number>('Range', same, (n, v) => (n.light!.range = v)) });
-            radius = new NumberField({ value: l.radius, step: 0.005, min: 0, precision: 3, ...this.hooks<number>('Radius', same, (n, v) => (n.light!.radius = v)) });
-            rows.push(row('Range', range.el), row('Radius', radius.el, 'Size of the light source'));
-            if (l.type === 'spot') {
-                angle = new SliderField({ value: l.outerAngle, min: 1, max: 179, step: 1, precision: 1, ...this.hooks<number>('Cone Angle', same, (n, v) => (n.light!.outerAngle = v)) });
-                inner = new SliderField({ value: l.innerAngle, min: 0, max: 100, step: 1, precision: 0, ...this.hooks<number>('Inner Cone', same, (n, v) => (n.light!.innerAngle = v)) });
-                rows.push(row('Cone Angle', angle.el), row('Inner Cone %', inner.el, 'Inner cone as a percentage of the cone angle'));
-            }
-        }
-        this.watch(() => {
-            const cur = this.node.light;
-            if (!cur) return;
-            type.set(cur.type);
-            color.set(cur.color);
-            intensity.set(cur.intensity);
-            shadow.set(cur.castShadow);
-            range?.set(cur.range);
-            radius?.set(cur.radius);
-            angle?.set(cur.outerAngle);
-            inner?.set(cur.innerAngle);
-        });
+        this.watch(() => this.node.light && type.set(this.node.light.type));
+        // Range and radius belong to point and spot lights, the cones to spot lights: lights of this type get them.
+        const own = [...(l.type !== 'directional' ? ['range', 'radius'] : []), ...(l.type === 'spot' ? ['outerAngle', 'innerAngle'] : [])];
+        const rows = [row('Type', type.el), ...this.componentRows('light', ['color', 'intensity', 'castShadow']), ...this.componentRows('light', own, (n) => n.light?.type === l.type)];
         const remove = iconButton('trash', 'Remove light', () => this.hooks<null>('Remove Light', has, (n) => delete n.light).commit!(null));
         return section('light', 'Light', l.type === 'directional' ? 'sun' : l.type === 'point' ? 'bulb' : 'spot', rows, [remove]);
     }
@@ -781,17 +736,6 @@ export class InspectorPanel {
     private particlesSection(): HTMLElement {
         const has: Filter = (n) => !!n.particles;
         const p = this.node.particles!;
-        type P = ParticlesDoc;
-        const set = <K extends keyof P>(key: K, label: string) =>
-            this.hooks<P[K]>(label, has, (n, v) => ((n.particles as any)[key] = v), (n) => n.particles![key]);
-        const pair = (key: 'life' | 'size' | 'spin', i: 0 | 1, label: string) =>
-            this.hooks<number>(label, has, (n, v) => {
-                const r = [...n.particles![key]] as [number, number];
-                r[i] = v;
-                if (r[0] > r[1]) r[1 - i] = v;
-                n.particles![key] = r;
-            });
-        const rows: HTMLElement[] = [];
         const preset = h('button', { class: 'btn small', attrs: { type: 'button' } }, icon('sparkle', 14), h('span', { text: 'Preset...' }));
         preset.addEventListener('click', () => {
             const r = preset.getBoundingClientRect();
@@ -805,84 +749,17 @@ export class InspectorPanel {
                 r.bottom + 4,
             );
         });
-        rows.push(row('', h('div', { class: 'inline' }, preset, h('span', { class: 'muted small', text: `up to ${particleCount(p)} alive` }))));
-        const rate = new NumberField({ value: p.rate, min: 0, max: 5000, step: 0.5, precision: 1, ...set('rate', 'Emission Rate') });
-        const max = new NumberField({ value: p.max, min: 1, max: 50000, step: 1, precision: 0, ...set('max', 'Max Particles') });
-        const life0 = new NumberField({ value: p.life[0], min: 0.01, max: 60, step: 0.05, precision: 2, ...pair('life', 0, 'Lifetime') });
-        const life1 = new NumberField({ value: p.life[1], min: 0.01, max: 60, step: 0.05, precision: 2, ...pair('life', 1, 'Lifetime') });
-        const size0 = new NumberField({ value: p.size[0], min: 0.001, max: 50, step: 0.01, precision: 3, ...pair('size', 0, 'Size') });
-        const size1 = new NumberField({ value: p.size[1], min: 0.001, max: 50, step: 0.01, precision: 3, ...pair('size', 1, 'Size') });
-        const sizeEnd = new NumberField({ value: p.sizeEnd, min: 0, max: 20, step: 0.05, precision: 2, ...set('sizeEnd', 'Size at End') });
-        rows.push(
-            row('Rate', rate.el, 'Particles per second'),
-            row('Max', max.el, 'Most particles alive at once'),
-            row('Lifetime', h('div', { class: 'inline' }, life0.el, life1.el), 'Seconds, lowest and highest'),
-            row('Size', h('div', { class: 'inline' }, size0.el, size1.el), 'Meters at birth, lowest and highest'),
-            row('Size at End', sizeEnd.el, 'Factor of the birth size at the end of life'),
-        );
-        const shape = new SelectField<P['shape']>(PARTICLE_SHAPES.map((v) => ({ value: v, label: v[0].toUpperCase() + v.slice(1) })), p.shape, (v) => set('shape', 'Emitter Shape').commit!(v));
-        rows.push(row('Shape', shape.el, 'Where particles start, around the object'));
-        let radius: NumberField | null = null, box: Vec3Field | null = null;
-        if (p.shape === 'box') {
-            box = new Vec3Field({ value: p.box, step: 0.05, precision: 2, ...set('box', 'Emitter Box') });
-            rows.push(row('Box', box.el, 'Size in meters'));
-        } else {
-            radius = new NumberField({ value: p.radius, min: 0, max: 100, step: 0.01, precision: 2, ...set('radius', 'Emitter Radius') });
-            rows.push(row('Radius', radius.el, 'Meters'));
-        }
-        const vmin = new Vec3Field({ value: p.velocityMin, step: 0.05, precision: 2, ...set('velocityMin', 'Start Velocity') });
-        const vmax = new Vec3Field({ value: p.velocityMax, step: 0.05, precision: 2, ...set('velocityMax', 'Start Velocity') });
-        const gravity = new Vec3Field({ value: p.gravity, step: 0.05, precision: 2, ...set('gravity', 'Gravity') });
-        rows.push(
-            row('Velocity Min', vmin.el, 'm/s per axis, in the object\'s space'),
-            row('Velocity Max', vmax.el, 'm/s per axis, in the object\'s space'),
-            row('Gravity', gravity.el, 'Constant acceleration, m/s\u00b2 (up is +y)'),
-        );
-        const c0 = new ColorField({ value: p.colorStart, ...set('colorStart', 'Start Color') });
-        const c1 = new ColorField({ value: p.colorEnd, ...set('colorEnd', 'End Color') });
-        const a0 = new SliderField({ value: p.alphaStart, min: 0, max: 1, step: 0.01, precision: 2, ...set('alphaStart', 'Start Opacity') });
-        const a1 = new SliderField({ value: p.alphaEnd, min: 0, max: 1, step: 0.01, precision: 2, ...set('alphaEnd', 'End Opacity') });
-        const spin0 = new NumberField({ value: p.spin[0], step: 1, precision: 0, ...pair('spin', 0, 'Rotation') });
-        const spin1 = new NumberField({ value: p.spin[1], step: 1, precision: 0, ...pair('spin', 1, 'Rotation') });
-        rows.push(
-            row('Color', h('div', { class: 'inline' }, c0.el, c1.el), 'At birth and at the end of life'),
-            row('Opacity Start', a0.el),
-            row('Opacity End', a1.el),
-            row('Rotation', h('div', { class: 'inline' }, spin0.el, spin1.el), 'Start rotation of each sprite, degrees'),
-        );
-        const blend = new SelectField<P['blend']>([{ value: 'add', label: 'Add (glow)' }, { value: 'alpha', label: 'Alpha (cover)' }], p.blend, (v) => set('blend', 'Particle Blend').commit!(v));
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
-        const tex = new SelectField<string>([{ value: '', label: 'Soft dot' }, ...textures.map((a) => ({ value: a.id, label: a.name }))], p.texture ?? '', (v) => set('texture', 'Particle Texture').commit!(v || null));
-        const local = new CheckboxField(p.local, (v) => set('local', 'Particle Space').commit!(v), 'Move with the object');
-        const prewarm = new NumberField({ value: p.prewarm, min: 0, max: 30, step: 0.5, precision: 1, ...set('prewarm', 'Prewarm') });
-        rows.push(row('Blend', blend.el), row('Sprite', tex.el, 'Texture of each particle'), row('', local.el), row('Prewarm', prewarm.el, 'Seconds simulated before the first frame'));
-        this.watch(() => {
-            const cur = this.node.particles;
-            if (!cur) return;
-            rate.set(cur.rate);
-            max.set(cur.max);
-            life0.set(cur.life[0]);
-            life1.set(cur.life[1]);
-            size0.set(cur.size[0]);
-            size1.set(cur.size[1]);
-            sizeEnd.set(cur.sizeEnd);
-            shape.set(cur.shape);
-            radius?.set(cur.radius);
-            box?.set(cur.box);
-            vmin.set(cur.velocityMin);
-            vmax.set(cur.velocityMax);
-            gravity.set(cur.gravity);
-            c0.set(cur.colorStart);
-            c1.set(cur.colorEnd);
-            a0.set(cur.alphaStart);
-            a1.set(cur.alphaEnd);
-            spin0.set(cur.spin[0]);
-            spin1.set(cur.spin[1]);
-            blend.set(cur.blend);
-            tex.set(cur.texture ?? '');
-            local.set(cur.local);
-            prewarm.set(cur.prewarm);
-        });
+        const tex = new SelectField<string>([{ value: '', label: 'Soft dot' }, ...textures.map((a) => ({ value: a.id, label: a.name }))], p.texture ?? '', (v) =>
+            this.hooks<string | null>('Particle Texture', has, (n, t) => (n.particles!.texture = t)).commit!(v || null));
+        this.watch(() => this.node.particles && tex.set(this.node.particles.texture ?? ''));
+        const rows = [
+            row('', h('div', { class: 'inline' }, preset, h('span', { class: 'muted small', text: `up to ${particleCount(p)} alive` }))),
+            ...this.componentRows('particles', ['rate', 'max', 'life', 'size', 'sizeEnd', 'shape', p.shape === 'box' ? 'box' : 'radius', 'velocityMin', 'velocityMax', 'gravity']),
+            ...this.componentRows('particles', ['colorStart', 'colorEnd', 'alphaStart', 'alphaEnd', 'spin', 'blend']),
+            row('Sprite', tex.el, 'Texture of each particle'),
+            ...this.componentRows('particles', ['local', 'prewarm']),
+        ];
         const remove = iconButton('trash', 'Remove particles', () => this.hooks<null>('Remove Particles', has, (n) => delete n.particles).commit!(null));
         return section('particles', 'Particles', 'sparkle', rows, [remove]);
     }
@@ -891,24 +768,13 @@ export class InspectorPanel {
 
     private cameraSection(): HTMLElement {
         const has: Filter = (n) => !!n.camera;
-        const c = this.node.camera!;
-        const fov = new SliderField({ value: c.fov, min: 10, max: 120, step: 1, precision: 0, ...this.hooks<number>('Field of View', has, (n, v) => (n.camera!.fov = v)) });
-        const near = new NumberField({ value: c.near, step: 0.01, min: 0.001, precision: 3, ...this.hooks<number>('Near Plane', has, (n, v) => (n.camera!.near = v)) });
-        const far = new NumberField({ value: c.far, step: 1, min: 0.1, precision: 1, ...this.hooks<number>('Far Plane', has, (n, v) => (n.camera!.far = v)) });
-        const main = new CheckboxField(c.main, (v) => {
+        const main = new CheckboxField(this.node.camera!.main, (v) => {
             const id = this.node.id;
             this.store.commit('Main Camera', (doc) => {
                 for (const n of doc.nodes) if (n.camera) n.camera.main = v ? n.id === id : n.id === id ? false : n.camera.main;
             });
         }, 'Used by Play');
-        this.watch(() => {
-            const cur = this.node.camera;
-            if (!cur) return;
-            fov.set(cur.fov);
-            near.set(cur.near);
-            far.set(cur.far);
-            main.set(cur.main);
-        });
+        this.watch(() => this.node.camera && main.set(this.node.camera.main));
         const actions = h(
             'div',
             { class: 'inline' },
@@ -916,75 +782,46 @@ export class InspectorPanel {
             button('Look Through', () => this.editor.viewThroughCamera(this.node.id), 'small', 'camera'),
         );
         const remove = iconButton('trash', 'Remove camera', () => this.hooks<null>('Remove Camera', has, (n) => delete n.camera).commit!(null));
-        return section('camera', 'Camera', 'camera', [row('Main', main.el), row('Field of View', fov.el), row('Near', near.el), row('Far', far.el), row('', actions)], [remove]);
+        return section('camera', 'Camera', 'camera', [row('Main', main.el), ...this.componentRows('camera', ['fov', 'near', 'far']), row('', actions)], [remove]);
     }
 
     // ------------------------------------------------------------ character
 
     private characterSection(): HTMLElement {
         const has: Filter = (n) => !!n.character;
-        const c = this.node.character!;
-        const set = <K extends keyof CharacterDoc>(key: K, label: string) =>
-            this.hooks<CharacterDoc[K]>(label, has, (n, v) => ((n.character as any)[key] = v), (n) => n.character![key]);
-        const fields: [Exclude<keyof CharacterDoc, 'collide'>, string, string, number, number][] = [
-            ['speed', 'Walk Speed', 'm/s', 0, 100],
-            ['runSpeed', 'Run Speed', 'm/s: Shift or the joystick at its edge; Run in Move To', 0, 200],
-            ['jump', 'Jump', 'Take-off speed in m/s; 0 turns jumping off', 0, 100],
-            ['gravity', 'Gravity', 'm/s\u00b2', 0, 200],
-            ['height', 'Height', 'Of the body it collides with (m)', 0.2, 20],
-            ['radius', 'Radius', 'Of the body (m)', 0.05, 10],
-            ['eyeHeight', 'Eye Height', 'First person camera height (m)', 0.05, 20],
-            ['stepHeight', 'Step Height', 'Highest step it climbs without jumping (m)', 0, 10],
-        ];
-        const inputs = fields.map(([key, label, , min, max]) => new NumberField({ value: c[key], min, max, step: 0.05, precision: 2, ...set(key, label) }));
-        const collide = new CheckboxField(c.collide, (v) => set('collide', 'Character Collisions').commit!(v), 'Walls and other characters stop it, it stands on floors');
         const specs = this.store.doc.design.specs;
         const fromBrief = button('Body from the Brief', () => this.hooks<null>('Character Size from the Brief', has, (n) => {
             const d = defaultCharacter(specs);
             Object.assign(n.character!, { height: d.height, radius: d.radius, eyeHeight: d.eyeHeight, stepHeight: d.stepHeight });
         }).commit!(null), 'small', 'walk');
-        this.watch(() => {
-            const cur = this.node.character;
-            if (!cur) return;
-            fields.forEach(([key], i) => inputs[i].set(cur[key]));
-            collide.set(cur.collide);
-        });
         const remove = iconButton('trash', 'Remove character', () => this.hooks<null>('Remove Character', has, (n) => {
             delete n.character;
             delete n.player;
         }).commit!(null));
         return section('character', 'Character', 'walk', [
             h('div', { class: 'muted small pad', text: 'A body that walks the level in Play. The player controls it with a Player Controller; for an NPC, a behavior tree walks it with Move To, or a script with this.character.' }),
-            ...fields.map(([, label, hint], i) => row(label, inputs[i].el, hint)),
-            row('', collide.el),
+            ...this.componentRows('character', ['speed', 'runSpeed', 'jump', 'gravity', 'height', 'radius', 'eyeHeight', 'stepHeight', 'collide']),
             row('', fromBrief, `Height ${specs.playerHeight} m, radius ${specs.playerRadius} m, eyes at ${specs.eyeHeight} m, steps up to ${specs.stepHeight} m`),
         ], [remove]);
     }
 
     private playerSection(): HTMLElement {
         const has: Filter = (n) => !!n.player;
-        const p = this.node.player!;
-        const set = <K extends keyof PlayerDoc>(key: K, label: string) =>
-            this.hooks<PlayerDoc[K]>(label, has, (n, v) => ((n.player as any)[key] = v), (n) => n.player![key]);
-        const view = new SelectField<PlayerView>(PLAYER_VIEWS, p.view, (v) => set('view', 'Player View').commit!(v));
-        const distance = new NumberField({ value: p.distance, min: 0.5, max: 100, step: 0.05, precision: 2, ...set('distance', 'Camera Distance') });
-        const look = new NumberField({ value: p.lookSpeed, min: 0.05, max: 10, step: 0.01, precision: 2, ...set('lookSpeed', 'Look Speed') });
-        const invert = new CheckboxField(p.invertY, (v) => set('invertY', 'Invert Look').commit!(v), 'Dragging up looks down');
-        this.watch(() => {
-            const cur = this.node.player;
-            if (!cur) return;
-            view.set(cur.view);
-            distance.set(cur.distance);
-            look.set(cur.lookSpeed);
-            invert.set(cur.invertY);
-        });
+        const third = this.node.player!.view === 'third';
         const remove = iconButton('trash', 'Remove player controller', () => this.hooks<null>('Remove Player Controller', has, (n) => delete n.player).commit!(null));
         return section('player', 'Player Controller', 'play', [
             h('div', { class: 'muted small pad', text: 'The player controls this character in Play: WASD or the arrow keys move, Shift runs, Space jumps, a drag or Q / E turns the view and the wheel zooms. Touch screens get a joystick, a jump button, a finger to look and a pinch to zoom.' }),
-            row('View', view.el, 'Third person follows behind, first person looks from the eyes, Scene Camera keeps the camera node'),
-            ...(p.view === 'third' ? [row('Distance', distance.el, 'How far the camera stays behind (m)')] : []),
-            row('Look Speed', look.el),
-            row('', invert.el),
+            ...this.componentRows('player', ['view', ...(third ? ['distance'] : []), 'lookSpeed', 'invertY']),
+        ], [remove]);
+    }
+
+    private physicsSection(): HTMLElement {
+        const has: Filter = (n) => !!n.body;
+        const dynamic = this.node.body!.type === 'dynamic';
+        const remove = iconButton('trash', 'Remove physics body', () => this.hooks<null>('Remove Physics Body', has, (n) => delete n.body).commit!(null));
+        return section('body', 'Physics Body', 'physics', [
+            h('div', { class: 'muted small pad', text: 'In Play a dynamic body falls, collides and bounces; a kinematic one follows its object as scripts move it and pushes dynamic bodies; a fixed one stays put. Meshes without a body are fixed too, and characters push dynamic bodies. Scripts use this.body and onCollisionEnter / onTriggerEnter.' }),
+            ...this.componentRows('body', ['type', 'shape', ...(dynamic ? ['mass'] : []), 'friction', 'bounce', ...(dynamic ? ['drag', 'angularDrag', 'gravity', 'lockRotation', 'fast'] : []), 'sensor']),
         ], [remove]);
     }
 
@@ -1040,11 +877,36 @@ export class InspectorPanel {
         });
         if (overrides) rows.push(row('Overrides', h('div', { class: 'readonly', text: `${overrides} changed ${overrides === 1 ? 'item' : 'items'}` })));
         const out = [section('model', 'Model', 'model', rows, [menu])];
+        if (info?.clips.length) out.push(this.animationSection(node, info.clips));
         if (info) {
             out.push(this.materialSlotsSection(node, info));
             out.push(this.partsSection(node, info));
         }
         return out;
+    }
+
+    /** The clip the model plays, and on a character the clip of each mode. */
+    private animationSection(node: NodeDoc, clips: string[]): HTMLElement {
+        const same: Filter = (n) => n.model?.asset === node.model!.asset;
+        const clipRow = (key: 'clip' | (typeof ANIMATION_MODES)[number], empty: string) => {
+            const label = key === 'clip' ? 'Clip' : key[0].toUpperCase() + key.slice(1);
+            const edit = this.hooks<string>(`Animation ${label}`, same, (n, v) => (n.animation = Animation.parse({ ...n.animation, [key]: v })));
+            const f = new SelectField<string>([{ value: '', label: empty }, ...clips.map((c) => ({ value: c, label: c }))], node.animation?.[key] ?? '', (v) => edit.commit!(v));
+            this.watch(() => f.set(this.node.animation?.[key] ?? ''));
+            return row(label, f.el);
+        };
+        let character = false;
+        for (let n: NodeDoc | undefined = node; n && !character; n = this.store.node(n.parent)) character = !!n.character;
+        return section('animation', 'Animation', 'play', [
+            clipRow('clip', `First (${clips[0]})`),
+            ...this.componentRows('animation', ['speed', 'fade', 'preview'], same),
+            ...(character
+                ? [
+                      h('div', { class: 'muted small pad', text: "In Play the character's mode picks the clip:" }),
+                      ...ANIMATION_MODES.map((m) => clipRow(m, `Auto (${clipFor(clips, defaults(Animation), m) ?? 'keeps the clip'})`)),
+                  ]
+                : []),
+        ]);
     }
 
     private materialSlotsSection(node: NodeDoc, info: ModelInfo): HTMLElement {
@@ -1558,7 +1420,7 @@ export class InspectorPanel {
             });
         }
         if (items.length) items.push({ separator: true });
-        if (!node.player && !node.light && !node.camera && !node.particles) {
+        if (!node.player && !node.light && !node.camera && !node.particles && !node.body) {
             const specs = this.store.doc.design.specs;
             if (!node.character) items.push({ label: 'Character', icon: 'walk', action: () => this.hooks<null>('Add Character', (n) => !n.character, (n) => (n.character = defaultCharacter(specs))).commit!(null) });
             items.push({
@@ -1569,6 +1431,9 @@ export class InspectorPanel {
                     n.player = defaultPlayer();
                 }).commit!(null),
             });
+        }
+        if (!node.body && !node.character && !node.light && !node.camera && !node.particles) {
+            items.push({ label: 'Physics Body', icon: 'physics', action: () => this.hooks<null>('Add Physics Body', (n) => !n.body && !n.character, (n) => (n.body = defaults(Body))).commit!(null) });
         }
         if (!node.agent) {
             const stopped = () => this.editor.player.state === 'stopped';

@@ -1,18 +1,14 @@
 import { Emitter } from './events';
 import { readLocal, writeLocal } from './local';
-import { sanitizeParticles } from './particles';
-import { sanitizeCharacter, sanitizePlayer } from './character';
-import {
-    defaultCamera, defaultCameraDoc, defaultEnvironment, defaultGeometry, defaultGI, defaultRenderGraph, uid,
-} from './defaults';
+import { defaultCamera, defaultRenderGraph, uid } from './defaults';
 import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, sanitizeAiModels } from './behavior/format';
 import { sanitizeDesign } from './design';
-import { clampGIGrid } from './giLimits';
 import { migrateScene } from './migrate';
+import { Animation, Body, Camera, Character, Environment, Mesh, Model, Params, Particles, Player } from './model';
+import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
-    SCENE_VERSION, type BuildDoc, type CameraState, type GeometryDoc, type GeometryType, type GIDoc, type NodeDoc,
-    type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc, type SceneDoc, type ScriptDoc, type ScriptRef,
-    type ShaderDoc,
+    SCENE_VERSION, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
+    type SceneDoc, type ScriptDoc, type ScriptRef, type ShaderDoc,
 } from './types';
 
 /** What changed in a doc update. Omitted means "anything may have changed". */
@@ -404,28 +400,8 @@ export class Store extends Emitter<StoreEvents> {
     }
 }
 
-const finite = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-const vec = (v: any, d: [number, number, number]): [number, number, number] =>
-    Array.isArray(v) && v.length === 3 ? [finite(v[0], d[0]), finite(v[1], d[1]), finite(v[2], d[2])] : [...d];
-const str = (v: any, d: string) => (typeof v === 'string' ? v : d);
-const isObj = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-
-function paramValue(v: any): ParamValue | undefined {
-    if (typeof v === 'number') return Number.isFinite(v) ? v : undefined;
-    if (typeof v === 'string' || typeof v === 'boolean') return v;
-    if (Array.isArray(v) && v.every((x) => typeof x === 'number' && Number.isFinite(x))) return v.slice();
-    return undefined;
-}
-
-function params(raw: any): Record<string, ParamValue> {
-    const out: Record<string, ParamValue> = {};
-    if (!isObj(raw)) return out;
-    for (const [k, v] of Object.entries(raw)) {
-        const pv = paramValue(v);
-        if (pv !== undefined) out[k] = pv;
-    }
-    return out;
-}
+/** Values of script fields and shader properties by name; what is not one is dropped. */
+const params = (raw: unknown): Record<string, ParamValue> => Params.parse(raw ?? {});
 
 function sanitizeScripts(raw: any): ScriptDoc[] {
     const seen = new Set<string>();
@@ -476,139 +452,38 @@ function sanitizeRenderGraph(raw: any, shaders: ShaderDoc[]): RenderGraphDoc {
     return rg;
 }
 
-/** Repairs node components loaded from files or older builds. */
+/** Repairs the components of a node loaded from a file or an older build (see core/model.ts). */
 function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
-    if (node.camera !== undefined) {
-        if (!isObj(node.camera)) delete node.camera;
-        else {
-            const d = defaultCameraDoc();
-            const c = node.camera as any;
-            node.camera = {
-                fov: Math.min(170, Math.max(1, finite(c.fov, d.fov))),
-                near: Math.max(0.001, finite(c.near, d.near)),
-                far: Math.max(0.01, finite(c.far, d.far)),
-                main: c.main !== false,
-            };
-        }
-    }
-    if (node.particles !== undefined) {
-        const p = sanitizeParticles(node.particles);
-        if (p) node.particles = p;
-        else delete node.particles;
-    }
+    const set = <K extends keyof NodeDoc>(key: K, value: NodeDoc[K] | undefined) => {
+        if (value === undefined) delete node[key];
+        else node[key] = value;
+    };
+    set('mesh', isObj(node.mesh) && isObj(node.mesh.material) ? Mesh.parse(node.mesh) : undefined);
+    set('model', repair(Model, node.model));
+    set('camera', repair(Camera, node.camera));
+    set('particles', repair(Particles, node.particles));
+    set('body', repair(Body, node.body));
+    set('animation', repair(Animation, node.animation));
     // A player controls a character (an older player carried the body itself).
-    const character = sanitizeCharacter(node.character ?? node.player);
-    const player = character && sanitizePlayer(node.player);
-    if (character) node.character = character;
-    else delete node.character;
-    if (player) node.player = player;
-    else delete node.player;
+    const character = repair(Character, node.character ?? node.player);
+    set('character', character);
+    set('player', character && repair(Player, node.player));
     if (node.scripts !== undefined) {
         const refs: ScriptRef[] = [];
         for (const r of Array.isArray(node.scripts) ? node.scripts : []) {
             if (!isObj(r) || typeof r.script !== 'string' || !scriptIds.has(r.script)) continue;
             refs.push({ script: r.script, enabled: r.enabled !== false, props: params(r.props) });
         }
-        if (refs.length) node.scripts = refs;
-        else delete node.scripts;
+        set('scripts', refs.length ? refs : undefined);
     }
-    if (node.mesh !== undefined) {
-        if (!isObj(node.mesh) || !isObj(node.mesh.material)) delete node.mesh;
-        else node.mesh.geometry = sanitizeGeometry(node.mesh.geometry);
-    }
-    if (node.agent !== undefined) {
-        const agent = sanitizeAgent(node.agent);
-        if (agent) node.agent = agent;
-        else delete node.agent;
-    }
+    if (node.agent !== undefined) set('agent', sanitizeAgent(node.agent));
     if (node.prefab !== undefined && (typeof node.prefab !== 'string' || !node.prefab)) delete node.prefab;
     if (node.prefabChild !== undefined && node.prefabChild !== true) delete node.prefabChild;
-    if (node.mesh && isObj(node.mesh.material)) {
-        const m = node.mesh.material as any;
-        if (m.slot !== undefined && (typeof m.slot !== 'string' || !m.slot)) delete m.slot;
-        if (!MATERIAL_TYPES.includes(m.type)) m.type = 'lit';
-        if (m.params !== undefined) m.params = params(m.params);
-        if (m.shader !== undefined && m.shader !== null && typeof m.shader !== 'string') m.shader = null;
-        if (m.alphaMode !== undefined && !ALPHA_MODES.includes(m.alphaMode)) delete m.alphaMode;
-        for (const k of ['tiling', 'offset'] as const) {
-            if (m[k] === undefined) continue;
-            const d = k === 'tiling' ? 1 : 0;
-            m[k] = Array.isArray(m[k]) ? [finite(m[k][0], d), finite(m[k][1], d)] : [d, d];
-        }
-    }
-    if (node.model) {
-        const model = node.model as any;
-        if (model.materials !== undefined) {
-            if (!isObj(model.materials)) delete model.materials;
-            else {
-                for (const [k, o] of Object.entries(model.materials)) {
-                    if (!isObj(o)) {
-                        delete model.materials[k];
-                        continue;
-                    }
-                    const mo = o as any;
-                    if (mo.params !== undefined) mo.params = params(mo.params);
-                    if (mo.shading !== undefined && !['model', 'unlit', 'lambert'].includes(mo.shading)) delete mo.shading;
-                    if (mo.alphaMode !== undefined && !ALPHA_MODES.includes(mo.alphaMode)) delete mo.alphaMode;
-                }
-            }
-        }
-        if (model.parts !== undefined) {
-            if (!isObj(model.parts)) delete model.parts;
-            else {
-                for (const [k, o] of Object.entries(model.parts)) {
-                    if (!isObj(o)) {
-                        delete model.parts[k];
-                        continue;
-                    }
-                    const part = o as any;
-                    for (const t of ['position', 'rotation', 'scale'] as const) {
-                        if (part[t] !== undefined) part[t] = vec(part[t], t === 'scale' ? [1, 1, 1] : [0, 0, 0]);
-                    }
-                }
-            }
-        }
-    }
-}
-
-const MATERIAL_TYPES = ['lit', 'unlit', 'lambert', 'shader'];
-const GEOMETRY_TYPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
-
-/** Known shape with every size a finite number (missing sizes take the defaults). */
-function sanitizeGeometry(raw: any): GeometryDoc {
-    const type: GeometryType = isObj(raw) && GEOMETRY_TYPES.includes(raw.type) ? raw.type : 'box';
-    const d = defaultGeometry(type) as any;
-    const out: any = { type };
-    for (const [k, v] of Object.entries(d)) {
-        if (k === 'type') continue;
-        out[k] = finite(isObj(raw) ? raw[k] : undefined, v as number);
-    }
-    return out as GeometryDoc;
-}
-const ALPHA_MODES = ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'];
-
-function sanitizeGI(raw: any): GIDoc {
-    const d = defaultGI();
-    if (!isObj(raw)) return d;
-    return {
-        enable: raw.enable === true,
-        center: vec(raw.center, d.center),
-        counts: clampGIGrid(vec(raw.counts, d.counts)),
-        spacing: Math.min(100, Math.max(0.1, finite(raw.spacing, d.spacing))),
-        intensity: Math.max(0, finite(raw.intensity, d.intensity)),
-        bounce: Math.min(1, Math.max(0, finite(raw.bounce, d.bounce))),
-        realtime: raw.realtime === true,
-    };
 }
 
 /** Repairs documents from files or older builds: migrations, ids, parents, cycles, defaults. */
 export function sanitize(input: any): SceneDoc {
     if (input && typeof input === 'object') input = migrateScene(input);
-    const env = { ...defaultEnvironment(), ...(input?.environment || {}) };
-    for (const k of ['bloom', 'ao', 'fog'] as const) {
-        env[k] = { ...defaultEnvironment()[k], ...(input?.environment?.[k] || {}) } as any;
-    }
-    env.gi = sanitizeGI(input?.environment?.gi);
     const scripts = sanitizeScripts(input?.scripts);
     const shaders = sanitizeShaders(input?.shaders);
     const scriptIds = new Set(scripts.map((s) => s.id));
@@ -620,7 +495,7 @@ export function sanitize(input: any): SceneDoc {
         format: 'canonical-scene',
         version: SCENE_VERSION,
         name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
-        environment: env,
+        environment: repair(Environment, input?.environment) ?? defaults(Environment),
         assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
         scripts,
         shaders,
@@ -651,9 +526,9 @@ function sanitizeNodes(raw: any, scriptIds: Set<string>): NodeDoc[] {
             name: typeof item.name === 'string' ? item.name : 'Object',
             parent: typeof item.parent === 'string' ? item.parent : null,
             visible: item.visible !== false,
-            position: vec(item.position, [0, 0, 0]),
-            rotation: vec(item.rotation, [0, 0, 0]),
-            scale: vec(item.scale, [1, 1, 1]),
+            position: vecOr(item.position, [0, 0, 0]),
+            rotation: vecOr(item.rotation, [0, 0, 0]),
+            scale: vecOr(item.scale, [1, 1, 1]),
         };
         sanitizeComponents(node, scriptIds);
         nodes.push(node);
@@ -693,7 +568,7 @@ function sanitizePrefabs(raw: any, scriptIds: Set<string>): PrefabDoc[] {
         }
         const prefab: PrefabDoc = { id, name: str(p.name, 'Prefab') || 'Prefab', nodes, asset: str(p.asset, '') || uid('a') };
         if (p.useModel === true) prefab.useModel = true;
-        if (Array.isArray(p.modelOffset)) prefab.modelOffset = vec(p.modelOffset, [0, 0, 0]);
+        if (Array.isArray(p.modelOffset)) prefab.modelOffset = vecOr(p.modelOffset, [0, 0, 0]);
         out.push(prefab);
     }
     return out;

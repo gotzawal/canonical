@@ -18,6 +18,8 @@ export interface PlayerManifest {
     files: string[];
     /** Files of `files` only agents with models use (inference worker, ONNX Runtime, WebAssembly). */
     ai?: string[];
+    /** Files of `files` only physics uses (Rapier). */
+    physics?: string[];
     /** Prefix of the files on this server ('' for a production build). */
     base?: string;
 }

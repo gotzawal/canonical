@@ -1,33 +1,13 @@
-// Particle emitter defaults, presets and repair of stored values.
+// Particle emitter defaults and presets. The emitter's fields are in
+// core/model.ts (Particles).
 
-import type { NodeDoc, ParticleShape, ParticlesDoc, Vec3 } from './types';
+import { Particles } from './model';
+import { defaults } from './schema';
+import type { NodeDoc, ParticlesDoc } from './types';
 
-export const PARTICLE_SHAPES: ParticleShape[] = ['box', 'circle', 'sphere', 'hemisphere'];
+export { PARTICLE_SHAPES } from './model';
 
-export function defaultParticles(): ParticlesDoc {
-    return {
-        rate: 40,
-        max: 2000,
-        life: [1.5, 2.5],
-        size: [0.15, 0.3],
-        sizeEnd: 1,
-        shape: 'circle',
-        radius: 0.3,
-        box: [1, 1, 1],
-        velocityMin: [-0.2, 0.8, -0.2],
-        velocityMax: [0.2, 1.4, 0.2],
-        gravity: [0, 0, 0],
-        spin: [0, 360],
-        colorStart: '#ffffff',
-        colorEnd: '#ffffff',
-        alphaStart: 1,
-        alphaEnd: 0,
-        texture: null,
-        blend: 'add',
-        local: false,
-        prewarm: 2,
-    };
-}
+export const defaultParticles = (): ParticlesDoc => defaults(Particles);
 
 export interface ParticlePreset {
     id: string;
@@ -96,51 +76,7 @@ export const PARTICLE_PRESETS: ParticlePreset[] = [
 
 export function presetParticles(id: string): ParticlesDoc {
     const preset = PARTICLE_PRESETS.find((p) => p.id === id);
-    return { ...defaultParticles(), ...(preset?.values ?? {}), preset: preset?.id };
-}
-
-const isObj = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const finite = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-const clamp = (v: any, d: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, finite(v, d)));
-const vec = (v: any, d: Vec3): Vec3 => (Array.isArray(v) && v.length === 3 ? [finite(v[0], d[0]), finite(v[1], d[1]), finite(v[2], d[2])] : [...d] as Vec3);
-const range = (v: any, d: [number, number], lo: number, hi: number): [number, number] => {
-    if (!Array.isArray(v)) return [...d] as [number, number];
-    const a = clamp(v[0], d[0], lo, hi), b = clamp(v[1], d[1], lo, hi);
-    return a <= b ? [a, b] : [b, a];
-};
-const hex = (v: any, d: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : d);
-
-/** A stored emitter with every value present and in range. */
-export function sanitizeParticles(input: any): ParticlesDoc | undefined {
-    if (!isObj(input)) return undefined;
-    const d = defaultParticles();
-    const out: ParticlesDoc = {
-        rate: clamp(input.rate, d.rate, 0, 5000),
-        max: Math.round(clamp(input.max, d.max, 1, 50000)),
-        life: range(input.life, d.life, 0.01, 60),
-        size: range(input.size, d.size, 0.001, 50),
-        sizeEnd: clamp(input.sizeEnd, d.sizeEnd, 0, 20),
-        shape: PARTICLE_SHAPES.includes(input.shape) ? input.shape : d.shape,
-        radius: clamp(input.radius, d.radius, 0, 100),
-        box: vec(input.box, d.box).map((v) => Math.min(500, Math.max(0, v))) as Vec3,
-        velocityMin: vec(input.velocityMin, d.velocityMin),
-        velocityMax: vec(input.velocityMax, d.velocityMax),
-        gravity: vec(input.gravity, d.gravity),
-        spin: range(input.spin, d.spin, -3600, 3600),
-        colorStart: hex(input.colorStart, d.colorStart),
-        colorEnd: hex(input.colorEnd, d.colorEnd),
-        alphaStart: clamp(input.alphaStart, d.alphaStart, 0, 1),
-        alphaEnd: clamp(input.alphaEnd, d.alphaEnd, 0, 1),
-        texture: typeof input.texture === 'string' && input.texture ? input.texture : null,
-        blend: input.blend === 'alpha' ? 'alpha' : 'add',
-        local: input.local === true,
-        prewarm: clamp(input.prewarm, d.prewarm, 0, 30),
-    };
-    for (let i = 0; i < 3; i++) {
-        if (out.velocityMin[i] > out.velocityMax[i]) [out.velocityMin[i], out.velocityMax[i]] = [out.velocityMax[i], out.velocityMin[i]];
-    }
-    if (typeof input.preset === 'string' && input.preset) out.preset = input.preset.slice(0, 40);
-    return out;
+    return Particles.parse({ ...preset?.values, preset: preset?.id });
 }
 
 /** Particles alive at once at most: the rate times the longest life, within the cap. */

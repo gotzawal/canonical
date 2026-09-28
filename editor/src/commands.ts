@@ -32,7 +32,7 @@ export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
     const store = editor.store;
     const selected = () => store.selection.length > 0;
     const view = (id: string, label: string, key: string, yaw: () => number, pitch: number): Command => ({ id, label, keys: [key], run: () => editor.camera.setView(yaw(), pitch) });
-    return [
+    const list: Command[] = [
         { id: 'play.toggle', label: 'Play', icon: 'play', keys: ['Mod+P'], global: true, run: () => editor.togglePlay() },
         { id: 'play.pause', label: 'Pause', icon: 'pause', keys: ['Mod+Shift+P'], global: true, enabled: () => editor.player.state !== 'stopped', run: () => editor.pausePlay() },
         { id: 'dock.toggle', label: 'Toggle Code Panel', icon: 'panelBottom', keys: ['Mod+J', 'Mod+`'], global: true, run: () => ui.toggleDock() },
@@ -63,7 +63,7 @@ export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
         { id: 'tool.rotate', label: 'Rotate Tool', keys: ['E'], run: () => editor.setTool('rotate') },
         { id: 'tool.scale', label: 'Scale Tool', keys: ['R'], run: () => editor.setTool('scale') },
         { id: 'tool.space', label: 'World / Local Gizmo', keys: ['X'], once: true, run: () => editor.toggleSpace() },
-        { id: 'view.walk', label: 'Walk at Eye Height', icon: 'walk', keys: ['V'], once: true, run: () => editor.walk?.toggle() },
+        { id: 'view.walk', label: 'Walk at Eye Height', icon: 'walk', keys: ['V'], once: true, run: () => editor.setView(editor.view === 'walk' ? 'scene' : 'walk') },
         { id: 'view.frame', label: 'Frame Selection', icon: 'focus', keys: ['F'], run: () => editor.frameSelection() },
         { id: 'view.frameAll', label: 'Frame All', keys: ['Home'], run: () => editor.viewport.frameAll() },
         { id: 'view.grid', label: 'Grid', icon: 'grid', keys: ['G'], once: true, run: () => store.setPrefs({ grid: !store.prefs.grid }) },
@@ -73,8 +73,9 @@ export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
         view('view.left', 'Left', 'Shift+3', () => 270, 0),
         view('view.top', 'Top', '7', () => store.camera.yaw, 89.5),
         view('view.bottom', 'Bottom', 'Shift+7', () => store.camera.yaw, -89.5),
-        { id: 'help.shortcuts', label: 'Keyboard Shortcuts', icon: 'keyboard', keys: ['?'], run: () => showShortcuts(editor.commands) },
+        { id: 'help.shortcuts', label: 'Keyboard Shortcuts', icon: 'keyboard', keys: ['?'], run: () => showShortcuts(list) },
     ];
+    return list;
 }
 
 /** Keys that are not commands, for the shortcuts dialog. */
@@ -181,15 +182,11 @@ export class Commands {
             if (player.state !== 'stopped') player.keyEvent(e, false);
         });
     }
-
-    /** Rows of the shortcuts dialog. */
-    help(): [string, string][] {
-        const keyed = this.list.filter((c) => c.keys?.length).map((c): [string, string] => [c.keys!.map(shortcutLabel).join(' / '), c.label]);
-        return [...keyed, ...MORE_KEYS.map(([k, v]): [string, string] => [shortcutLabel(k), v])];
-    }
 }
 
-export function showShortcuts(commands: Commands) {
-    const table = h('table', { class: 'shortcuts' }, commands.help().map(([k, v]) => h('tr', null, h('td', null, h('kbd', { text: k })), h('td', { text: v }))));
+function showShortcuts(list: Command[]) {
+    const keyed = list.filter((c) => c.keys?.length).map((c): [string, string] => [c.keys!.map(shortcutLabel).join(' / '), c.label]);
+    const rows = [...keyed, ...MORE_KEYS.map(([k, v]): [string, string] => [shortcutLabel(k), v])];
+    const table = h('table', { class: 'shortcuts' }, rows.map(([k, v]) => h('tr', null, h('td', null, h('kbd', { text: k })), h('td', { text: v }))));
     void dialog('Keyboard shortcuts', table);
 }

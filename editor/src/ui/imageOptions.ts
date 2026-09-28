@@ -1,5 +1,5 @@
 import type { ParamValue } from '../core/types';
-import { describeSpec, type ParamSpec } from '../ai/images';
+import { describeSpec, type ParamSpec } from '../openrouter/images';
 import { h } from './dom';
 
 const humanize = (k: string) => k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());

@@ -3,58 +3,28 @@
 // accepts. Generation costs credits and can be switched off in the settings.
 
 import { assetImageDataUrl } from '../core/images';
+import { notify } from '../core/messages';
 import type { ShotDoc } from '../core/types';
-import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
 import { conceptPrompt, generateConcepts, type ConceptView } from '../design/concepts';
-import { notices } from '../ui/notify';
-import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from './images';
-import type { ToolDef } from './openrouter';
-import type { ToolEnv, ToolResult } from './tools';
-import { def, num, optStr, ToolError, type Json } from './toolUtil';
+import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
+import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from '../openrouter/images';
+import { num, optStr, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
-/** Tools that spend credits on images; left out when the settings forbid it. */
-export const PAID_IMAGE_TOOLS = new Set(['generate_paintover', 'generate_concept']);
-
-export function imageToolDefs(): ToolDef[] {
-    return [
-        def('generate_paintover', 'Make paintovers of a shot: a fresh greybox capture of the shot and its concept image go to the image model, which keeps the composition and paints the style and mood over it. The results are added to the shot and attached for you to look at; the user chooses the target. Costs credits: make one or two unless asked for more.', {
+export const imageTools = tools({
+    generate_paintover: {
+        groups: ['images'],
+        needs: 'images',
+        description: 'Make paintovers of a shot: a fresh greybox capture of the shot and its concept image go to the image model, which keeps the composition and paints the style and mood over it. The results are added to the shot and attached for you to look at; the user chooses the target. Costs credits: make one or two unless asked for more.',
+        params: {
             shot: { type: 'string', description: 'Shot id or name.' },
             prompt: { type: 'string', description: 'Instruction for the image model. Leave it out for the default (keep the composition, take style and mood from the concept and the plan).' },
             count: { type: 'integer', minimum: 1, maximum: MAX_IMAGES, description: 'Images to make (default 1).' },
             seed: { type: 'integer' },
             options: { type: 'object', description: 'Image model options such as aspect_ratio or resolution (image_model_info lists them). Leave it out for the defaults; the aspect ratio follows the shot.' },
             references: { type: 'array', items: { type: 'string' }, description: 'More reference image asset ids (other concepts or paintovers), sent after the capture and the concept.' },
-        }, ['shot']),
-        def('generate_concept', 'Draw concept images of the design with the image model, so the user can review how it will look before and while it is built: an area from outside or inside, an overview of the whole place, or a floor plan. They are added as concepts of the area, proposed until the user approves them in the Design tab; approved concepts are the references for shots and paintovers. With capture, a capture of the greybox (the current view or a shot) is painted over, keeping its shapes. Costs credits: one or two per area.', {
-            area: { type: 'string', description: 'Area id or name; leave out for the whole place.' },
-            view: { type: 'string', enum: ['exterior', 'interior', 'overview', 'plan'], description: 'Default exterior.' },
-            instructions: { type: 'string', description: 'What to show or change, added to the default instruction built from the plan.' },
-            prompt: { type: 'string', description: 'A whole instruction instead of the default.' },
-            count: { type: 'integer', minimum: 1, maximum: 4, description: 'Default 1.' },
-            references: { type: 'array', items: { type: 'string' }, description: 'Image asset ids to match (other concepts, paintovers).' },
-            capture: { type: 'string', description: '"view" for the current view of the greybox, or a shot id or name.' },
-        }),
-        def('choose_paintover', 'Make one of a shot\'s paintovers its target, the image every later comparison of the shot uses. Only when the user asked you to choose or lets you decide the details (detail level quick): then pick the one that keeps the blockout\'s composition best. Otherwise ask them to pick one (Design tab, the shot\'s Paintover button).', {
-            shot: { type: 'string', description: 'Shot id or name.' },
-            paintover: { type: 'string', description: 'Asset id of the paintover.' },
-        }, ['shot', 'paintover']),
-        def('image_model_info', 'The image model set for paintovers and swatches: whether it takes reference images, and the options it accepts with their allowed values.'),
-    ];
-}
-
-function findShot(env: ToolEnv, ref: unknown): ShotDoc {
-    const shots = env.editor.store.doc.design.shots;
-    const r = typeof ref === 'string' ? ref.trim() : '';
-    const shot = shots.find((s) => s.id === r) ?? shots.find((s) => s.name.toLowerCase() === r.toLowerCase());
-    if (!shot) throw new ToolError(`No shot "${r}". Shots: ${shots.map((s) => `${s.name} (${s.id})`).join(', ') || 'none'}.`);
-    return shot;
-}
-
-export async function runImageTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult | null> {
-    const ed = env.editor;
-    switch (name) {
-        case 'generate_paintover': {
-            if (!env.allowImages()) throw new ToolError('Image generation is turned off in the AI settings.');
+        },
+        required: ['shot'],
+        async run({ env, args, ed }) {
             const shot = findShot(env, args.shot);
             const model = imageModelId();
             const models = await listImageModels().catch(() => []);
@@ -100,9 +70,22 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
                 images,
                 summary: `${res.paintovers.length} for ${shot.name}`,
             };
-        }
-        case 'generate_concept': {
-            if (!env.allowImages()) throw new ToolError('Image generation is turned off in the AI settings.');
+        },
+    },
+    generate_concept: {
+        groups: ['concepts'],
+        needs: 'images',
+        description: 'Draw concept images of the design with the image model, so the user can review how it will look before and while it is built: an area from outside or inside, an overview of the whole place, or a floor plan. They are added as concepts of the area, proposed until the user approves them in the Design tab; approved concepts are the references for shots and paintovers. With capture, a capture of the greybox (the current view or a shot) is painted over, keeping its shapes. Costs credits: one or two per area.',
+        params: {
+            area: { type: 'string', description: 'Area id or name; leave out for the whole place.' },
+            view: { type: 'string', enum: ['exterior', 'interior', 'overview', 'plan'], description: 'Default exterior.' },
+            instructions: { type: 'string', description: 'What to show or change, added to the default instruction built from the plan.' },
+            prompt: { type: 'string', description: 'A whole instruction instead of the default.' },
+            count: { type: 'integer', minimum: 1, maximum: 4, description: 'Default 1.' },
+            references: { type: 'array', items: { type: 'string' }, description: 'Image asset ids to match (other concepts, paintovers).' },
+            capture: { type: 'string', description: '"view" for the current view of the greybox, or a shot id or name.' },
+        },
+        async run({ env, args, ed }) {
             const d = ed.store.doc.design;
             const ref = optStr(args.area, 'area', 200);
             const area = ref ? d.areas.find((a) => a.id === ref) ?? d.areas.find((a) => a.name.toLowerCase() === ref.toLowerCase()) ?? null : null;
@@ -124,7 +107,7 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
                 }
             }
             if (res.concepts.length) {
-                notices.show({
+                notify({
                     kind: 'review',
                     key: 'concept-review',
                     icon: 'image',
@@ -147,8 +130,17 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
                 images,
                 summary: `${res.concepts.length} for ${area?.name ?? 'the whole place'}`,
             };
-        }
-        case 'choose_paintover': {
+        },
+    },
+    choose_paintover: {
+        groups: ['images', 'shots'],
+        description: 'Make one of a shot\'s paintovers its target, the image every later comparison of the shot uses. Only when the user asked you to choose or lets you decide the details (detail level quick): then pick the one that keeps the blockout\'s composition best. Otherwise ask them to pick one (Design tab, the shot\'s Paintover button).',
+        params: {
+            shot: { type: 'string', description: 'Shot id or name.' },
+            paintover: { type: 'string', description: 'Asset id of the paintover.' },
+        },
+        required: ['shot', 'paintover'],
+        run({ env, args, ed }) {
             const shot = findShot(env, args.shot);
             const asset = typeof args.paintover === 'string' ? args.paintover.trim() : '';
             if (!shot.paintovers.some((p) => p.asset === asset)) {
@@ -156,8 +148,12 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
             }
             ed.pipeline.choosePaintover(shot.id, asset);
             return { data: { ok: true, shot: shot.name, target: asset }, summary: shot.name };
-        }
-        case 'image_model_info': {
+        },
+    },
+    image_model_info: {
+        groups: ['images'],
+        description: 'The image model set for paintovers and swatches: whether it takes reference images, and the options it accepts with their allowed values.',
+        async run({ env }) {
             const model = imageModelId();
             const models = await listImageModels().catch(() => []);
             const info = models.find((m) => m.id === model);
@@ -177,7 +173,14 @@ export async function runImageTool(env: ToolEnv, name: string, args: Json): Prom
                 },
                 summary: model,
             };
-        }
-    }
-    return null;
+        },
+    },
+});
+
+function findShot(env: ToolEnv, ref: unknown): ShotDoc {
+    const shots = env.editor.store.doc.design.shots;
+    const r = typeof ref === 'string' ? ref.trim() : '';
+    const shot = shots.find((s) => s.id === r) ?? shots.find((s) => s.name.toLowerCase() === r.toLowerCase());
+    if (!shot) throw new ToolError(`No shot "${r}". Shots: ${shots.map((s) => `${s.name} (${s.id})`).join(', ') || 'none'}.`);
+    return shot;
 }

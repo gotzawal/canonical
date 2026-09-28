@@ -5,6 +5,7 @@
 // commits it as one undo step (see Editor.applyBehaviorOps).
 
 import { uid } from '../ids';
+import { isObj } from '../schema';
 import type {
     AgentDoc, AiModelDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc,
     BlackboardValue, BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc, NodeDoc,
@@ -83,8 +84,6 @@ class OpFail extends Error {
         super(message);
     }
 }
-
-const isObj = (v: unknown): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
 
 // --------------------------------------------------------------- the list
 

@@ -2,7 +2,7 @@
 // probe grids that fit in them. Shared by the document sanitizer and the
 // engine side (engine/gi.ts).
 
-import type { Vec3 } from './types';
+import type { Vec3 } from './math';
 
 /** Size of one cube face when a probe captures the scene. */
 export const GI_PROBE_SIZE = 16;

@@ -4,8 +4,8 @@
 // or proposed by the assistant.
 
 import { levelSignature, STAGE_IDS, stageIndex } from '../core/design';
+import { hasColorGrade } from '../core/templates';
 import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId } from '../core/types';
-import { hasColorGrade } from './effects';
 
 /** Groups of assistant tools; each stage allows some of them (see ai/tools.ts). */
 export type ToolGroup =

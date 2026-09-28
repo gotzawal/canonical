@@ -15,6 +15,8 @@ import { Runtime } from '../engine/runtime';
 import { ShaderManager } from '../engine/shaders';
 import { SceneSync } from '../engine/sync';
 import { ScriptCompiler } from '../play/compiler';
+import type { ModelServices } from '../play/ai/services';
+import { loadPhysics, usesPhysics } from '../play/physics';
 import { Player, type ScriptIssue } from '../play/player';
 import { h } from '../ui/dom';
 import { icon } from '../ui/icons';
@@ -100,9 +102,9 @@ async function main() {
     // The view the game was built from, for scenes without a camera node.
     const view = new CameraController(runtime, store, picker);
     const compiler = new ScriptCompiler(store, game.trusted);
-    const player = new Player(runtime, store, sync, picker, compiler);
-    // The player controller's joystick and hints go over the game.
-    player.controlsHost = root;
+    // The player controller's joystick and hints go over the game; the agents get their models once they load.
+    let agentModels: ModelServices | null = null;
+    const player = new Player(runtime, store, sync, picker, compiler, { controls: root, aiServices: () => agentModels });
     new RenderGraphController(runtime, store, shaders, sync);
     store.on('change', (hint) => sync.sync(hint));
     sync.sync();
@@ -120,7 +122,9 @@ async function main() {
     if (debug) showIssues(root, player, !game.trusted && game.doc.scripts.length > 0);
     // Agents that ask or recall get their models in the background; they
     // play with the blackboard defaults until the models are ready.
-    if (sceneModelsNeeded(store.doc).length) await startModels(root, runtime, player, store);
+    if (sceneModelsNeeded(store.doc).length) agentModels = await startModels(root, runtime, player, store);
+    // Bodies fall from the first frame (the player started loading Rapier with the scene).
+    if (usesPhysics(store.doc)) await loadPhysics();
     player.play();
     bindInput(canvas, player, view);
     addFullscreenButton(root);
@@ -136,17 +140,16 @@ async function main() {
  * first play (with Save-Data on, a button offers the download instead). A
  * chip in the corner shows the progress.
  */
-async function startModels(root: HTMLElement, runtime: Runtime, player: Player, store: Store) {
+async function startModels(root: HTMLElement, runtime: Runtime, player: Player, store: Store): Promise<ModelServices | null> {
     let services: typeof import('../play/ai/services');
     try {
         services = await import('../play/ai/services');
     } catch (e) {
         console.warn('[ai] the model services could not be loaded; the agents use their defaults', e);
-        return;
+        return null;
     }
     const saveData = !!(navigator as Navigator & { connection?: { saveData?: boolean } }).connection?.saveData;
     const models = new services.ModelServices(runtime, player.speech, () => store.doc.aiModels, { policy: saveData ? 'ask' : 'auto' });
-    player.aiServices = () => models;
     const chip = h('button', { class: 'player-models', attrs: { type: 'button', hidden: true } });
     chip.addEventListener('click', () => {
         for (const id of Array.from(models.needed)) void models.download(id);
@@ -179,6 +182,7 @@ async function startModels(root: HTMLElement, runtime: Runtime, player: Player, 
     models.on('needed', update);
     root.append(chip);
     (window as any).__models = models;
+    return models;
 }
 
 function nextFrames(runtime: Runtime, count: number): Promise<void> {

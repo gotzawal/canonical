@@ -6,9 +6,10 @@
 import { getAssetBlob } from '../core/assets';
 import { sceneModelsNeeded } from '../core/behavior/format';
 import { usedAssetIds } from '../core/persistence';
+import { usesPhysics } from '../play/physics';
 import type { AssetMeta, CameraState, SceneDoc } from '../core/types';
 import { GAME_FILE, PLAYER_MANIFEST, type GameFile, type PlayerManifest } from './gameFile';
-import type { ZipEntry } from './zip';
+import type { ZipEntry } from '../core/zip';
 
 export interface BuildOptions {
     title: string;
@@ -49,8 +50,8 @@ export function assetPath(asset: AssetMeta): string {
     return `media/${asset.id}${stem ? '-' + stem : ''}${ext}`;
 }
 
-/** The player app of this editor: the files every game gets (the AI files only when its agents use models). */
-async function playerFiles(title: string, ai: boolean): Promise<ZipEntry[]> {
+/** The player app of this editor: the files every game gets (the AI and physics files only when it uses them). */
+async function playerFiles(title: string, uses: { ai: boolean; physics: boolean }): Promise<ZipEntry[]> {
     const manifestUrl = new URL(PLAYER_MANIFEST, document.baseURI);
     let res: Response;
     try {
@@ -67,7 +68,7 @@ async function playerFiles(title: string, ai: boolean): Promise<ZipEntry[]> {
     const manifest = (await res.json()) as PlayerManifest;
     if (!manifest?.html || !Array.isArray(manifest.files)) throw new Error(`${PLAYER_MANIFEST} is not valid.`);
     const root = new URL(manifest.base ?? '', manifestUrl);
-    const skip = new Set(ai ? [] : manifest.ai ?? []);
+    const skip = new Set([...(uses.ai ? [] : manifest.ai ?? []), ...(uses.physics ? [] : manifest.physics ?? [])]);
     const out: ZipEntry[] = [];
     for (const file of manifest.files) {
         if (skip.has(file)) continue;
@@ -116,7 +117,7 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     const models = sceneModelsNeeded(doc);
     const ai = models.length > 0;
     log('Collecting the player app...');
-    const files = await playerFiles(title, ai);
+    const files = await playerFiles(title, { ai, physics: usesPhysics(doc) });
     if (ai) {
         log(
             `The agents use ${models.join(', ')}: ` +

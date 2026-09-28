@@ -1,11 +1,13 @@
 import * as core from '@orillusion/core';
 import type { Camera3D, Engine3D, Object3D, Scene3D, Transform } from '@orillusion/core';
 import { invert, transformPoint } from '../core/math';
-import type { Vec3 } from '../core/types';
+import type { BodyDoc, Vec3 } from '../core/types';
 import type { BlackboardApi } from './ai/agents';
+import type { AnimatorApi } from './animation';
 import type { SayOptions } from './ai/speech';
 import type { Character } from './character';
 import type { Input } from './input';
+import type { BodyApi, PhysicsApi } from './physics';
 
 // Base class of user scripts. Scripts are plain classes:
 //
@@ -16,7 +18,8 @@ import type { Input } from './input';
 //
 // Lifecycle methods (all optional): awake, start, update(dt), lateUpdate(dt),
 // onDestroy, onKeyDown(key), onKeyUp(key), onPointerDown(e), onPointerUp(e),
-// onClick(e), onTaskAbort(task). `dt` is in seconds. Everything the runtime provides lives on
+// onClick(e), onTaskAbort(task), onCollisionEnter(other), onCollisionExit(other),
+// onTriggerEnter(other), onTriggerExit(other). `dt` is in seconds. Everything the runtime provides lives on
 // the prototype or behind a symbol, so the enumerable own properties of an
 // instance are exactly the user's fields.
 
@@ -31,6 +34,8 @@ export interface SpawnOptions {
     /** Parent object; the scene root by default. */
     parent?: Object3D;
     name?: string;
+    /** A physics body: true for a dynamic one, or its settings ({ type, mass, bounce, ... }). */
+    body?: boolean | Partial<BodyDoc>;
 }
 
 export interface PointerEventInfo {
@@ -90,6 +95,9 @@ export interface PlayApi {
     blackboard(target: Object3D | string): BlackboardApi | null;
     setPlayer(obj: Object3D | null): void;
     character(target: Object3D | string | null): Character | null;
+    body(target: Object3D | string): BodyApi | null;
+    physics(): PhysicsApi | null;
+    animator(target: Object3D | string): AnimatorApi | null;
     remember(text: string, tags: string[]): string | null;
     memory(id: string): { id: string; text: string; tags: string[] } | null;
     saveMemories(): SavedMemory[];
@@ -302,6 +310,45 @@ export class Script {
         return this.api.character(target);
     }
 
+    /**
+     * The skeletal animation of this object's model, or of the first model
+     * under it (null without clips): clips, clip (playing now), speed, and
+     * play(clip, fade?) blending over `fade` seconds. A character's model
+     * changes clip with the character's mode by itself.
+     */
+    get animator(): AnimatorApi | null {
+        return this.api.animator(this.object3D);
+    }
+
+    /** Another object's animation (by object or name). */
+    getAnimator(target: Object3D | string): AnimatorApi | null {
+        return this.api.animator(target);
+    }
+
+    /**
+     * This object's physics body (null without one): velocity and
+     * angularVelocity (degrees per second) to read or set,
+     * applyImpulse([x, y, z]), applyTorqueImpulse([x, y, z]),
+     * teleport(position, rotation?), type, mass, sleeping and wakeUp().
+     */
+    get body(): BodyApi | null {
+        return this.api.body(this.object3D);
+    }
+
+    /** Another object's body (by object or name). */
+    getBody(target: Object3D | string): BodyApi | null {
+        return this.api.body(target);
+    }
+
+    /**
+     * The physics world (null when the scene has none): gravity [x, y, z]
+     * and raycast(origin, direction, maxDistance?, ignoreObject?), which
+     * returns { object, point, normal, distance } or null.
+     */
+    get physics(): PhysicsApi | null {
+        return this.api.physics();
+    }
+
     /** Agents near this object (the player) get their questions answered first. The camera counts until a script sets one. */
     setPlayer(obj: Object3D | null = this.object3D) {
         this.api.setPlayer(obj);
@@ -341,4 +388,5 @@ export class Script {
 /** Lifecycle method names a script class may implement. */
 export const LIFECYCLE = [
     'awake', 'start', 'update', 'lateUpdate', 'onDestroy', 'onKeyDown', 'onKeyUp', 'onPointerDown', 'onPointerUp', 'onClick', 'onTaskAbort',
+    'onCollisionEnter', 'onCollisionExit', 'onTriggerEnter', 'onTriggerExit',
 ] as const;

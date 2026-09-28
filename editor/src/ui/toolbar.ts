@@ -1,3 +1,4 @@
+import type { Commands } from '../commands';
 import type { Editor } from '../editor';
 import type { Tool } from '../core/store';
 import { h } from './dom';
@@ -16,9 +17,8 @@ function toolButton(iconName: string, title: string, onClick: (e: MouseEvent) =>
 }
 
 /** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls. */
-export function toolbar(editor: Editor, createMenu: () => MenuItem[], showAI: () => void): HTMLElement {
+export function toolbar(editor: Editor, cmds: Commands, createMenu: () => MenuItem[], showAI: () => void): HTMLElement {
     const store = editor.store;
-    const cmds = editor.commands;
     /** A button for a command: its tooltip names the key. */
     const command = (id: string, iconName: string, title = cmds.get(id).label) => toolButton(iconName, title + cmds.hint(id), () => cmds.get(id).run());
     const toolButtons = TOOLS.map((t) => {
@@ -31,7 +31,7 @@ export function toolbar(editor: Editor, createMenu: () => MenuItem[], showAI: ()
     const grid = command('view.grid', 'grid');
     const frame = command('view.frame', 'focus');
     const walk = command('view.walk', 'walk', 'Walk at eye height: WASD and mouse, Esc to stop');
-    editor.on('walk', (on) => walk.classList.toggle('active', on));
+    editor.on('view', () => walk.classList.toggle('active', editor.view === 'walk'));
     const undo = command('edit.undo', 'undo');
     const redo = command('edit.redo', 'redo');
     const add = h('button', { class: 'tool-btn wide accent', attrs: { type: 'button' } }, icon('plus', 16), h('span', { text: 'Add' }));

@@ -1,90 +1,33 @@
 import { defaultMemory } from './behavior/format';
 import { defaultDesign } from './design';
+import { Camera, Environment, Geometry, GI, Light, Material } from './model';
+import { defaults } from './schema';
 import {
     SCENE_VERSION, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
-    type LightDoc, type LightType, type MaterialDoc, type NodeDoc, type RenderGraphDoc, type SceneDoc, type Vec3,
+    type LightDoc, type LightType, type MaterialDoc, type MeshDoc, type NodeDoc, type NodeWith, type RenderGraphDoc, type SceneDoc,
+    type Vec3,
 } from './types';
 
 export { uid } from './ids';
 import { uid } from './ids';
 
-export function defaultGeometry(type: GeometryType): GeometryDoc {
-    switch (type) {
-        case 'box': return { type, width: 1, height: 1, depth: 1 };
-        case 'sphere': return { type, radius: 0.5, segments: 32 };
-        case 'plane': return { type, width: 10, height: 10 };
-        case 'cylinder': return { type, radiusTop: 0.5, radiusBottom: 0.5, height: 1, segments: 32 };
-        case 'cone': return { type, radius: 0.5, height: 1, segments: 32 };
-        case 'torus': return { type, radius: 0.5, tube: 0.18, segments: 32 };
-        case 'ramp': return { type, width: 2, height: 1, depth: 3 };
-        case 'stairs': return { type, width: 1.5, height: 1.5, depth: 3, steps: 8 };
-        case 'capsule': return { type, radius: 0.35, height: 1.8, segments: 24 };
-    }
-}
+export const defaultGeometry = <T extends GeometryType>(type: T) => Geometry.parse({ type }) as Extract<GeometryDoc, { type: T }>;
 
-export function defaultMaterial(color = '#c8c8c8'): MaterialDoc {
-    return {
-        type: 'lit',
-        color,
-        opacity: 1,
-        metallic: 0,
-        roughness: 0.6,
-        emissive: '#000000',
-        emissiveIntensity: 1,
-        doubleSide: false,
-        map: null,
-    };
-}
+export const defaultMaterial = (color = '#c8c8c8'): MaterialDoc => Material.parse({ color });
 
-export function defaultLight(type: LightType): LightDoc {
-    return {
-        type,
-        color: '#ffffff',
-        intensity: type === 'directional' ? 3 : type === 'point' ? 4 : 6,
-        castShadow: type === 'directional',
-        range: 10,
-        radius: 0.1,
-        innerAngle: 60,
-        outerAngle: 60,
-    };
-}
+export const defaultLight = (type: LightType): LightDoc =>
+    Light.parse({ type, intensity: type === 'directional' ? 3 : type === 'point' ? 4 : 6, castShadow: type === 'directional' });
 
-export function defaultEnvironment(): EnvironmentDoc {
-    return {
-        sky: 'atmospheric',
-        skyColor: '#3a4250',
-        sunX: 0.71,
-        sunY: 0.6,
-        skyExposure: 1,
-        exposure: 1,
-        bloom: { enable: false, intensity: 0.6, threshold: 1 },
-        ao: { enable: false, strength: 1, distance: 1 },
-        fxaa: true,
-        fog: { enable: false, color: '#aab4be', near: 5, far: 80, intensity: 1 },
-        gi: defaultGI(),
-    };
-}
+export const defaultEnvironment = (): EnvironmentDoc => defaults(Environment);
 
 /** 8 x 3 x 8 probes, 2 units apart: covers the default 20 x 20 ground. */
-export function defaultGI(): GIDoc {
-    return {
-        enable: false,
-        center: [0, 2, 0],
-        counts: [8, 3, 8],
-        spacing: 2,
-        intensity: 1,
-        bounce: 0.5,
-        realtime: false,
-    };
-}
+export const defaultGI = (): GIDoc => defaults(GI);
 
 export function defaultRenderGraph(): RenderGraphDoc {
     return { disabled: [], posts: [] };
 }
 
-export function defaultCameraDoc(): CameraDoc {
-    return { fov: 60, near: 0.1, far: 1000, main: true };
-}
+export const defaultCameraDoc = (): CameraDoc => defaults(Camera);
 
 export function defaultCamera(): CameraState {
     return { target: [0, 0.5, 0], yaw: 35, pitch: 24, distance: 9, fov: 50 };
@@ -133,16 +76,9 @@ export function geometryHeight(g: GeometryDoc): number {
     }
 }
 
-export function makeMeshNode(type: GeometryType, parent: string | null = null): NodeDoc {
-    const node = makeNode(GEOMETRY_NAMES[type], parent);
-    node.mesh = {
-        geometry: defaultGeometry(type),
-        material: defaultMaterial(),
-        castShadow: true,
-        receiveShadow: true,
-    };
-    node.position = [0, geometryHeight(node.mesh.geometry) / 2, 0];
-    return node;
+export function makeMeshNode(type: GeometryType, parent: string | null = null): NodeWith<'mesh'> {
+    const mesh: MeshDoc = { geometry: defaultGeometry(type), material: defaultMaterial(), castShadow: true, receiveShadow: true };
+    return { ...makeNode(GEOMETRY_NAMES[type], parent, [0, geometryHeight(mesh.geometry) / 2, 0]), mesh };
 }
 
 const LIGHT_NAMES: Record<LightType, string> = {
@@ -151,9 +87,8 @@ const LIGHT_NAMES: Record<LightType, string> = {
     spot: 'Spot Light',
 };
 
-export function makeLightNode(type: LightType, parent: string | null = null): NodeDoc {
-    const node = makeNode(LIGHT_NAMES[type], parent);
-    node.light = defaultLight(type);
+export function makeLightNode(type: LightType, parent: string | null = null): NodeWith<'light'> {
+    const node = { ...makeNode(LIGHT_NAMES[type], parent), light: defaultLight(type) };
     if (type === 'directional') {
         node.position = [0, 6, 0];
         node.rotation = [50, 30, 0];
@@ -166,13 +101,9 @@ export function makeLightNode(type: LightType, parent: string | null = null): No
     return node;
 }
 
-export function makeCameraNode(parent: string | null = null): NodeDoc {
-    const node = makeNode('Camera', parent);
-    node.camera = defaultCameraDoc();
+export function makeCameraNode(parent: string | null = null): NodeWith<'camera'> {
     // Cameras look down their local +Z axis: this one faces the origin.
-    node.position = [0, 2, 8];
-    node.rotation = [14, 180, 0];
-    return node;
+    return { ...makeNode('Camera', parent, [0, 2, 8]), rotation: [14, 180, 0], camera: defaultCameraDoc() };
 }
 
 export function newScene(): SceneDoc {

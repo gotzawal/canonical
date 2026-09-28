@@ -4,104 +4,253 @@
 
 import { makeMeshNode, makeNode } from '../core/defaults';
 import { invert, mat4, transformPoint } from '../core/math';
-import { makeCharacterNode } from '../core/character';
+import { defaultPlayer, makeCharacterNode } from '../core/character';
+import { Character, Player } from '../core/model';
+import { patch, toolFields } from '../core/schema';
 import type { NodeDoc, Vec3 } from '../core/types';
 import { runLevelCheck, summarize } from '../design/levelCheck';
 import { assignSlot, upsertSlot } from '../design/materialSlots';
 import { planBuilding, SIDES, snapRooms, type OpeningSpec, type RoomSpec, type Side } from '../design/rooms';
-import type { ToolDef } from './openrouter';
 import { resolvePlace } from './greyboxTools';
-import type { ToolEnv, ToolResult } from './tools';
-import { def, node, num, optStr, r3, rv, str, ToolError, type Json } from './toolUtil';
+import { node, num, optStr, r3, rv, str, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
 const xz = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 };
 const side = { type: 'string', enum: SIDES, description: 'x_min / x_max: the wall at the room\'s lowest / highest x; z_min / z_max likewise.' };
 const place = { type: ['array', 'string'], description: '[x, y, z], or the name / id of a route point, area or object.' };
 
-export function levelToolDefs(): ToolDef[] {
-    return [
-        def(
-            'build_rooms',
-            'Build rooms or a whole building from its floor plan, closed by construction: each room is a rectangle of wall centerlines (min and max [x, z]); rooms that share an edge share one wall, corners and junctions close without gaps or overlaps, doors and windows are cut into the walls, floors and ceilings close the rooms. Room edges less than 0.3 m apart are snapped together. Everything goes into one group. Use it for every building and interior instead of placing wall boxes one by one, then run check_level. Coordinates are in the parent\'s space (world space without a parent). For a floor above, give its rooms floor_y = lower floor_y + height + slab; the ceilings under them are left out, and a hole makes a stairwell.',
-            {
-                name: { type: 'string', description: 'Name of the group, e.g. "House".' },
-                parent: { type: 'string', description: 'Object id or name to build under (the area group).' },
-                floor_y: { type: 'number', description: 'Top of the floors (default 0.1: a little over a ground at 0, so the two do not flicker).' },
-                height: { type: 'number', description: 'Clear height from floor to ceiling (default 3).' },
-                wall_thickness: { type: 'number', description: 'Default 0.2.' },
-                slab: { type: 'number', description: 'Thickness of floors and ceilings (default 0.2).' },
-                rooms: {
-                    type: 'array',
-                    items: {
-                        type: 'object',
-                        properties: {
-                            name: { type: 'string' },
-                            min: { ...xz, description: '[x, z] of the corner with the lowest x and z (wall centerlines).' },
-                            max: { ...xz, description: '[x, z] of the opposite corner.' },
-                            floor_y: { type: 'number' },
-                            height: { type: 'number' },
-                            floor: { type: 'boolean', description: 'Default true.' },
-                            ceiling: { type: 'boolean', description: 'Default true; false for courtyards and roofless ruins.' },
-                            open: { type: 'array', items: side, description: 'Sides without a wall: to join the next room without a wall, or open to the outside.' },
-                            doors: {
-                                type: 'array',
-                                items: {
-                                    type: 'object',
-                                    properties: {
-                                        side,
-                                        at: { type: 'number', description: 'Middle of the door along its wall as a coordinate (x on z_min / z_max walls, z on x_min / x_max walls); default the middle of the side.' },
-                                        width: { type: 'number', description: 'Default the brief\'s door width.' },
-                                        height: { type: 'number', description: 'Default the brief\'s door height.' },
-                                    },
-                                    required: ['side'],
-                                },
-                                description: 'A door between two rooms needs to be given once, by either room.',
-                            },
-                            windows: {
-                                type: 'array',
-                                items: {
-                                    type: 'object',
-                                    properties: { side, at: { type: 'number' }, width: { type: 'number', description: 'Default 1.2.' }, height: { type: 'number', description: 'Default 1.2.' }, sill: { type: 'number', description: 'Bottom above the floor, default 0.9.' } },
-                                    required: ['side'],
-                                },
-                            },
-                            holes: { type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 }, description: 'Holes in the floor, [min x, min z, max x, max z] (stairwells).' },
-                        },
-                        required: ['name', 'min', 'max'],
-                    },
-                },
-                slots: {
+export const levelTools = tools({
+    build_rooms: {
+        groups: ['objects'],
+        description: 'Build rooms or a whole building from its floor plan, closed by construction: each room is a rectangle of wall centerlines (min and max [x, z]); rooms that share an edge share one wall, corners and junctions close without gaps or overlaps, doors and windows are cut into the walls, floors and ceilings close the rooms. Room edges less than 0.3 m apart are snapped together. Everything goes into one group. Use it for every building and interior instead of placing wall boxes one by one, then run check_level. Coordinates are in the parent\'s space (world space without a parent). For a floor above, give its rooms floor_y = lower floor_y + height + slab; the ceilings under them are left out, and a hole makes a stairwell.',
+        params: {
+            name: { type: 'string', description: 'Name of the group, e.g. "House".' },
+            parent: { type: 'string', description: 'Object id or name to build under (the area group).' },
+            floor_y: { type: 'number', description: 'Top of the floors (default 0.1: a little over a ground at 0, so the two do not flicker).' },
+            height: { type: 'number', description: 'Clear height from floor to ceiling (default 3).' },
+            wall_thickness: { type: 'number', description: 'Default 0.2.' },
+            slab: { type: 'number', description: 'Thickness of floors and ceilings (default 0.2).' },
+            rooms: {
+                type: 'array',
+                items: {
                     type: 'object',
-                    description: 'Material slots to link the pieces to (id or name; a new name adds the slot).',
-                    properties: { walls: { type: 'string' }, floors: { type: 'string' }, ceilings: { type: 'string' } },
+                    properties: {
+                        name: { type: 'string' },
+                        min: { ...xz, description: '[x, z] of the corner with the lowest x and z (wall centerlines).' },
+                        max: { ...xz, description: '[x, z] of the opposite corner.' },
+                        floor_y: { type: 'number' },
+                        height: { type: 'number' },
+                        floor: { type: 'boolean', description: 'Default true.' },
+                        ceiling: { type: 'boolean', description: 'Default true; false for courtyards and roofless ruins.' },
+                        open: { type: 'array', items: side, description: 'Sides without a wall: to join the next room without a wall, or open to the outside.' },
+                        doors: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: {
+                                    side,
+                                    at: { type: 'number', description: 'Middle of the door along its wall as a coordinate (x on z_min / z_max walls, z on x_min / x_max walls); default the middle of the side.' },
+                                    width: { type: 'number', description: 'Default the brief\'s door width.' },
+                                    height: { type: 'number', description: 'Default the brief\'s door height.' },
+                                },
+                                required: ['side'],
+                            },
+                            description: 'A door between two rooms needs to be given once, by either room.',
+                        },
+                        windows: {
+                            type: 'array',
+                            items: {
+                                type: 'object',
+                                properties: { side, at: { type: 'number' }, width: { type: 'number', description: 'Default 1.2.' }, height: { type: 'number', description: 'Default 1.2.' }, sill: { type: 'number', description: 'Bottom above the floor, default 0.9.' } },
+                                required: ['side'],
+                            },
+                        },
+                        holes: { type: 'array', items: { type: 'array', items: { type: 'number' }, minItems: 4, maxItems: 4 }, description: 'Holes in the floor, [min x, min z, max x, max z] (stairwells).' },
+                    },
+                    required: ['name', 'min', 'max'],
                 },
             },
-            ['name', 'rooms'],
-        ),
-        def(
-            'check_level',
-            'Check the level the way the player will meet it, with the player\'s body: seams between walls, floors and ceilings, gaps in walls, holes in roofs and floors, floating objects, route points out of reach (doors too narrow or low, steps too high, walls in the way), roofed rooms nobody can get into, and large empty spaces (compactness). Returns the findings with positions and a plan view image. A check of the whole level ticks the Level checklist item when it passes. Run it after building and fix what it finds; passages (doors) and windows it lists are fine.',
-            {
-                area: { type: 'string', description: 'Check only this area of the plan (id or name; its bounds).' },
-                object: { type: 'string', description: 'Check only this object and what is under it (a building).' },
-                step: { type: 'number', description: 'Grid spacing in meters (default 0.5; smaller finds narrower gaps and takes longer).' },
+            slots: {
+                type: 'object',
+                description: 'Material slots to link the pieces to (id or name; a new name adds the slot).',
+                properties: { walls: { type: 'string' }, floors: { type: 'string' }, ceilings: { type: 'string' } },
             },
-        ),
-        def(
-            'place_player',
-            'Place the player: a character (the brief\'s body size) that the built-in Player Controller moves. In Play it walks with WASD or the arrow keys (an on-screen joystick on touch screens), runs with Shift, jumps with Space, and a drag turns the camera (the wheel or a pinch zooms). It stands on the ground at `at`; a scene has one player, so an existing one moves there. Never write movement or camera scripts for the player; change its options here or with update_objects (the character and player fields).',
-            {
-                at: place,
-                facing: { type: ['number', 'array', 'string'], description: 'Degrees around +Y (0 faces +z), or a point / name to face.' },
-                view: { type: 'string', enum: ['third', 'first', 'scene'], description: 'third: a camera follows behind; first: from the eyes; scene: keep the scene\'s camera node.' },
-                speed: { type: 'number', description: 'Walking speed m/s (default 3).' },
-                run_speed: { type: 'number' },
-                jump: { type: 'number', description: 'Take-off speed m/s; 0 turns jumping off.' },
-            },
-            ['at'],
-        ),
-    ];
-}
+        },
+        required: ['name', 'rooms'],
+        run({ env, args, ed, store }) {
+            if (ed.pipeline.placementLocked) throw new ToolError('Placement is locked in this stage: new objects would change the level. It can be unlocked in the pipeline bar.');
+            const rooms = roomsFrom(env, args);
+            const wall = args.wall_thickness !== undefined ? Math.min(2, Math.max(0.05, num(args.wall_thickness, 'wall_thickness'))) : 0.2;
+            const slab = args.slab !== undefined ? Math.min(2, Math.max(0.05, num(args.slab, 'slab'))) : 0.2;
+            const snapped = snapRooms(rooms, Math.max(0.3, wall * 1.5));
+            checkOverlaps(rooms);
+            const plan = planBuilding(rooms, { wall, slab });
+            const parent = args.parent !== undefined && args.parent !== null && args.parent !== '' ? node(store.doc, args.parent) : null;
+            if (parent?.prefab || parent?.prefabChild) throw new ToolError('A building cannot go into a prefab instance.');
+            // The group sits at the middle of the plan, on its lowest floor.
+            const x0 = Math.min(...rooms.map((r) => r.min[0])), x1 = Math.max(...rooms.map((r) => r.max[0]));
+            const z0 = Math.min(...rooms.map((r) => r.min[1])), z1 = Math.max(...rooms.map((r) => r.max[1]));
+            const origin: Vec3 = [round((x0 + x1) / 2), Math.min(...rooms.map((r) => r.floorY)), round((z0 + z1) / 2)];
+            const groupName = str(args.name, 'name', 200).trim() || 'Building';
+            const group = makeNode(ed.uniqueName(groupName, parent?.id ?? null), parent?.id ?? null, origin);
+            const counts = new Map<string, number>();
+            const ids = { walls: [] as string[], floors: [] as string[], ceilings: [] as string[] };
+            const nodes: NodeDoc[] = [group];
+            for (const p of plan.pieces) {
+                const n = makeMeshNode('box', group.id);
+                const k = counts.get(p.name) ?? 0;
+                counts.set(p.name, k + 1);
+                n.name = k ? `${p.name} (${k})` : p.name;
+                n.mesh!.geometry = { type: 'box', width: p.size[0], height: p.size[1], depth: p.size[2] };
+                n.position = [round(p.center[0] - origin[0]), round(p.center[1] - origin[1]), round(p.center[2] - origin[2])];
+                nodes.push(n);
+                ids[p.kind === 'wall' ? 'walls' : p.kind === 'floor' ? 'floors' : 'ceilings'].push(n.id);
+            }
+            // Floors lying on another surface at the same height flicker.
+            const warnings = [...snapped, ...plan.warnings];
+            const toWorld = parent ? (p: Vec3) => transformPoint(ed.picker.worldMatrix(parent.id) ?? mat4(), p) : (p: Vec3) => p;
+            ed.picker.update();
+            for (const r of rooms) {
+                if (!r.floor) continue;
+                const top = toWorld([(r.min[0] + r.max[0]) / 2, r.floorY, (r.min[1] + r.max[1]) / 2]);
+                const hit = ed.picker.raycast([top[0], top[1] + 0.3, top[2]], [0, -1, 0], 0.4);
+                if (hit && Math.abs(hit.point[1] - top[1]) < 0.02) {
+                    warnings.push(`${r.name}: its floor lies on ${store.node(hit.id)?.name ?? 'another surface'} at the same height and will flicker; raise floor_y by a few centimeters (0.1 over a ground at 0).`);
+                    break;
+                }
+            }
+            store.commit('AI: Build Rooms', (d) => {
+                d.nodes.push(...nodes);
+            });
+            const slots = (args.slots ?? {}) as Json;
+            for (const [key, list] of [['walls', ids.walls], ['floors', ids.floors], ['ceilings', ids.ceilings]] as const) {
+                const slot = slotRef(env, slots[key]);
+                if (slot && list.length) assignSlot(ed.store, slot, list);
+            }
+            store.select([group.id]);
+            return {
+                data: {
+                    group: { id: group.id, name: group.name },
+                    rooms: rooms.map((r) => ({
+                        name: r.name,
+                        // The clear space inside the walls.
+                        inside_min: rv([r.min[0] + wall / 2, r.min[1] + wall / 2]),
+                        inside_max: rv([r.max[0] - wall / 2, r.max[1] - wall / 2]),
+                        floor_y: r3(r.floorY),
+                        height: r3(r.height),
+                    })),
+                    openings: plan.openings,
+                    pieces: { walls: ids.walls.length, floors: ids.floors.length, ceilings: ids.ceilings.length },
+                    ...(warnings.length ? { warnings } : {}),
+                    note: 'The pieces are named Wall, <Room> Floor and <Room> Ceiling under the group. Check the result with check_level.',
+                },
+                summary: `${groupName}: ${rooms.length} room${rooms.length === 1 ? '' : 's'}, ${plan.pieces.length} pieces`,
+            };
+        },
+    },
+    check_level: {
+        groups: ['read'],
+        description: 'Check the level the way the player will meet it, with the player\'s body: seams between walls, floors and ceilings, gaps in walls, holes in roofs and floors, floating objects, route points out of reach (doors too narrow or low, steps too high, walls in the way), roofed rooms nobody can get into, and large empty spaces (compactness). Returns the findings with positions and a plan view image. A check of the whole level ticks the Level checklist item when it passes. Run it after building and fix what it finds; passages (doors) and windows it lists are fine.',
+        params: {
+            area: { type: 'string', description: 'Check only this area of the plan (id or name; its bounds).' },
+            object: { type: 'string', description: 'Check only this object and what is under it (a building).' },
+            step: { type: 'number', description: 'Grid spacing in meters (default 0.5; smaller finds narrower gaps and takes longer).' },
+        },
+        async run({ env, args, ed, store }) {
+            if (ed.player.state !== 'stopped') throw new ToolError('Stop Play first: the check looks at the level as it is built.');
+            if (ed.isolated) throw new ToolError('A prefab is being edited on its own: finish that first (Apply or Discard).');
+            const d = store.doc.design;
+            const areaRef = optStr(args.area, 'area', 200);
+            const area = areaRef ? d.areas.find((a) => a.id === areaRef) ?? d.areas.find((a) => a.name.toLowerCase() === areaRef.toLowerCase()) : null;
+            if (areaRef && !area) throw new ToolError(`No area "${areaRef}". Areas: ${d.areas.map((a) => a.name).join(', ') || 'none'}.`);
+            const object = args.object !== undefined ? node(store.doc, args.object).id : null;
+            const step = args.step !== undefined ? Math.min(2, Math.max(0.25, num(args.step, 'step'))) : undefined;
+            let result;
+            try {
+                result = await runLevelCheck(ed, { area, object, step });
+            } catch (e: any) {
+                throw new ToolError(e?.message || String(e));
+            }
+            const r = result.report;
+            const fixes: string[] = [];
+            if (r.seams.length) fixes.push('Seams: move or resize the pieces so they touch or overlap a little (walls of build_rooms always meet).');
+            if (r.openings.some((o) => o.kind.startsWith('gap'))) fixes.push('Gaps: a wall does not reach the floor or the ceiling there, or a piece is missing.');
+            if (r.roofHoles.length || r.floorHoles.length) fixes.push('Holes: close them with a slab, unless the plan wants them (a courtyard, a stairwell).');
+            if (r.unreachable.length || r.sealed.length) fixes.push('Out of reach: add or widen a door (at least the body width plus a margin, as high as the door height), lower a step, or add stairs or a ramp.');
+            if (r.floating.length) fixes.push('Floating: rest it on what is below (or delete it).');
+            if (r.empty.length) fixes.push('Empty spaces: make the rooms smaller or fill them as the plan says, so the space stays compact.');
+            return {
+                data: {
+                    scope: result.scope,
+                    summary: summarize(r),
+                    ...r,
+                    ...(fixes.length ? { how_to_fix: fixes } : {}),
+                    ...(env.screenshots() ? { image: 'A plan view of the check is attached in the next message.' } : {}),
+                },
+                image: env.screenshots() ? result.map : undefined,
+                summary: summarize(r),
+            };
+        },
+    },
+    place_player: {
+        groups: ['objects', 'play', 'code'],
+        description: 'Place the player: a character (the brief\'s body size) that the built-in Player Controller moves. In Play it walks with WASD or the arrow keys (an on-screen joystick on touch screens), runs with Shift, jumps with Space, and a drag turns the camera (the wheel or a pinch zooms). It stands on the ground at `at`; a scene has one player, so an existing one moves there. Never write movement or camera scripts for the player; change its options here or with update_objects (the character and player fields).',
+        params: {
+            at: place,
+            facing: { type: ['number', 'array', 'string'], description: 'Degrees around +Y (0 faces +z), or a point / name to face.' },
+            ...toolFields(Player, ['view']),
+            ...toolFields(Character, ['speed', 'runSpeed', 'jump']),
+        },
+        required: ['at'],
+        run({ env, args, ed, store }) {
+            const where = resolvePlace(env, args.at, 'at');
+            const existing = store.doc.nodes.find((n) => n.player);
+            const own = new Set(existing ? [existing.id, ...store.descendants(existing.id).map((n) => n.id)] : []);
+            ed.picker.update();
+            const p = where.point;
+            // Down from a little above the point (an object's middle, not over its roof) to what is under it.
+            const hit = ed.picker.raycast([p[0], p[1] + 0.6, p[2]], [0, -1, 0], 60, (id) => own.has(id));
+            const feet: Vec3 = [p[0], hit ? hit.point[1] : p[1], p[2]];
+            let facing: number | undefined;
+            if (args.facing !== undefined) {
+                if (typeof args.facing === 'number') facing = args.facing;
+                else {
+                    const to = resolvePlace(env, args.facing, 'facing').point;
+                    facing = (Math.atan2(to[0] - feet[0], to[2] - feet[2]) * 180) / Math.PI;
+                }
+            }
+            const options = (n: NodeDoc) => {
+                n.player = patch(Player, n.player ?? defaultPlayer(), { view: args.view }, '');
+                n.character = patch(Character, n.character!, { speed: args.speed, run_speed: args.run_speed, jump: args.jump }, '');
+            };
+            if (existing) {
+                // Its origin keeps its height over its feet.
+                const b = ed.picker.bounds(existing.id);
+                const m = ed.picker.worldMatrix(existing.id);
+                const lift = b && m ? m[13] - b.min[1] : (existing.character?.height ?? 1.8) / 2;
+                const world: Vec3 = [feet[0], feet[1] + lift, feet[2]];
+                const parentWorld = existing.parent ? ed.picker.worldMatrix(existing.parent) : null;
+                const local = parentWorld ? transformPoint(invert(parentWorld) ?? mat4(), world) : world;
+                store.commit('AI: Place Player', (d) => {
+                    const n = d.nodes.find((x) => x.id === existing.id)!;
+                    n.position = [round(local[0]), round(local[1]), round(local[2])];
+                    if (facing !== undefined) n.rotation = [n.rotation[0], round(facing), n.rotation[2]];
+                    n.character ??= makeCharacterNode(d.design.specs).character;
+                    options(n);
+                }, { nodes: [existing.id] });
+                return { data: { id: existing.id, name: existing.name, moved: true, feet: rv(feet), ...(hit ? {} : { note: 'No ground under that point: the player will fall. Place it over a floor.' }) }, summary: existing.name };
+            }
+            const n = makeCharacterNode(store.doc.design.specs, true);
+            n.name = ed.uniqueName('Player', null);
+            n.position = [round(feet[0]), round(feet[1] + n.character!.height / 2), round(feet[2])];
+            if (facing !== undefined) n.rotation = [0, round(facing), 0];
+            options(n);
+            store.commit('AI: Place Player', (d) => {
+                d.nodes.push(n);
+            });
+            return { data: { id: n.id, name: n.name, created: true, feet: rv(feet), ...(hit ? {} : { note: 'No ground under that point: the player will fall. Place it over a floor.' }) }, summary: n.name };
+        },
+    },
+});
 
 const sideOf = (v: unknown, what: string): Side => {
     if (!SIDES.includes(v as Side)) throw new ToolError(`${what} must be one of ${SIDES.join(', ')}.`);
@@ -178,174 +327,7 @@ function slotRef(env: ToolEnv, ref: unknown): string | null {
     const name = str(ref, 'slot', 200).trim();
     const slots = env.editor.store.doc.design.materials;
     const found = slots.find((s) => s.id === name) ?? slots.find((s) => s.name.toLowerCase() === name.toLowerCase());
-    return (found ?? upsertSlot(env.editor, { name }, 'AI: Add Material Slot')).id;
-}
-
-export async function runLevelTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult | null> {
-    const ed = env.editor;
-    const store = ed.store;
-    switch (name) {
-        case 'build_rooms': {
-            if (ed.pipeline.placementLocked) throw new ToolError('Placement is locked in this stage: new objects would change the level. It can be unlocked in the pipeline bar.');
-            const rooms = roomsFrom(env, args);
-            const wall = args.wall_thickness !== undefined ? Math.min(2, Math.max(0.05, num(args.wall_thickness, 'wall_thickness'))) : 0.2;
-            const slab = args.slab !== undefined ? Math.min(2, Math.max(0.05, num(args.slab, 'slab'))) : 0.2;
-            const snapped = snapRooms(rooms, Math.max(0.3, wall * 1.5));
-            checkOverlaps(rooms);
-            const plan = planBuilding(rooms, { wall, slab });
-            const parent = args.parent !== undefined && args.parent !== null && args.parent !== '' ? node(store.doc, args.parent) : null;
-            if (parent?.prefab || parent?.prefabChild) throw new ToolError('A building cannot go into a prefab instance.');
-            // The group sits at the middle of the plan, on its lowest floor.
-            const x0 = Math.min(...rooms.map((r) => r.min[0])), x1 = Math.max(...rooms.map((r) => r.max[0]));
-            const z0 = Math.min(...rooms.map((r) => r.min[1])), z1 = Math.max(...rooms.map((r) => r.max[1]));
-            const origin: Vec3 = [round((x0 + x1) / 2), Math.min(...rooms.map((r) => r.floorY)), round((z0 + z1) / 2)];
-            const groupName = str(args.name, 'name', 200).trim() || 'Building';
-            const group = makeNode(ed.uniqueName(groupName, parent?.id ?? null), parent?.id ?? null, origin);
-            const counts = new Map<string, number>();
-            const ids = { walls: [] as string[], floors: [] as string[], ceilings: [] as string[] };
-            const nodes: NodeDoc[] = [group];
-            for (const p of plan.pieces) {
-                const n = makeMeshNode('box', group.id);
-                const k = counts.get(p.name) ?? 0;
-                counts.set(p.name, k + 1);
-                n.name = k ? `${p.name} (${k})` : p.name;
-                n.mesh!.geometry = { type: 'box', width: p.size[0], height: p.size[1], depth: p.size[2] };
-                n.position = [round(p.center[0] - origin[0]), round(p.center[1] - origin[1]), round(p.center[2] - origin[2])];
-                nodes.push(n);
-                ids[p.kind === 'wall' ? 'walls' : p.kind === 'floor' ? 'floors' : 'ceilings'].push(n.id);
-            }
-            // Floors lying on another surface at the same height flicker.
-            const warnings = [...snapped, ...plan.warnings];
-            const toWorld = parent ? (p: Vec3) => transformPoint(ed.picker.worldMatrix(parent.id) ?? mat4(), p) : (p: Vec3) => p;
-            ed.picker.update();
-            for (const r of rooms) {
-                if (!r.floor) continue;
-                const top = toWorld([(r.min[0] + r.max[0]) / 2, r.floorY, (r.min[1] + r.max[1]) / 2]);
-                const hit = ed.picker.raycast([top[0], top[1] + 0.3, top[2]], [0, -1, 0], 0.4);
-                if (hit && Math.abs(hit.point[1] - top[1]) < 0.02) {
-                    warnings.push(`${r.name}: its floor lies on ${store.node(hit.id)?.name ?? 'another surface'} at the same height and will flicker; raise floor_y by a few centimeters (0.1 over a ground at 0).`);
-                    break;
-                }
-            }
-            store.commit('AI: Build Rooms', (d) => {
-                d.nodes.push(...nodes);
-            });
-            const slots = (args.slots ?? {}) as Json;
-            for (const [key, list] of [['walls', ids.walls], ['floors', ids.floors], ['ceilings', ids.ceilings]] as const) {
-                const slot = slotRef(env, slots[key]);
-                if (slot && list.length) assignSlot(ed, slot, list);
-            }
-            store.select([group.id]);
-            return {
-                data: {
-                    group: { id: group.id, name: group.name },
-                    rooms: rooms.map((r) => ({
-                        name: r.name,
-                        // The clear space inside the walls.
-                        inside_min: rv([r.min[0] + wall / 2, r.min[1] + wall / 2]),
-                        inside_max: rv([r.max[0] - wall / 2, r.max[1] - wall / 2]),
-                        floor_y: r3(r.floorY),
-                        height: r3(r.height),
-                    })),
-                    openings: plan.openings,
-                    pieces: { walls: ids.walls.length, floors: ids.floors.length, ceilings: ids.ceilings.length },
-                    ...(warnings.length ? { warnings } : {}),
-                    note: 'The pieces are named Wall, <Room> Floor and <Room> Ceiling under the group. Check the result with check_level.',
-                },
-                summary: `${groupName}: ${rooms.length} room${rooms.length === 1 ? '' : 's'}, ${plan.pieces.length} pieces`,
-            };
-        }
-        case 'check_level': {
-            if (ed.player.state !== 'stopped') throw new ToolError('Stop Play first: the check looks at the level as it is built.');
-            if (ed.isolated) throw new ToolError('A prefab is being edited on its own: finish that first (Apply or Discard).');
-            const d = store.doc.design;
-            const areaRef = optStr(args.area, 'area', 200);
-            const area = areaRef ? d.areas.find((a) => a.id === areaRef) ?? d.areas.find((a) => a.name.toLowerCase() === areaRef.toLowerCase()) : null;
-            if (areaRef && !area) throw new ToolError(`No area "${areaRef}". Areas: ${d.areas.map((a) => a.name).join(', ') || 'none'}.`);
-            const object = args.object !== undefined ? node(store.doc, args.object).id : null;
-            const step = args.step !== undefined ? Math.min(2, Math.max(0.25, num(args.step, 'step'))) : undefined;
-            let result;
-            try {
-                result = await runLevelCheck(ed, { area, object, step });
-            } catch (e: any) {
-                throw new ToolError(e?.message || String(e));
-            }
-            const r = result.report;
-            const fixes: string[] = [];
-            if (r.seams.length) fixes.push('Seams: move or resize the pieces so they touch or overlap a little (walls of build_rooms always meet).');
-            if (r.openings.some((o) => o.kind.startsWith('gap'))) fixes.push('Gaps: a wall does not reach the floor or the ceiling there, or a piece is missing.');
-            if (r.roofHoles.length || r.floorHoles.length) fixes.push('Holes: close them with a slab, unless the plan wants them (a courtyard, a stairwell).');
-            if (r.unreachable.length || r.sealed.length) fixes.push('Out of reach: add or widen a door (at least the body width plus a margin, as high as the door height), lower a step, or add stairs or a ramp.');
-            if (r.floating.length) fixes.push('Floating: rest it on what is below (or delete it).');
-            if (r.empty.length) fixes.push('Empty spaces: make the rooms smaller or fill them as the plan says, so the space stays compact.');
-            return {
-                data: {
-                    scope: result.scope,
-                    summary: summarize(r),
-                    ...r,
-                    ...(fixes.length ? { how_to_fix: fixes } : {}),
-                    ...(env.screenshots() ? { image: 'A plan view of the check is attached in the next message.' } : {}),
-                },
-                image: env.screenshots() ? result.map : undefined,
-                summary: summarize(r),
-            };
-        }
-        case 'place_player': {
-            const where = resolvePlace(env, args.at, 'at');
-            const existing = store.doc.nodes.find((n) => n.player);
-            const own = new Set(existing ? [existing.id, ...store.descendants(existing.id).map((n) => n.id)] : []);
-            ed.picker.update();
-            const p = where.point;
-            // Down from a little above the point (an object's middle, not over its roof) to what is under it.
-            const hit = ed.picker.raycast([p[0], p[1] + 0.6, p[2]], [0, -1, 0], 60, (id) => own.has(id));
-            const feet: Vec3 = [p[0], hit ? hit.point[1] : p[1], p[2]];
-            let facing: number | undefined;
-            if (args.facing !== undefined) {
-                if (typeof args.facing === 'number') facing = args.facing;
-                else {
-                    const to = resolvePlace(env, args.facing, 'facing').point;
-                    facing = (Math.atan2(to[0] - feet[0], to[2] - feet[2]) * 180) / Math.PI;
-                }
-            }
-            const options = (n: NodeDoc) => {
-                if (args.view !== undefined) {
-                    if (!['third', 'first', 'scene'].includes(args.view)) throw new ToolError('view must be third, first or scene.');
-                    n.player!.view = args.view;
-                }
-                const c = n.character!;
-                if (args.speed !== undefined) c.speed = Math.max(0, num(args.speed, 'speed'));
-                if (args.run_speed !== undefined) c.runSpeed = Math.max(0, num(args.run_speed, 'run_speed'));
-                if (args.jump !== undefined) c.jump = Math.max(0, num(args.jump, 'jump'));
-            };
-            if (existing) {
-                // Its origin keeps its height over its feet.
-                const b = ed.picker.bounds(existing.id);
-                const m = ed.picker.worldMatrix(existing.id);
-                const lift = b && m ? m[13] - b.min[1] : (existing.character?.height ?? 1.8) / 2;
-                const world: Vec3 = [feet[0], feet[1] + lift, feet[2]];
-                const parentWorld = existing.parent ? ed.picker.worldMatrix(existing.parent) : null;
-                const local = parentWorld ? transformPoint(invert(parentWorld) ?? mat4(), world) : world;
-                store.commit('AI: Place Player', (d) => {
-                    const n = d.nodes.find((x) => x.id === existing.id)!;
-                    n.position = [round(local[0]), round(local[1]), round(local[2])];
-                    if (facing !== undefined) n.rotation = [n.rotation[0], round(facing), n.rotation[2]];
-                    n.character ??= makeCharacterNode(d.design.specs).character;
-                    options(n);
-                }, { nodes: [existing.id] });
-                return { data: { id: existing.id, name: existing.name, moved: true, feet: rv(feet), ...(hit ? {} : { note: 'No ground under that point: the player will fall. Place it over a floor.' }) }, summary: existing.name };
-            }
-            const n = makeCharacterNode(store.doc.design.specs, true);
-            n.name = ed.uniqueName('Player', null);
-            n.position = [round(feet[0]), round(feet[1] + n.character!.height / 2), round(feet[2])];
-            if (facing !== undefined) n.rotation = [0, round(facing), 0];
-            options(n);
-            store.commit('AI: Place Player', (d) => {
-                d.nodes.push(n);
-            });
-            return { data: { id: n.id, name: n.name, created: true, feet: rv(feet), ...(hit ? {} : { note: 'No ground under that point: the player will fall. Place it over a floor.' }) }, summary: n.name };
-        }
-    }
-    return null;
+    return (found ?? upsertSlot(env.editor.store, { name }, 'AI: Add Material Slot')).id;
 }
 
 function round(v: number): number {

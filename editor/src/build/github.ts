@@ -4,7 +4,7 @@
 
 import { blobToBase64 } from '../core/assets';
 import { GAME_FILE } from './gameFile';
-import type { ZipEntry } from './zip';
+import type { ZipEntry } from '../core/zip';
 
 const API = 'https://api.github.com';
 /** GitHub refuses files over 100 MB. */

@@ -15,7 +15,8 @@ import type { Store } from '../core/store';
 import type { CharacterDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
 import type { SceneSync } from '../engine/sync';
-import { CharacterMotor, LevelRays, type CastFn } from './motor';
+import { LevelRays } from '../engine/levelRays';
+import { CharacterMotor, type CastFn } from './motor';
 
 /** How fast the body turns toward where it goes, per second. */
 const TURN_RATE = 12;
@@ -59,6 +60,10 @@ export class Character extends Emitter<CharacterEvents> {
     facing: number;
     /** Movement in the last frame, m/s. */
     readonly velocity: Vec3 = [0, 0, 0];
+    /** The horizontal velocity it tried to move at in the last frame, m/s. */
+    readonly wanted: Vec3 = [0, 0, 0];
+    /** Nodes its last move ran into (physics pushes the dynamic ones). */
+    readonly bumped = new Set<string>();
     mode: CharacterMode = 'idle';
     /** Height of the object's origin above the feet. */
     readonly offset: number;
@@ -191,6 +196,9 @@ export class Character extends Emitter<CharacterEvents> {
         const jump = this.jumpWanted && d.jump > 0 ? d.jump : 0;
         const wasGrounded = motor.grounded;
         const falling = -motor.vy;
+        this.wanted[0] = dt > 0 ? (wx * k) / dt : 0;
+        this.wanted[2] = dt > 0 ? (wz * k) / dt : 0;
+        this.bumped.clear();
         this.wish = [0, 0];
         this.jumpWanted = false;
         if (d.collide) {
@@ -280,7 +288,12 @@ export class Characters {
     private own = new Set<string>();
 
     constructor(picker: Picker, sync: SceneSync, store: Store) {
-        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id));
+        // Triggers (physics bodies that only detect) do not stop anyone.
+        const trigger = (id: string) => {
+            for (let n = store.node(id); n; n = n.parent ? store.node(n.parent) : undefined) if (n.body) return n.body.sensor;
+            return false;
+        };
+        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id) || trigger(id));
     }
 
     /** Ray casts against the level without the characters (for cameras). */
@@ -291,7 +304,9 @@ export class Characters {
         for (const id of nodes) this.own.add(id);
         this.rays.refresh(1);
         const cast: CastFn = (o, d, max) => {
-            let best: { distance: number; point: Vec3 } | null = this.rays.cast(o, d, max);
+            const hit = this.rays.cast(o, d, max);
+            if (hit && !d[1]) c.bumped.add(hit.id);
+            let best: { distance: number; point: Vec3 } | null = hit;
             for (const other of this.list) {
                 const t = other.obj === obj ? null : hitBody(o, d, other, best?.distance ?? max);
                 if (t !== null) best = { distance: t, point: add(o, scale(normalize(d), t)) };

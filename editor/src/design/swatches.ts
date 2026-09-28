@@ -13,10 +13,10 @@ import { putAsset } from '../core/assets';
 import { tx } from '../core/db';
 import { uid } from '../core/ids';
 import { assetImageDataUrl, canvas, canvasBlob } from '../core/images';
+import type { Store } from '../core/store';
 import type { AssetMeta, MaterialSlotDoc, ParamValue } from '../core/types';
-import type { Editor } from '../editor';
-import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
+import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 
 export interface SwatchRecord {
     id: string;
@@ -409,8 +409,8 @@ function assetName(rec: SwatchRecord): string {
  * commit; the caller commits the meta) when missing. The same swatch is
  * copied once, also after it was renamed in the library.
  */
-export async function swatchAsset(editor: Editor, rec: SwatchRecord): Promise<{ meta: AssetMeta; added: boolean }> {
-    const existing = editor.store.doc.assets.find((a) => a.kind === 'texture' && swatchIdOf(a) === rec.id);
+export async function swatchAsset(store: Store, rec: SwatchRecord): Promise<{ meta: AssetMeta; added: boolean }> {
+    const existing = store.doc.assets.find((a) => a.kind === 'texture' && swatchIdOf(a) === rec.id);
     if (existing) return { meta: existing, added: false };
     const meta = await putAsset(rec.blob, assetName(rec), 'texture', undefined, { width: rec.size, height: rec.size });
     return { meta, added: true };

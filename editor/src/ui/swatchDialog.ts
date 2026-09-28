@@ -2,9 +2,9 @@ import type { Editor } from '../editor';
 import { getAssetUrl } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import type { MaterialSlotDoc, ParamValue } from '../core/types';
-import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
-import { roomSample, useSwatch } from '../design/materialSlots';
+import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
+import { roomSample, useSwatch, type RoomSample } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import {
     deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
@@ -13,8 +13,7 @@ import { clear, h } from './dom';
 import { optionField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, toast, type Modal } from './overlays';
-import { button, iconButton } from './widgets';
-import type { RoomSample } from '../viewport/referenceRoom';
+import { button, iconButton, suggestions } from './widgets';
 
 let current: SwatchDialog | null = null;
 /** A generation in progress; it keeps running when the dialog closes. */
@@ -77,11 +76,11 @@ class SwatchDialog {
         this.prompt.addEventListener('keydown', (e) => e.stopPropagation());
         const reset = h('button', { class: 'link-btn', text: 'Reset to the default', attrs: { type: 'button' } });
         reset.addEventListener('click', () => (this.prompt.value = this.defaultPrompt()));
-        this.modelInput = h('input', { class: 'text', attrs: { type: 'text', list: 'sw-models', spellcheck: 'false' } });
+        this.modelInput = h('input', { class: 'text', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off' } });
         this.modelInput.value = imageModelId();
         this.modelInput.addEventListener('keydown', (e) => e.stopPropagation());
         this.modelInput.addEventListener('change', () => this.renderOptions());
-        const datalist = h('datalist', { attrs: { id: 'sw-models' } });
+        const modelList = suggestions(this.modelInput, () => this.models.map((m) => ({ value: m.id, label: m.name })));
         this.optionsEl = h('div', { class: 'po-options' });
         this.count = h('input', { class: 'text po-num', attrs: { type: 'number', min: 1, max: MAX_IMAGES, step: 1 } });
         this.count.value = '2';
@@ -107,7 +106,7 @@ class SwatchDialog {
             this.prompt,
             h('div', { class: 'group-label', text: 'Image model' }),
             this.modelInput,
-            datalist,
+            modelList,
             this.optionsEl,
             h('div', { class: 'po-row' }, field('Images', this.count)),
             h('p', { class: 'muted small', text: 'Billed to your OpenRouter account; failed or cancelled generations are not charged.' }),
@@ -132,7 +131,6 @@ class SwatchDialog {
         void listImageModels()
             .then((list) => {
                 this.models = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
-                for (const m of this.models) datalist.appendChild(h('option', { attrs: { value: m.id }, text: m.name }));
                 this.renderOptions();
             })
             .catch(() => {});
@@ -291,7 +289,7 @@ class SwatchDialog {
     private async use(s: SwatchRecord) {
         if (!this.slotId) return;
         try {
-            const slot = await useSwatch(this.editor, this.slotId, s.id);
+            const slot = await useSwatch(this.editor.store, this.slotId, s.id);
             toast(`${slot.name} uses ${s.name} now.`, 'success');
             void this.renderLibrary();
         } catch (e: any) {
@@ -305,7 +303,7 @@ class SwatchDialog {
         const samples: RoomSample[] = [{ name: s.name, texture: s.blob, color: '#ffffff', roughness: s.roughness ?? slot?.roughness ?? 0.8, metallic: s.metallic ?? slot?.metallic ?? 0, tile: s.tile }];
         if (slot) samples.push({ ...roomSample(doc, slot), name: `${slot.name} (now)` });
         this.close();
-        void this.editor.room?.open(samples);
+        this.editor.emit('show-room', samples);
     }
 
     // ------------------------------------------------------------- actions

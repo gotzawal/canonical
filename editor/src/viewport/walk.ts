@@ -1,6 +1,6 @@
-import type { Editor } from '../editor';
 import { add, DEG, normalize, scale } from '../core/math';
 import type { Vec3 } from '../core/types';
+import type { Editor } from '../editor';
 import { CharacterMotor } from '../play/motor';
 import { h } from '../ui/dom';
 import { toast } from '../ui/overlays';
@@ -38,6 +38,7 @@ export class WalkController {
         this.hudText = h('span');
         this.hud = h('div', { class: 'walk-hud', attrs: { hidden: true } }, this.hudText);
         viewportEl.appendChild(this.hud);
+        editor.on('view', (view) => (view === 'walk' ? this.begin() : this.stop()));
     }
 
     private get specs() {
@@ -54,18 +55,10 @@ export class WalkController {
         return this.motor.feet;
     }
 
-    toggle() {
-        if (this.active) this.stop();
-        else this.begin();
-    }
-
-    begin() {
+    /** Starts walking (editor.setView('walk') calls it). */
+    private begin() {
         if (this.active) return;
         const ed = this.editor;
-        if (ed.player.state !== 'stopped') {
-            toast('Stop Play mode first.', 'info');
-            return;
-        }
         ed.pipeline.showShot(null);
         const cam = ed.store.camera;
         // Start on the floor under the orbit target (up to a step above it), not on a roof
@@ -99,10 +92,9 @@ export class WalkController {
         } catch { /* pointer lock unavailable: keys still work */ }
         this.off = ed.runtime.onBeforeFrame(() => this.tick());
         this.hud.hidden = false;
-        this.editor.emit('walk', true);
     }
 
-    stop() {
+    private stop() {
         if (!this.active) return;
         this.active = false;
         this.off?.();
@@ -116,7 +108,7 @@ export class WalkController {
         const fwd = this.forward();
         const distance = 3;
         this.editor.camera.jump({ ...this.editor.store.camera, target: add(eye, scale(fwd, distance)), distance, yaw: this.lookYaw + 180, pitch: -this.lookPitch });
-        this.editor.emit('walk', false);
+        if (this.editor.view === 'walk') this.editor.setView('scene');
     }
 
     private key(e: KeyboardEvent, down: boolean) {

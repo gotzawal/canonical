@@ -4,7 +4,7 @@ import { CodePanel, type CodeKind } from './codePanel';
 import { DecisionLogPanel } from './decisionLogPanel';
 import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
-import { confirmDialog } from './overlays';
+import { confirmDialog, toast } from './overlays';
 import { RenderGraphPanel } from './renderGraphPanel';
 import { readLocal, writeLocal } from '../core/local';
 
@@ -61,6 +61,7 @@ export class Dock {
         editor.on('open-code', ({ kind, id }) => this.open(kind, id));
         editor.on('show-graph', () => this.show('graph'));
         editor.on('show-behavior', () => this.show('behavior'));
+        editor.on('flush-edits', () => this.applyEdits());
         editor.store.on('change', () => this.syncDocs());
         editor.store.on('load', () => this.syncDocs());
         this.restore();
@@ -112,9 +113,11 @@ export class Dock {
         return d && !this.collapsed ? { kind: d.kind, id: d.id, name: d.panel.title } : null;
     }
 
-    /** Code panels with edits that were not applied yet. */
-    dirtyPanels(): CodePanel[] {
-        return this.docs.filter((d) => d.panel.dirty).map((d) => d.panel);
+    /** Applies the code edited in the panels but not applied yet (before Play or a build). */
+    private applyEdits() {
+        const dirty = this.docs.filter((d) => d.panel.dirty);
+        for (const d of dirty) d.panel.apply();
+        if (dirty.length) toast(`Applied ${dirty.length} edited file(s) first.`, 'info');
     }
 
     show(key: string, reveal = true) {

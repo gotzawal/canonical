@@ -8,18 +8,15 @@ import type { MaterialSlotDoc } from '../core/types';
 import { assignSlot, slotUsers, upsertSlot, useSwatch, type SlotPatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import { generateSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom } from '../design/swatches';
-import { MAX_IMAGES } from './images';
-import type { ToolDef } from './openrouter';
-import { allowedGroups, type ToolEnv, type ToolResult } from './tools';
 import { stageDef } from '../design/stages';
-import { def, hex, node, num, optStr, r3, str, ToolError, type Json } from './toolUtil';
+import { MAX_IMAGES } from '../openrouter/images';
+import { allowedGroups, hex, node, num, optStr, r3, str, ToolError, tools, type ToolEnv } from './toolUtil';
 
-/** Tools that spend credits; left out when image generation is off. */
-export const PAID_MATERIAL_TOOLS = new Set(['generate_swatch']);
-
-export function materialToolDefs(): ToolDef[] {
-    return [
-        def('set_material_slot', 'Add or change a material slot: a named surface of the level (plaster, cobblestone, oak planks). Objects linked to it (assign_material_slot) render with the world space triplanar shader, so its swatch shows at its real size: tile is the size of one texture tile in meters. One roughness and one metallic value per slot. Mark slots meant as a plain color (painted metal, glass) with flat.', {
+export const materialTools = tools({
+    set_material_slot: {
+        groups: ['materials', 'design'],
+        description: 'Add or change a material slot: a named surface of the level (plaster, cobblestone, oak planks). Objects linked to it (assign_material_slot) render with the world space triplanar shader, so its swatch shows at its real size: tile is the size of one texture tile in meters. One roughness and one metallic value per slot. Mark slots meant as a plain color (painted metal, glass) with flat.',
+        params: {
             slot: { type: 'string', description: 'Id or name of the slot to change; leave out to add one.' },
             name: { type: 'string' },
             description: { type: 'string', description: 'Material, color, wear: what a swatch has to show.' },
@@ -28,56 +25,8 @@ export function materialToolDefs(): ToolDef[] {
             metallic: { type: 'number' },
             tile: { type: 'number', description: 'Meters per texture tile.' },
             flat: { type: 'boolean', description: 'A plain color, no swatch needed.' },
-        }),
-        def('assign_material_slot', 'Link objects to a material slot; their material follows the slot from then on. Parts of prefab instances link the matching part of the prefab (every instance follows).', {
-            slot: { type: 'string', description: 'Slot id or name.' },
-            objects: { type: 'array', items: { type: 'string' }, description: 'Object ids or names.' },
-        }, ['slot', 'objects']),
-        def('search_swatches', 'Search the swatch library of this browser (shared by every project) by words against names and tags. A contact sheet of the results is attached (numbered like the list). Search before generating.', {
-            query: { type: 'string' },
-            limit: { type: 'integer', minimum: 1, maximum: 16 },
-        }, ['query']),
-        def('use_swatch', 'Put a library swatch on a material slot. The slot takes the swatch\'s tile size (its real size), roughness and metallic where the swatch has them, and white as its color.', {
-            slot: { type: 'string', description: 'Slot id or name.' },
-            swatch: { type: 'string', description: 'Swatch id from search_swatches.' },
-        }, ['slot', 'swatch']),
-        def('generate_swatch', 'Generate swatches for a slot with the image model when the library has nothing that fits: a flat, evenly lit, tileable albedo from the slot\'s description, matched to the concepts and paintovers given as references. Results are processed (crop, shading evened out, seams blended, brightness within sRGB 30-240) and added to the library; use_swatch puts one on the slot. Costs credits.', {
-            slot: { type: 'string', description: 'Slot id or name.' },
-            prompt: { type: 'string', description: 'Leave out for the default built from the slot.' },
-            references: { type: 'array', items: { type: 'string' }, description: 'Concept or paintover asset ids to match; default: the first shot targets.' },
-            count: { type: 'integer', minimum: 1, maximum: MAX_IMAGES, description: 'Default 2.' },
-        }, ['slot']),
-    ];
-}
-
-function findSlot(env: ToolEnv, ref: unknown): MaterialSlotDoc {
-    const slots = env.editor.store.doc.design.materials;
-    const r = typeof ref === 'string' ? ref.trim() : '';
-    const slot = slots.find((s) => s.id === r) ?? slots.find((s) => s.name.toLowerCase() === r.toLowerCase());
-    if (!slot) throw new ToolError(`No material slot "${r}". Slots: ${slots.map((s) => `${s.name} (${s.id})`).join(', ') || 'none yet'}.`);
-    return slot;
-}
-
-function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
-    const doc = env.editor.store.doc;
-    const meta = s.swatch ? doc.assets.find((a) => a.id === s.swatch) : undefined;
-    return {
-        id: s.id,
-        name: s.name,
-        swatch: s.swatch ? swatchIdOf(meta) ?? s.swatch : null,
-        color: s.color,
-        roughness: r3(s.roughness),
-        metallic: r3(s.metallic),
-        tile: r3(s.tile),
-        ...(s.flat ? { flat: true } : {}),
-        objects: slotUsers(doc, s.id).length,
-    };
-}
-
-export async function runMaterialTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult | null> {
-    const ed = env.editor;
-    switch (name) {
-        case 'set_material_slot': {
+        },
+        run({ env, args, ed }) {
             const existing = args.slot !== undefined ? findSlot(env, args.slot) : undefined;
             // Outside the stages that edit materials, only slots no object uses yet can change (planning).
             if (existing && !allowedGroups(env).has('materials') && slotUsers(ed.store.doc, existing.id).length) {
@@ -92,19 +41,37 @@ export async function runMaterialTool(env: ToolEnv, name: string, args: Json): P
             if (args.metallic !== undefined) patch.metallic = num(args.metallic, 'metallic');
             if (args.tile !== undefined) patch.tile = num(args.tile, 'tile');
             if (args.flat !== undefined) patch.flat = !!args.flat;
-            const slot = upsertSlot(ed, { ...(existing ? { id: existing.id } : {}), ...patch }, existing ? 'AI: Edit Material Slot' : 'AI: Add Material Slot');
+            const slot = upsertSlot(ed.store, { ...(existing ? { id: existing.id } : {}), ...patch }, existing ? 'AI: Edit Material Slot' : 'AI: Add Material Slot');
             return { data: slotSummary(env, slot), summary: slot.name };
-        }
-        case 'assign_material_slot': {
+        },
+    },
+    assign_material_slot: {
+        groups: ['materials', 'objects'],
+        description: 'Link objects to a material slot; their material follows the slot from then on. Parts of prefab instances link the matching part of the prefab (every instance follows).',
+        params: {
+            slot: { type: 'string', description: 'Slot id or name.' },
+            objects: { type: 'array', items: { type: 'string' }, description: 'Object ids or names.' },
+        },
+        required: ['slot', 'objects'],
+        run({ env, args, ed }) {
             const slot = findSlot(env, args.slot);
             const ids = (Array.isArray(args.objects) ? args.objects : []).map((r: unknown) => node(ed.store.doc, r).id);
             if (!ids.length) throw new ToolError('objects is empty.');
             const meshes = ids.filter((id) => ed.store.node(id)?.mesh || ed.store.node(id)?.prefab);
             if (!meshes.length) throw new ToolError('None of these objects has a mesh (lights, cameras, groups and models have no slot).');
-            const n = assignSlot(ed, slot.id, meshes);
+            const n = assignSlot(ed.store, slot.id, meshes);
             return { data: { ok: true, slot: slot.name, linked: n, skipped: ids.length - meshes.length }, summary: `${n} to ${slot.name}` };
-        }
-        case 'search_swatches': {
+        },
+    },
+    search_swatches: {
+        groups: ['materials'],
+        description: 'Search the swatch library of this browser (shared by every project) by words against names and tags. A contact sheet of the results is attached (numbered like the list). Search before generating.',
+        params: {
+            query: { type: 'string' },
+            limit: { type: 'integer', minimum: 1, maximum: 16 },
+        },
+        required: ['query'],
+        async run({ env, args }) {
             const query = str(args.query, 'query', 400);
             const limit = args.limit !== undefined ? Math.max(1, Math.min(16, Math.round(num(args.limit, 'limit')))) : 8;
             const found = await searchSwatches(query, limit);
@@ -115,17 +82,37 @@ export async function runMaterialTool(env: ToolEnv, name: string, args: Json): P
                 images,
                 summary: `${list.length} found`,
             };
-        }
-        case 'use_swatch': {
+        },
+    },
+    use_swatch: {
+        groups: ['materials'],
+        description: 'Put a library swatch on a material slot. The slot takes the swatch\'s tile size (its real size), roughness and metallic where the swatch has them, and white as its color.',
+        params: {
+            slot: { type: 'string', description: 'Slot id or name.' },
+            swatch: { type: 'string', description: 'Swatch id from search_swatches.' },
+        },
+        required: ['slot', 'swatch'],
+        async run({ env, args, ed }) {
             const slot = findSlot(env, args.slot);
             const id = str(args.swatch, 'swatch', 64).trim();
-            const updated = await useSwatch(ed, slot.id, id).catch((e) => {
+            const updated = await useSwatch(ed.store, slot.id, id).catch((e) => {
                 throw new ToolError(e?.message || String(e));
             });
             return { data: slotSummary(env, updated), summary: `${updated.name}` };
-        }
-        case 'generate_swatch': {
-            if (!env.allowImages()) throw new ToolError('Image generation is turned off in the AI settings.');
+        },
+    },
+    generate_swatch: {
+        groups: ['images'],
+        needs: 'images',
+        description: 'Generate swatches for a slot with the image model when the library has nothing that fits: a flat, evenly lit, tileable albedo from the slot\'s description, matched to the concepts and paintovers given as references. Results are processed (crop, shading evened out, seams blended, brightness within sRGB 30-240) and added to the library; use_swatch puts one on the slot. Costs credits.',
+        params: {
+            slot: { type: 'string', description: 'Slot id or name.' },
+            prompt: { type: 'string', description: 'Leave out for the default built from the slot.' },
+            references: { type: 'array', items: { type: 'string' }, description: 'Concept or paintover asset ids to match; default: the first shot targets.' },
+            count: { type: 'integer', minimum: 1, maximum: MAX_IMAGES, description: 'Default 2.' },
+        },
+        required: ['slot'],
+        async run({ env, args, ed }) {
             const slot = findSlot(env, args.slot);
             const doc = ed.store.doc;
             let refs: string[] = (Array.isArray(args.references) ? args.references : []).filter((r: unknown): r is string => typeof r === 'string');
@@ -153,7 +140,30 @@ export async function runMaterialTool(env: ToolEnv, name: string, args: Json): P
                 images,
                 summary: `${res.swatches.length} for ${slot.name}`,
             };
-        }
-    }
-    return null;
+        },
+    },
+});
+
+function findSlot(env: ToolEnv, ref: unknown): MaterialSlotDoc {
+    const slots = env.editor.store.doc.design.materials;
+    const r = typeof ref === 'string' ? ref.trim() : '';
+    const slot = slots.find((s) => s.id === r) ?? slots.find((s) => s.name.toLowerCase() === r.toLowerCase());
+    if (!slot) throw new ToolError(`No material slot "${r}". Slots: ${slots.map((s) => `${s.name} (${s.id})`).join(', ') || 'none yet'}.`);
+    return slot;
+}
+
+function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
+    const doc = env.editor.store.doc;
+    const meta = s.swatch ? doc.assets.find((a) => a.id === s.swatch) : undefined;
+    return {
+        id: s.id,
+        name: s.name,
+        swatch: s.swatch ? swatchIdOf(meta) ?? s.swatch : null,
+        color: s.color,
+        roughness: r3(s.roughness),
+        metallic: r3(s.metallic),
+        tile: r3(s.tile),
+        ...(s.flat ? { flat: true } : {}),
+        objects: slotUsers(doc, s.id).length,
+    };
 }
