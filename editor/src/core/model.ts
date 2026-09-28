@@ -265,6 +265,38 @@ export const Player = z.object({
 export type PlayerDoc = z.output<typeof Player>;
 export type PlayerView = PlayerDoc['view'];
 
+// ------------------------------------------------------------------ physics
+
+export const BODY_TYPES = ['dynamic', 'kinematic', 'fixed'] as const;
+export const BODY_SHAPES = ['auto', 'box', 'sphere', 'capsule', 'hull', 'mesh'] as const;
+
+/**
+ * A physics body (see play/physics.ts). In Play a dynamic body falls,
+ * collides and bounces, and its object follows it; a kinematic one follows
+ * its object (scripts move it) and pushes dynamic bodies; a fixed one stays
+ * put. Shown meshes without a body are fixed too, so the level holds what
+ * falls on it, and characters push dynamic bodies out of their way.
+ */
+export const Body = z.object({
+    type: oneOf(BODY_TYPES, 'dynamic', { description: 'dynamic falls and collides; kinematic follows its object (moved by scripts) and pushes dynamic bodies; fixed stays put.' }),
+    shape: oneOf(BODY_SHAPES, 'auto', {
+        title: 'Collider',
+        labels: { auto: 'Auto', box: 'Box', sphere: 'Sphere', capsule: 'Capsule', hull: 'Convex Hull', mesh: 'Mesh' },
+        description: 'auto fits a primitive exactly and wraps other meshes; box, sphere and capsule fit the meshes\' bounds; hull wraps them; mesh uses their triangles (a dynamic body gets the hull).',
+    }),
+    mass: num(1, 0.001, 1e6, { description: 'kg (dynamic).' }),
+    friction: num(0.5, 0, 2, { step: 0.01, slider: true }),
+    bounce: unit(0, { description: 'Restitution: 0 stops dead, 1 bounces back as fast.' }),
+    drag: num(0, 0, 100, { step: 0.01, description: 'Linear damping: slows it down over time.' }),
+    angularDrag: num(0.05, 0, 100, { step: 0.01, description: 'Angular damping: slows its spin.' }),
+    gravity: num(1, -10, 10, { step: 0.05, description: 'Times the world gravity (9.81 m/s² down); 0 floats.' }),
+    lockRotation: bool(false, { description: 'Collisions do not turn it (an upright crate, a character-like prop).' }),
+    fast: bool(false, { title: 'Continuous', description: 'For fast small objects (balls, bullets): continuous collision detection so they do not pass through thin walls.' }),
+    sensor: bool(false, { title: 'Trigger', description: 'Only detects what enters it (onTriggerEnter / onTriggerExit in scripts) instead of colliding.' }),
+});
+export type BodyDoc = z.output<typeof Body>;
+export type BodyType = BodyDoc['type'];
+
 // -------------------------------------------------------------- environment
 
 /**

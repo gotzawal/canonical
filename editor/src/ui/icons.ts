@@ -10,6 +10,7 @@ const PATHS: Record<string, string> = {
     ramp: '<path d="M3 19h18V6Z"/><path d="M8.5 16.5 21 9"/>',
     stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',
     capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
+    physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',

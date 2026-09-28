@@ -16,6 +16,7 @@ import { ShaderManager } from '../engine/shaders';
 import { SceneSync } from '../engine/sync';
 import { ScriptCompiler } from '../play/compiler';
 import type { ModelServices } from '../play/ai/services';
+import { loadPhysics, usesPhysics } from '../play/physics';
 import { Player, type ScriptIssue } from '../play/player';
 import { h } from '../ui/dom';
 import { icon } from '../ui/icons';
@@ -122,6 +123,8 @@ async function main() {
     // Agents that ask or recall get their models in the background; they
     // play with the blackboard defaults until the models are ready.
     if (sceneModelsNeeded(store.doc).length) agentModels = await startModels(root, runtime, player, store);
+    // Bodies fall from the first frame (the player started loading Rapier with the scene).
+    if (usesPhysics(store.doc)) await loadPhysics();
     player.play();
     bindInput(canvas, player, view);
     addFullscreenButton(root);

@@ -14,6 +14,7 @@ import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
 import { Characters, type Character } from './character';
+import { bodyOf, loadPhysics, physicsLoaded, preloadPhysics, usesPhysics, Physics, type BodyApi, type PhysicsApi } from './physics';
 import { PlayControls } from './playControls';
 import { PlayerController } from './playerController';
 import {
@@ -113,6 +114,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private chats = new Set<AbortController>();
     /** The characters of this session, and the player's control of one of them. */
     private characters: Characters | null = null;
+    /** The physics world of the session (play/physics.ts). */
+    private world: Physics | null = null;
+    /** Stops so far: a Play waiting for Rapier starts only when no Stop came in between. */
+    private runs = 0;
     private controller: PlayerController | null = null;
     /** The pointer that feeds the mouse of the scripts (the first one down). */
     private mousePointer: number | null = null;
@@ -128,6 +133,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     ) {
         super();
         this.agents = new AgentSystem(this, () => host.aiServices?.() ?? null);
+        // Rapier loads before the first Play that needs it.
+        preloadPhysics(store.doc);
+        store.on('load', () => preloadPhysics(store.doc));
+        store.on('change', () => preloadPhysics(store.doc));
     }
 
     get engine() {
@@ -159,6 +168,12 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             if (this.state === 'paused') this.setState('playing');
             return;
         }
+        // Physics loads with the scene; Play waits for it when it is not there yet.
+        if (physicsLoaded() === undefined && usesPhysics(this.store.doc)) {
+            const run = this.runs;
+            void loadPhysics().then(() => run === this.runs && this.state === 'stopped' && this.play());
+            return;
+        }
         this.checkpointState = this.store.checkpoint();
         this.store.setPlaying(true);
         this.issues.length = 0;
@@ -169,6 +184,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.sceneChildren = new Set(this.runtime.scene.entityChildren as Object3D[]);
         this.setupCamera();
         this.setupCharacters();
+        this.setupPhysics();
         this.instantiate();
         // Blackboards exist before awake() / start(), so scripts can write their first facts there.
         try {
@@ -207,6 +223,9 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         for (const inst of this.instances) {
             if (!inst.destroyed) this.call(inst, 'onDestroy');
         }
+        this.world?.dispose();
+        this.world = null;
+        this.runs++;
         for (const ctx of this.contexts) {
             ctx.api = null;
             ctx.object3D = null;
@@ -271,6 +290,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     /** Plays for `seconds`, stops, and returns what the scripts reported. */
     async runFor(seconds: number): Promise<{ logs: ScriptLog[]; issues: ScriptIssue[]; frames: number }> {
         if (this.state !== 'stopped') this.stop();
+        if (usesPhysics(this.store.doc)) await loadPhysics();
         this.play();
         await new Promise((r) => setTimeout(r, Math.max(0, seconds) * 1000));
         const result = { logs: this.logs.slice(), issues: this.issues.slice(), frames: this.time.frame };
@@ -324,6 +344,19 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             this.controls.start({ jump: players[0].character!.jump > 0 });
         }
         if (players.length > 1) this.warn(`One player plays at a time: ${players[0].name} does; ${players.slice(1).map((n) => n.name).join(', ')} stand(s) still.`);
+    }
+
+    private setupPhysics() {
+        const R = physicsLoaded();
+        if (!R || !usesPhysics(this.store.doc)) return;
+        this.world = new Physics(R, {
+            store: this.store,
+            sync: this.sync,
+            characters: () => this.characters?.list ?? [],
+            notify: (obj, method, other) => {
+                for (const inst of this.instances.filter((i) => i.obj === obj && !i.destroyed && !i.broken)) this.call(inst, method, other);
+            },
+        });
     }
 
     private instantiate() {
@@ -409,6 +442,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.runTimers();
         this.agents.frame();
         this.characters?.update(dt);
+        this.world?.step(dt);
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'lateUpdate', dt);
         }
@@ -654,6 +688,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         obj.scaleY = sy;
         obj.scaleZ = sz;
         (opts.parent ?? this.runtime.scene).addChild(obj);
+        if (opts.body) {
+            if (this.world) this.world.add(obj, bodyOf(opts.body), [mr], defaultGeometry(kind));
+            else this.warn(`${obj.name} gets no body: physics is not available.`);
+        }
         this.recolored.add(mr);
         this.spawnedAll.add(obj);
         if (!this.spawnedBy.has(owner)) this.spawnedBy.set(owner, []);
@@ -679,6 +717,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.agents.removeObjects(doomed);
         // Destroyed characters stop; the player's camera stays where it was.
         this.characters?.remove(doomed);
+        this.world?.remove(doomed);
         if (this.controller && doomed.has(this.controller.character.obj)) this.controller = null;
         for (const inst of this.instances) {
             if (!inst.destroyed && doomed.has(inst.obj)) {
@@ -749,6 +788,15 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     findObject(ref: string): Object3D | null {
         return this.objectOf(ref) ?? this.find(ref);
+    }
+
+    body(target: Object3D | string): BodyApi | null {
+        const obj = typeof target === 'string' ? this.findObject(target) : target;
+        return (obj && this.world?.api(obj)) ?? null;
+    }
+
+    physics(): PhysicsApi | null {
+        return this.world;
     }
 
     scriptsOn(obj: Object3D): Script[] {

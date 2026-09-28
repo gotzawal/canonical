@@ -1,7 +1,8 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Camera, Character, Light, Material, Particles, Player } from '../core/model';
+import { Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
+import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import { unassignSlot } from '../design/materialSlots';
 import { formatBytes } from '../core/assets';
@@ -79,6 +80,7 @@ const COMPONENTS = {
     particles: [Particles, (n: NodeDoc) => n.particles],
     character: [Character, (n: NodeDoc) => n.character],
     player: [Player, (n: NodeDoc) => n.player],
+    body: [Body, (n: NodeDoc) => n.body],
     material: [Material, (n: NodeDoc) => n.mesh?.material],
 } as const;
 
@@ -155,6 +157,7 @@ export class InspectorPanel {
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
             (n.character ? 'char' : '-') + (n.player ? ':player:' + n.player.view : ''),
+            n.body ? 'body:' + n.body.type : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -239,6 +242,7 @@ export class InspectorPanel {
         if (node.camera) this.body.append(this.cameraSection());
         if (node.character) this.body.append(this.characterSection());
         if (node.player) this.body.append(this.playerSection());
+        if (node.body) this.body.append(this.physicsSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         if (node.agent) this.body.append(this.agentSection(node));
@@ -801,6 +805,16 @@ export class InspectorPanel {
         return section('player', 'Player Controller', 'play', [
             h('div', { class: 'muted small pad', text: 'The player controls this character in Play: WASD or the arrow keys move, Shift runs, Space jumps, a drag or Q / E turns the view and the wheel zooms. Touch screens get a joystick, a jump button, a finger to look and a pinch to zoom.' }),
             ...this.componentRows('player', ['view', ...(third ? ['distance'] : []), 'lookSpeed', 'invertY']),
+        ], [remove]);
+    }
+
+    private physicsSection(): HTMLElement {
+        const has: Filter = (n) => !!n.body;
+        const dynamic = this.node.body!.type === 'dynamic';
+        const remove = iconButton('trash', 'Remove physics body', () => this.hooks<null>('Remove Physics Body', has, (n) => delete n.body).commit!(null));
+        return section('body', 'Physics Body', 'physics', [
+            h('div', { class: 'muted small pad', text: 'In Play a dynamic body falls, collides and bounces; a kinematic one follows its object as scripts move it and pushes dynamic bodies; a fixed one stays put. Meshes without a body are fixed too, and characters push dynamic bodies. Scripts use this.body and onCollisionEnter / onTriggerEnter.' }),
+            ...this.componentRows('body', ['type', 'shape', ...(dynamic ? ['mass'] : []), 'friction', 'bounce', ...(dynamic ? ['drag', 'angularDrag', 'gravity', 'lockRotation', 'fast'] : []), 'sensor']),
         ], [remove]);
     }
 
@@ -1374,7 +1388,7 @@ export class InspectorPanel {
             });
         }
         if (items.length) items.push({ separator: true });
-        if (!node.player && !node.light && !node.camera && !node.particles) {
+        if (!node.player && !node.light && !node.camera && !node.particles && !node.body) {
             const specs = this.store.doc.design.specs;
             if (!node.character) items.push({ label: 'Character', icon: 'walk', action: () => this.hooks<null>('Add Character', (n) => !n.character, (n) => (n.character = defaultCharacter(specs))).commit!(null) });
             items.push({
@@ -1385,6 +1399,9 @@ export class InspectorPanel {
                     n.player = defaultPlayer();
                 }).commit!(null),
             });
+        }
+        if (!node.body && !node.character && !node.light && !node.camera && !node.particles) {
+            items.push({ label: 'Physics Body', icon: 'physics', action: () => this.hooks<null>('Add Physics Body', (n) => !n.body && !n.character, (n) => (n.body = defaults(Body))).commit!(null) });
         }
         if (!node.agent) {
             const stopped = () => this.editor.player.state === 'stopped';

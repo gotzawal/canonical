@@ -5,8 +5,8 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
-import { patch, toolSchema } from '../core/schema';
+import { Body, Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
+import { defaults, patch, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
 import { stageDef, type ToolGroup } from '../design/stages';
@@ -43,6 +43,10 @@ const objectFields = {
     },
     player: {
         ...toolSchema(Player, 'The player controls this object\'s character (added when missing): WASD / a joystick walk, Space jumps, a drag turns its camera. null removes it. One player per scene: place it with place_player.'),
+        type: ['object', 'null'],
+    },
+    body: {
+        ...toolSchema(Body, 'A physics body: in Play a dynamic one falls, collides and bounces; kinematic follows its object (scripts move it) and pushes dynamic bodies; fixed stays put. Meshes without a body are fixed, so the level holds what falls on it. Scripts use this.body and onCollisionEnter / onTriggerEnter. null removes it.'),
         type: ['object', 'null'],
     },
     cast_shadow: { type: 'boolean' },
@@ -487,6 +491,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         const p = n.player;
         out.player = { view: p.view, ...(p.view === 'third' ? { distance: p.distance } : {}) };
     }
+    if (n.body) {
+        const b = n.body;
+        out.body = { type: b.type, ...(b.shape !== 'auto' ? { shape: b.shape } : {}), ...(b.type === 'dynamic' ? { mass: b.mass } : {}), ...(b.sensor ? { sensor: true } : {}) };
+    }
     if (n.particles) {
         const p = n.particles;
         out.particles = { preset: p.preset, rate: p.rate, life: p.life, size: p.size, shape: p.shape, blend: p.blend, colors: [p.colorStart, p.colorEnd], alive_at_most: Math.min(p.max, Math.ceil(p.rate * p.life[1])) };
@@ -571,7 +579,7 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         delete n.character;
         delete n.player;
     } else if (spec.character || spec.player) {
-        if (n.light || n.camera || n.particles) throw new ToolError(`"${n.name}" cannot be a character (lights, cameras and particles cannot).`);
+        if (n.light || n.camera || n.particles || n.body) throw new ToolError(`"${n.name}" cannot be a character (lights, cameras, particles and physics bodies cannot).`);
         n.character = patch(Character, n.character ?? defaultCharacter(doc.design.specs), spec.character ?? {}, 'character');
     }
     if (spec.player === null) delete n.player;
@@ -580,6 +588,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
         if (!n.character) throw new ToolError('The player controls a character: give the object one (character) too.');
         n.player = patch(Player, n.player ?? defaultPlayer(), spec.player, 'player');
+    }
+    if (spec.body === null) delete n.body;
+    else if (spec.body) {
+        if (n.light || n.camera || n.particles || n.character) throw new ToolError(`"${n.name}" cannot have a physics body (lights, cameras, particles and characters cannot).`);
+        n.body = patch(Body, n.body ?? defaults(Body), spec.body, 'body');
     }
     if (spec.camera) {
         if (!n.camera) throw new ToolError(`"${n.name}" is not a camera.`);
@@ -698,7 +711,7 @@ class StagePolicy {
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
-        if ((spec.player !== undefined || spec.character !== undefined) && !this.any('objects', 'code', 'play')) return `Characters and the player cannot be changed in the ${this.stage} stage.`;
+        if ((spec.player !== undefined || spec.character !== undefined || spec.body !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player and physics bodies cannot be changed in the ${this.stage} stage.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {

@@ -29,6 +29,7 @@ test('offers component fields in the tool schemas', async () => {
     expect(fields.light.properties.outer_angle).toMatchObject({ minimum: 1, maximum: 179 });
     expect(fields.material.properties.transmission).toMatchObject({ minimum: 0, maximum: 1 });
     expect(fields.material.properties.preset.enum).toContain('glass');
+    expect(fields.body.properties.type.enum).toEqual(['dynamic', 'kinematic', 'fixed']);
 });
 
 test('creates and changes objects, the environment and particles with its tools', async () => {
@@ -39,6 +40,7 @@ test('creates and changes objects, the environment and particles with its tools'
                 objects: [
                     { type: 'capsule', name: 'Guard', position: [2, 0.9, 0], character: { step_height: 0.5, run_speed: 7 }, material: { color: 'red', roughness: 2, transmission: 0.5 } },
                     { type: 'spot_light', name: 'Lamp', position: [0, 4, 0], light: { outer_angle: 45, cast_shadow: true } },
+                    { type: 'box', name: 'Crate', position: [0, 2, 0], body: { mass: 5, bounce: 0.2, shape: 'hull' } },
                 ],
             },
         }],
@@ -55,6 +57,7 @@ test('creates and changes objects, the environment and particles with its tools'
     expect(guard.player!.view).toBe('first');
     expect(guard.mesh!.material).toMatchObject({ color: '#ff0000', roughness: 1, transmission: 0.5 });
     expect((await node('Lamp'))!.light).toMatchObject({ type: 'spot', outerAngle: 45, castShadow: true });
+    expect((await node('Crate'))!.body).toMatchObject({ type: 'dynamic', mass: 5, bounce: 0.2, shape: 'hull' });
     expect((await node('Fire'))!.particles!.life).toEqual([1, 2]);
     const env = await editor.page().evaluate(() => window.__editor.store.doc.environment);
     expect(env.bloom).toEqual({ enable: true, intensity: 1.5, threshold: 1 });

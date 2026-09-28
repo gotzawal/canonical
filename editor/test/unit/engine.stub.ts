@@ -6,5 +6,10 @@ export class Vector3 {
     constructor(public x = 0, public y = 0, public z = 0) {}
 }
 export class Object3D {}
+export class Quaternion {
+    set() {
+        return this;
+    }
+}
 export class RenderNode {}
 export const VertexAttributeName = { position: 'position', indices: 'indices' };
