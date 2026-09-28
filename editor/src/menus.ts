@@ -167,5 +167,5 @@ export function showAbout(editor: Editor) {
         ),
         b.repo ? h('p', null, h('a', { text: `github.com/${b.repo}`, attrs: { href: `https://github.com/${b.repo}`, target: '_blank', rel: 'noopener' } })) : null,
     );
-    void dialog('About Canonical Editor', body);
+    void dialog('About Morglay', body);
 }

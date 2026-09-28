@@ -3,7 +3,7 @@
        Effects off, or a system asking for less transparency) makes them
        opaque; everything else is translucent and suits both. */
     --backdrop:
-        radial-gradient(1100px 680px at 8% -12%, rgba(61, 139, 253, 0.26), transparent 62%),
+        radial-gradient(1100px 680px at 8% -12%, rgba(187, 153, 255, 0.26), transparent 62%),
         radial-gradient(900px 620px at 104% 112%, rgba(146, 96, 255, 0.2), transparent 60%),
         radial-gradient(700px 480px at 58% 46%, rgba(48, 196, 186, 0.08), transparent 70%),
         #0c0e12;
@@ -33,8 +33,12 @@
     --text-strong: #f2f4f7;
     --muted: #8b95a3;
     --faint: #747d8b;
-    --accent: #3d8bfd;
-    --accent-soft: rgba(61, 139, 253, 0.16);
+    /* The key color, a light violet. Text and icons on it are dark. */
+    --accent: #bb99ff;
+    --accent-hover: #c9adff;
+    --accent-soft: rgba(187, 153, 255, 0.16);
+    --accent-text: #d3bdff;
+    --on-accent: #1c1433;
     --select: #ffa53d;
     --select-soft: rgba(255, 165, 61, 0.14);
     --danger: #ef5b5b;
@@ -172,24 +176,19 @@ a {
     min-width: 0;
 }
 
+/* The logo and the wordmark (logo.ts), in the key color. */
 .brand {
     display: flex;
     align-items: center;
-    gap: 7px;
-    font-weight: 650;
-    font-size: 13px;
-    color: var(--text-strong);
-    white-space: nowrap;
+    gap: 8px;
+    margin-right: 6px;
+    color: var(--accent);
 }
 
-.brand-mark {
+.brand-mark,
+.brand-name {
     flex: none;
     display: block;
-}
-
-.brand-sub {
-    font-weight: 500;
-    color: var(--muted);
 }
 
 .scene-name {
@@ -374,7 +373,7 @@ a {
 .menu-item:hover:not(.disabled),
 .menu-item:focus-visible {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     outline: none;
 }
 
@@ -391,7 +390,7 @@ a {
 }
 
 .menu-item:hover:not(.disabled) .menu-icon {
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .menu-label {
@@ -405,7 +404,7 @@ a {
 }
 
 .menu-item:hover:not(.disabled) .menu-shortcut {
-    color: rgba(255, 255, 255, 0.8);
+    color: rgba(28, 20, 51, 0.72);
 }
 
 .menu-sep {
@@ -450,12 +449,12 @@ a {
 .suggestion:hover,
 .suggestion.active {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .suggestion:hover .muted,
 .suggestion.active .muted {
-    color: rgba(255, 255, 255, 0.8);
+    color: rgba(28, 20, 51, 0.72);
 }
 
 .submenu {
@@ -525,7 +524,7 @@ a {
 
 .tool-btn.active {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .tool-btn:disabled {
@@ -535,12 +534,12 @@ a {
 
 .tool-btn.accent {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     font-weight: 600;
 }
 
 .tool-btn.accent:hover {
-    background: #5a9dff;
+    background: var(--accent-hover);
 }
 
 /* ------------------------------------------------------------- viewport */
@@ -577,7 +576,7 @@ a {
     justify-content: center;
     border: 2px dashed var(--accent);
     border-radius: 10px;
-    background: rgba(61, 139, 253, 0.12);
+    background: rgba(187, 153, 255, 0.12);
     color: var(--text-strong);
     font-size: 15px;
     font-weight: 600;
@@ -769,7 +768,7 @@ a {
 }
 
 .tree-row.selected.primary {
-    background: rgba(61, 139, 253, 0.28);
+    background: rgba(187, 153, 255, 0.28);
 }
 
 .tree:focus .tree-row.selected.primary {
@@ -1379,7 +1378,7 @@ input.text:focus,
     top: 1.5px;
     width: 4px;
     height: 8px;
-    border: solid #fff;
+    border: solid var(--on-accent);
     border-width: 0 2px 2px 0;
     transform: rotate(45deg);
 }
@@ -1420,11 +1419,11 @@ input.text:focus,
 .btn.primary {
     background: var(--accent);
     border-color: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .btn.primary:hover {
-    background: #5a9dff;
+    background: var(--accent-hover);
 }
 
 .btn.danger {
@@ -2185,7 +2184,7 @@ kbd {
 }
 
 .code-input::selection {
-    background: rgba(61, 139, 253, 0.35);
+    background: rgba(187, 153, 255, 0.35);
     -webkit-text-fill-color: transparent;
 }
 
@@ -2455,7 +2454,7 @@ kbd {
 
 .chain-item.custom {
     color: var(--text);
-    background: rgba(61, 139, 253, 0.1);
+    background: rgba(187, 153, 255, 0.1);
 }
 
 .chain-item.broken {
@@ -2772,7 +2771,7 @@ kbd {
 .ai-msg.user .ai-bubble {
     max-width: 90%;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
     white-space: pre-wrap;
 }
 
@@ -3278,7 +3277,7 @@ kbd {
 }
 
 .notice.checkpoint {
-    border-color: rgba(61, 139, 253, 0.55);
+    border-color: rgba(187, 153, 255, 0.55);
 }
 
 .notice-head {
@@ -3493,7 +3492,7 @@ kbd {
 }
 
 .pipeline-chip.current {
-    border-color: rgba(61, 139, 253, 0.5);
+    border-color: rgba(187, 153, 255, 0.5);
     background: var(--accent-soft);
     color: var(--text-strong);
     font-weight: 600;
@@ -3502,11 +3501,12 @@ kbd {
 .pipeline-chip.current .pipeline-num {
     border-color: transparent;
     background: var(--accent);
-    color: #fff;
+    color: var(--on-accent);
 }
 
 .pipeline-chip.current.done .pipeline-num {
     background: var(--success);
+    color: #fff;
 }
 
 .pipeline-btn {
@@ -3534,8 +3534,8 @@ kbd {
 }
 
 .pipeline-btn.accent {
-    border-color: rgba(61, 139, 253, 0.6);
-    color: #9cc3ff;
+    border-color: rgba(187, 153, 255, 0.6);
+    color: var(--accent-text);
 }
 
 .pipeline-bar > .btn {
@@ -3644,7 +3644,7 @@ kbd {
 }
 
 .check-note {
-    color: #9cc3ff;
+    color: var(--accent-text);
     font-size: 11px;
     white-space: pre-wrap;
 }
@@ -3685,7 +3685,7 @@ kbd {
     font-size: 10.5px;
     font-weight: 600;
     background: var(--accent-soft);
-    color: #9cc3ff;
+    color: var(--accent-text);
 }
 
 .stage-status.done {
@@ -3796,9 +3796,9 @@ kbd {
 .design-proposal {
     margin: 6px 0 8px;
     padding: 8px 10px;
-    border: 1px solid rgba(61, 139, 253, 0.45);
+    border: 1px solid rgba(187, 153, 255, 0.45);
     border-radius: 7px;
-    background: rgba(61, 139, 253, 0.08);
+    background: rgba(187, 153, 255, 0.08);
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -3808,7 +3808,7 @@ kbd {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #9cc3ff;
+    color: var(--accent-text);
     font-weight: 600;
 }
 
@@ -4006,8 +4006,8 @@ kbd {
 }
 
 .shot-item.active {
-    border-color: rgba(61, 139, 253, 0.6);
-    background: rgba(61, 139, 253, 0.06);
+    border-color: rgba(187, 153, 255, 0.6);
+    background: rgba(187, 153, 255, 0.06);
 }
 
 .shot-info {
@@ -4294,16 +4294,16 @@ kbd {
     gap: 5px;
     margin: 4px 6px 8px;
     padding: 8px 10px;
-    border: 1px solid rgba(61, 139, 253, 0.5);
+    border: 1px solid rgba(187, 153, 255, 0.5);
     border-radius: 7px;
-    background: rgba(61, 139, 253, 0.08);
+    background: rgba(187, 153, 255, 0.08);
 }
 
 .isolation-title {
     display: flex;
     align-items: center;
     gap: 6px;
-    color: #9cc3ff;
+    color: var(--accent-text);
     font-weight: 600;
 }
 
@@ -5852,7 +5852,6 @@ input.text.bt-part-id {
 }
 
 @media (max-width: 560px) {
-    .brand-sub,
     .brand-name {
         display: none;
     }

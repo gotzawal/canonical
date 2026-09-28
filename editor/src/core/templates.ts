@@ -193,7 +193,9 @@ export interface ShaderTemplate {
 }
 
 /** Marks the triplanar shader material slots use (see design/materialSlots.ts). */
-export const TRIPLANAR_MARKER = '@canonical triplanar';
+export const TRIPLANAR_MARKER = '@morglay triplanar';
+/** The marker under the editor's earlier name, in older projects. */
+export const OLD_TRIPLANAR_MARKER = '@canonical triplanar';
 
 export const TRIPLANAR_CODE = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo texture is
 // projected along x, y and z and blended by the surface normal, so it keeps

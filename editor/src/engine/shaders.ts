@@ -70,7 +70,7 @@ interface ShaderEvents {
     compiled: string;
 }
 
-const USER_BEGIN = 'fn canonical_user_code_begin() {}';
+const USER_BEGIN = 'fn morglay_user_code_begin() {}';
 const TEXTURE_DEFAULTS = ['white', 'black', 'gray', 'normal'] as const;
 
 /** Uniform struct of the engine's PBR material, which the lighting code reads. */
@@ -242,7 +242,7 @@ function textureBindings(props: ShaderProperty[]): string {
 export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: ParsedShader): string {
     const includes = parsed.includes.map((n) => `#include "${n}"`).join('\n');
     if (doc.kind === 'post') {
-        const fields = structFields(parsed.props) || '    canonical_pad: vec4<f32>,';
+        const fields = structFields(parsed.props) || '    morglay_pad: vec4<f32>,';
         return [
             '#include "GlobalUniform"',
             includes,
@@ -410,7 +410,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
             return { messages: [{ line: 0, column: 0, severity: 'error', message: `Preprocessor: ${err?.message || err}` }], parsed, source };
         }
         const finalLines = final.split('\n');
-        const begin = finalLines.findIndex((l) => l.includes('canonical_user_code_begin'));
+        const begin = finalLines.findIndex((l) => l.includes('morglay_user_code_begin'));
         const device = this.runtime.engine.context3D.device;
         device.pushErrorScope('validation');
         const module = device.createShaderModule({ label: `editor shader ${doc.name}`, code: final });
@@ -437,7 +437,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
             return;
         }
         const version = ++shaderSerial;
-        const name = `canonical_shader_${id}_${version}`.replace(/[^A-Za-z0-9_]/g, '_');
+        const name = `morglay_shader_${id}_${version}`.replace(/[^A-Za-z0-9_]/g, '_');
         ShaderLib.register(name, source);
         e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert };
         e.status = { state: 'ok', messages, props: parsed.props, version };
@@ -499,7 +499,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
     createPost(id: string, instanceId: string): EditorPost | null {
         const valid = this.entries.get(id)?.valid;
         if (!valid || valid.kind !== 'post') return null;
-        const clsName = `CanonicalPost_${instanceId}_${valid.version}`.replace(/[^A-Za-z0-9_]/g, '_');
+        const clsName = `MorglayPost_${instanceId}_${valid.version}`.replace(/[^A-Za-z0-9_]/g, '_');
         // PostPass keys its chain by constructor name, so every instance
         // needs a class of its own.
         const Cls = class extends EditorPost {};
@@ -589,7 +589,7 @@ export class EditorPost extends PostBase {
         const key = this.constructor.name;
         this.renderTexture = this.createRTTexture(key, w, h, GPUTextureFormat.rgba16float);
         this.postQuad = this.createViewQuad(key, this.shaderName, this.renderTexture);
-        if (!this.props.some((p) => p.type !== 'texture')) this.postQuad.quadShader.setUniformVector4('canonical_pad', new Vector4());
+        if (!this.props.some((p) => p.type !== 'texture')) this.postQuad.quadShader.setUniformVector4('morglay_pad', new Vector4());
         this.writeValues();
     }
 

@@ -36,6 +36,7 @@ export type WorkerOut =
     | { type: 'failed'; id: number; message: string; code?: 'not-cached' | 'lost' }
     | { type: 'lost'; message: string };
 
+/** Named for the editor's earlier name: renaming it would download the models again. */
 const CACHE = 'canonical-models-v1';
 /** Files a model folder may have; an empty {} is stored when it has not (so the cache knows). */
 const OPTIONAL = ['config.json', 'tokenizer_config.json'];

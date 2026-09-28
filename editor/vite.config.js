@@ -71,7 +71,7 @@ function shared() {
  */
 function playerManifest() {
     return {
-        name: 'canonical-player-manifest',
+        name: 'morglay-player-manifest',
         apply: 'build',
         writeBundle(options, bundle) {
             const entry = Object.values(bundle).find(
@@ -180,10 +180,10 @@ function devPlayer() {
         return JSON.parse(fs.readFileSync(path.join(outDir, PLAYER_MANIFEST), 'utf8'))
     }
     return {
-        name: 'canonical-dev-player',
+        name: 'morglay-dev-player',
         apply: 'serve',
         configureServer(server) {
-            outDir = path.join(server.config.cacheDir, 'canonical-player')
+            outDir = path.join(server.config.cacheDir, 'morglay-player')
             const touch = () => (dirty = true)
             server.watcher.on('change', touch)
             server.watcher.on('add', touch)
@@ -225,7 +225,7 @@ function devPlayer() {
                         return
                     }
                 } catch (e) {
-                    server.config.logger.error(`[canonical] player build failed: ${e?.message || e}`)
+                    server.config.logger.error(`[morglay] player build failed: ${e?.message || e}`)
                     res.statusCode = 500
                     res.end(`The player build failed: ${e?.message || e}`)
                     return

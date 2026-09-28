@@ -170,7 +170,7 @@ export async function deployToGitHub(files: ZipEntry[], opts: DeployOptions): Pr
         log(`Creating the repository ${owner}/${name}...`);
         const body = {
             name,
-            description: `${opts.title}, made with Canonical Editor`,
+            description: `${opts.title}, made with Morglay`,
             homepage: `https://${owner.toLowerCase()}.github.io/${name}/`,
             // Git's data API needs a first commit to exist.
             auto_init: true,
@@ -203,7 +203,7 @@ export async function deployToGitHub(files: ZipEntry[], opts: DeployOptions): Pr
                 log('The repository is empty; adding a README first...');
                 await request(token, 'PUT', `${base}/contents/README.md`, {
                     message: 'Initial commit',
-                    content: btoa(`# ${repo.name}\n\nMade with Canonical Editor.\n`),
+                    content: btoa(`# ${repo.name}\n\nMade with Morglay.\n`),
                 });
                 initialized = true;
             }
@@ -260,7 +260,7 @@ export async function deployToGitHub(files: ZipEntry[], opts: DeployOptions): Pr
     log('Creating the commit...');
     const tree = await request<{ sha: string }>(token, 'POST', `${base}/git/trees`, { tree: entries });
     const commit = await request<{ sha: string }>(token, 'POST', `${base}/git/commits`, {
-        message: `Deploy ${opts.title} from Canonical Editor`,
+        message: `Deploy ${opts.title} from Morglay`,
         tree: tree.sha,
         parents: parent ? [parent] : [],
     });

@@ -3,6 +3,8 @@
 //   kv        small editor state that outlives a reload (the assistant's conversation)
 //   swatches  the swatch library, shared by every project in this browser
 
+// Named for the editor's earlier name, like its keys in localStorage
+// (canonical-editor/...): renaming them would lose what browsers hold.
 const DB_NAME = 'canonical-editor';
 const DB_VERSION = 2;
 

@@ -105,7 +105,7 @@ export function fileNameFor(doc: SceneDoc): string {
 }
 
 export function projectFileNameFor(doc: SceneDoc): string {
-    return `${baseName(doc)}.canonical.zip`;
+    return `${baseName(doc)}.morglay.zip`;
 }
 
 /**
@@ -129,7 +129,7 @@ export async function exportSceneFile(store: Store): Promise<Blob> {
 
 // ---------------------------------------------------------------- projects
 
-/** project.json inside a project file (.canonical.zip). */
+/** project.json inside a project file (.morglay.zip). */
 interface ProjectManifest {
     format: 'canonical-project';
     version: 1;
@@ -190,17 +190,17 @@ export async function importProject(zip: Blob): Promise<{ doc: SceneDoc; camera?
     try {
         files = await readZip(zip);
     } catch (e: any) {
-        throw new Error(`This is not a Canonical project file (${e?.message || e}).`);
+        throw new Error(`This is not a Morglay project file (${e?.message || e}).`);
     }
     const manifestBlob = files.get(PROJECT_FILE);
-    if (!manifestBlob) throw new Error('This zip file is not a Canonical project (project.json is missing).');
+    if (!manifestBlob) throw new Error('This zip file is not a Morglay project (project.json is missing).');
     let manifest: ProjectManifest;
     try {
         manifest = JSON.parse(await manifestBlob.text());
     } catch {
         throw new Error('project.json in this file is not valid.');
     }
-    if (manifest?.format !== 'canonical-project' || !manifest.scene) throw new Error('This zip file is not a Canonical project.');
+    if (manifest?.format !== 'canonical-project' || !manifest.scene) throw new Error('This zip file is not a Morglay project.');
     for (const f of Array.isArray(manifest.files) ? manifest.files : []) {
         const blob = f && typeof f.path === 'string' ? files.get(f.path) : undefined;
         const meta = f?.meta;
@@ -220,7 +220,7 @@ export async function importSceneFile(text: string): Promise<{ doc: SceneDoc; ca
         throw new Error('Not a valid JSON file.');
     }
     if (!parsed || (parsed.format !== 'canonical-scene' && !Array.isArray((parsed as any).nodes))) {
-        throw new Error('This file is not a Canonical scene.');
+        throw new Error('This file is not a Morglay scene.');
     }
     const embedded = parsed.embedded || {};
     for (const asset of Array.isArray(parsed.assets) ? parsed.assets : []) {

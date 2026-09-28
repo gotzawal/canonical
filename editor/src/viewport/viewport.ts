@@ -347,7 +347,7 @@ export class Viewport {
         const [x, y] = this.local(e);
         this.picker.update();
         const point = this.groundPoint(x, y);
-        const assetId = e.dataTransfer?.getData('application/x-canonical-asset');
+        const assetId = e.dataTransfer?.getData('application/x-morglay-asset');
         if (assetId) {
             this.hooks.onDropAsset(assetId, point, this.picker.pick(x, y)?.id ?? null);
             return;

@@ -45,7 +45,7 @@ export function rigGltf(): string {
     const U16 = 5123;
     const accessor = (view: number, type: string, count: number, componentType = F32, extra = {}) => ({ bufferView: view, componentType, count, type, ...extra });
     const gltf = {
-        asset: { version: '2.0', generator: 'canonical tests' },
+        asset: { version: '2.0', generator: 'morglay tests' },
         scene: 0,
         scenes: [{ nodes: [0] }],
         nodes: [

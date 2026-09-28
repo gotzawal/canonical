@@ -9,7 +9,7 @@ import { MenuItem, showMenu } from './overlays';
 import { iconButton } from './widgets';
 
 /** Payload of dragged assets: an asset id, or "script:<id>" / "shader:<id>". */
-export const ASSET_MIME = 'application/x-canonical-asset';
+export const ASSET_MIME = 'application/x-morglay-asset';
 
 /** Imported models and textures, plus the project's scripts and shaders. */
 export class AssetsPanel {
