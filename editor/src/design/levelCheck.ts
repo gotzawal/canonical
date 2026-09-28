@@ -6,15 +6,34 @@
 // grid of columns with ray casts; the findings come with a plan view.
 
 import { levelSignature } from '../core/design';
+import type { RayHit } from '../core/math';
 import type { AreaDoc, Vec3 } from '../core/types';
 import type { Editor } from '../editor';
+import { LevelRays } from '../engine/levelRays';
 import type { Box } from '../engine/picking';
-import { CharacterMotor, LevelRays, type Hit } from '../play/motor';
+import { CharacterMotor } from '../play/motor';
 
 export interface CheckBody {
     height: number;
     radius: number;
     stepHeight: number;
+}
+
+/** A shown object of the level: its world box, and whether it is a mesh (or a model). */
+export interface LevelObject {
+    id: string;
+    name: string;
+    box: Box;
+    mesh: boolean;
+}
+
+/** What the check sees of the level (scanLevel makes it from the editor's scene). */
+export interface LevelScan {
+    objects: LevelObject[];
+    /** Nearest hit of a ray against the meshes; `ignore` leaves objects out. */
+    cast(origin: Vec3, dir: Vec3, maxDist: number, ignore?: (id: string) => boolean): RayHit | null;
+    /** Ids of the objects under an object. */
+    descendants(id: string): string[];
 }
 
 export interface LevelCheckOptions {
@@ -29,8 +48,6 @@ export interface LevelCheckOptions {
     startOutside?: boolean;
     /** Points the player has to reach (route points). */
     targets: { name: string; point: Vec3 }[];
-    /** Objects left out (the player itself). */
-    skip: Set<string>;
     /** The size the plan gives the level (layout size), to compare with what was built. */
     planned?: Vec3 | null;
 }
@@ -82,7 +99,7 @@ const EMPTY_OUTDOOR = 8;
 const REACH_GROW = 15;
 
 /** A place to stand: a surface in a column of the grid, with the room above it. */
-interface Cell {
+export interface Cell {
     ix: number;
     iz: number;
     x: number;
@@ -100,13 +117,37 @@ interface Cell {
     clear: number;
 }
 
-/** World box of what the level's shown meshes cover, ground planes larger than `limit` left out. */
-export function builtBounds(editor: Editor, skip: Set<string>, limit = 200): Box | null {
+/** The grid of the check and what it found, for the plan view (drawMap). */
+export interface LevelPlan {
+    box: Box;
+    step: number;
+    nx: number;
+    nz: number;
+    columns: Cell[][];
+    emptyCells: Cell[];
+    objects: { box: Box }[];
+    start: Vec3 | null;
+    targets: { name: string; point: Vec3 }[];
+}
+
+/** The shown objects of the editor's scene but `skip`, with rays against their meshes. */
+export function scanLevel(editor: Editor, skip: Set<string>): LevelScan {
+    const { store, sync, picker } = editor;
+    const rays = new LevelRays(picker, sync, store, (id) => skip.has(id));
+    rays.refresh();
+    const objects: LevelObject[] = [];
+    for (const n of store.doc.nodes) {
+        if (skip.has(n.id) || !sync.entries.get(n.id)?.visible) continue;
+        const box = picker.bounds(n.id, false);
+        if (box) objects.push({ id: n.id, name: n.name, box, mesh: !!(n.mesh || n.model) });
+    }
+    return { objects, cast: rays.cast, descendants: (id) => store.descendants(id).map((n) => n.id) };
+}
+
+/** World box of what the objects cover, ground planes larger than `limit` left out. */
+export function builtBounds(objects: LevelObject[], limit = 200): Box | null {
     let box: Box | null = null;
-    for (const n of editor.store.doc.nodes) {
-        if (skip.has(n.id) || !editor.sync.entries.get(n.id)?.visible) continue;
-        const b = editor.picker.bounds(n.id, false);
-        if (!b) continue;
+    for (const { box: b } of objects) {
         const flat = b.max[1] - b.min[1] < 0.05 && (b.max[0] - b.min[0] > limit / 2 || b.max[2] - b.min[2] > limit / 2);
         if (flat) continue;
         box = box ? { min: box.min.map((v, i) => Math.min(v, b.min[i])) as Vec3, max: box.max.map((v, i) => Math.max(v, b.max[i])) as Vec3 } : { min: [...b.min] as Vec3, max: [...b.max] as Vec3 };
@@ -122,20 +163,11 @@ const r2 = (p: Vec3): Vec3 => [round(p[0]), round(p[1]), round(p[2])];
  * Runs the check. It casts many rays (a second or two for a large level)
  * and yields to the page now and then.
  */
-export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promise<{ report: LevelReport; map: string }> {
-    const { store, sync, picker } = editor;
-    const doc = store.doc;
+export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Promise<{ report: LevelReport; plan: LevelPlan }> {
     const body = opts.body;
-    const shown = (id: string) => !opts.skip.has(id) && !!sync.entries.get(id)?.visible;
-
-    // The meshes for rays, and a box per object for seams and support.
-    const rays = new LevelRays(picker, sync, store, (id) => opts.skip.has(id));
-    rays.refresh();
-    const objects: { id: string; name: string; box: Box; mesh: boolean }[] = [];
-    for (const n of doc.nodes) {
-        const b = shown(n.id) ? picker.bounds(n.id, false) : null;
-        if (b) objects.push({ id: n.id, name: n.name, box: b, mesh: !!(n.mesh || n.model) });
-    }
+    // Rays against the meshes, and a box per object for seams and support.
+    const rays = level;
+    const objects = level.objects;
 
     // The region and its grid: coarser when the level is large.
     const box: Box = { min: [...opts.box.min] as Vec3, max: [...opts.box.max] as Vec3 };
@@ -163,7 +195,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
     // 1. Columns: every surface to stand on, from the top down, with the room
     //    above it. A face seen from behind means the ray is inside a solid (a
     //    floor running under a wall): no place to stand there.
-    const known = (hit: Hit) => !!(hit.normal[0] || hit.normal[1] || hit.normal[2]);
+    const known = (hit: RayHit) => !!(hit.normal[0] || hit.normal[1] || hit.normal[2]);
     for (let iz = 0; iz < nz; iz++) {
         for (let ix = 0; ix < nx; ix++) {
             const x = box.min[0] + (ix + 0.5) * step;
@@ -367,7 +399,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
         if (flat) continue;
         const touching = objects.some((p) => p !== o && boxGap(o.box, p.box).distance <= 0.03);
         if (touching) continue;
-        const own = new Set([o.id, ...store.descendants(o.id).map((n) => n.id)]);
+        const own = new Set([o.id, ...level.descendants(o.id)]);
         const c: Vec3 = [(o.box.min[0] + o.box.max[0]) / 2, o.box.min[1] + 0.01, (o.box.min[2] + o.box.max[2]) / 2];
         const below = rays.cast(c, DOWN, 50, (id) => own.has(id));
         if (below && below.distance < 0.05) continue;
@@ -425,7 +457,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
     const indoorCells = cells.filter((c) => c.walk && covered(c));
     const heights = indoorCells.map((c) => c.head).sort((a, b) => a - b);
     const ceiling = heights.length ? round(heights[Math.floor(heights.length / 2)], 10) : null;
-    const built = builtBounds(editor, opts.skip);
+    const built = builtBounds(objects);
     const footprint: [number, number] = built ? [round(built.max[0] - built.min[0], 10), round(built.max[2] - built.min[2], 10)] : [0, 0];
     const notes: string[] = [];
     if (ceiling !== null && ceiling > 4.5) notes.push(`Roofed spaces are ${ceiling} m high in the middle; rooms are usually 2.6-3.2 m (halls more).`);
@@ -465,8 +497,7 @@ export async function checkLevel(editor: Editor, opts: LevelCheckOptions): Promi
         },
         notes,
     };
-    const map = drawMap(report, { box, step, nx, nz, columns, emptyCells, objects: structural, start: opts.start, targets: opts.targets });
-    return { report, map };
+    return { report, plan: { box, step, nx, nz, columns, emptyCells, objects: structural, start: opts.start, targets: opts.targets } };
 }
 
 /** Walls, floors and ceilings: tall and thin, or flat and wide. */
@@ -538,11 +569,8 @@ const MAP_COLORS = {
     text: '#d9dee6',
 };
 
-/** A plan view of the check: floors, walls, what the player reaches and every finding. */
-function drawMap(
-    report: LevelReport,
-    g: { box: Box; step: number; nx: number; nz: number; columns: Cell[][]; emptyCells: Cell[]; objects: { box: Box }[]; start: Vec3 | null; targets: { name: string; point: Vec3 }[] },
-): string {
+/** A plan view of the check (a PNG data URL): floors, walls, what the player reaches and every finding. */
+export function drawMap(report: LevelReport, g: LevelPlan): string {
     const w = g.box.max[0] - g.box.min[0];
     const d = g.box.max[2] - g.box.min[2];
     const scale = Math.max(4, Math.min(48, 720 / Math.max(w, d, 1)));
@@ -727,6 +755,7 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
     const firstPoint = d.play.route.find((r) => r.position);
     if (!start && firstPoint?.position) start = [...firstPoint.position] as Vec3;
     const targets = d.play.route.filter((r) => r.position).map((r) => ({ name: r.name, point: [...r.position!] as Vec3 }));
+    const level = scanLevel(editor, skip);
 
     let box: Box | null;
     let label: string;
@@ -739,7 +768,7 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
         label = scope.area.name;
         if (!box) throw new Error(`${scope.area.name} has no bounds in the plan.`);
     } else {
-        box = builtBounds(editor, skip);
+        box = builtBounds(level.objects);
         label = 'the level';
     }
     if (!box) throw new Error('There is nothing built to check yet.');
@@ -756,16 +785,16 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
         }
     }
     const inRegion = (pt: Vec3) => pt[0] >= box!.min[0] && pt[0] <= box!.max[0] && pt[2] >= box!.min[2] && pt[2] <= box!.max[2];
-    const result = await checkLevel(editor, {
+    const { report, plan } = await checkLevel(level, {
         box,
         step: scope.step ?? 0.5,
         body,
         start: start && inRegion(start) ? start : null,
         startOutside: !!start && !inRegion(start),
         targets: targets.filter((t) => inRegion(t.point)),
-        skip,
         planned: scope.object || scope.area ? null : d.layout.size,
     });
+    const result = { report, map: drawMap(report, plan) };
     if (!scope.object && !scope.area) {
         const summary = summarize(result.report);
         store.patch((dd) => {

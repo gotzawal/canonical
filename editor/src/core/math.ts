@@ -292,6 +292,14 @@ export function localMatrix(position: Vec3, rotation: Vec3, s: Vec3): Mat4 {
 
 export interface Ray { origin: Vec3; dir: Vec3; }
 
+/** A ray's nearest hit in the level: the object it hit and the normal of the triangle there. */
+export interface RayHit {
+    distance: number;
+    point: Vec3;
+    id: string;
+    normal: Vec3;
+}
+
 /** Returns distance along the ray, or null when parallel / behind. */
 export function rayPlane(ray: Ray, point: Vec3, normal: Vec3): number | null {
     const d = dot(ray.dir, normal);

@@ -15,7 +15,8 @@ import type { Store } from '../core/store';
 import type { CharacterDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
 import type { SceneSync } from '../engine/sync';
-import { CharacterMotor, LevelRays, type CastFn } from './motor';
+import { LevelRays } from '../engine/levelRays';
+import { CharacterMotor, type CastFn } from './motor';
 
 /** How fast the body turns toward where it goes, per second. */
 const TURN_RATE = 12;

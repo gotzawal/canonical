@@ -194,12 +194,14 @@ You need Node.js (CI uses 22) and pnpm.
 pnpm install
 pnpm run editor             # dev server at http://localhost:8100
 pnpm run editor:typecheck   # type check the editor
+pnpm run editor:test        # unit tests of the editor's logic (Vitest, in Node)
 pnpm run editor:build       # static site in editor/dist
+xvfb-run -a pnpm run editor:e2e   # browser tests of the build (Playwright)
 ```
 
 The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.
 
-`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**.
+`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**. `.github/workflows/editor-tests.yml` runs the unit and browser tests.
 
 | Path | Contents |
 |---|---|
@@ -214,14 +216,14 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 | `test/` | Engine tests |
 
 ### Testing
-Check a change with `pnpm run editor:typecheck` and `pnpm run editor:build`, then drive the built editor in a browser: serve it with `npx vite preview --config editor/vite.config.js`, which also serves the player app that Build & Deploy needs. What has worked for scripted runs (Playwright or plain CDP):
+Check a change with `pnpm run editor:typecheck`, `pnpm run editor:test` and `pnpm run editor:build`, then drive the built editor in a browser: `xvfb-run -a pnpm run editor:e2e` runs the Playwright tests in `editor/test/e2e` against `npx vite preview --config editor/vite.config.js`, which also serves the player app that Build & Deploy needs. What has worked for scripted runs (Playwright or plain CDP):
 
-- **WebGPU without a GPU.** Chromium can run WebGPU on the CPU with SwiftShader: `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader`. On a server, run the browser headed under a virtual display (`xvfb-run -a node test.mjs`), which is more reliable than headless.
+- **WebGPU without a GPU.** Chromium can run WebGPU on the CPU with SwiftShader: `--enable-unsafe-webgpu --enable-features=Vulkan --use-vulkan=swiftshader --use-webgpu-adapter=swiftshader --disable-gpu-watchdog`. On a server, run the browser headed under a virtual display (`xvfb-run -a node test.mjs`), which is more reliable than headless. Compiling the shaders stalls the first frames of a page for about half a minute; without the GPU watchdog that ends without an "Instance dropped" error, so the browser tests share one page per file.
 - **Start clean.** The editor restores its last scene, layout and settings from localStorage and IndexedDB. Clear both and reload for a new scene. A new scene opens on the brief screen; "Work without a brief" dismisses it.
 - **Wait for state, not time.** The editor is `window.__editor` (its store, pipeline, camera and so on). It is ready when `.viewport canvas.gpu` is there and `.viewport-loading` is gone. SwiftShader can stop drawing frames for many seconds after a load, and waits that poll on animation frames stop with it. So give `waitForFunction` a `{ polling: 100 }` interval, click with `el.click()` inside `page.evaluate` when Playwright's actionability waits time out, and wait for `!__editor.camera.animating` after camera moves.
 - **Keys.** Shortcuts take digits by their position (`Shift+1` is the back view, not `!`), and letters by position too when the layout types another script (Korean, Cyrillic). For a symbol typed with Shift, press the symbol (`?`), not `Shift+/`.
 - **The assistant without an account.** Put a dummy key in `localStorage['canonical-editor/openrouter-key']`. Then answer `https://openrouter.ai/api/v1/models` and `/api/v1/chat/completions` with `context.route`. A chat reply is a `text/event-stream` body of `data: {"choices":[{"delta":...}]}` lines ending with `data: [DONE]`, so a test can script tool calls step by step.
-- **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats and the script compiler, run in Node. Bundle a test with `npx esbuild test.ts --bundle --platform=node --format=esm --outfile=test.mjs`, and stub the few globals they touch (`window`, `document`, `localStorage`).
+- **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats, the script compiler, the room planner and the level check, run in Node: `editor/test/unit` has their Vitest tests. `test/unit/setup.ts` stubs the few globals they touch (`window`, `document`, `localStorage`), and `@orillusion/core` resolves to a stub there. The level check runs on any `LevelScan` (boxes and a ray cast), so tests give it a level made of boxes.
 - **The engine.** `pnpm run test:ci` runs `test/` in Electron with SwiftShader. The same page (`test/?auto` on `pnpm run dev`) also runs in Chromium when `window.electron` is stubbed to collect the results.
 - **Load.** SwiftShader is CPU bound. With several browsers at once, the GPU process can lose its device ("Instance dropped" errors) or time out. Run browser tests one at a time, and rerun a failure on an idle machine before deciding it is not the change.
 
