@@ -12,7 +12,7 @@
 </p>
 
 <p align="center">
-  <a href="https://gotzawal.github.io/canonical/"><strong>Open the editor</strong></a>
+  <a href="https://gotzawal.github.io/morglay/"><strong>Open the editor</strong></a>
   &nbsp;·&nbsp;
   <a href="#features">Features</a>
   &nbsp;·&nbsp;
@@ -32,7 +32,7 @@
 
 Morglay is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant builds the scene, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
-The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/canonical/** every time `main` is updated.
+The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/morglay/** every time `main` is updated.
 
 | Name | What it is |
 |---|---|
