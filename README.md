@@ -26,7 +26,7 @@
 </p>
 
 
-<img width="1200" height="679" alt="image" src="https://github.com/user-attachments/assets/813ddf3c-0550-4a57-90ab-7d66e75ef87e" />
+<img width="2880" height="1560" alt="image" src="https://github.com/user-attachments/assets/09f3414f-2f7e-44f1-91cd-4fb2a04d69df" />
 
 
 
