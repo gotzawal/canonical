@@ -1,11 +1,11 @@
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="editor/public/logo-white.svg">
-    <img src="editor/public/logo.svg" alt="Canonical logo" width="112">
+    <img src="editor/public/logo.svg" alt="Morglay logo" width="112">
   </picture>
 </p>
 
-<h1 align="center">Canonical</h1>
+<h1 align="center">Morglay</h1>
 
 <p align="center">
   An open-source, AI-automated development editor based on the Orillusion WebGPU engine.
@@ -30,14 +30,14 @@
 
 
 
-Canonical is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant builds the scene, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
+Morglay is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant builds the scene, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
 The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/canonical/** every time `main` is updated.
 
 | Name | What it is |
 |---|---|
-| **Canonical** | This project: the editor, its AI assistant and the tooling around them |
-| **Orillusion** | The WebGPU engine Canonical is built on. Its source is included in this repository |
+| **Morglay** | This project: the editor, its AI assistant and the tooling around them |
+| **Orillusion** | The WebGPU engine Morglay is built on. Its source is included in this repository |
 
 ## Features
 
@@ -178,14 +178,14 @@ Each material slot of an imported model keeps the file's material or switches to
 
 - **Run in New Tab** plays the scene the way the built game runs, with script errors shown on screen
 - **Download .zip** gives the folder for any static host: itch.io (as an HTML game), Netlify, Cloudflare Pages or your own server. It has to be served over HTTP; opening `index.html` from disk does not work
-- **GitHub Pages** pushes the game to a branch (`gh-pages` by default, which then holds only the game) of a repository, which it can create, and publishes it at `https://<owner>.github.io/<repository>/`. It needs a [personal access token](https://github.com/settings/tokens/new?scopes=public_repo&description=Canonical%20Editor) with the `public_repo` scope (`repo` for private repositories, where Pages needs a paid plan), or a fine-grained token with Contents, Pages and Administration (to create repositories) set to Read and write. Deploying again uploads only the files that changed. Before it replaces a branch that holds anything else than a game, or changes an existing Pages setup, it asks
+- **GitHub Pages** pushes the game to a branch (`gh-pages` by default, which then holds only the game) of a repository, which it can create, and publishes it at `https://<owner>.github.io/<repository>/`. It needs a [personal access token](https://github.com/settings/tokens/new?scopes=public_repo&description=Morglay) with the `public_repo` scope (`repo` for private repositories, where Pages needs a paid plan), or a fine-grained token with Contents, Pages and Administration (to create repositories) set to Read and write. Deploying again uploads only the files that changed. Before it replaces a branch that holds anything else than a game, or changes an existing Pages setup, it asks
 
 A game whose agents ask or recall also gets ONNX Runtime and the inference worker (about 27 MB) and downloads the models into the player's browser the first time it runs, playing with the defaults meanwhile; other games leave these files out.
 
 The title, repository and branch are saved with the scene. The token is sent only to `api.github.com`; it is kept for the current tab, or in this browser's storage when "Remember on this device" is on, where scripts you run in the editor could read it. Builds leave out the scripts of an opened scene file until you enable them.
 
 ## The engine: Orillusion
-[Orillusion](https://www.orillusion.com/) is an open-source 3D rendering engine for the web, written in TypeScript and built on WebGPU from the start rather than ported from WebGL. It aims for desktop-class rendering in the browser, which makes it a strong base for Canonical:
+[Orillusion](https://www.orillusion.com/) is an open-source 3D rendering engine for the web, written in TypeScript and built on WebGPU from the start rather than ported from WebGL. It aims for desktop-class rendering in the browser, which makes it a strong base for Morglay:
 
 - **Built for modern GPUs.** WebGPU gives it compute shaders and lower CPU overhead than WebGL, and Orillusion uses compute for clustered lighting, global illumination and GPU particles.
 - **High-end rendering.** Physically based materials, real-time shadows, image-based lighting and DDGI global illumination, plus post effects such as bloom, GTAO, screen space reflections, TAA, depth of field and volumetric fog.
@@ -214,7 +214,7 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 
 | Path | Contents |
 |---|---|
-| `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
+| `editor/` | Morglay: UI, viewport, scripting, shaders and the AI assistant |
 | `editor/player.html`, `editor/src/player/` | The game player that Build & Deploy puts into every game |
 | `editor/src/core/model.ts` | The components of objects (material, light, camera, particles, character, player...) and the scene settings as zod schemas: their types, defaults, the repair of opened files, the assistant's tool arguments and the inspector's fields all come from them, so a new setting is one line there plus what the engine does with it |
 | `editor/src/` | Layered: `core/` (data, schemas, store) at the bottom, then `engine/`, `play/` and the pipeline (`design/`); `editor.ts` gets all of them when main.ts makes it; the assistant (`ai/`), the view modes (`viewport/`) and the UI (`ui/`) sit on top. Code below the UI reports to it through events, `core/messages.ts` (toasts, notices, questions) and the editor's own, and `test/unit/layers.test.ts` checks the direction |

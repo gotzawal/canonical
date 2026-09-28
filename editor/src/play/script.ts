@@ -115,7 +115,7 @@ export interface ScriptContext {
     api: PlayApi | null;
 }
 
-export const CTX: unique symbol = Symbol('canonical.script');
+export const CTX: unique symbol = Symbol('morglay.script');
 
 let pending: ScriptContext | null = null;
 

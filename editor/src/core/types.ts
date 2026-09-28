@@ -153,6 +153,7 @@ export interface RenderGraphDoc {
 export const SCENE_VERSION = 3;
 
 export interface SceneDoc {
+    /** The editor's earlier name, as in the other files' format tags, so files open in older and newer versions alike. */
     format: 'canonical-scene';
     version: typeof SCENE_VERSION;
     name: string;

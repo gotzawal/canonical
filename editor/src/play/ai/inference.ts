@@ -120,7 +120,7 @@ export class InferenceClient extends Emitter<{ status: string }> {
 
     private ensureWorker(): Worker {
         if (this.worker) return this.worker;
-        const w = new Worker(new URL('./inference.worker.ts', import.meta.url), { type: 'module', name: 'canonical-inference' });
+        const w = new Worker(new URL('./inference.worker.ts', import.meta.url), { type: 'module', name: 'morglay-inference' });
         w.onmessage = (ev: MessageEvent<WorkerOut>) => this.onMessage(ev.data);
         w.onerror = (ev) => {
             // A late error of a worker that was ended already does not end the new one.

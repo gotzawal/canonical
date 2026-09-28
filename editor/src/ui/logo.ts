@@ -1,4 +1,4 @@
-// The Canonical logo as one path: the disc with the blades and the centre cut
+// The Morglay logo as one path: the disc with the blades and the centre cut
 // out. It is drawn in currentColor, so on the dark UI it shows as a light disc.
 // The same shape is in editor/public (favicon.svg, logo.svg, logo-white.svg).
 
@@ -17,5 +17,34 @@ export function logo(size = 20, cls = ''): SVGSVGElement {
     wrap.innerHTML =
         `<svg class="logo ${cls}" width="${size}" height="${size}" viewBox="0 0 1024 1024" aria-hidden="true">` +
         `<path fill="currentColor" fill-rule="evenodd" d="${DISC}${CUTS}"/></svg>`;
+    return wrap.firstElementChild as SVGSVGElement;
+}
+
+// The wordmark: "Morglay" set in Fraunces Italic, light and soft (wght 300,
+// SOFT 100, opsz 48; SIL Open Font License 1.1), and outlined, so it looks
+// the same on every system without loading the font. Font units, 1000 to the
+// em. The box is centred on the capitals: in a row that centres its items the
+// word lines up with the logo, and the descenders hang below.
+const WORDMARK_BOX = [3474, 1234];
+const WORDMARK =
+    'M432 807l-25 9l321-511q12-20 27-29q15-9 28-9l72 0q14 0 18 5q5 5 4 14q-1 12-8 17q-7 5-16 7l-26 5q-14 2-23 13q-8 11-11 28q-4 22-11 57q-6 35-15 78q-8 44-17 90q-9 47-18 93q-9 46-16 87q-8 40-14 71q-5 30-7 45q-3 17 1 27q5 9 18 14l31 9q9 3 13 7q5 4 4 13q-1 10-8 15q-7 5-20 5l-180 0q-13 0-18-6q-5-6-4-15q1-9 7-14q7-4 15-7l31-7q15-4 25-13q11-9 14-28q4-18 11-54q7-36 16-84q10-48 20-101q10-53 20-104q10-52 17-95q8-44 12-72l14 7l-296 466q-13 21-22 29q-9 8-21 8q-10 0-17-9q-6-8-9-22q-6-37-13-78q-7-41-14-85q-6-43-13-86q-6-43-12-84q-7-41-13-78q-7-36-13-66l23-5l-156 512q-5 15-2 25q3 10 15 14l37 10q18 8 15 20q-1 11-10 17q-8 5-22 5l-149 0q-15 0-21-6q-5-6-4-15q1-11 7-17q7-5 21-8l28-7q12-3 20-9q8-5 13-17q6-11 11-30l151-489q6-20 2-34q-4-14-17-18l-35-9q-7-3-12-8q-4-5-3-14q1-9 8-14q8-5 19-5l77 0q18 0 29 13q11 13 16 42q6 34 12 74q6 40 13 82q6 42 13 86q7 44 14 86q7 43 14 82q7 40 14 75' + // M
+    'm700-297q54 3 89 31q36 29 49 79q14 49 3 113q-10 62-35 108q-25 47-61 78q-36 31-80 45q-44 15-92 12q-51-3-86-31q-36-28-50-78q-15-49-3-116q9-52 32-97q24-44 59-78q35-33 79-51q44-18 96-15m-111 424q22 2 44-6q23-7 44-23q21-15 39-40q18-25 32-60q15-35 22-79q10-54 1-93q-8-38-31-59q-23-21-55-23q-24-1-47 7q-23 9-45 27q-21 18-38 44q-18 26-31 59q-13 34-20 73q-10 55-2 93q9 38 31 58q23 20 56 22' + // o
+    'm356-337q-7-2-9-9q-3-7 2-17q9-16 25-30q17-14 38-23q21-8 43-8q25 0 36 11q12 12 12 34q0 20-8 48q-9 29-21 61q-12 32-23 63q-11 32-16 59l-12-3q17-58 42-108q25-50 55-87q30-37 62-57q32-21 63-21q32 0 49 20q16 19 16 52q0 23-7 39q-6 16-18 24q-11 9-25 9q-12 0-18-8q-5-7-5-17q0-9 2-18q3-9 3-22q0-13-5-21q-6-8-18-8q-26 0-59 30q-33 31-65 84q-32 53-54 122q-13 40-18 61q-4 21-4 35q0 10 4 18q5 8 9 15q5 7 5 14q0 10-9 19q-9 8-24 13q-15 5-33 5q-20 0-29-11q-9-10-7-33q2-22 15-58l75-227q15-41 14-61q-1-19-20-19q-8 0-18 5q-9 4-22 15q-6 6-12 9q-6 3-11 1' + // r
+    'm761 5l-85 371q-18 80-61 134q-43 55-106 83q-62 28-139 28q-49 0-74-15q-25-15-25-39q0-16 11-25q12-10 29-10q13 0 25 6q12 5 24 13q13 8 27 13q15 6 31 6q41 0 79-19q38-18 67-56q28-37 41-95l60-253l16 13q-28 67-68 116q-39 50-85 76q-46 27-95 27q-29 0-49-15q-20-14-30-43q-9-28-6-71q2-51 20-101q19-50 50-93q31-42 72-75q41-33 89-51q49-18 102-18q35 0 58 5q22 5 33 15q11 9 10 22q-1 10-5 17q-4 7-9 15q-4 8-7 19m-344 231q-2 30 4 50q6 21 20 30q14 10 33 10q29 0 59-21q31-21 59-56q29-35 51-78q23-43 37-88q14-45 15-85q1-22-10-33q-11-11-31-11q-31 0-63 15q-33 16-63 43q-29 27-54 62q-24 36-40 77q-15 42-17 85' + // g
+    'm735-584q33 0 49 12q16 12 16 29q0 16-10 27q-10 11-29 11q-10 0-18-3q-8-3-16-6q-8-3-17-6q-8-3-19-3q-15 0-28 8q-12 9-22 23q-9 15-13 35q-2 9-2 18q0 9 0 18q0 9 0 18q-1 10-3 22q-1 11-5 25l-111 357q-15 49-13 65q3 17 24 17q17 0 36-12q20-12 33-28q5-6 9-7q4-1 8 0q6 2 8 8q2 7-1 17q-5 20-26 39q-21 19-49 31q-28 12-58 12q-29 0-43-13q-14-13-13-42q2-29 16-75l137-441q25-83 65-120q40-36 95-36' + // l
+    'm363 360l-66 259q-7 24-4 36q3 13 18 13q10 0 19-6q10-5 21-14q8-7 13-9q6-2 10 0q6 3 7 10q1 8-5 20q-12 23-39 40q-27 18-61 18q-22 0-35-12q-13-12-13-37q0-11 2-25q2-13 7-35q6-21 16-55q11-34 27-87l7 13q-34 79-75 132q-40 53-84 79q-43 27-86 27q-44 0-69-30q-25-30-20-96q2-52 21-102q19-49 50-93q31-43 72-76q42-32 89-51q48-19 99-19q36 0 59 6q24 5 35 16q12 10 12 25q-1 11-6 19q-6 8-12 15q-6 8-9 19m-342 229q-3 48 11 68q14 21 41 21q28 0 59-24q32-24 62-63q30-38 55-84q25-45 41-89q15-44 17-78q0-19-11-28q-11-8-33-8q-32 0-65 15q-33 16-63 43q-31 28-56 65q-24 36-40 78q-15 41-18 84' + // a
+    'm586 166l101-265q48-120 91-176q44-56 92-56q18 0 28 10q10 10 10 27q0 17-11 29q-11 11-34 18q-20 4-37 13q-17 10-34 31q-18 20-37 57q-20 36-44 94l-93 226q-30 74-67 119q-36 45-82 64q-45 20-103 20q-39 0-60-15q-21-15-21-39q0-16 10-27q11-10 29-10q9 0 17 4q8 4 16 10q8 6 17 12q9 6 19 10q10 4 23 4q24 0 47-12q24-12 42-35q19-24 31-58q11-33 12-77q0-21-1-48q0-26-1-57q0-31-2-64q-1-33-2-67q-2-34-3-66q-2-31-3-59q-2-28-10-40q-7-13-18-13q-7 0-14 5q-6 5-13 14q-6 8-13 10q-7 3-12 2q-7-2-10-9q-2-7 2-20q6-16 20-30q13-14 32-23q20-8 42-8q23 0 38 19q15 19 18 60q2 21 3 58q1 36 2 81q1 45 1 94q1 49 1 96q1 48 1 88l-20-1'; // y
+
+let wordmarks = 0;
+
+/** The wordmark at a font size of `size` px: a light tint fading into currentColor. */
+export function wordmark(size = 24, cls = ''): SVGSVGElement {
+    const [w, h] = WORDMARK_BOX;
+    const id = `wordmark-fill-${++wordmarks}`;
+    const wrap = document.createElement('span');
+    wrap.innerHTML =
+        `<svg class="wordmark ${cls}" width="${Math.round((w * size) / 1000)}" height="${Math.round((h * size) / 1000)}" viewBox="0 0 ${w} ${h}" role="img" aria-label="Morglay">` +
+        `<defs><linearGradient id="${id}" x2="1" y2="0.35"><stop stop-color="#f4efff"/><stop offset="0.6" stop-color="currentColor"/></linearGradient></defs>` +
+        `<path fill="url(#${id})" d="${WORDMARK}"/></svg>`;
     return wrap.firstElementChild as SVGSVGElement;
 }

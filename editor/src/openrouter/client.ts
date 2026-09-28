@@ -114,7 +114,7 @@ export function headers(key: string): Record<string, string> {
         'Content-Type': 'application/json',
         // Optional attribution headers OpenRouter uses for its app rankings.
         'HTTP-Referer': location.origin + location.pathname,
-        'X-Title': 'Canonical Editor',
+        'X-Title': 'Morglay',
     };
 }
 

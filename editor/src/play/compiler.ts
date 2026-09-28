@@ -5,10 +5,10 @@ import type { ParamValue, ScriptDoc } from '../core/types';
 import { Script, LIFECYCLE, withContext } from './script';
 
 // Scripts are ES module-like JavaScript. The compiler turns `import` /
-// `export` into plain code (only '@orillusion/core' and 'canonical' can be
+// `export` into plain code (only '@orillusion/core' and 'morglay' can be
 // imported), wraps it in a function and evaluates it through an injected
 // <script> element, which gives syntax errors and stack traces real line
-// numbers (the source URL is canonical-script/<id>/<name>).
+// numbers (the source URL is morglay-script/<id>/<name>).
 
 export type ScriptClass = new () => Script;
 
@@ -54,14 +54,17 @@ export const PAUSED_MESSAGE = 'Scripts from an opened scene file or snapshot are
 
 const MODULES: Record<string, () => any> = {
     '@orillusion/core': () => core,
+    morglay: () => ({ Script, default: Script }),
+    '@morglay/script': () => ({ Script, default: Script }),
+    // The editor's earlier name, which older scripts import.
     canonical: () => ({ Script, default: Script }),
     '@canonical/script': () => ({ Script, default: Script }),
 };
 
-const SOURCE_PREFIX = 'canonical-script/';
+const SOURCE_PREFIX = 'morglay-script/';
 let defineSerial = 0;
 const registry = new Map<string, Function>();
-(window as any).__canonical_define = (token: string, factory: Function) => registry.set(token, factory);
+(window as any).__morglay_define = (token: string, factory: Function) => registry.set(token, factory);
 
 /** Rewrites import / export statements; keeps the line count unchanged. */
 export function transformModule(code: string): { code: string; defaultName: string | null; error: ScriptDiagnostic | null } {
@@ -70,7 +73,7 @@ export function transformModule(code: string): { code: string; defaultName: stri
     let out = code.replace(/^[ \t]*import\s+([\s\S]*?)\s+from\s+(['"])([^'"]+)\2[ \t]*;?/gm, (m, clause: string, _q, mod: string, offset: number) => {
         const lines = '\n'.repeat((m.match(/\n/g) || []).length);
         if (!(mod in MODULES)) {
-            error ??= { line: lineAt(offset), column: 1, message: `Cannot import "${mod}". Scripts can import from '@orillusion/core' and 'canonical'.` };
+            error ??= { line: lineAt(offset), column: 1, message: `Cannot import "${mod}". Scripts can import from '@orillusion/core' and 'morglay'.` };
             return lines;
         }
         const src = `__import(${JSON.stringify(mod)})`;
@@ -124,7 +127,7 @@ function evaluate(doc: ScriptDoc, body: string): { factory: Function | null; err
     const token = `s${++defineSerial}`;
     const file = `${SOURCE_PREFIX}${encodeURIComponent(doc.id)}/${encodeURIComponent(doc.name || 'script.js')}`;
     const source =
-        `__canonical_define(${JSON.stringify(token)}, function (__import, Script, __exports) {"use strict";\n` +
+        `__morglay_define(${JSON.stringify(token)}, function (__import, Script, __exports) {"use strict";\n` +
         `${body}\n});\n//# sourceURL=${file}`;
     let syntax: ScriptDiagnostic | null = null;
     const onError = (e: ErrorEvent) => {

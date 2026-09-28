@@ -16,7 +16,7 @@ import { readLocal, writeLocal } from '../core/local';
 
 const DEPLOY_KEY = 'canonical-editor/deploy';
 const TOKEN_KEY = 'canonical-editor/github-token';
-const PREVIEW_WINDOW = 'canonical-preview';
+const PREVIEW_WINDOW = 'morglay-preview';
 
 /** Preferences of this browser; title, repository and branch belong to the scene (SceneDoc.build). */
 interface DeploySettings {
@@ -303,7 +303,7 @@ export function showBuildDialog(editor: Editor) {
                 h('a', {
                     class: 'small',
                     text: 'Create a token',
-                    attrs: { href: 'https://github.com/settings/tokens/new?scopes=public_repo&description=Canonical%20Editor', target: '_blank', rel: 'noopener' },
+                    attrs: { href: 'https://github.com/settings/tokens/new?scopes=public_repo&description=Morglay', target: '_blank', rel: 'noopener' },
                 }),
             ),
         ),

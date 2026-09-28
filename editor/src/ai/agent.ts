@@ -268,7 +268,7 @@ export class Agent extends Emitter<AgentEvents> {
 
     /** The cache fields every request of this conversation carries (see caching.ts). */
     private get cacheRequest(): { sessionId: string; longCache: boolean } {
-        return { sessionId: `canonical-${this.editor.store.doc.design.id}-${this.conversation}`, longCache: aiSettings.value.cacheLong };
+        return { sessionId: `morglay-${this.editor.store.doc.design.id}-${this.conversation}`, longCache: aiSettings.value.cacheLong };
     }
 
     // ------------------------------------------------------------ requests

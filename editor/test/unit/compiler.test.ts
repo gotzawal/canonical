@@ -7,7 +7,7 @@ const scriptDoc = (code: string, name = 'Spin.js') => ({ id: 's_1', name, code }
 
 describe('transformModule', () => {
     it('turns imports and exports into plain code on the same lines', () => {
-        const src = "import { Vector3 } from '@orillusion/core';\nimport Script from 'canonical';\nexport default class Spin extends Script {}\n";
+        const src = "import { Vector3 } from '@orillusion/core';\nimport Script from 'morglay';\nexport default class Spin extends Script {}\n";
         const t = transformModule(src);
         expect(t.error).toBeNull();
         expect(t.defaultName).toBe('Spin');
@@ -15,6 +15,10 @@ describe('transformModule', () => {
         expect(t.code).toContain('const { Vector3 } = __import("@orillusion/core");');
         expect(t.code).toContain('class Spin extends Script');
         expect(t.code).not.toMatch(/\bexport\b/);
+    });
+
+    it("takes scripts that import the editor's earlier name", () => {
+        expect(transformModule("import Script from 'canonical';\nexport default class A extends Script {}\n").error).toBeNull();
     });
 
     it('refuses modules scripts cannot import, with the line', () => {
@@ -67,7 +71,7 @@ describe('ScriptCompiler', () => {
     });
 
     it('maps stack frames of scripts to their lines', () => {
-        const err = { stack: 'Error: x\n    at Spin.update (canonical-script/s_1/Spin.js:5:9)' };
+        const err = { stack: 'Error: x\n    at Spin.update (morglay-script/s_1/Spin.js:5:9)' };
         expect(scriptLocation(err)).toEqual({ id: 's_1', name: 'Spin.js', line: 4, column: 9 });
         expect(scriptLocation(new Error('elsewhere'))).toBeNull();
     });

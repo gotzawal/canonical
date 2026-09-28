@@ -6,7 +6,7 @@
 
 import { uid } from '../core/ids';
 import { makeMaterialSlot } from '../core/design';
-import { TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
+import { OLD_TRIPLANAR_MARKER, TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
 import type { ChangeHint, Store } from '../core/store';
 import type { MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
 import { getSwatch, swatchAsset } from './swatches';
@@ -16,7 +16,8 @@ export const TRIPLANAR_NAME = 'Triplanar.wgsl';
 
 /** The project's triplanar shader, if it has one. */
 export function findTriplanar(doc: SceneDoc): ShaderDoc | undefined {
-    return doc.shaders.find((s) => s.kind === 'material' && s.code.includes(TRIPLANAR_MARKER)) ?? doc.shaders.find((s) => s.name === TRIPLANAR_NAME && s.kind === 'material');
+    const marked = (code: string) => code.includes(TRIPLANAR_MARKER) || code.includes(OLD_TRIPLANAR_MARKER);
+    return doc.shaders.find((s) => s.kind === 'material' && marked(s.code)) ?? doc.shaders.find((s) => s.name === TRIPLANAR_NAME && s.kind === 'material');
 }
 
 /** The triplanar shader's id, adding the shader to the project when missing (inside a commit). */

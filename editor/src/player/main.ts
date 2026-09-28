@@ -52,7 +52,7 @@ async function loadGame(): Promise<Game> {
     } catch {
         throw new Error(`${GAME_FILE} is not valid JSON.`);
     }
-    if (game?.format !== 'canonical-game' || !game.scene) throw new Error(`${GAME_FILE} is not a Canonical game.`);
+    if (game?.format !== 'canonical-game' || !game.scene) throw new Error(`${GAME_FILE} is not a Morglay game.`);
     const files = game.files ?? {};
     setAssetResolver((meta) => (files[meta.id] ? new URL(files[meta.id], url).href : null));
     return { title: game.title, doc: game.scene, camera: game.camera, trusted: true, preview: false };
@@ -79,7 +79,7 @@ async function main() {
         fail(root, 'The game could not be loaded', e?.message || String(e));
         return;
     }
-    const name = game.title || game.doc.name || 'Canonical Game';
+    const name = game.title || game.doc.name || 'Morglay Game';
     document.title = game.preview ? `${name} (Preview)` : name;
     title.textContent = name;
     status.textContent = 'Starting WebGPU...';

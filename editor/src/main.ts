@@ -31,7 +31,7 @@ import { h } from './ui/dom';
 import { HierarchyPanel } from './ui/hierarchy';
 import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
-import { logo } from './ui/logo';
+import { logo, wordmark } from './ui/logo';
 import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
@@ -91,7 +91,7 @@ async function main() {
         h(
             'header',
             { class: 'topbar' },
-            h('div', { class: 'brand' }, logo(20, 'brand-mark'), h('span', { class: 'brand-name', text: 'Canonical' }), h('span', { class: 'brand-sub', text: 'Editor' })),
+            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             menuSlot,
             h('div', { class: 'spacer' }),
             sceneName,
@@ -419,7 +419,7 @@ async function main() {
 
     const updateTitle = () => {
         sceneName.textContent = store.doc.name;
-        document.title = `${store.doc.name} - Canonical Editor`;
+        document.title = `${store.doc.name} - Morglay`;
     };
     store.on('change', updateTitle);
     store.on('load', updateTitle);
@@ -572,7 +572,7 @@ function unsupported(app: HTMLElement, reason: string) {
         h(
             'div',
             { class: 'unsupported' },
-            h('div', { class: 'brand' }, logo(20, 'brand-mark'), h('span', { class: 'brand-name', text: 'Canonical' }), h('span', { class: 'brand-sub', text: 'Editor' })),
+            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             h('h1', { text: 'WebGPU is required' }),
             h('p', { text: 'The editor renders with the Orillusion WebGPU engine, which could not start in this browser.' }),
             h('p', { class: 'reason', text: reason }),
