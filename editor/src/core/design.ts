@@ -2,7 +2,10 @@
 // data. Defaults and repair of documents from files or older builds live
 // here; the stage rules are in design/stages.ts.
 
+import { clamp } from './math';
 import { uid } from './ids';
+import { Specs } from './model';
+import { defaults, finite, hexOr as hex, isObj, list, repair, str } from './schema';
 import type {
     AreaDoc, CameraState, CheckItemDoc, ConceptDoc, DesignDoc, EffectItemDoc, LayoutDoc, MaterialSlotDoc, MoodDoc,
     PaintoverDoc, ParamValue, PlayDoc, QuestionDoc, RoutePointDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SightlineDoc,
@@ -15,18 +18,7 @@ export function stageIndex(id: StageId): number {
     return STAGE_IDS.indexOf(id);
 }
 
-export function defaultSpecs(): SpecsDoc {
-    return {
-        playerHeight: 1.8,
-        eyeHeight: 1.65,
-        playerRadius: 0.35,
-        doorWidth: 1.2,
-        doorHeight: 2.2,
-        stepHeight: 0.3,
-        maxSlope: 40,
-        notes: '',
-    };
-}
+export const defaultSpecs = (): SpecsDoc => defaults(Specs);
 
 export function defaultMood(): MoodDoc {
     return {
@@ -73,14 +65,9 @@ export function makeMaterialSlot(name: string): MaterialSlotDoc {
 
 // ------------------------------------------------------------------ repair
 
-const isObj = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const str = (v: any, d = '', max = 20000) => (typeof v === 'string' ? v.slice(0, max) : d);
-const finite = (v: any, d: number) => (typeof v === 'number' && Number.isFinite(v) ? v : d);
-const clampNum = (v: any, d: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, finite(v, d)));
-const vec = (v: any): Vec3 | null =>
+const clampNum = (v: unknown, d: number, lo: number, hi: number) => clamp(finite(v, d), lo, hi);
+const vec = (v: unknown): Vec3 | null =>
     Array.isArray(v) && v.length === 3 && v.every((x) => typeof x === 'number' && Number.isFinite(x)) ? [v[0], v[1], v[2]] : null;
-const list = (v: any): any[] => (Array.isArray(v) ? v : []);
-const hex = (v: any, d: string) => (typeof v === 'string' && /^#[0-9a-f]{6}$/i.test(v) ? v.toLowerCase() : d);
 const stageId = (v: any): StageId | null => (STAGE_IDS.includes(v) ? v : null);
 
 /** Ids unique within one list; missing or repeated ids get a new one. */
@@ -189,18 +176,7 @@ export function sanitizeDesign(input: any): DesignDoc {
             ...(typeof c.prompt === 'string' && c.prompt ? { prompt: c.prompt.slice(0, 8000) } : {}),
         }));
 
-    const s = isObj(input.specs) ? input.specs : {};
-    const ds = defaultSpecs();
-    out.specs = {
-        playerHeight: clampNum(s.playerHeight, ds.playerHeight, 0.1, 100),
-        eyeHeight: clampNum(s.eyeHeight, ds.eyeHeight, 0.05, 100),
-        playerRadius: clampNum(s.playerRadius, ds.playerRadius, 0.01, 50),
-        doorWidth: clampNum(s.doorWidth, ds.doorWidth, 0.1, 100),
-        doorHeight: clampNum(s.doorHeight, ds.doorHeight, 0.1, 100),
-        stepHeight: clampNum(s.stepHeight, ds.stepHeight, 0, 10),
-        maxSlope: clampNum(s.maxSlope, ds.maxSlope, 0, 89),
-        notes: str(s.notes, '', 8000),
-    };
+    out.specs = repair(Specs, input.specs) ?? defaultSpecs();
 
     const m = isObj(input.mood) ? input.mood : {};
     const dm = defaultMood();

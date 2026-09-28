@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { emptyScene, makeMeshNode, makeNode } from '../../src/core/defaults';
+import { emptyScene, makeMeshNode, makeNode, newScene } from '../../src/core/defaults';
+import { exampleGuard, exampleShowcase } from '../../src/examples';
 import { sanitize, Store } from '../../src/core/store';
 import { SCENE_VERSION, type NodeDoc } from '../../src/core/types';
 
@@ -7,6 +8,13 @@ const scene = (...nodes: NodeDoc[]) => ({ ...emptyScene(), nodes });
 const names = (s: Store) => s.doc.nodes.map((n) => n.name);
 
 describe('sanitize', () => {
+    it('keeps valid scenes as they are', () => {
+        for (const doc of [newScene(), exampleShowcase(), exampleGuard()]) {
+            const plain = JSON.parse(JSON.stringify(doc));
+            expect(JSON.parse(JSON.stringify(sanitize(plain)))).toEqual(plain);
+        }
+    });
+
     it('gives repeated ids new ones and drops parents that do not exist', () => {
         const a = makeNode('A');
         const b = { ...makeNode('B'), id: a.id };

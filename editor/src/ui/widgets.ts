@@ -369,7 +369,7 @@ export class Vec2Field {
         );
         this.el = h(
             'div',
-            { class: 'vec3 vec2' },
+            { class: 'vec3 vec2' + (labels.some((l) => l.length > 1) ? ' wide' : '') },
             this.fields.map((f, i) => h('label', { class: 'vec3-item' }, h('span', { class: 'axis-tag axis-' + 'xy'[i], text: labels[i] }), f.el)),
         );
     }

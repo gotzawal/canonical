@@ -2,12 +2,11 @@ import type { Editor } from '../editor';
 import {
     defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode,
 } from '../core/defaults';
-import { clampGIGrid } from '../core/giLimits';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
-import { defaultCharacter, defaultPlayer, sanitizeCharacter, sanitizePlayer } from '../core/character';
-import type {
-    GeometryType, LightType, MaterialDoc, MaterialOverride, NodeDoc, ParamValue, PartOverride, SceneDoc,
-} from '../core/types';
+import { defaultCharacter, defaultPlayer } from '../core/character';
+import { Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
+import { patch, toolSchema } from '../core/schema';
+import type { GeometryType, LightType, MaterialDoc, NodeDoc, ParamValue, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
 import { recentLogs } from '../ui/statusbar';
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
@@ -58,59 +57,10 @@ export interface ToolEnv {
 // ------------------------------------------------------------------ schemas
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
-const color = { type: 'string', description: '#rrggbb (CSS color names also work)' };
-const textureRef = { type: ['string', 'null'], description: 'Texture asset id, or null for none.' };
-const materialSchema = {
-    type: 'object',
-    description: 'Material of a primitive. lit = PBR (LitMaterial), unlit = ignores lights, lambert = cheap matte (directional lights only), shader = custom WGSL shader.',
-    properties: {
-        type: { type: 'string', enum: ['lit', 'unlit', 'lambert', 'shader'] },
-        preset: { type: 'string', enum: MATERIAL_PRESETS.map((p) => p.id), description: 'Start from a preset (keeps color and textures), then apply the other fields.' },
-        color,
-        opacity: { type: 'number' },
-        alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'], description: 'auto blends when opacity < 1; mask cuts out pixels below alpha_cutoff; additive (glow, fire) and multiply (stains, tinted glass) are transparent blending modes.' },
-        alpha_cutoff: { type: 'number' },
-        metallic: { type: 'number' },
-        roughness: { type: 'number' },
-        emissive: color,
-        emissive_intensity: { type: 'number' },
-        double_side: { type: 'boolean' },
-        texture: textureRef,
-        tiling: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Texture repeat [u, v].' },
-        offset: { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2, description: 'Texture offset [u, v].' },
-        normal_map: { ...textureRef, description: 'Lit only.' },
-        normal_scale: { type: 'number', description: 'Lit only.' },
-        metal_rough_map: { ...textureRef, description: 'Lit only: glTF metallic-roughness texture (roughness in G, metallic in B).' },
-        ao_map: { ...textureRef, description: 'Lit only: ambient occlusion (grayscale).' },
-        emissive_map: { ...textureRef, description: 'Lit only.' },
-        clearcoat: { type: 'number', description: 'Lit only, 0..1: glossy coat layer (car paint).' },
-        clearcoat_roughness: { type: 'number' },
-        transmission: { type: 'number', description: 'Lit only, 0..1: light passes through (glass, water).' },
-        ior: { type: 'number', description: 'Index of refraction for transmission (1.5 glass, 1.33 water).' },
-        thickness: { type: 'number' },
-        attenuation_color: color,
-        attenuation_distance: { type: 'number', description: '0 = no absorption.' },
-        shader: { type: ['string', 'null'], description: 'Material shader id or name; sets type to "shader". null goes back to lit.' },
-        params: { type: 'object', description: 'Values of the shader\'s @property declarations.' },
-    },
-};
-const lightSchema = {
-    type: 'object',
-    properties: {
-        type: { type: 'string', enum: ['directional', 'point', 'spot'] },
-        color,
-        intensity: { type: 'number' },
-        cast_shadow: { type: 'boolean' },
-        range: { type: 'number' },
-        radius: { type: 'number' },
-        angle: { type: 'number', description: 'Spot cone angle in degrees.' },
-        inner_angle: { type: 'number', description: 'Spot inner cone, percent of the angle.' },
-    },
-};
-const cameraSchema = {
-    type: 'object',
-    properties: { fov: { type: 'number' }, near: { type: 'number' }, far: { type: 'number' }, main: { type: 'boolean' } },
-};
+const TEXTURE_FIELDS = ['map', 'normal_map', 'metal_rough_map', 'ao_map', 'emissive_map'];
+const materialSchema = toolSchema(Material, 'Material of a primitive. Settings left out keep their value.');
+materialSchema.properties.preset = { type: 'string', enum: MATERIAL_PRESETS.map((p) => p.id), description: 'Start from a preset (keeps color and textures), then apply the other fields.' };
+materialSchema.properties.shader = { type: ['string', 'null'], description: 'Material shader id or name; sets type to "shader". null goes back to lit.' };
 const objectFields = {
     name: { type: 'string' },
     parent: { type: ['string', 'null'], description: 'Parent object id or name; null for the scene root.' },
@@ -127,37 +77,20 @@ const objectFields = {
     tube: { type: 'number', description: 'torus tube radius' },
     segments: { type: 'number', description: 'Round shapes: segments around. A cone with 8 or fewer has flat sides (4: a square pyramid).' },
     material: materialSchema,
-    light: lightSchema,
-    camera: cameraSchema,
+    light: toolSchema(Light),
+    camera: toolSchema(Camera),
     character: {
+        ...toolSchema(Character, 'A character: in Play the object walks the level (stands on floors, walls and other characters stop it). The player controls one (player); an NPC is walked by its behavior tree (Move To) or a script (this.character). null removes it.'),
         type: ['object', 'null'],
-        description: 'A character: in Play the object walks the level (stands on floors, walls and other characters stop it). The player controls one (player); an NPC is walked by its behavior tree (Move To) or a script (this.character). null removes it.',
-        properties: {
-            speed: { type: 'number' },
-            run_speed: { type: 'number' },
-            jump: { type: 'number', description: 'Take-off speed m/s; 0 turns jumping off.' },
-            gravity: { type: 'number' },
-            height: { type: 'number' },
-            radius: { type: 'number' },
-            eye_height: { type: 'number' },
-            step_height: { type: 'number' },
-            collide: { type: 'boolean' },
-        },
     },
     player: {
+        ...toolSchema(Player, 'The player controls this object\'s character (added when missing): WASD / a joystick walk, Space jumps, a drag turns its camera. null removes it. One player per scene: place it with place_player.'),
         type: ['object', 'null'],
-        description: 'The player controls this object\'s character (added when missing): WASD / a joystick walk, Space jumps, a drag turns its camera. null removes it. One player per scene: place it with place_player.',
-        properties: {
-            view: { type: 'string', enum: ['third', 'first', 'scene'] },
-            distance: { type: 'number', description: 'Third person camera distance.' },
-            look_speed: { type: 'number' },
-            invert_y: { type: 'boolean' },
-        },
     },
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
-const SHAPES: GeometryType[] = ['box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs', 'capsule'];
+const SHAPES = GEOMETRY_TYPES;
 const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 /** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
@@ -267,56 +200,16 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
             },
         }, ['updates']),
         def('delete_objects', 'Delete objects and their children.', { ids: { type: 'array', items: { type: 'string' } } }, ['ids']),
-        def('set_environment', 'Change sky, exposure and post processing settings.', {
-            scene_name: { type: 'string' },
-            sky: { type: 'string', enum: ['atmospheric', 'color'] },
-            sky_color: color,
-            sun_x: { type: 'number', description: 'Atmospheric sun azimuth 0..1' },
-            sun_y: { type: 'number', description: 'Atmospheric sun elevation 0..1' },
-            sky_exposure: { type: 'number' },
-            exposure: { type: 'number' },
-            fxaa: { type: 'boolean' },
-            bloom: { type: 'object', properties: { enable: { type: 'boolean' }, intensity: { type: 'number' }, threshold: { type: 'number' } } },
-            ao: { type: 'object', properties: { enable: { type: 'boolean' }, strength: { type: 'number' }, distance: { type: 'number' } } },
-            fog: { type: 'object', properties: { enable: { type: 'boolean' }, color, near: { type: 'number' }, far: { type: 'number' }, intensity: { type: 'number' } } },
-            gi: {
-                type: 'object',
-                description: 'Dynamic diffuse global illumination (DDGI): a probe grid bounces light between surfaces. Surfaces more than one spacing outside the grid get no indirect light. fit_to_scene sizes the grid to the meshes.',
-                properties: {
-                    enable: { type: 'boolean' },
-                    fit_to_scene: { type: 'boolean' },
-                    center: vec3,
-                    counts: { ...vec3, description: 'Probes along x, y, z: at most 16 per axis and 512 in all.' },
-                    spacing: { type: 'number' },
-                    intensity: { type: 'number' },
-                    bounce: { type: 'number', description: '0..1' },
-                    realtime: { type: 'boolean', description: 'Capture continuously (moving objects / lights).' },
-                },
-            },
-        }),
+        def('set_environment', 'Change sky, exposure and post processing settings.', environmentFields()),
         def('list_model_parts', 'Material slots and mesh parts of an imported model object, with their current values and overrides.', { id: { type: 'string' } }, ['id']),
         def('set_model_material', 'Override a material slot of imported model objects. Missing fields keep their value; reset clears the slot. Each slot can get its own shading: the file\'s PBR material, unlit, lambert, or a custom material shader.', {
             ids: { type: 'array', items: { type: 'string' } },
             slot: { type: 'string' },
             reset: { type: 'boolean' },
-            shading: { type: 'string', enum: ['model', 'unlit', 'lambert'], description: 'Built-in shading; "model" is the file\'s material. Ignored while a shader is set.' },
-            color,
-            opacity: { type: 'number' },
-            alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'] },
-            alpha_cutoff: { type: 'number' },
-            normal_scale: { type: 'number', description: 'Model shading only.' },
-            clearcoat: { type: 'number', description: 'Model shading only, 0..1.' },
-            clearcoat_roughness: { type: 'number' },
-            transmission: { type: 'number', description: 'Model shading only, 0..1 (glass).' },
-            ior: { type: 'number' },
-            metallic: { type: 'number' },
-            roughness: { type: 'number' },
-            emissive: color,
-            emissive_intensity: { type: 'number' },
-            double_side: { type: 'boolean' },
-            texture: { type: ['string', 'null'], description: 'Texture asset id, null for none, "file" for the model\'s own.' },
+            ...toolSchema(MaterialOverride).properties,
+            map: { type: ['string', 'null'], description: 'Texture asset id, null for none, "file" for the model\'s own.' },
+            alpha_mode: { type: 'string', enum: ['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'], description: 'auto keeps the file\'s mode.' },
             shader: { type: ['string', 'null'], description: 'Material shader id or name to replace the material; null removes it. Texture properties named normalMap, maskMap, emissiveMap or aoMap get the model\'s own maps unless params sets them.' },
-            params: { type: 'object' },
         }, ['ids', 'slot']),
         def('set_model_part', 'Override a mesh part of imported model objects (visibility, shadows, material slot, local transform). reset clears the part.', {
             ids: { type: 'array', items: { type: 'string' } },
@@ -400,6 +293,14 @@ function allToolDefs(env: ToolEnv): ToolDef[] {
     return defs;
 }
 
+/** set_environment's arguments: the environment's fields, the scene name and fitting GI to the scene. */
+function environmentFields(): Json {
+    const props = toolSchema(Environment).properties;
+    props.gi.description = 'Dynamic diffuse global illumination (DDGI): a probe grid bounces light between surfaces. Surfaces more than one spacing outside the grid get no indirect light. fit_to_scene sizes the grid to the meshes.';
+    props.gi.properties.fit_to_scene = { type: 'boolean' };
+    return { scene_name: { type: 'string' }, ...props };
+}
+
 // ---------------------------------------------------------------- helpers
 
 function nodeType(n: NodeDoc): string {
@@ -432,23 +333,12 @@ function materialSummary(m: MaterialDoc): Json {
         out.emissive = m.emissive;
         out.emissive_intensity = r3(m.emissiveIntensity);
     }
-    if (m.map) out.texture = m.map;
+    if (m.map) out.map = m.map;
     if (m.type === 'shader') {
         out.shader = m.shader;
         if (m.params && Object.keys(m.params).length) out.params = m.params;
     }
     return out;
-}
-
-/** snake_case tool fields onto a component's camelCase ones (numbers, booleans and the view); returns the component. */
-function assignFields<T extends object>(to: T, from: unknown, what: string): T {
-    for (const [k, v] of Object.entries((from ?? {}) as Json)) {
-        const key = k.replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
-        if (!(key in to) || v === undefined) continue;
-        if (key === 'view' && !['third', 'first', 'scene'].includes(v)) throw new ToolError(`${what}.view must be third, first or scene.`);
-        (to as Record<string, unknown>)[key] = typeof v === 'boolean' || key === 'view' ? v : num(v, `${what}.${k}`);
-    }
-    return to;
 }
 
 function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
@@ -466,7 +356,7 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         delete g.type;
         out.geometry = g;
     }
-    if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { angle: n.light.outerAngle } : {}) };
+    if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { outer_angle: n.light.outerAngle } : {}) };
     if (n.camera) out.camera = { ...n.camera };
     if (n.character) {
         const c = n.character;
@@ -545,46 +435,35 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (spec.segments !== undefined && 'segments' in g) g.segments = Math.round(num(spec.segments, 'segments'));
         if (spec.cast_shadow !== undefined) n.mesh.castShadow = !!spec.cast_shadow;
         if (spec.receive_shadow !== undefined) n.mesh.receiveShadow = !!spec.receive_shadow;
-        if (spec.material) applyMaterial(env, doc, n.mesh.material, spec.material);
+        if (spec.material) n.mesh.material = applyMaterial(doc, n.mesh.material, spec.material);
     } else if (spec.material) {
         throw new ToolError(`"${n.name}" has no mesh. Use set_model_material for imported models.`);
     }
     if (spec.light) {
         if (!n.light) throw new ToolError(`"${n.name}" is not a light.`);
-        const l = spec.light;
-        if (l.type !== undefined && l.type !== n.light.type) n.light = { ...defaultLight(l.type as LightType), color: n.light.color };
-        if (l.color !== undefined) n.light.color = hex(l.color);
-        if (l.intensity !== undefined) n.light.intensity = Math.max(0, num(l.intensity, 'intensity'));
-        if (l.cast_shadow !== undefined) n.light.castShadow = !!l.cast_shadow;
-        if (l.range !== undefined) n.light.range = Math.max(0.01, num(l.range, 'range'));
-        if (l.radius !== undefined) n.light.radius = Math.max(0, num(l.radius, 'radius'));
-        if (l.angle !== undefined) n.light.outerAngle = Math.min(179, Math.max(1, num(l.angle, 'angle')));
-        if (l.inner_angle !== undefined) n.light.innerAngle = Math.min(100, Math.max(0, num(l.inner_angle, 'inner_angle')));
+        const type = spec.light.type as LightType | undefined;
+        // Another type starts from that type's defaults, in the same color.
+        const base = type !== undefined && type !== n.light.type && Light.shape.type.safeParse(type).success ? { ...defaultLight(type), color: n.light.color } : n.light;
+        n.light = patch(Light, base, spec.light, 'light', hex);
     }
     if (spec.character === null) {
         delete n.character;
         delete n.player;
     } else if (spec.character || spec.player) {
         if (n.light || n.camera || n.particles) throw new ToolError(`"${n.name}" cannot be a character (lights, cameras and particles cannot).`);
-        n.character = sanitizeCharacter(assignFields({ ...(n.character ?? defaultCharacter(doc.design.specs)) }, spec.character, 'character'))!;
+        n.character = patch(Character, n.character ?? defaultCharacter(doc.design.specs), spec.character ?? {}, 'character');
     }
     if (spec.player === null) delete n.player;
     else if (spec.player) {
         const other = doc.nodes.find((o) => o.player && o.id !== n.id) ?? batch.find((o) => o.player && o !== n);
         if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
         if (!n.character) throw new ToolError('The player controls a character: give the object one (character) too.');
-        n.player = sanitizePlayer(assignFields({ ...(n.player ?? defaultPlayer()) }, spec.player, 'player'))!;
+        n.player = patch(Player, n.player ?? defaultPlayer(), spec.player, 'player');
     }
     if (spec.camera) {
         if (!n.camera) throw new ToolError(`"${n.name}" is not a camera.`);
-        const c = spec.camera;
-        if (c.fov !== undefined) n.camera.fov = Math.min(170, Math.max(1, num(c.fov, 'fov')));
-        if (c.near !== undefined) n.camera.near = Math.max(0.001, num(c.near, 'near'));
-        if (c.far !== undefined) n.camera.far = Math.max(0.01, num(c.far, 'far'));
-        if (c.main !== undefined) {
-            n.camera.main = !!c.main;
-            if (n.camera.main) for (const o of doc.nodes) if (o !== n && o.camera) o.camera.main = false;
-        }
+        n.camera = patch(Camera, n.camera, spec.camera, 'camera');
+        if (spec.camera.main) for (const o of doc.nodes) if (o !== n && o.camera) o.camera.main = false;
     }
 }
 
@@ -594,64 +473,30 @@ function textureId(doc: SceneDoc, v: unknown, what: string): string | null {
     return v;
 }
 
-const unit = (v: unknown, what: string) => Math.min(1, Math.max(0, num(v, what)));
-
-function applyMaterial(_env: ToolEnv, doc: SceneDoc, m: MaterialDoc, p: Json) {
-    if (p.preset !== undefined) {
-        const preset = MATERIAL_PRESETS.find((x) => x.id === p.preset);
-        if (!preset) throw new ToolError(`Unknown preset "${p.preset}". Use one of ${MATERIAL_PRESETS.map((x) => x.id).join(', ')}.`);
-        preset.apply(m);
+/** A primitive's material with the tool's changes: a preset first, the shader by id or name, textures that exist. */
+function applyMaterial(doc: SceneDoc, m: MaterialDoc, p: Json): MaterialDoc {
+    const { preset, shader: shaderRef, ...fields } = p;
+    let base = m;
+    if (preset !== undefined) {
+        const found = MATERIAL_PRESETS.find((x) => x.id === preset);
+        if (!found) throw new ToolError(`Unknown preset "${preset}". Use one of ${MATERIAL_PRESETS.map((x) => x.id).join(', ')}.`);
+        base = { ...m };
+        found.apply(base);
     }
-    if (p.type !== undefined) {
-        if (!['lit', 'unlit', 'lambert', 'shader'].includes(p.type)) throw new ToolError(`Unknown material type "${p.type}".`);
-        m.type = p.type;
+    for (const k of TEXTURE_FIELDS) if (fields[k] !== undefined) textureId(doc, fields[k], k);
+    if (fields.params !== undefined) fields.params = params(fields.params);
+    const out = patch(Material, base, fields, 'material', hex);
+    if (shaderRef === null) {
+        out.type = 'lit';
+        out.shader = null;
+    } else if (shaderRef !== undefined) {
+        const s = shader(doc, shaderRef);
+        if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader; use add_post_effect.`);
+        out.type = 'shader';
+        out.shader = s.id;
     }
-    if (p.color !== undefined) m.color = hex(p.color);
-    if (p.opacity !== undefined) m.opacity = unit(p.opacity, 'opacity');
-    if (p.alpha_mode !== undefined) {
-        if (!['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'].includes(p.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${p.alpha_mode}".`);
-        if (p.alpha_mode === 'auto') delete m.alphaMode;
-        else m.alphaMode = p.alpha_mode;
-    }
-    if (p.alpha_cutoff !== undefined) m.alphaCutoff = unit(p.alpha_cutoff, 'alpha_cutoff');
-    if (p.metallic !== undefined) m.metallic = unit(p.metallic, 'metallic');
-    if (p.roughness !== undefined) m.roughness = unit(p.roughness, 'roughness');
-    if (p.emissive !== undefined) m.emissive = hex(p.emissive, 'emissive');
-    if (p.emissive_intensity !== undefined) m.emissiveIntensity = Math.max(0, num(p.emissive_intensity, 'emissive_intensity'));
-    if (p.double_side !== undefined) m.doubleSide = !!p.double_side;
-    if (p.texture !== undefined) m.map = textureId(doc, p.texture, 'texture');
-    for (const [key, field] of [['normal_map', 'normalMap'], ['metal_rough_map', 'metalRoughMap'], ['ao_map', 'aoMap'], ['emissive_map', 'emissiveMap']] as const) {
-        if (p[key] !== undefined) m[field] = textureId(doc, p[key], key);
-    }
-    if (p.tiling !== undefined) {
-        if (!Array.isArray(p.tiling) || p.tiling.length !== 2) throw new ToolError('tiling must be [u, v].');
-        m.tiling = [num(p.tiling[0], 'tiling'), num(p.tiling[1], 'tiling')];
-    }
-    if (p.offset !== undefined) {
-        if (!Array.isArray(p.offset) || p.offset.length !== 2) throw new ToolError('offset must be [u, v].');
-        m.offset = [num(p.offset[0], 'offset'), num(p.offset[1], 'offset')];
-    }
-    if (p.normal_scale !== undefined) m.normalScale = Math.max(0, num(p.normal_scale, 'normal_scale'));
-    if (p.clearcoat !== undefined) m.clearcoat = unit(p.clearcoat, 'clearcoat');
-    if (p.clearcoat_roughness !== undefined) m.clearcoatRoughness = unit(p.clearcoat_roughness, 'clearcoat_roughness');
-    if (p.transmission !== undefined) m.transmission = unit(p.transmission, 'transmission');
-    if (p.ior !== undefined) m.ior = Math.min(3, Math.max(1, num(p.ior, 'ior')));
-    if (p.thickness !== undefined) m.thickness = Math.max(0, num(p.thickness, 'thickness'));
-    if (p.attenuation_color !== undefined) m.attenuationColor = hex(p.attenuation_color, 'attenuation_color');
-    if (p.attenuation_distance !== undefined) m.attenuationDistance = Math.max(0, num(p.attenuation_distance, 'attenuation_distance'));
-    if (p.shader !== undefined) {
-        if (p.shader === null) {
-            m.type = 'lit';
-            m.shader = null;
-        } else {
-            const s = shader(doc, p.shader);
-            if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader; use add_post_effect.`);
-            m.type = 'shader';
-            m.shader = s.id;
-        }
-    }
-    if (m.type === 'shader' && !m.shader) throw new ToolError('Material type "shader" needs a shader.');
-    if (p.params !== undefined) m.params = { ...(m.params ?? {}), ...params(p.params) };
+    if (out.type === 'shader' && !out.shader) throw new ToolError('Material type "shader" needs a shader.');
+    return out;
 }
 
 function makeTyped(type: string): NodeDoc {
@@ -926,36 +771,14 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                 return { data: { deleted: all.size }, summary: `${all.size} object(s)` };
             }
             case 'set_environment': {
+                const { scene_name: name, ...rest } = args;
+                const { fit_to_scene: fit, ...gi } = (rest.gi ?? {}) as Json;
+                const environment = patch(Environment, doc().environment, { ...rest, ...(rest.gi ? { gi } : {}) }, 'environment', hex);
                 store.commit('AI: Environment', (d) => {
-                    const e = d.environment;
-                    if (args.scene_name !== undefined) d.name = String(args.scene_name).trim() || d.name;
-                    if (args.sky !== undefined) e.sky = args.sky === 'color' ? 'color' : 'atmospheric';
-                    if (args.sky_color !== undefined) e.skyColor = hex(args.sky_color);
-                    if (args.sun_x !== undefined) e.sunX = Math.min(1, Math.max(0, num(args.sun_x, 'sun_x')));
-                    if (args.sun_y !== undefined) e.sunY = Math.min(1, Math.max(0, num(args.sun_y, 'sun_y')));
-                    if (args.sky_exposure !== undefined) e.skyExposure = Math.max(0, num(args.sky_exposure, 'sky_exposure'));
-                    if (args.exposure !== undefined) e.exposure = Math.max(0, num(args.exposure, 'exposure'));
-                    if (args.fxaa !== undefined) e.fxaa = !!args.fxaa;
-                    for (const k of ['bloom', 'ao', 'fog'] as const) {
-                        const src = args[k];
-                        if (!src || typeof src !== 'object') continue;
-                        for (const [key, val] of Object.entries(src)) {
-                            if (!(key in e[k])) continue;
-                            (e[k] as any)[key] = key === 'enable' ? !!val : key === 'color' ? hex(val) : num(val, `${k}.${key}`);
-                        }
-                    }
-                    const gi = args.gi;
-                    if (gi && typeof gi === 'object') {
-                        if (gi.enable !== undefined) e.gi.enable = !!gi.enable;
-                        if (gi.center !== undefined) e.gi.center = v3(gi.center, 'gi.center');
-                        if (gi.counts !== undefined) e.gi.counts = clampGIGrid(v3(gi.counts, 'gi.counts'));
-                        if (gi.spacing !== undefined) e.gi.spacing = Math.min(100, Math.max(0.1, num(gi.spacing, 'gi.spacing')));
-                        if (gi.intensity !== undefined) e.gi.intensity = Math.max(0, num(gi.intensity, 'gi.intensity'));
-                        if (gi.bounce !== undefined) e.gi.bounce = unit(gi.bounce, 'gi.bounce');
-                        if (gi.realtime !== undefined) e.gi.realtime = !!gi.realtime;
-                    }
+                    if (name !== undefined) d.name = String(name).trim() || d.name;
+                    d.environment = environment;
                 }, { env: true });
-                if (args.gi?.fit_to_scene) ed.fitGIToScene();
+                if (fit) ed.fitGIToScene();
                 const g = doc().environment.gi;
                 return { data: { ok: true, gi: g.enable ? { counts: g.counts, spacing: g.spacing, center: g.center, error: ed.runtime.gi.error || undefined } : undefined } };
             }
@@ -995,47 +818,25 @@ export async function runTool(env: ToolEnv, name: string, args: Json): Promise<T
                     ed.setModelMaterial(ids, slot, null, 'AI: Reset Model Material');
                     return { data: { ok: true } };
                 }
-                const patch: Partial<MaterialOverride> = {};
-                if (args.shading !== undefined) {
-                    if (!['model', 'unlit', 'lambert'].includes(args.shading)) throw new ToolError(`Unknown shading "${args.shading}".`);
-                    patch.shading = args.shading === 'model' ? undefined : args.shading;
-                }
-                if (args.color !== undefined) patch.color = hex(args.color);
-                if (args.opacity !== undefined) patch.opacity = Math.min(1, Math.max(0, num(args.opacity, 'opacity')));
-                if (args.alpha_mode !== undefined) {
-                    if (!['auto', 'opaque', 'blend', 'mask', 'additive', 'multiply'].includes(args.alpha_mode)) throw new ToolError(`Unknown alpha_mode "${args.alpha_mode}".`);
-                    patch.alphaMode = args.alpha_mode === 'auto' ? undefined : args.alpha_mode;
-                }
-                if (args.alpha_cutoff !== undefined) patch.alphaCutoff = unit(args.alpha_cutoff, 'alpha_cutoff');
-                if (args.normal_scale !== undefined) patch.normalScale = Math.max(0, num(args.normal_scale, 'normal_scale'));
-                if (args.clearcoat !== undefined) patch.clearcoat = unit(args.clearcoat, 'clearcoat');
-                if (args.clearcoat_roughness !== undefined) patch.clearcoatRoughness = unit(args.clearcoat_roughness, 'clearcoat_roughness');
-                if (args.transmission !== undefined) patch.transmission = unit(args.transmission, 'transmission');
-                if (args.ior !== undefined) patch.ior = Math.min(3, Math.max(1, num(args.ior, 'ior')));
-                if (args.metallic !== undefined) patch.metallic = Math.min(1, Math.max(0, num(args.metallic, 'metallic')));
-                if (args.roughness !== undefined) patch.roughness = Math.min(1, Math.max(0, num(args.roughness, 'roughness')));
-                if (args.emissive !== undefined) patch.emissive = hex(args.emissive, 'emissive');
-                if (args.emissive_intensity !== undefined) patch.emissiveIntensity = Math.max(0, num(args.emissive_intensity, 'emissive_intensity'));
-                if (args.double_side !== undefined) patch.doubleSide = !!args.double_side;
-                if (args.texture !== undefined) {
-                    if (args.texture === 'file') patch.map = undefined;
-                    else if (args.texture === null) patch.map = null;
-                    else if (!doc().assets.some((a) => a.id === args.texture && a.kind === 'texture')) throw new ToolError(`No texture asset "${args.texture}".`);
-                    else patch.map = args.texture;
-                }
-                if (args.shader !== undefined) {
-                    if (args.shader === null) patch.shader = undefined;
+                const { ids: _ids, slot: _slot, reset: _reset, shading, alpha_mode: alphaMode, map, shader: shaderRef, params: values, ...fields } = args;
+                const change: Partial<MaterialOverride> = patch(MaterialOverride, {}, fields, 'material', hex);
+                // "model", "auto" and "file" keep the file's own shading, alpha mode and texture.
+                if (shading !== undefined) change.shading = shading === 'model' ? undefined : patch(MaterialOverride, {}, { shading }, 'material').shading;
+                if (alphaMode !== undefined) change.alphaMode = alphaMode === 'auto' ? undefined : patch(MaterialOverride, {}, { alpha_mode: alphaMode }, 'material').alphaMode;
+                if (map !== undefined) change.map = map === 'file' ? undefined : textureId(doc(), map, 'map');
+                if (shaderRef !== undefined) {
+                    if (shaderRef === null) change.shader = undefined;
                     else {
-                        const s = shader(doc(), args.shader);
+                        const s = shader(doc(), shaderRef);
                         if (s.kind !== 'material') throw new ToolError(`"${s.name}" is a post shader.`);
-                        patch.shader = s.id;
+                        change.shader = s.id;
                     }
                 }
-                if (args.params !== undefined) {
+                if (values !== undefined) {
                     const cur = doc().nodes.find((n) => n.id === ids[0])?.model?.materials?.[slot]?.params ?? {};
-                    patch.params = { ...cur, ...params(args.params) };
+                    change.params = { ...cur, ...params(values) };
                 }
-                ed.setModelMaterial(ids, slot, patch, 'AI: Model Material');
+                ed.setModelMaterial(ids, slot, change, 'AI: Model Material');
                 return { data: { ok: true }, summary: slot };
             }
             case 'set_model_part': {

@@ -3,39 +3,20 @@
 // and the lift / gamma / gain color grade of the Finish stage.
 
 import { uid } from '../core/ids';
-import { PARTICLE_PRESETS, PARTICLE_SHAPES, particleCount, presetParticles, sanitizeParticles, sceneParticles } from '../core/particles';
+import { Particles } from '../core/model';
+import { PARTICLE_PRESETS, particleCount, presetParticles, sceneParticles } from '../core/particles';
+import { patch, toolSchema } from '../core/schema';
 import type { NodeDoc, ParticlesDoc } from '../core/types';
 import { addColorGrade, addVignette } from '../design/effects';
 import type { ToolDef } from './openrouter';
 import type { ToolEnv, ToolResult } from './tools';
-import { def, node, num, str, ToolError, v3, type Json } from './toolUtil';
+import { def, hex, node, num, str, ToolError, v3, type Json } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
-const pair = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 };
 const vec4 = { type: 'array', items: { type: 'number' }, minItems: 1, maxItems: 4, description: '[r, g, b, all] or [all]' };
 
-const particleFields = {
-    rate: { type: 'number', description: 'Particles per second.' },
-    max: { type: 'integer', description: 'Most particles alive at once.' },
-    life: { ...pair, description: 'Seconds a particle lives [min, max].' },
-    size: { ...pair, description: 'Size in meters at birth [min, max].' },
-    size_end: { type: 'number', description: 'Size at the end of life as a factor of the birth size.' },
-    shape: { type: 'string', enum: PARTICLE_SHAPES },
-    radius: { type: 'number' },
-    box: vec3,
-    velocity_min: { ...vec3, description: 'Start velocity m/s per axis (object space), lowest.' },
-    velocity_max: { ...vec3, description: 'Highest start velocity.' },
-    gravity: { ...vec3, description: 'Constant acceleration m/s^2, e.g. [0, -9.8, 0].' },
-    spin: { ...pair, description: 'Start rotation of each sprite in degrees [min, max].' },
-    color_start: { type: 'string' },
-    color_end: { type: 'string' },
-    alpha_start: { type: 'number' },
-    alpha_end: { type: 'number' },
-    texture: { type: ['string', 'null'], description: 'Texture asset id for the sprite; null for a soft dot.' },
-    blend: { type: 'string', enum: ['add', 'alpha'], description: 'add glows (fire, sparks), alpha covers (smoke, dust, rain).' },
-    local: { type: 'boolean', description: 'Particles move with the object.' },
-    prewarm: { type: 'number', description: 'Seconds simulated before the first frame.' },
-};
+/** The emitter's fields as tool arguments (the preset is chosen by id). */
+const { preset: _preset, ...particleFields } = toolSchema(Particles).properties;
 
 export function effectToolDefs(): ToolDef[] {
     return [
@@ -63,19 +44,11 @@ export function effectToolDefs(): ToolDef[] {
     ];
 }
 
-/** Tool arguments to emitter values. */
-function particleArgs(args: Json, base: ParticlesDoc): ParticlesDoc {
-    const p: any = { ...base };
-    const map: [string, keyof ParticlesDoc][] = [
-        ['rate', 'rate'], ['max', 'max'], ['life', 'life'], ['size', 'size'], ['size_end', 'sizeEnd'], ['shape', 'shape'], ['radius', 'radius'],
-        ['box', 'box'], ['velocity_min', 'velocityMin'], ['velocity_max', 'velocityMax'], ['gravity', 'gravity'], ['spin', 'spin'],
-        ['color_start', 'colorStart'], ['color_end', 'colorEnd'], ['alpha_start', 'alphaStart'], ['alpha_end', 'alphaEnd'],
-        ['texture', 'texture'], ['blend', 'blend'], ['local', 'local'], ['prewarm', 'prewarm'],
-    ];
-    for (const [arg, key] of map) if (args[arg] !== undefined) p[key] = args[arg];
-    const out = sanitizeParticles(p);
-    if (!out) throw new ToolError('Invalid particle values.');
-    return out;
+/** Tool arguments to emitter values: the emitter's fields, a texture that exists. */
+function particleArgs(env: ToolEnv, args: Json, base: ParticlesDoc): ParticlesDoc {
+    const { id: _id, preset: _preset, name: _name, position: _position, parent: _parent, ...fields } = args;
+    if (fields.texture && !env.editor.store.doc.assets.some((a) => a.id === fields.texture && a.kind === 'texture')) throw new ToolError(`"${fields.texture}" is not a texture asset.`);
+    return patch(Particles, base, fields, 'particles', hex);
 }
 
 export async function runEffectTool(env: ToolEnv, name: string, args: Json): Promise<ToolResult | null> {
@@ -85,8 +58,7 @@ export async function runEffectTool(env: ToolEnv, name: string, args: Json): Pro
         case 'add_particles': {
             const preset = str(args.preset, 'preset', 40);
             if (!PARTICLE_PRESETS.some((p) => p.id === preset)) throw new ToolError(`Unknown preset "${preset}".`);
-            if (args.texture && !store.doc.assets.some((a) => a.id === args.texture && a.kind === 'texture')) throw new ToolError(`"${args.texture}" is not a texture asset.`);
-            const particles = particleArgs(args, presetParticles(preset));
+            const particles = particleArgs(env, args, presetParticles(preset));
             const parent = args.parent !== undefined ? node(store.doc, args.parent).id : null;
             const label = PARTICLE_PRESETS.find((p) => p.id === preset)!.label;
             const n: NodeDoc = {
@@ -107,9 +79,8 @@ export async function runEffectTool(env: ToolEnv, name: string, args: Json): Pro
         case 'update_particles': {
             const target = node(store.doc, args.id);
             if (!target.particles) throw new ToolError(`${target.name} has no particle emitter.`);
-            if (args.texture && !store.doc.assets.some((a) => a.id === args.texture && a.kind === 'texture')) throw new ToolError(`"${args.texture}" is not a texture asset.`);
             const base = args.preset !== undefined ? { ...presetParticles(str(args.preset, 'preset', 40)), texture: target.particles.texture } : target.particles;
-            const particles = particleArgs(args, base);
+            const particles = particleArgs(env, args, base);
             store.commit('AI: Edit Particles', (d) => {
                 const n = d.nodes.find((x) => x.id === target.id);
                 if (n) n.particles = particles;

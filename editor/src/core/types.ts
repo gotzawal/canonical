@@ -2,195 +2,18 @@
 // snapshotted for undo/redo, autosaved and written to a file. The engine scene
 // is rebuilt from it by engine/sync.ts.
 
+import type { CameraDoc, CharacterDoc, EnvironmentDoc, LightDoc, MeshDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
+
 export type Vec3 = [number, number, number];
 
-/**
- * Primitive shapes. Every shape is centered on its origin like the box.
- * The ramp and the stairs rise toward -Z (the first step is at +Z); the
- * capsule's height includes its round caps. The cone stands on its base;
- * up to 8 segments its sides are flat (4: a square pyramid).
- */
-export type GeometryDoc =
-    | { type: 'box'; width: number; height: number; depth: number }
-    | { type: 'sphere'; radius: number; segments: number }
-    | { type: 'plane'; width: number; height: number }
-    | { type: 'cylinder'; radiusTop: number; radiusBottom: number; height: number; segments: number }
-    | { type: 'cone'; radius: number; height: number; segments: number }
-    | { type: 'torus'; radius: number; tube: number; segments: number }
-    | { type: 'ramp'; width: number; height: number; depth: number }
-    | { type: 'stairs'; width: number; height: number; depth: number; steps: number }
-    | { type: 'capsule'; radius: number; height: number; segments: number };
-
-export type GeometryType = GeometryDoc['type'];
+// Components and settings defined by their schemas (core/model.ts).
+export type {
+    AlphaMode, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType, MaterialDoc, MaterialOverride,
+    MaterialType, MeshDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
+} from './model';
 
 /** Value of a script property or a shader property. Colors are #rrggbb strings, vectors number arrays. */
 export type ParamValue = number | string | boolean | number[];
-
-/**
- * Surface materials. 'lit' is the engine's PBR material (LitMaterial),
- * 'unlit' ignores lights (UnLitMaterial), 'lambert' is a cheap matte
- * material lit by directional lights (LambertMaterial) and 'shader' renders
- * with a custom WGSL material shader.
- */
-export type MaterialType = 'lit' | 'unlit' | 'lambert' | 'shader';
-
-/**
- * Alpha handling. 'auto' blends when opacity is below 1 (on a model slot it
- * keeps the file's mode), 'mask' cuts out pixels whose alpha is below the
- * cutoff (foliage, fences), 'additive' and 'multiply' are transparent
- * blending modes (glow and fire, stains and tinted glass).
- */
-export type AlphaMode = 'auto' | 'opaque' | 'blend' | 'mask' | 'additive' | 'multiply';
-
-export interface MaterialDoc {
-    /** 'shader' renders with the custom shader asset in `shader`. */
-    type: MaterialType;
-    /** Base color as #rrggbb. */
-    color: string;
-    opacity: number;
-    metallic: number;
-    roughness: number;
-    emissive: string;
-    emissiveIntensity: number;
-    doubleSide: boolean;
-    /** Texture asset id for the base color map, or null. */
-    map: string | null;
-    /** Shader asset id, used when `type` is 'shader'. */
-    shader?: string | null;
-    /** Values of the custom shader's declared properties, by property name. */
-    params?: Record<string, ParamValue>;
-    // The fields below are optional; a missing field means its default.
-    /** Default 'auto'. */
-    alphaMode?: AlphaMode;
-    /** 'mask' mode: alpha below this is cut out. Default 0.5. */
-    alphaCutoff?: number;
-    /** Texture repeat [u, v] for every map. Default [1, 1]. */
-    tiling?: [number, number];
-    /** Texture offset [u, v] for every map. Default [0, 0]. */
-    offset?: [number, number];
-    /** Lit only: tangent space normal map (texture asset id). */
-    normalMap?: string | null;
-    /** Lit only: strength of the normal map. Default 1. */
-    normalScale?: number;
-    /** Lit only: glTF style metallic-roughness map, roughness in G and metallic in B. */
-    metalRoughMap?: string | null;
-    /** Lit only: ambient occlusion map (grayscale; the engine reads G like Unity). */
-    aoMap?: string | null;
-    /** Lit only: emission map, multiplied by the emissive color. */
-    emissiveMap?: string | null;
-    /** Lit only: clear coat layer, 0..1. Default 0. */
-    clearcoat?: number;
-    /** Lit only: roughness of the clear coat, 0..1. Default 0. */
-    clearcoatRoughness?: number;
-    /** Lit only: light passing through the surface (glass, water), 0..1. Default 0. */
-    transmission?: number;
-    /** Lit only: index of refraction. Default 1.5. */
-    ior?: number;
-    /** Lit only: thickness of the volume behind a transmissive surface. Default 0. */
-    thickness?: number;
-    /** Lit only: color light turns into while it travels through the volume. Default white. */
-    attenuationColor?: string;
-    /** Lit only: distance at which light inside the volume reaches the attenuation color; 0 means no absorption. */
-    attenuationDistance?: number;
-    /**
-     * Material slot (DesignDoc.materials) this surface belongs to. Setting a
-     * slot's swatch rewrites the material of every mesh in the slot.
-     */
-    slot?: string;
-}
-
-export interface MeshDoc {
-    geometry: GeometryDoc;
-    material: MaterialDoc;
-    castShadow: boolean;
-    receiveShadow: boolean;
-}
-
-export type LightType = 'directional' | 'point' | 'spot';
-
-export interface LightDoc {
-    type: LightType;
-    color: string;
-    intensity: number;
-    castShadow: boolean;
-    /** Point / spot only. */
-    range: number;
-    /** Point / spot only. */
-    radius: number;
-    /** Spot only: inner cone as a percentage of the outer cone (0..100). */
-    innerAngle: number;
-    /** Spot only: full cone angle in degrees. */
-    outerAngle: number;
-}
-
-/**
- * Shading model for a material slot of an imported model: 'model' keeps the
- * file's own PBR material, 'unlit' and 'lambert' replace it with the engine
- * material of that name (keeping the file's color texture).
- */
-export type SlotShading = 'model' | 'unlit' | 'lambert';
-
-/**
- * Per-instance change to one material slot of an imported model. Every field
- * is optional: a missing field keeps the value from the model file.
- */
-export interface MaterialOverride {
-    color?: string;
-    opacity?: number;
-    metallic?: number;
-    roughness?: number;
-    emissive?: string;
-    emissiveIntensity?: number;
-    doubleSide?: boolean;
-    /** Texture asset replacing the base color map; null removes the map. */
-    map?: string | null;
-    /** Built-in shading model replacing the file's material; missing means 'model'. */
-    shading?: SlotShading;
-    /** Custom shader asset replacing the material (takes precedence over `shading`). */
-    shader?: string | null;
-    params?: Record<string, ParamValue>;
-    alphaMode?: AlphaMode;
-    alphaCutoff?: number;
-    /** PBR only: normal map strength. */
-    normalScale?: number;
-    /** PBR only: clear coat layer, 0..1. */
-    clearcoat?: number;
-    clearcoatRoughness?: number;
-    /** PBR only: transmission (glass), 0..1. */
-    transmission?: number;
-    ior?: number;
-}
-
-/** Per-instance change to one mesh part of an imported model. */
-export interface PartOverride {
-    visible?: boolean;
-    castShadow?: boolean;
-    receiveShadow?: boolean;
-    /** Material slot key to render this part with instead of its own. */
-    material?: string;
-    /** Local transform of the part, replacing the one from the file. */
-    position?: Vec3;
-    rotation?: Vec3;
-    scale?: Vec3;
-}
-
-export interface ModelDoc {
-    /** Model asset id (a .glb / .gltf blob stored in IndexedDB). */
-    asset: string;
-    /** Material slot overrides keyed by slot key (see engine/modelParts.ts). */
-    materials?: Record<string, MaterialOverride>;
-    /** Mesh part overrides keyed by part path (see engine/modelParts.ts). */
-    parts?: Record<string, PartOverride>;
-}
-
-export interface CameraDoc {
-    /** Vertical field of view in degrees. */
-    fov: number;
-    near: number;
-    far: number;
-    /** Play mode renders through the first camera marked main. */
-    main: boolean;
-}
 
 /** A script attached to a node. */
 export interface ScriptRef {
@@ -199,101 +22,6 @@ export interface ScriptRef {
     enabled: boolean;
     /** Values for the script's public fields, overriding the defaults in code. */
     props: Record<string, ParamValue>;
-}
-
-export type ParticleShape = 'box' | 'circle' | 'sphere' | 'hemisphere';
-
-/**
- * A particle emitter (fire, smoke, sparks, dust, rain), simulated on the
- * GPU by packages/particle. Ranges are [min, max]; each particle takes a
- * random value in between.
- */
-export interface ParticlesDoc {
-    /** Preset it started from (for reference). */
-    preset?: string;
-    /** Particles emitted per second. */
-    rate: number;
-    /** Most particles alive at once. */
-    max: number;
-    /** Seconds a particle lives. */
-    life: [number, number];
-    /** Size in meters at birth. */
-    size: [number, number];
-    /** Size at the end of life, as a factor of the birth size. */
-    sizeEnd: number;
-    /** Where particles start: on or in this shape around the object. */
-    shape: ParticleShape;
-    /** Circle, sphere and hemisphere radius in meters. */
-    radius: number;
-    /** Box size in meters. */
-    box: Vec3;
-    /** Start velocity per axis in m/s, in the object's space: lowest and highest. */
-    velocityMin: Vec3;
-    velocityMax: Vec3;
-    /** Constant acceleration in m/s^2 (e.g. [0, -9.8, 0] falls, [0, 1, 0] rises). */
-    gravity: Vec3;
-    /** Start rotation of each sprite in degrees. */
-    spin: [number, number];
-    colorStart: string;
-    colorEnd: string;
-    alphaStart: number;
-    alphaEnd: number;
-    /** Sprite texture asset id; null draws a soft round dot. */
-    texture: string | null;
-    /** 'add' glows (fire, sparks, magic), 'alpha' covers (smoke, dust, rain). */
-    blend: 'add' | 'alpha';
-    /** Particles move with the object (local) or stay where they were born (world). */
-    local: boolean;
-    /** Seconds simulated before the first frame, so the effect is already running. */
-    prewarm: number;
-}
-
-/**
- * A character (see play/character.ts): a standing body that walks, runs,
- * jumps and falls through the level, standing on the scene's meshes,
- * climbing steps and stopping at walls and at other characters. It moves
- * the way its controller tells it: the player (NodeDoc.player), a behavior
- * tree (Move To) or a script (this.character). Sizes are in meters.
- */
-export interface CharacterDoc {
-    height: number;
-    radius: number;
-    /** Eyes above the feet: the first person view. */
-    eyeHeight: number;
-    /** The highest step it climbs. */
-    stepHeight: number;
-    /** Walking and running speed, m/s. */
-    speed: number;
-    runSpeed: number;
-    /** Take-off speed of a jump, m/s; 0 turns jumping off. */
-    jump: number;
-    /** Downward acceleration, m/s^2. */
-    gravity: number;
-    /** Walls stop it and it stands on floors; off, it moves freely at its height. */
-    collide: boolean;
-}
-
-/**
- * How the player's view follows its character: 'third' orbits a camera
- * behind it, 'first' looks from its eyes, 'scene' keeps the scene's camera
- * node (the player walks relative to it).
- */
-export type PlayerView = 'third' | 'first' | 'scene';
-
-/**
- * The player controls the character of its object (see
- * play/playerController.ts): WASD or the arrow keys (an on-screen joystick
- * on touch screens) walk, Shift runs, Space jumps, and the camera turns
- * with a mouse drag or a finger.
- */
-export interface PlayerDoc {
-    view: PlayerView;
-    /** Third person: how far the camera stays behind the player. */
-    distance: number;
-    /** Look speed factor for mouse drags and fingers (1 = default). */
-    lookSpeed: number;
-    /** Dragging up looks down. */
-    invertY: boolean;
 }
 
 /** A node with these components, e.g. `NodeWith<'mesh'>` from makeMeshNode. */
@@ -349,45 +77,6 @@ export interface PrefabDoc {
     useModel?: boolean;
     /** Offset that puts the model's bottom center on the pivot. */
     modelOffset?: Vec3;
-}
-
-export type SkyType = 'atmospheric' | 'color';
-
-/**
- * Dynamic diffuse global illumination (DDGI): a grid of light probes
- * captures the scene and lit surfaces receive the light it bounces.
- */
-export interface GIDoc {
-    enable: boolean;
-    /** World position of the center of the probe grid. */
-    center: Vec3;
-    /** Probes along x, y and z. */
-    counts: Vec3;
-    /** Distance between neighboring probes. */
-    spacing: number;
-    /** Strength of the indirect light. */
-    intensity: number;
-    /** How much light keeps bouncing between surfaces, 0..1. */
-    bounce: number;
-    /** Re-capture the probes continuously (moving objects and lights); otherwise only after changes. */
-    realtime: boolean;
-}
-
-export interface EnvironmentDoc {
-    sky: SkyType;
-    skyColor: string;
-    /** Atmospheric sun azimuth, 0..1. */
-    sunX: number;
-    /** Atmospheric sun elevation, 0..1. */
-    sunY: number;
-    skyExposure: number;
-    /** Tonemap exposure. */
-    exposure: number;
-    bloom: { enable: boolean; intensity: number; threshold: number };
-    ao: { enable: boolean; strength: number; distance: number };
-    fxaa: boolean;
-    fog: { enable: boolean; color: string; near: number; far: number; intensity: number };
-    gi: GIDoc;
 }
 
 /**
@@ -869,20 +558,6 @@ export interface LayoutDoc {
     /** Overall footprint x and z and height y, in meters. */
     size?: Vec3 | null;
     connections: { from: string; to: string; kind?: string; note?: string }[];
-}
-
-/** Measurements the level is built to. */
-export interface SpecsDoc {
-    playerHeight: number;
-    eyeHeight: number;
-    playerRadius: number;
-    doorWidth: number;
-    doorHeight: number;
-    /** Highest step the player climbs without jumping. */
-    stepHeight: number;
-    /** Steepest walkable slope, degrees. */
-    maxSlope: number;
-    notes: string;
 }
 
 export interface MoodDoc {

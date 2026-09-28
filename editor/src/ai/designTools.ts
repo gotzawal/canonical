@@ -3,6 +3,8 @@
 
 import { STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
+import { Specs } from '../core/model';
+import { patch, toolSchema } from '../core/schema';
 import type { AreaDoc, AreaObjectDoc, DesignDoc, StageId, Vec3 } from '../core/types';
 import { evaluateStage, stageDef } from '../design/stages';
 import type { ToolDef } from './openrouter';
@@ -55,19 +57,7 @@ export function designToolDefs(): ToolDef[] {
                     description: 'Map concept images (image asset ids) to areas; adds images that are not concepts yet (e.g. ones the user attached).',
                     items: { type: 'object', properties: { asset: { type: 'string' }, area: { type: ['string', 'null'] }, note: { type: 'string' }, remove: { type: 'boolean' } }, required: ['asset'] },
                 },
-                specs: {
-                    type: 'object',
-                    properties: {
-                        player_height: { type: 'number' },
-                        eye_height: { type: 'number' },
-                        player_radius: { type: 'number' },
-                        door_width: { type: 'number' },
-                        door_height: { type: 'number' },
-                        step_height: { type: 'number' },
-                        max_slope: { type: 'number', description: 'Degrees.' },
-                        notes: { type: 'string' },
-                    },
-                },
+                specs: toolSchema(Specs),
                 mood: {
                     type: 'object',
                     properties: {
@@ -262,13 +252,7 @@ function applyDesign(env: ToolEnv, d: DesignDoc, args: Json): { changed: string[
     }
 
     if (args.specs !== undefined) {
-        const sp = args.specs as Json;
-        const map: [string, keyof DesignDoc['specs']][] = [
-            ['player_height', 'playerHeight'], ['eye_height', 'eyeHeight'], ['player_radius', 'playerRadius'], ['door_width', 'doorWidth'],
-            ['door_height', 'doorHeight'], ['step_height', 'stepHeight'], ['max_slope', 'maxSlope'],
-        ];
-        for (const [k, key] of map) if (sp[k] !== undefined) (d.specs as any)[key] = Math.max(0, num(sp[k], `specs.${k}`));
-        if (sp.notes !== undefined) d.specs.notes = str(sp.notes, 'specs.notes', 8000);
+        d.specs = patch(Specs, d.specs, args.specs, 'specs');
         changed.push('specs');
     }
 

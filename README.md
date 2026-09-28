@@ -209,6 +209,7 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 |---|---|
 | `editor/` | Canonical Editor: UI, viewport, scripting, shaders and the AI assistant |
 | `editor/player.html`, `editor/src/player/` | The game player that Build & Deploy puts into every game |
+| `editor/src/core/model.ts` | The components of objects (material, light, camera, particles, character, player...) and the scene settings as zod schemas: their types, defaults, the repair of opened files, the assistant's tool arguments and the inspector's fields all come from them, so a new setting is one line there plus what the engine does with it |
 | `editor/src/core/behavior/` | Behavior formats: node type definitions, edit operations, validation, outlines |
 | `editor/src/play/ai/` | Agents while playing: tree runtime, blackboards, context pool, Ask and Model tasks, scheduler, memory, inference worker and model adapters, speech |
 | `editor/public/` | Favicons and the logo |

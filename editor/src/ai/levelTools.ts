@@ -4,7 +4,9 @@
 
 import { makeMeshNode, makeNode } from '../core/defaults';
 import { invert, mat4, transformPoint } from '../core/math';
-import { makeCharacterNode } from '../core/character';
+import { defaultPlayer, makeCharacterNode } from '../core/character';
+import { Character, Player } from '../core/model';
+import { patch, toolFields } from '../core/schema';
 import type { NodeDoc, Vec3 } from '../core/types';
 import { runLevelCheck, summarize } from '../design/levelCheck';
 import { assignSlot, upsertSlot } from '../design/materialSlots';
@@ -93,10 +95,8 @@ export function levelToolDefs(): ToolDef[] {
             {
                 at: place,
                 facing: { type: ['number', 'array', 'string'], description: 'Degrees around +Y (0 faces +z), or a point / name to face.' },
-                view: { type: 'string', enum: ['third', 'first', 'scene'], description: 'third: a camera follows behind; first: from the eyes; scene: keep the scene\'s camera node.' },
-                speed: { type: 'number', description: 'Walking speed m/s (default 3).' },
-                run_speed: { type: 'number' },
-                jump: { type: 'number', description: 'Take-off speed m/s; 0 turns jumping off.' },
+                ...toolFields(Player, ['view']),
+                ...toolFields(Character, ['speed', 'runSpeed', 'jump']),
             },
             ['at'],
         ),
@@ -308,14 +308,8 @@ export async function runLevelTool(env: ToolEnv, name: string, args: Json): Prom
                 }
             }
             const options = (n: NodeDoc) => {
-                if (args.view !== undefined) {
-                    if (!['third', 'first', 'scene'].includes(args.view)) throw new ToolError('view must be third, first or scene.');
-                    n.player!.view = args.view;
-                }
-                const c = n.character!;
-                if (args.speed !== undefined) c.speed = Math.max(0, num(args.speed, 'speed'));
-                if (args.run_speed !== undefined) c.runSpeed = Math.max(0, num(args.run_speed, 'run_speed'));
-                if (args.jump !== undefined) c.jump = Math.max(0, num(args.jump, 'jump'));
+                n.player = patch(Player, n.player ?? defaultPlayer(), { view: args.view }, '');
+                n.character = patch(Character, n.character!, { speed: args.speed, run_speed: args.run_speed, jump: args.jump }, '');
             };
             if (existing) {
                 // Its origin keeps its height over its feet.

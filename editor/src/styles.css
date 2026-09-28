@@ -1177,6 +1177,15 @@ input.text:focus,
     padding-left: 16px;
 }
 
+/* Tags of more than a letter (Min, Max). */
+.vec3.wide .axis-tag {
+    width: 26px;
+}
+
+.vec3.wide .vec3-item input.num {
+    padding-left: 30px;
+}
+
 .axis-tag {
     position: absolute;
     left: 1px;

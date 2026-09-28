@@ -1,6 +1,7 @@
 // Argument parsing shared by the assistant's tools.
 
 import { tidy } from '../core/math';
+import { InputError as ToolError } from '../core/schema';
 import type { ToolDef } from './openrouter';
 import type { NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/types';
 import { normalizeHex } from '../engine/color';
@@ -13,7 +14,7 @@ export function def(name: string, description: string, properties: Json = {}, re
 }
 
 /** An error the model caused (bad arguments); its message goes back to the model. */
-export class ToolError extends Error {}
+export { ToolError };
 
 export const r3 = (v: number) => tidy(v, 3);
 export const rv = (v: number[]) => v.map(r3);

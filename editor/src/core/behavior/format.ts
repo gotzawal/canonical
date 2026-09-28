@@ -4,6 +4,7 @@
 // validate.ts's job.
 
 import { uid } from '../ids';
+import { isObj, str } from '../schema';
 import type {
     AgentDoc, BehaviorTreeDoc, BlackboardKeyDoc, BlackboardKeyOwner, BlackboardKeyType, BlackboardSchemaDoc, BlackboardValue,
     BtCompositeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, EnumValueDoc, MemoryDoc, MemoryItemDoc, AiModelDoc,
@@ -21,8 +22,6 @@ export function defaultMemory(): MemoryDoc {
     return { embedder: DEFAULT_EMBEDDER, items: [] };
 }
 
-const isObj = (v: any): v is Record<string, any> => !!v && typeof v === 'object' && !Array.isArray(v);
-const str = (v: any, d = '', max = 2000) => (typeof v === 'string' ? v.slice(0, max) : d);
 
 /** A readable id from any text: letters, digits, _ and -. */
 export function toReadableId(s: string, fallback = 'item'): string {
@@ -238,7 +237,7 @@ function repairService(raw: any, taken: Set<string>): BtServiceDoc | null {
     const id = isReadableId(raw.id) && !taken.has(raw.id) ? raw.id : uniqueId(typeof raw.id === 'string' && raw.id ? raw.id : newItemId(def.type, taken), taken);
     taken.add(id);
     const out: Record<string, any> = { id, type: def.type };
-    const note = str(raw.note).trim();
+    const note = str(raw.note, '', 2000).trim();
     if (note) out.note = note;
     repairFields(def, raw, out);
     return out as BtServiceDoc;
@@ -252,7 +251,7 @@ export function repairNode(raw: any, taken: Set<string>, depth = 0): BtNodeDoc |
     const id = isReadableId(raw.id) && !taken.has(raw.id) ? raw.id : uniqueId(typeof raw.id === 'string' && raw.id ? raw.id : newItemId(def.type, taken), taken);
     taken.add(id);
     const out: Record<string, any> = { id, type: def.type };
-    const note = str(raw.note).trim();
+    const note = str(raw.note, '', 2000).trim();
     if (note) out.note = note;
     repairFields(def, raw, out);
     const decorators = (Array.isArray(raw.decorators) ? raw.decorators : []).map(repairDecorator).filter(Boolean) as BtDecoratorDoc[];
@@ -269,7 +268,7 @@ function repairKey(raw: any): BlackboardKeyDoc | null {
     if (!isObj(raw) || !isReadableId(raw.name)) return null;
     const type: BlackboardKeyType = KEY_TYPES.some((k) => k.type === raw.type) ? raw.type : 'string';
     const owner: BlackboardKeyOwner = KEY_OWNERS.some((o) => o.owner === raw.owner) ? raw.owner : 'fact';
-    const key: BlackboardKeyDoc = { name: raw.name, type, default: null, description: str(raw.description), owner };
+    const key: BlackboardKeyDoc = { name: raw.name, type, default: null, description: str(raw.description, '', 2000), owner };
     if (type === 'enum') {
         const seen = new Set<string>();
         key.values = [];
