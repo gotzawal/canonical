@@ -174,7 +174,8 @@ export class Picker {
         if (!pos || pos.length < 9 || (topology && topology !== 'triangle-list')) return boxT;
 
         let best: number | null = null;
-        let hitTri: [number, number, number] | null = null;
+        // Set by tri(); asserted so the check below is not narrowed to the initial null.
+        let hitTri = null as [number, number, number] | null;
         const tri = (a: number, b2: number, c: number) => {
             const t = rayTriangle(
                 o[0], o[1], o[2], d[0], d[1], d[2],

@@ -150,7 +150,7 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
                 h('button', { class: 'icon-btn notice-close', title: 'Close', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: close } }, icon('close', 14)),
             ),
             body,
-            actions.childElementCount ? actions : null,
+            ...(actions.childElementCount ? [actions] : []),
             mute,
         );
         // Hovering keeps a timed card open.

@@ -190,16 +190,19 @@ export class Runtime {
             this.lastEnv = '';
         }
 
+        // The engine's default settings have every post effect.
         const pp = setting.render.postProcessing;
-        pp.bloom.bloomIntensity = env.bloom.intensity;
-        pp.bloom.luminanceThreshole = env.bloom.threshold;
+        const bloom = pp.bloom!;
+        bloom.bloomIntensity = env.bloom.intensity;
+        bloom.luminanceThreshole = env.bloom.threshold;
         this.togglePost(BloomPost, env.bloom.enable);
 
-        pp.gtao.darkFactor = Math.min(1, Math.max(0.01, env.ao.strength));
-        pp.gtao.maxDistance = Math.min(50, Math.max(0.1, env.ao.distance));
+        const gtao = pp.gtao!;
+        gtao.darkFactor = Math.min(1, Math.max(0.01, env.ao.strength));
+        gtao.maxDistance = Math.min(50, Math.max(0.1, env.ao.distance));
         this.togglePost(GTAOPost, env.ao.enable);
 
-        const fog = pp.globalFog;
+        const fog = pp.globalFog!;
         fog.fogType = 0;
         fog.fogColor = hexToColor(env.fog.color);
         // The engine's linear fog ramps from `end` (clear) to `start` (full).

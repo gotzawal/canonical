@@ -199,6 +199,8 @@ pnpm run editor:build       # static site in editor/dist
 xvfb-run -a pnpm run editor:e2e   # browser tests of the build (Playwright)
 ```
 
+The editor type checks in strict mode. The engine and the particle package, which it imports as source, are a referenced project (`editor/tsconfig.engine.json`) checked as their declarations, so they keep their own, looser settings.
+
 The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.
 
 `.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**. `.github/workflows/editor-tests.yml` runs the unit and browser tests.

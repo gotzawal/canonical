@@ -33,7 +33,7 @@
         "editor": "vite --config editor/vite.config.js",
         "editor:build": "vite build --config editor/vite.config.js",
         "editor:preview": "vite preview --config editor/vite.config.js",
-        "editor:typecheck": "tsc --noEmit -p editor/tsconfig.json",
+        "editor:typecheck": "tsc -b editor/tsconfig.json",
         "editor:test": "vitest run --config editor/vitest.config.ts",
         "editor:e2e": "playwright test -c editor/playwright.config.ts",
         "build": "tsc --p tsconfig.build.json && vite build && npm run build:types && npm run minify",

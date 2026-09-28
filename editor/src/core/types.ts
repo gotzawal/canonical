@@ -296,6 +296,9 @@ export interface PlayerDoc {
     invertY: boolean;
 }
 
+/** A node with these components, e.g. `NodeWith<'mesh'>` from makeMeshNode. */
+export type NodeWith<K extends keyof NodeDoc> = NodeDoc & Required<Pick<NodeDoc, K>>;
+
 export interface NodeDoc {
     id: string;
     name: string;

@@ -6,7 +6,7 @@ import { defaultCharacter, defaultPlayer } from './core/character';
 import { applyBehaviorOps, writeBehaviorChanges } from './core/behavior/ops';
 import { defaultDesign } from './core/design';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
-import { SCENE_VERSION, type GeometryType, type NodeDoc, type ParamValue, type SceneDoc, type ScriptDoc, type ShaderDoc, type Vec3 } from './core/types';
+import { SCENE_VERSION, type GeometryType, type NodeDoc, type NodeWith, type ParamValue, type SceneDoc, type ScriptDoc, type ShaderDoc, type Vec3 } from './core/types';
 
 function script(template: string, name: string): ScriptDoc {
     const t = SCRIPT_TEMPLATES.find((x) => x.id === template)!;
@@ -63,7 +63,7 @@ export function exampleShowcase(): SceneDoc {
         { type: 'torus', color: '#4f8fe6', metallic: 0.7, roughness: 0.3, x: 2 },
         { type: 'sphere', color: '#dcdfe3', metallic: 0, roughness: 0.05, x: 4 },
     ];
-    const prims: NodeDoc[] = [];
+    const prims: NodeWith<'mesh'>[] = [];
     for (const s of shapes) {
         const n = makeMeshNode(s.type, group.id);
         n.position = [s.x, n.position[1], 0] as Vec3;
@@ -78,7 +78,7 @@ export function exampleShowcase(): SceneDoc {
     torus.position = [2, 0.9, 0];
     attach(torus, rotator, { speed: 60, axis: 'x' });
     pearl.name = 'Hologram Sphere';
-    pearl.mesh!.material = { ...pearl.mesh!.material, type: 'shader', shader: hologram.id, params: { glow: '#3dd8ff' } };
+    pearl.mesh.material = { ...pearl.mesh.material, type: 'shader', shader: hologram.id, params: { glow: '#3dd8ff' } };
 
     const glass = makeMeshNode('box');
     glass.name = 'Glass Panel';

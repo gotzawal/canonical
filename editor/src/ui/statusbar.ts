@@ -149,7 +149,7 @@ export function statusbar(editor: Editor): HTMLElement {
 
     let warned = '';
     editor.autosave.onStatus = (s) => {
-        saved.textContent = s.problem ? 'Not safe in this browser' : `Saved in browser ${s.saved.toLocaleTimeString()}`;
+        saved.textContent = s.problem === undefined ? `Saved in browser ${s.saved.toLocaleTimeString()}` : 'Not safe in this browser';
         saved.title = s.problem ?? '';
         saved.classList.toggle('warn', !!s.problem);
         // Told once per problem; the status bar keeps showing it.
