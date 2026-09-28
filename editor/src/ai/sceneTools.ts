@@ -5,7 +5,7 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Body, Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
 import { defaults, patch, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
@@ -43,6 +43,10 @@ const objectFields = {
     },
     player: {
         ...toolSchema(Player, 'The player controls this object\'s character (added when missing): WASD / a joystick walk, Space jumps, a drag turns its camera. null removes it. One player per scene: place it with place_player.'),
+        type: ['object', 'null'],
+    },
+    animation: {
+        ...toolSchema(Animation, 'Skeletal animation of an imported model with clips (list_model_parts lists them): the clip it plays, its speed and crossfade, and on a character the clip of each mode (idle, walk, run, jump, fall; empty picks a clip named for the mode). Scripts play clips with this.animator. null removes it.'),
         type: ['object', 'null'],
     },
     body: {
@@ -236,7 +240,7 @@ export const sceneTools = tools({
     },
     list_model_parts: {
         groups: ['read'],
-        description: 'Material slots and mesh parts of an imported model object, with their current values and overrides.',
+        description: 'Material slots, mesh parts and animation clips of an imported model object, with their current values and overrides.',
         params: { id: { type: 'string' } },
         required: ['id'],
         run({ args, ed, doc }) {
@@ -263,6 +267,7 @@ export const sceneTools = tools({
                     })),
                     parts: info.parts.slice(0, 300).map((p) => ({ path: p.path, name: p.name, slot: p.slot, triangles: p.triangles, ...(parts[p.path] ? { override: parts[p.path] } : {}) })),
                     ...(info.parts.length > 300 ? { truncated: info.parts.length - 300 } : {}),
+                    ...(info.clips.length ? { clips: info.clips } : {}),
                 },
             };
         },
@@ -491,6 +496,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         const p = n.player;
         out.player = { view: p.view, ...(p.view === 'third' ? { distance: p.distance } : {}) };
     }
+    if (n.animation) {
+        const a = n.animation;
+        out.animation = { clip: a.clip || 'first', ...(a.speed !== 1 ? { speed: a.speed } : {}), ...Object.fromEntries(ANIMATION_MODES.filter((m) => a[m]).map((m) => [m, a[m]])) };
+    }
     if (n.body) {
         const b = n.body;
         out.body = { type: b.type, ...(b.shape !== 'auto' ? { shape: b.shape } : {}), ...(b.type === 'dynamic' ? { mass: b.mass } : {}), ...(b.sensor ? { sensor: true } : {}) };
@@ -588,6 +597,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (other) throw new ToolError(`"${other.name}" is the player already: one player per scene. Move it with place_player.`);
         if (!n.character) throw new ToolError('The player controls a character: give the object one (character) too.');
         n.player = patch(Player, n.player ?? defaultPlayer(), spec.player, 'player');
+    }
+    if (spec.animation === null) delete n.animation;
+    else if (spec.animation) {
+        if (!n.model) throw new ToolError(`"${n.name}" is not an imported model: only models have animation clips.`);
+        n.animation = patch(Animation, n.animation ?? defaults(Animation), spec.animation, 'animation');
     }
     if (spec.body === null) delete n.body;
     else if (spec.body) {
@@ -711,7 +725,7 @@ class StagePolicy {
         if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
-        if ((spec.player !== undefined || spec.character !== undefined || spec.body !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player and physics bodies cannot be changed in the ${this.stage} stage.`;
+        if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed in the ${this.stage} stage.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {

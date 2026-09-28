@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import { unassignSlot } from '../design/materialSlots';
@@ -23,6 +23,7 @@ import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import { schemaRows } from './schemaFields';
+import { clipFor } from '../play/animation';
 import {
     CheckboxField, ColorField, EditHooks, FieldGuard, FieldSteps, NumberField, SelectField, SliderField, TextField, Vec3Field, button,
     iconButton, row, section,
@@ -82,6 +83,8 @@ const COMPONENTS = {
     player: [Player, (n: NodeDoc) => n.player],
     body: [Body, (n: NodeDoc) => n.body],
     material: [Material, (n: NodeDoc) => n.mesh?.material],
+    // Made on the first edit: every model with clips shows the section.
+    animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
 } as const;
 
 type Filter = (n: NodeDoc) => boolean;
@@ -296,13 +299,17 @@ export class InspectorPanel {
      * stays valid (a range in order, a body no thinner than its radius).
      */
     private componentRows(comp: keyof typeof COMPONENTS, keys: readonly string[], filter?: Filter): HTMLElement[] {
-        const schema: z.ZodObject = COMPONENTS[comp][0];
-        const get = COMPONENTS[comp][1] as (n: NodeDoc) => Record<string, unknown> | undefined;
-        const fields = schemaRows(schema, keys, get(this.node)!, (key, label) =>
-            this.hooks(label, filter ?? ((n) => !!get(n)), (n, v) => Object.assign(get(n)!, schema.parse({ ...get(n), [key]: v })), (n) => get(n)?.[key]),
+        const [schema, get, make] = COMPONENTS[comp] as unknown as [z.ZodObject, (n: NodeDoc) => Record<string, unknown> | undefined, (keyof NodeDoc)?];
+        const value = (n: NodeDoc) => get(n) ?? (make ? defaults(schema) : undefined);
+        const fields = schemaRows(schema, keys, value(this.node)!, (key, label) =>
+            this.hooks(label, filter ?? ((n) => !!get(n)), (n, v) => {
+                const next = schema.parse({ ...get(n), [key]: v });
+                if (get(n)) Object.assign(get(n)!, next);
+                else (n as unknown as Record<string, unknown>)[make!] = next;
+            }, (n) => value(n)?.[key]),
         );
         this.watch(() => {
-            const cur = get(this.node);
+            const cur = value(this.node);
             if (cur) fields.set(cur);
         });
         return fields.rows;
@@ -870,11 +877,36 @@ export class InspectorPanel {
         });
         if (overrides) rows.push(row('Overrides', h('div', { class: 'readonly', text: `${overrides} changed ${overrides === 1 ? 'item' : 'items'}` })));
         const out = [section('model', 'Model', 'model', rows, [menu])];
+        if (info?.clips.length) out.push(this.animationSection(node, info.clips));
         if (info) {
             out.push(this.materialSlotsSection(node, info));
             out.push(this.partsSection(node, info));
         }
         return out;
+    }
+
+    /** The clip the model plays, and on a character the clip of each mode. */
+    private animationSection(node: NodeDoc, clips: string[]): HTMLElement {
+        const same: Filter = (n) => n.model?.asset === node.model!.asset;
+        const clipRow = (key: 'clip' | (typeof ANIMATION_MODES)[number], empty: string) => {
+            const label = key === 'clip' ? 'Clip' : key[0].toUpperCase() + key.slice(1);
+            const edit = this.hooks<string>(`Animation ${label}`, same, (n, v) => (n.animation = Animation.parse({ ...n.animation, [key]: v })));
+            const f = new SelectField<string>([{ value: '', label: empty }, ...clips.map((c) => ({ value: c, label: c }))], node.animation?.[key] ?? '', (v) => edit.commit!(v));
+            this.watch(() => f.set(this.node.animation?.[key] ?? ''));
+            return row(label, f.el);
+        };
+        let character = false;
+        for (let n: NodeDoc | undefined = node; n && !character; n = this.store.node(n.parent)) character = !!n.character;
+        return section('animation', 'Animation', 'play', [
+            clipRow('clip', `First (${clips[0]})`),
+            ...this.componentRows('animation', ['speed', 'fade', 'preview'], same),
+            ...(character
+                ? [
+                      h('div', { class: 'muted small pad', text: "In Play the character's mode picks the clip:" }),
+                      ...ANIMATION_MODES.map((m) => clipRow(m, `Auto (${clipFor(clips, defaults(Animation), m) ?? 'keeps the clip'})`)),
+                  ]
+                : []),
+        ]);
     }
 
     private materialSlotsSection(node: NodeDoc, info: ModelInfo): HTMLElement {

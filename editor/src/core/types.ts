@@ -3,13 +3,13 @@
 // is rebuilt from it by engine/sync.ts.
 
 import type { Vec3 } from './math';
-import type { BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, LightDoc, MeshDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
+import type { AnimationDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, LightDoc, MeshDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
 
 export type { Vec3 };
 
 // Components and settings defined by their schemas (core/model.ts).
 export type {
-    AlphaMode, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType, MaterialDoc, MaterialOverride,
+    AlphaMode, AnimationDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType, MaterialDoc, MaterialOverride,
     MaterialType, MeshDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
 } from './model';
 
@@ -49,6 +49,8 @@ export interface NodeDoc {
     player?: PlayerDoc;
     /** A physics body: the object falls and collides in Play mode. */
     body?: BodyDoc;
+    /** Skeletal animation of the node's model: its clip, and a character's clip per mode. */
+    animation?: AnimationDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
     agent?: AgentDoc;

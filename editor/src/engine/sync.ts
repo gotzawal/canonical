@@ -6,7 +6,7 @@ import {
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
+import type { AnimationDoc, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
@@ -30,6 +30,8 @@ interface ModelState {
     overrides: ModelOverrides | null;
     /** Overrides last applied, to skip unchanged updates. */
     key: string;
+    /** The clip the editor last played. */
+    clip?: string;
 }
 
 /** Engine-side state of one document node. */
@@ -256,6 +258,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyMesh(entry, node.mesh);
         this.applyLight(entry, node.light);
         this.applyModel(entry, node.model);
+        this.applyAnimation(entry, node.animation);
         this.applyParticles(entry, node.particles);
     }
 
@@ -517,6 +520,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     state.info = null;
                     state.overrides = null;
                 }
+                this.applyAnimation(entry, this.store.node(entry.id)?.animation);
                 this.setEnabled(entry, entry.visible, true);
                 this.runtime.gi.invalidate();
                 this.emit('model', entry.id);
@@ -528,6 +532,19 @@ export class SceneSync extends Emitter<SyncEvents> {
                 console.error('[editor] model load failed', err);
                 this.emit('model', entry.id);
             });
+    }
+
+    /** The clip a model shows in the editor, moving while previewed (Play drives it: play/animation.ts). */
+    private applyAnimation(entry: Entry, doc: AnimationDoc | undefined) {
+        const st = entry.model;
+        const a = st?.info?.animator;
+        if (!st?.info || !a || this.store.playing) return;
+        const clip = doc?.clip && st.info.clips.includes(doc.clip) ? doc.clip : st.info.clips[0];
+        const preview = doc?.preview ?? true;
+        // Without the preview it holds the clip's first frame.
+        if (clip !== st.clip || !preview) a.playAnim(clip);
+        st.clip = clip;
+        a.timeScale = preview ? (doc?.speed ?? 1) : 0;
     }
 
     private applyModelOverrides(entry: Entry, model: ModelDoc) {

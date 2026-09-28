@@ -13,6 +13,7 @@ import { AgentSystem, type AgentHost, type AIServices, type BlackboardApi } from
 import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
+import { Animations, type AnimatorApi } from './animation';
 import { Characters, type Character } from './character';
 import { bodyOf, loadPhysics, physicsLoaded, preloadPhysics, usesPhysics, Physics, type BodyApi, type PhysicsApi } from './physics';
 import { PlayControls } from './playControls';
@@ -116,6 +117,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private characters: Characters | null = null;
     /** The physics world of the session (play/physics.ts). */
     private world: Physics | null = null;
+    /** The animated models of the session (play/animation.ts). */
+    private animations: Animations | null = null;
     /** Stops so far: a Play waiting for Rapier starts only when no Stop came in between. */
     private runs = 0;
     private controller: PlayerController | null = null;
@@ -184,6 +187,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.sceneChildren = new Set(this.runtime.scene.entityChildren as Object3D[]);
         this.setupCamera();
         this.setupCharacters();
+        this.animations = new Animations(this.store, this.sync, this.characters?.list ?? []);
         this.setupPhysics();
         this.instantiate();
         // Blackboards exist before awake() / start(), so scripts can write their first facts there.
@@ -240,6 +244,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.pendingDestroy = [];
         this.pointerTarget = null;
         this.characters = null;
+        this.animations = null;
         this.controller = null;
         this.mousePointer = null;
         this.controls?.stop();
@@ -300,6 +305,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     private setState(state: PlayState) {
         this.state = state;
+        this.animations?.pause(state === 'paused');
         this.emit('state', state);
     }
 
@@ -797,6 +803,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     physics(): PhysicsApi | null {
         return this.world;
+    }
+
+    animator(target: Object3D | string): AnimatorApi | null {
+        const obj = typeof target === 'string' ? this.findObject(target) : target;
+        return (obj && this.animations?.of(obj)) ?? null;
     }
 
     scriptsOn(obj: Object3D): Script[] {

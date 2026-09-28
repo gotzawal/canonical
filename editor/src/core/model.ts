@@ -265,6 +265,27 @@ export const Player = z.object({
 export type PlayerDoc = z.output<typeof Player>;
 export type PlayerView = PlayerDoc['view'];
 
+// ---------------------------------------------------------------- animation
+
+/** A character's modes, which pick its model's clips (play/character.ts). */
+export const ANIMATION_MODES = ['idle', 'walk', 'run', 'jump', 'fall'] as const;
+const modeClip = (mode: string) => text('', 200, { title: mode[0].toUpperCase() + mode.slice(1), description: `Clip while the character is in its ${mode} mode; empty picks one by its name.` });
+
+/**
+ * Skeletal animation of an imported model (see play/animation.ts): the clip
+ * it plays, in the editor too while previewed, and on a character the clip
+ * of each of its modes, crossfaded as the mode changes. Scripts play clips
+ * with this.animator.
+ */
+export const Animation = z.object({
+    clip: text('', 200, { description: 'Clip it plays; empty plays the first.' }),
+    speed: num(1, 0, 10, { step: 0.05, description: 'Playback speed: 1 as made.' }),
+    fade: num(0.25, 0, 5, { step: 0.05, title: 'Crossfade', description: 'Seconds one clip takes to blend into the next.' }),
+    preview: bool(true, { description: 'Plays in the editor too, not only in Play.' }),
+    ...Object.fromEntries(ANIMATION_MODES.map((m) => [m, modeClip(m)])) as Record<(typeof ANIMATION_MODES)[number], ReturnType<typeof modeClip>>,
+});
+export type AnimationDoc = z.output<typeof Animation>;
+
 // ------------------------------------------------------------------ physics
 
 export const BODY_TYPES = ['dynamic', 'kinematic', 'fixed'] as const;

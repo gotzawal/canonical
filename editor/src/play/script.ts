@@ -3,6 +3,7 @@ import type { Camera3D, Engine3D, Object3D, Scene3D, Transform } from '@orillusi
 import { invert, transformPoint } from '../core/math';
 import type { BodyDoc, Vec3 } from '../core/types';
 import type { BlackboardApi } from './ai/agents';
+import type { AnimatorApi } from './animation';
 import type { SayOptions } from './ai/speech';
 import type { Character } from './character';
 import type { Input } from './input';
@@ -96,6 +97,7 @@ export interface PlayApi {
     character(target: Object3D | string | null): Character | null;
     body(target: Object3D | string): BodyApi | null;
     physics(): PhysicsApi | null;
+    animator(target: Object3D | string): AnimatorApi | null;
     remember(text: string, tags: string[]): string | null;
     memory(id: string): { id: string; text: string; tags: string[] } | null;
     saveMemories(): SavedMemory[];
@@ -306,6 +308,21 @@ export class Script {
     /** Another object's character (by object or name). */
     getCharacter(target: Object3D | string): Character | null {
         return this.api.character(target);
+    }
+
+    /**
+     * The skeletal animation of this object's model, or of the first model
+     * under it (null without clips): clips, clip (playing now), speed, and
+     * play(clip, fade?) blending over `fade` seconds. A character's model
+     * changes clip with the character's mode by itself.
+     */
+    get animator(): AnimatorApi | null {
+        return this.api.animator(this.object3D);
+    }
+
+    /** Another object's animation (by object or name). */
+    getAnimator(target: Object3D | string): AnimatorApi | null {
+        return this.api.animator(target);
     }
 
     /**
