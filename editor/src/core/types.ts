@@ -2,9 +2,10 @@
 // snapshotted for undo/redo, autosaved and written to a file. The engine scene
 // is rebuilt from it by engine/sync.ts.
 
+import type { Vec3 } from './math';
 import type { CameraDoc, CharacterDoc, EnvironmentDoc, LightDoc, MeshDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
 
-export type Vec3 = [number, number, number];
+export type { Vec3 };
 
 // Components and settings defined by their schemas (core/model.ts).
 export type {

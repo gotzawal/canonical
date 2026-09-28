@@ -4,8 +4,8 @@
 // their own lines.
 
 import type { ChatRequest as ScriptChatRequest } from '../play/script';
-import { chat, type ChatMessage } from './openrouter';
-import { aiSettings } from './settings';
+import { chat, type ChatMessage } from '../openrouter/client';
+import { aiSettings } from '../openrouter/settings';
 
 export async function scriptChat(req: ScriptChatRequest): Promise<string> {
     const key = aiSettings.apiKey;

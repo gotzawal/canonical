@@ -11,8 +11,8 @@ import type { Editor } from '../editor';
 import {
     checkParams, closestAspect, DEFAULT_IMAGE_MODEL, generateImages, listImageModels, modelParams, takesImages,
     type ImageModel,
-} from '../ai/images';
-import { aiSettings } from '../ai/settings';
+} from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 import { patchShot } from './pipeline';
 
 export interface PaintoverSettings {

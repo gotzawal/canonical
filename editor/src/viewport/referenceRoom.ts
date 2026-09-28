@@ -1,24 +1,13 @@
 import {
     BoxGeometry, DirectLight, LitMaterial, MeshRenderer, Object3D, PlaneGeometry, SphereGeometry, Texture, Vector3,
 } from '@orillusion/core';
-import type { Editor } from '../editor';
 import type { CameraState, EnvironmentDoc } from '../core/types';
+import type { RoomSample } from '../design/materialSlots';
+import type { Editor } from '../editor';
 import { hexToColor } from '../engine/color';
 import { applyUVTransform } from '../engine/materials';
 import { h } from '../ui/dom';
 import { icon } from '../ui/icons';
-
-/** A surface to look at in the room. */
-export interface RoomSample {
-    name: string;
-    /** Albedo texture (an image blob, or a project texture asset id); none for a plain color. */
-    texture?: Blob | string | null;
-    color: string;
-    roughness: number;
-    metallic: number;
-    /** Meters per texture tile. */
-    tile: number;
-}
 
 /** Mid gray, 18% reflectance. */
 const GRAY = '#767676';
@@ -50,15 +39,17 @@ export class ReferenceRoom {
             this.list,
         );
         viewportEl.appendChild(this.hud);
+        editor.on('show-room', (samples) => void this.open(samples));
+        editor.on('view', (view) => view !== 'room' && this.close());
     }
 
     /** Shows the room with these samples (up to eight). */
     async open(samples: RoomSample[]) {
         if (this.active) this.close();
         const ed = this.editor;
-        if (ed.player.state !== 'stopped') ed.stopPlay();
-        if (ed.walk?.active) ed.walk.stop();
+        ed.stopPlay();
         if (ed.isolated) ed.finishPrefabEdit(false);
+        ed.setView('room');
         ed.pipeline.showShot(null);
         this.active = true;
         ed.store.select([]);
@@ -107,7 +98,6 @@ export class ReferenceRoom {
         this.hud.hidden = false;
         const store = ed.store;
         this.offs.push(store.on('load', () => this.close()));
-        this.offs.push(ed.on('walk', (on) => on && this.close()));
         this.offs.push(ed.on('isolate', (id) => id && this.close()));
         const onKey = (e: KeyboardEvent) => {
             if (e.key !== 'Escape' || document.querySelector('.dialog-backdrop')) return;
@@ -139,6 +129,7 @@ export class ReferenceRoom {
         if (this.camera) ed.camera.jump(this.camera);
         this.camera = null;
         this.hud.hidden = true;
+        if (ed.view === 'room') ed.setView('scene');
     }
 
     private add(root: Object3D, geometry: any, material: LitMaterial, pos: [number, number, number]): Object3D {

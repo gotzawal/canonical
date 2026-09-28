@@ -3,8 +3,8 @@ import { getAssetUrl, putDesignImage } from '../core/assets';
 import { Emitter } from '../core/events';
 import { pickFiles } from '../core/persistence';
 import type { PaintoverDoc, ParamValue, ShotDoc } from '../core/types';
-import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
+import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 import {
     defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot, paintoverSpend, rememberOptions, uploadPaintover,
     type PaintoverSettings,

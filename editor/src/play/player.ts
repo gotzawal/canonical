@@ -8,7 +8,7 @@ import { cloneMaterial } from '../engine/modelParts';
 import type { Picker } from '../engine/picking';
 import type { Runtime } from '../engine/runtime';
 import { buildGeometry, type SceneSync } from '../engine/sync';
-import { logInfo } from '../ui/statusbar';
+import { logInfo } from '../core/log';
 import { AgentSystem, type AgentHost, type AIServices, type BlackboardApi } from './ai/agents';
 import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
@@ -59,6 +59,16 @@ interface Timer {
     cancelled: boolean;
 }
 
+/** What the page around Play mode (the editor or the game player) gives it. */
+export interface PlayerHost {
+    /** Element the on-screen controls go into (the view). */
+    controls?: HTMLElement;
+    /** The agents' models, once they are set up. */
+    aiServices?: () => AIServices | null;
+    /** Language model for scripts (this.chat); games have none. */
+    chat?: (req: ChatRequest) => Promise<string>;
+}
+
 interface PlayerEvents {
     state: PlayState;
     issue: ScriptIssue;
@@ -83,10 +93,6 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     readonly agents: AgentSystem;
     /** Voice lines of scripts (this.say), one sentence at a time. */
     readonly speech = new SpeechQueue();
-    /** The agents' models; set by the editor or the game player. */
-    aiServices: () => AIServices | null = () => null;
-    /** Language model for scripts (this.chat); the editor sets it, games have none. */
-    chatModel: ((req: ChatRequest) => Promise<string>) | null = null;
 
     private instances: Instance[] = [];
     /** What each script of this session sees; cut off at Stop, so code still running later (a setTimeout) cannot reach the editor scene. */
@@ -110,8 +116,6 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private controller: PlayerController | null = null;
     /** The pointer that feeds the mouse of the scripts (the first one down). */
     private mousePointer: number | null = null;
-    /** Element the on-screen controls go into (the view); set by the editor or the game player. */
-    controlsHost: HTMLElement | null = null;
     private controls: PlayControls | null = null;
 
     constructor(
@@ -120,9 +124,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         private sync: SceneSync,
         private picker: Picker,
         private compiler: ScriptCompiler,
+        private host: PlayerHost = {},
     ) {
         super();
-        this.agents = new AgentSystem(this, () => this.aiServices());
+        this.agents = new AgentSystem(this, () => host.aiServices?.() ?? null);
     }
 
     get engine() {
@@ -314,8 +319,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             this.gameCamera = ctl.camera;
             this.runtime.setActiveCamera(ctl.camera);
         }
-        if (this.controlsHost) {
-            this.controls ??= new PlayControls(this.controlsHost, this.input, (x, y) => this.tap(x, y));
+        if (this.host.controls) {
+            this.controls ??= new PlayControls(this.host.controls, this.input, (x, y) => this.tap(x, y));
             this.controls.start({ jump: players[0].character!.jump > 0 });
         }
         if (players.length > 1) this.warn(`One player plays at a time: ${players[0].name} does; ${players.slice(1).map((n) => n.name).join(', ')} stand(s) still.`);
@@ -808,14 +813,15 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     }
 
     chat(owner: Script, req: ChatRequest): Promise<string> {
-        if (!this.chatModel) return Promise.reject(new Error('No language model is set up here: this.chat() works in the editor with an OpenRouter key.'));
+        const chat = this.host.chat;
+        if (!chat) return Promise.reject(new Error('No language model is set up here: this.chat() works in the editor with an OpenRouter key.'));
         // Stop cancels the requests still open, along with the signal a task passed.
         const ctl = new AbortController();
         const outer = req.signal;
         if (outer?.aborted) ctl.abort();
         else outer?.addEventListener('abort', () => ctl.abort(), { once: true });
         this.chats.add(ctl);
-        return this.chatModel({ ...req, signal: ctl.signal }).finally(() => this.chats.delete(ctl));
+        return chat({ ...req, signal: ctl.signal }).finally(() => this.chats.delete(ctl));
     }
 
     timer(owner: Script, seconds: number, fn: () => void, repeat: boolean): () => void {

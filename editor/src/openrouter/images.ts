@@ -5,7 +5,7 @@
 // Failed or cancelled generations are not charged.
 
 import type { ParamValue } from '../core/types';
-import { errorText, headers, OPENROUTER_URL, OpenRouterError } from './openrouter';
+import { errorText, headers, OPENROUTER_URL, OpenRouterError } from './client';
 
 export const DEFAULT_IMAGE_MODEL = 'google/gemini-3.1-flash-image-preview';
 /** Most images one generation may ask for. */

@@ -1,74 +1,8 @@
+import { clearLogs, logEvents, logs } from '../core/log';
 import type { Editor } from '../editor';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
-
-interface LogEntry {
-    level: 'error' | 'warn' | 'info';
-    text: string;
-    time: Date;
-}
-
-const MAX_LOGS = 300;
-const logs: LogEntry[] = [];
-const listeners = new Set<() => void>();
-
-function push(level: LogEntry['level'], args: unknown[]) {
-    const text = args
-        .map((a) => {
-            if (a instanceof Error) return a.stack || a.message;
-            if (typeof a === 'string') return a;
-            try {
-                return JSON.stringify(a);
-            } catch {
-                return String(a);
-            }
-        })
-        .join(' ');
-    logs.push({ level, text, time: new Date() });
-    if (logs.length > MAX_LOGS) logs.shift();
-    for (const l of listeners) l();
-}
-
-/** Mirrors console errors/warnings (including WebGPU validation errors) into the editor. */
-export function captureConsole() {
-    const origError = console.error.bind(console);
-    const origWarn = console.warn.bind(console);
-    console.error = (...args: unknown[]) => {
-        push('error', args);
-        origError(...args);
-    };
-    console.warn = (...args: unknown[]) => {
-        push('warn', args);
-        origWarn(...args);
-    };
-    window.addEventListener('error', (e) => push('error', [e.error ?? e.message]));
-    window.addEventListener('unhandledrejection', (e) => push('error', ['Unhandled promise rejection:', e.reason]));
-}
-
-export function logInfo(text: string) {
-    push('info', [text]);
-}
-
-/** Latest console entries, oldest first (used by the AI tools). */
-export function recentLogs(limit = 50, levels: LogEntry['level'][] = ['error', 'warn', 'info']): { level: string; text: string; time: string }[] {
-    return logs
-        .filter((l) => levels.includes(l.level))
-        .slice(-limit)
-        .map((l) => ({ level: l.level, text: l.text.slice(0, 2000), time: l.time.toISOString() }));
-}
-
-export function clearLogs() {
-    logs.length = 0;
-    for (const l of listeners) l();
-}
-
-let openLocation: (file: string, line: number) => void = () => {};
-
-/** Called when a "[Name.js:12]" reference in the console is clicked. */
-export function onLogLocation(fn: (file: string, line: number) => void) {
-    openLocation = fn;
-}
 
 function build(): { sha: string; ref: string; repo: string; time: string } {
     try {
@@ -82,8 +16,8 @@ export function buildInfo() {
     return build();
 }
 
-/** Bottom bar: selection, autosave, fps, GPU and build info, plus the log drawer. */
-export function statusbar(editor: Editor): HTMLElement {
+/** Bottom bar: selection, autosave, fps, GPU and build info, plus the log drawer; a click on "[Name.js:12]" in it calls `openLocation`. */
+export function statusbar(editor: Editor, openLocation: (file: string, line: number) => void): HTMLElement {
     const store = editor.store;
     const selection = h('span', { class: 'status-item grow' });
     const saved = h('span', { class: 'status-item muted', text: 'Not saved yet' });
@@ -134,7 +68,7 @@ export function statusbar(editor: Editor): HTMLElement {
             list.appendChild(h('div', { class: 'log-entry ' + l.level }, h('span', { class: 'log-time', text: l.time.toLocaleTimeString() }), pre));
         }
     };
-    listeners.add(renderLogs);
+    logEvents.on('change', renderLogs);
     renderLogs();
 
     const updateSelection = () => {

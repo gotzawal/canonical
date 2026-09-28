@@ -3,15 +3,12 @@
 // accepts. Generation costs credits and can be switched off in the settings.
 
 import { assetImageDataUrl } from '../core/images';
+import { notify } from '../core/messages';
 import type { ShotDoc } from '../core/types';
-import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
 import { conceptPrompt, generateConcepts, type ConceptView } from '../design/concepts';
-import { notices } from '../ui/notify';
-import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from './images';
+import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
+import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from '../openrouter/images';
 import { num, optStr, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
-
-/** Tools that spend credits on images; left out when the settings forbid it. */
-export const PAID_IMAGE_TOOLS = new Set(['generate_paintover', 'generate_concept']);
 
 export const imageTools = tools({
     generate_paintover: {
@@ -110,7 +107,7 @@ export const imageTools = tools({
                 }
             }
             if (res.concepts.length) {
-                notices.show({
+                notify({
                     kind: 'review',
                     key: 'concept-review',
                     icon: 'image',

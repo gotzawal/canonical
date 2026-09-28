@@ -12,7 +12,7 @@ import { greyboxTools } from './greyboxTools';
 import { imageTools } from './imageTools';
 import { levelTools } from './levelTools';
 import { materialTools } from './materialTools';
-import type { ToolDef } from './openrouter';
+import type { ToolDef } from '../openrouter/client';
 import { sceneTools } from './sceneTools';
 import { allowedGroups, definition, ToolError, type Json, type Tool, type ToolEnv, type ToolResult } from './toolUtil';
 

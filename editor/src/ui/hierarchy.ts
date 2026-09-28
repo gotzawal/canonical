@@ -1,3 +1,4 @@
+import type { Commands } from '../commands';
 import type { Editor } from '../editor';
 import type { NodeDoc } from '../core/types';
 import { clear, h } from './dom';
@@ -18,7 +19,7 @@ export class HierarchyPanel {
     private dragIds: string[] = [];
     private renaming: string | null = null;
 
-    constructor(private editor: Editor, private createMenu: () => MenuItem[]) {
+    constructor(private editor: Editor, private commands: Commands, private createMenu: () => MenuItem[]) {
         const store = editor.store;
         const search = h('input', {
             class: 'search',
@@ -364,7 +365,7 @@ export class HierarchyPanel {
                   { separator: true },
                   { label: 'Make Prefab', icon: 'prefab', enabled: () => !node.prefabChild, action: () => editor.createPrefab() },
               ];
-        const cmd = (id: string, patch?: Partial<MenuItem>) => editor.commands.item(id, patch);
+        const cmd = (id: string, patch?: Partial<MenuItem>) => this.commands.item(id, patch);
         return [
             cmd('edit.rename', { icon: 'dots', action: () => this.startRename(node.id) }),
             cmd('edit.duplicate'),

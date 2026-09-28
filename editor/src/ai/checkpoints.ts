@@ -3,9 +3,10 @@
 // of edits were made by hand), the scene memo is refreshed and the user is
 // asked whether to save: yes downloads the project file.
 
-import type { Agent, AgentDone } from '../ai/agent';
+import { dismiss, notify } from '../core/messages';
+import { stageDef } from '../design/stages';
 import type { Editor } from '../editor';
-import { notices, type Notice } from '../ui/notify';
+import type { Agent, AgentDone } from './agent';
 
 /** Hand edits that make a checkpoint... */
 const EDIT_COUNT = 30;
@@ -21,7 +22,6 @@ export class Checkpoints {
     private lastAt = Date.now();
     private lastPrompt = 0;
     private memoJob: Promise<boolean> | null = null;
-    private notice: Notice | null = null;
 
     constructor(private editor: Editor, private agent: Agent) {
         const store = editor.store;
@@ -34,22 +34,20 @@ export class Checkpoints {
         store.on('load', () => {
             this.edits = [];
             this.lastAt = Date.now();
-            this.notice?.close();
+            dismiss('checkpoint');
         });
         editor.on('saved', (kind) => {
             if (kind !== 'project') return;
-            this.notice?.close();
+            dismiss('checkpoint');
             this.edits = [];
             this.lastAt = Date.now();
         });
         agent.on('done', (d) => {
             if (d.changed && !d.error) this.run('ai', recentFromRequest(d));
         });
-    }
-
-    /** A stage was completed (called by the pipeline). */
-    stageCompleted(title: string, next: string | null) {
-        this.run('stage', `Completed the ${title} stage${next ? ` and moved on to ${next}` : ' (the last stage)'}.`);
+        editor.pipeline.on('completed', ({ stage, next }) => {
+            this.run('stage', `Completed the ${stageDef(stage).title} stage${next ? ` and moved on to ${stageDef(next).title}` : ' (the last stage)'}.`);
+        });
     }
 
     /** Refreshes the memo and asks to save. */
@@ -66,7 +64,7 @@ export class Checkpoints {
                 : reason === 'stage'
                   ? `${recent} Download the project file (.zip) with everything so far?`
                   : `${labels.length} edits since the last checkpoint. Download the project file (.zip) with everything so far?`;
-        this.notice = notices.show({
+        notify({
             kind: 'checkpoint',
             key: 'checkpoint',
             icon: 'save',

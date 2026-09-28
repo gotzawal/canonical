@@ -124,7 +124,7 @@ export const levelTools = tools({
             const slots = (args.slots ?? {}) as Json;
             for (const [key, list] of [['walls', ids.walls], ['floors', ids.floors], ['ceilings', ids.ceilings]] as const) {
                 const slot = slotRef(env, slots[key]);
-                if (slot && list.length) assignSlot(ed, slot, list);
+                if (slot && list.length) assignSlot(ed.store, slot, list);
             }
             store.select([group.id]);
             return {
@@ -327,7 +327,7 @@ function slotRef(env: ToolEnv, ref: unknown): string | null {
     const name = str(ref, 'slot', 200).trim();
     const slots = env.editor.store.doc.design.materials;
     const found = slots.find((s) => s.id === name) ?? slots.find((s) => s.name.toLowerCase() === name.toLowerCase());
-    return (found ?? upsertSlot(env.editor, { name }, 'AI: Add Material Slot')).id;
+    return (found ?? upsertSlot(env.editor.store, { name }, 'AI: Add Material Slot')).id;
 }
 
 function round(v: number): number {

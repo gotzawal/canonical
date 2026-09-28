@@ -7,9 +7,8 @@
 import { uid } from '../core/ids';
 import { makeMaterialSlot } from '../core/design';
 import { TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
-import type { ChangeHint } from '../core/store';
+import type { ChangeHint, Store } from '../core/store';
 import type { MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
-import type { Editor } from '../editor';
 import { getSwatch, swatchAsset } from './swatches';
 
 export const TRIPLANAR_NAME = 'Triplanar.wgsl';
@@ -79,10 +78,10 @@ export interface SlotPatch {
 }
 
 /** Creates a slot, or changes one (by id); linked materials follow. Returns the slot. */
-export function upsertSlot(editor: Editor, patch: SlotPatch & { id?: string }, label?: string): MaterialSlotDoc {
+export function upsertSlot(store: Store, patch: SlotPatch & { id?: string }, label?: string): MaterialSlotDoc {
     let id = patch.id ?? '';
-    const hint = slotChangeHint(editor, id);
-    editor.store.commit(label ?? (patch.id ? 'Edit Material Slot' : 'Add Material Slot'), (d) => {
+    const hint = slotChangeHint(store, id);
+    store.commit(label ?? (patch.id ? 'Edit Material Slot' : 'Add Material Slot'), (d) => {
         let slot = id ? d.design.materials.find((s) => s.id === id) : undefined;
         if (!slot) {
             slot = makeMaterialSlot(patch.name?.trim() || `Material ${d.design.materials.length + 1}`);
@@ -103,15 +102,15 @@ export function upsertSlot(editor: Editor, patch: SlotPatch & { id?: string }, l
         }
         syncSlots(d, id);
     }, hint);
-    return editor.store.doc.design.materials.find((s) => s.id === id)!;
+    return store.doc.design.materials.find((s) => s.id === id)!;
 }
 
 /**
  * Change hint of a slot edit: with linked meshes their materials change
  * too, so the scene follows (a design-only hint skips the engine sync).
  */
-function slotChangeHint(editor: Editor, slotId: string): ChangeHint | undefined {
-    return slotId && linkedMaterials(editor.store.doc).some(({ m }) => m.slot === slotId) ? undefined : { design: true };
+function slotChangeHint(store: Store, slotId: string): ChangeHint | undefined {
+    return slotId && linkedMaterials(store.doc).some(({ m }) => m.slot === slotId) ? undefined : { design: true };
 }
 
 /**
@@ -119,11 +118,11 @@ function slotChangeHint(editor: Editor, slotId: string): ChangeHint | undefined 
  * (by name) of the prefab, so every instance follows. Returns how many
  * materials were linked.
  */
-export function assignSlot(editor: Editor, slotId: string, nodeIds: string[]): number {
-    const doc = editor.store.doc;
+export function assignSlot(store: Store, slotId: string, nodeIds: string[]): number {
+    const doc = store.doc;
     if (!doc.design.materials.some((s) => s.id === slotId)) return 0;
     let count = 0;
-    editor.store.commit('Assign Material Slot', (d) => {
+    store.commit('Assign Material Slot', (d) => {
         const shaderId = ensureTriplanar(d);
         const slot = d.design.materials.find((s) => s.id === slotId)!;
         const touched = new Set<string>();
@@ -166,8 +165,8 @@ export function assignSlot(editor: Editor, slotId: string, nodeIds: string[]): n
 }
 
 /** Unlinks meshes from their slots; they keep their current look. */
-export function unassignSlot(editor: Editor, nodeIds: string[]) {
-    editor.store.commit('Unlink Material Slot', (d) => {
+export function unassignSlot(store: Store, nodeIds: string[]) {
+    store.commit('Unlink Material Slot', (d) => {
         for (const id of nodeIds) {
             const n = d.nodes.find((x) => x.id === id);
             if (n?.mesh?.material.slot) delete n.mesh.material.slot;
@@ -176,8 +175,8 @@ export function unassignSlot(editor: Editor, nodeIds: string[]) {
 }
 
 /** Deletes a slot; its meshes keep their current look. */
-export function deleteSlot(editor: Editor, slotId: string) {
-    editor.store.commit('Delete Material Slot', (d) => {
+export function deleteSlot(store: Store, slotId: string) {
+    store.commit('Delete Material Slot', (d) => {
         d.design.materials = d.design.materials.filter((s) => s.id !== slotId);
         for (const { m } of linkedMaterials(d)) if (m.slot === slotId) delete m.slot;
     }, { design: true });
@@ -197,12 +196,12 @@ function rootOf(doc: SceneDoc, n: NodeDoc): NodeDoc | undefined {
  * a texture (once) and the slot takes its tile size (the texture's real
  * size), roughness and metallic where it has them, and white as its color.
  */
-export async function useSwatch(editor: Editor, slotId: string, swatchId: string): Promise<MaterialSlotDoc> {
+export async function useSwatch(store: Store, slotId: string, swatchId: string): Promise<MaterialSlotDoc> {
     const rec = await getSwatch(swatchId);
     if (!rec) throw new Error('That swatch is not in the library of this browser.');
-    const { meta, added } = await swatchAsset(editor, rec);
-    const hint = slotChangeHint(editor, slotId);
-    editor.store.commit('Use Swatch', (d) => {
+    const { meta, added } = await swatchAsset(store, rec);
+    const hint = slotChangeHint(store, slotId);
+    store.commit('Use Swatch', (d) => {
         if (added && !d.assets.some((a) => a.id === meta.id)) d.assets.push(meta);
         const slot = d.design.materials.find((s) => s.id === slotId);
         if (!slot) return;
@@ -214,12 +213,24 @@ export async function useSwatch(editor: Editor, slotId: string, swatchId: string
         delete slot.flat;
         syncSlots(d, slotId);
     }, hint);
-    const slot = editor.store.doc.design.materials.find((s) => s.id === slotId);
+    const slot = store.doc.design.materials.find((s) => s.id === slotId);
     if (!slot) throw new Error('No such material slot.');
     return slot;
 }
 
-/** The slot's samples for the reference room. */
-export function roomSample(doc: SceneDoc, slot: MaterialSlotDoc) {
+/** A surface to look at in the reference room (viewport/referenceRoom.ts). */
+export interface RoomSample {
+    name: string;
+    /** Albedo texture (an image blob, or a project texture asset id); none for a plain color. */
+    texture?: Blob | string | null;
+    color: string;
+    roughness: number;
+    metallic: number;
+    /** Meters per texture tile. */
+    tile: number;
+}
+
+/** The slot's sample for the reference room. */
+export function roomSample(doc: SceneDoc, slot: MaterialSlotDoc): RoomSample {
     return { name: slot.name, texture: slot.swatch && doc.assets.some((a) => a.id === slot.swatch) ? slot.swatch : null, color: slot.color, roughness: slot.roughness, metallic: slot.metallic, tile: slot.tile };
 }

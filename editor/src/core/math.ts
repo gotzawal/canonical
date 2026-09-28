@@ -7,8 +7,7 @@
 // The engine's Matrix4 allocates a slot in a WASM pool on construction, so
 // the editor never creates Matrix4 instances for scratch math.
 
-import type { Vec3 } from './types';
-
+export type Vec3 = [number, number, number];
 export type Mat4 = Float64Array;
 export type Quat = [number, number, number, number];
 

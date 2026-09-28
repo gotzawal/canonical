@@ -5,6 +5,7 @@ import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
 import { clear, h } from './dom';
 import { icon } from './icons';
+import { notices } from './notify';
 import { popover, showMenu } from './overlays';
 
 /**
@@ -24,6 +25,19 @@ export class PipelineBar {
         store.on('change', rerender);
         store.on('load', () => this.render(true));
         editor.pipeline.on('busy', () => this.render(true));
+        editor.pipeline.on('proposed', (summary) =>
+            notices.show({
+                kind: 'stage',
+                key: 'stage-proposal',
+                icon: 'flag',
+                title: `The assistant proposes completing ${stageDef(editor.pipeline.design.stage).title}`,
+                body: summary.slice(0, 240),
+                actions: [{ label: 'Review', primary: true, run: show.design }],
+            }),
+        );
+        editor.pipeline.on('completed', ({ stage, next }) =>
+            notices.show({ kind: 'stage', key: 'stage-proposal', icon: 'check', title: `${stageDef(stage).title} complete`, body: next ? `Next: ${stageDef(next).long}.` : 'Every stage is complete.', timeout: 6000 }),
+        );
         // The frame rate item of the effects stage follows the editor's fps.
         setInterval(rerender, 2000);
         this.render(true);

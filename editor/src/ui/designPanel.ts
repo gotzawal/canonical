@@ -730,13 +730,13 @@ export class DesignPanel {
                 'div',
                 { class: 'design-actions' },
                 button('Add slot', () => {
-                    const slot = upsertSlot(this.editor, { name: `Material ${d.materials.length + 1}` });
+                    const slot = upsertSlot(this.store, { name: `Material ${d.materials.length + 1}` });
                     this.openSlots.add(slot.id);
                     this.schedule(true);
                 }, 'small', 'plus'),
                 button('Swatch library', () => openSwatchDialog(this.editor, null), 'small', 'image'),
                 d.materials.length
-                    ? button('Reference room', () => void this.editor.room?.open(d.materials.map((m) => roomSample(this.store.doc, m))), 'small', 'sun')
+                    ? button('Reference room', () => this.editor.emit('show-room', d.materials.map((m) => roomSample(this.store.doc, m))), 'small', 'sun')
                     : null,
             ),
         );
@@ -763,7 +763,7 @@ export class DesignPanel {
         });
         const item = h('div', { class: 'slot-item' }, head);
         if (!open) return item;
-        const set = (patch: SlotPatch, label = 'Edit Material Slot') => upsertSlot(this.editor, { id: slot.id, ...patch }, label);
+        const set = (patch: SlotPatch, label = 'Edit Material Slot') => upsertSlot(this.store, { id: slot.id, ...patch }, label);
         const name = new TextField(slot.name, (v) => v.trim() && set({ name: v.trim() }, 'Rename Material Slot'));
         const desc = new TextAreaField(slot.description, (v) => set({ description: v.trim() }), 'What the surface is: material, color, wear', 2);
         const color = new ColorField({ value: slot.color, commit: (v) => set({ color: v }) });
@@ -789,12 +789,12 @@ export class DesignPanel {
                     button(slot.swatch ? 'Change swatch' : 'Find a swatch', () => openSwatchDialog(this.editor, slot.id), 'small primary', 'image'),
                     button(`Assign to selection${sel.length ? ` (${sel.length})` : ''}`, () => {
                         if (!sel.length) return toast('Select objects in the viewport or the hierarchy first.', 'info');
-                        const n = assignSlot(this.editor, slot.id, sel);
+                        const n = assignSlot(this.store, slot.id, sel);
                         toast(`${n} surface${n === 1 ? '' : 's'} use ${slot.name} now.`, 'success');
                     }, 'small', 'check'),
                     users.length ? button('Select users', () => this.store.select(users.map((u) => u.id)), 'small', 'cursor') : null,
                     iconButton('trash', 'Delete slot (the objects keep their look)', async () => {
-                        if (await confirmDialog('Delete material slot', `Delete ${slot.name}? ${users.length} objects keep their current look.`, 'Delete', true)) deleteSlot(this.editor, slot.id);
+                        if (await confirmDialog('Delete material slot', `Delete ${slot.name}? ${users.length} objects keep their current look.`, 'Delete', true)) deleteSlot(this.store, slot.id);
                     }),
                 ),
             ),

@@ -554,7 +554,7 @@ export class InspectorPanel {
                     { class: 'design-note' },
                     icon('sliders', 14),
                     h('span', { text: `Follows the material slot ${slot.name}. Change the slot in the Design tab; edits here are replaced when the slot changes.` }),
-                    button('Unlink', () => unassignSlot(this.editor, this.store.selection), 'small'),
+                    button('Unlink', () => unassignSlot(this.store, this.store.selection), 'small'),
                 ),
             );
         }

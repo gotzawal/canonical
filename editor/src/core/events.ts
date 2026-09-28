@@ -14,6 +14,11 @@ export class Emitter<Events extends Record<string, any>> {
         return () => set!.delete(handler);
     }
 
+    /** True when something listens to `type`. */
+    has(type: keyof Events): boolean {
+        return !!this.handlers.get(type)?.size;
+    }
+
     emit<K extends keyof Events>(type: K, payload: Events[K]): void {
         const set = this.handlers.get(type);
         if (!set) return;

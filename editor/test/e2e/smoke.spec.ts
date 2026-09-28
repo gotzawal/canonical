@@ -47,6 +47,26 @@ test('plays a script and restores the scene on Stop', async () => {
     expect(await page.evaluate(() => window.__editor.store.doc.scripts.length)).toBe(1);
 });
 
+test('switches the view to the walk camera or the reference room, and back to the scene for Play', async () => {
+    const page = editor.page();
+    const view = () => page.evaluate(() => window.__editor.view);
+    await page.evaluate(() => window.__editor.setView('walk'));
+    await expect(page.locator('.walk-hud')).toBeVisible();
+    await page.evaluate(() => window.__editor.emit('show-room', [{ name: 'Gray', color: '#808080', roughness: 0.8, metallic: 0, tile: 1 }]));
+    await expect(page.locator('.room-hud')).toBeVisible();
+    await expect(page.locator('.walk-hud')).toBeHidden();
+    expect(await view()).toBe('room');
+
+    await page.evaluate(() => window.__editor.play());
+    await expect(page.locator('.room-hud')).toBeHidden();
+    expect(await view()).toBe('scene');
+    // The editor tells the user why through core/messages, which the UI shows.
+    await page.evaluate(() => window.__editor.setView('walk'));
+    await expect(page.locator('.toast', { hasText: 'Stop Play mode first.' })).toBeVisible();
+    expect(await view()).toBe('scene');
+    await page.evaluate(() => window.__editor.stopPlay());
+});
+
 test('reopens a saved scene the same', async () => {
     const same = await editor.page().evaluate(() => {
         const ed = window.__editor;

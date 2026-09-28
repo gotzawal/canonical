@@ -1,5 +1,6 @@
 import { PARTICLE_PRESETS } from './core/particles';
 import { version as engineVersion } from '../../package.json';
+import type { Commands } from './commands';
 import type { Editor } from './editor';
 import { createAssetMenu } from './ui/assetsPanel';
 import { buildInfo } from './ui/statusbar';
@@ -53,10 +54,11 @@ export function createMenu(editor: Editor): MenuItem[] {
 
 export function menuDefinitions(
     editor: Editor,
+    commands: Commands,
     panels: { toggleLeft: () => void; toggleRight: () => void; showGraph: () => void; showAI: () => void },
 ) {
     const store = editor.store;
-    const cmd = (id: string, patch?: Partial<MenuItem>) => editor.commands.item(id, patch);
+    const cmd = (id: string, patch?: Partial<MenuItem>) => commands.item(id, patch);
     const hasSel = () => store.selection.length > 0;
     let history = { canUndo: false, canRedo: false, undoLabel: '', redoLabel: '' };
     store.on('history', (hs) => (history = hs));

@@ -8,12 +8,9 @@ import type { MaterialSlotDoc } from '../core/types';
 import { assignSlot, slotUsers, upsertSlot, useSwatch, type SlotPatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import { generateSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom } from '../design/swatches';
-import { MAX_IMAGES } from './images';
 import { stageDef } from '../design/stages';
+import { MAX_IMAGES } from '../openrouter/images';
 import { allowedGroups, hex, node, num, optStr, r3, str, ToolError, tools, type ToolEnv } from './toolUtil';
-
-/** Tools that spend credits; left out when image generation is off. */
-export const PAID_MATERIAL_TOOLS = new Set(['generate_swatch']);
 
 export const materialTools = tools({
     set_material_slot: {
@@ -44,7 +41,7 @@ export const materialTools = tools({
             if (args.metallic !== undefined) patch.metallic = num(args.metallic, 'metallic');
             if (args.tile !== undefined) patch.tile = num(args.tile, 'tile');
             if (args.flat !== undefined) patch.flat = !!args.flat;
-            const slot = upsertSlot(ed, { ...(existing ? { id: existing.id } : {}), ...patch }, existing ? 'AI: Edit Material Slot' : 'AI: Add Material Slot');
+            const slot = upsertSlot(ed.store, { ...(existing ? { id: existing.id } : {}), ...patch }, existing ? 'AI: Edit Material Slot' : 'AI: Add Material Slot');
             return { data: slotSummary(env, slot), summary: slot.name };
         },
     },
@@ -62,7 +59,7 @@ export const materialTools = tools({
             if (!ids.length) throw new ToolError('objects is empty.');
             const meshes = ids.filter((id) => ed.store.node(id)?.mesh || ed.store.node(id)?.prefab);
             if (!meshes.length) throw new ToolError('None of these objects has a mesh (lights, cameras, groups and models have no slot).');
-            const n = assignSlot(ed, slot.id, meshes);
+            const n = assignSlot(ed.store, slot.id, meshes);
             return { data: { ok: true, slot: slot.name, linked: n, skipped: ids.length - meshes.length }, summary: `${n} to ${slot.name}` };
         },
     },
@@ -98,7 +95,7 @@ export const materialTools = tools({
         async run({ env, args, ed }) {
             const slot = findSlot(env, args.slot);
             const id = str(args.swatch, 'swatch', 64).trim();
-            const updated = await useSwatch(ed, slot.id, id).catch((e) => {
+            const updated = await useSwatch(ed.store, slot.id, id).catch((e) => {
                 throw new ToolError(e?.message || String(e));
             });
             return { data: slotSummary(env, updated), summary: `${updated.name}` };

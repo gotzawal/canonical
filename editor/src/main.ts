@@ -1,6 +1,8 @@
 import './styles.css';
 import { newScene } from './core/defaults';
 import { readLocal, writeLocal } from './core/local';
+import { captureConsole } from './core/log';
+import { messages } from './core/messages';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
@@ -9,7 +11,7 @@ import { RenderGraphController } from './engine/renderGraph';
 import { Runtime } from './engine/runtime';
 import { ShaderManager } from './engine/shaders';
 import { SceneSync } from './engine/sync';
-import { Checkpoints } from './design/checkpoints';
+import { Checkpoints } from './ai/checkpoints';
 import { designSummary, memoLines, pipelineSummary } from './design/context';
 import { Commands, editorCommands } from './commands';
 import { createMenu, menuDefinitions } from './menus';
@@ -33,7 +35,7 @@ import { logo } from './ui/logo';
 import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
-import { captureConsole, onLogLocation, statusbar } from './ui/statusbar';
+import { statusbar } from './ui/statusbar';
 import { applyTheme } from './ui/theme';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
@@ -50,6 +52,11 @@ type RightTab = 'inspector' | 'scene' | 'design' | 'ai';
 
 async function main() {
     captureConsole();
+    // Messages from below the UI (core/messages.ts).
+    messages.on('toast', (m) => toast(m.text, m.kind, m.timeout));
+    messages.on('notice', (n) => notices.show(n));
+    messages.on('dismiss', (key) => notices.dismiss(key));
+    messages.on('ask', (q) => void dialog(q.title, q.body, q.choices).then(q.answer));
     const app = document.getElementById('app')!;
 
     if (!('gpu' in navigator)) {
@@ -132,11 +139,12 @@ async function main() {
     }
     loading.remove();
 
+    // Hooks below that use the editor or the commands run later, on input.
     const shaders = new ShaderManager(runtime, store);
     const sync = new SceneSync(runtime, store, shaders);
     const picker = new Picker(runtime, sync, store);
     const camera = new CameraController(runtime, store, picker);
-    const gizmo = new Gizmo(store, picker);
+    const gizmo = new Gizmo(store, picker, (ids) => editor.pipeline.canPlace(ids));
     const autosave = new AutoSaver(store);
     const compiler = new ScriptCompiler(store, !saved?.scriptsPaused);
     autosave.scriptsPaused = !compiler.trusted;
@@ -144,19 +152,15 @@ async function main() {
         autosave.scriptsPaused = !trusted;
         autosave.schedule();
     });
-    const player = new Player(runtime, store, sync, picker, compiler);
-    const graph = new RenderGraphController(runtime, store, shaders, sync);
-    const editor = new Editor(store, runtime, sync, picker, camera, autosave, { shaders, compiler, player, graph });
+    // The player controller's joystick and hints go over the view.
+    const player = new Player(runtime, store, sync, picker, compiler, { controls: viewportEl, aiServices: (): ModelServices => models, chat: scriptChat });
     // Agent models: the editor loads cached copies by itself and asks before downloading.
     const models = new ModelServices(runtime, player.speech, () => store.doc.aiModels, { policy: 'ask', backend: savedBackend() });
-    editor.models = models;
-    player.aiServices = () => models;
-    player.chatModel = scriptChat;
+    const graph = new RenderGraphController(runtime, store, shaders, sync);
     const overlayDrawers: ((ctx: CanvasRenderingContext2D) => void)[] = [];
-    gizmo.guard = (ids) => editor.pipeline.canPlace(ids);
     const viewport = new Viewport(viewportEl, runtime, store, sync, picker, camera, gizmo, {
         onContextMenu: (_x, _y, cx, cy, id) => {
-            const cmd = (c: string, patch?: Partial<MenuItem>) => editor.commands.item(c, patch);
+            const cmd = (c: string, patch?: Partial<MenuItem>) => commands.item(c, patch);
             showMenu(
                 id
                     ? [
@@ -212,7 +216,7 @@ async function main() {
             return part ? { node: f.node, renderer: part.renderer } : null;
         },
         selectable: (id) => editor.selectable(id),
-        captured: () => !!editor.walk?.active,
+        captured: () => editor.view === 'walk',
         drawExtra: (ctx) => overlayDrawers.forEach((fn) => fn(ctx)),
         play: {
             active: () => player.state !== 'stopped',
@@ -221,11 +225,15 @@ async function main() {
             wheel: (d) => player.wheelEvent(d),
         },
     });
-    editor.viewport = viewport;
-    // The player controller's joystick and hints go over the view.
-    player.controlsHost = viewportEl;
-    editor.walk = new WalkController(editor, viewport.overlay, viewportEl);
-    editor.room = new ReferenceRoom(editor, viewportEl);
+    const editor: Editor = new Editor({ store, runtime, sync, picker, camera, autosave, shaders, compiler, player, graph, models, viewport });
+    const commands = new Commands(
+        editorCommands(editor, {
+            rename: () => store.primary && hierarchy.startRename(store.primary.id),
+            toggleDock: () => dock.toggle(),
+        }),
+    );
+    new WalkController(editor, viewport.overlay, viewportEl);
+    new ReferenceRoom(editor, viewportEl);
     overlayDrawers.push(pipelineOverlay(editor));
 
     store.on('change', (hint) => sync.sync(hint));
@@ -237,22 +245,13 @@ async function main() {
     });
 
     // ------------------------------------------------------------- panels
-    const hierarchy = new HierarchyPanel(editor, () => createMenu(editor));
+    const hierarchy = new HierarchyPanel(editor, commands, () => createMenu(editor));
     const assets = new AssetsPanel(editor);
     left.append(hierarchy.el, h('div', { class: 'splitter horizontal', dataset: { side: 'assets' } }), assets.el);
     installSplitters(app);
 
     const dock = new Dock(editor, app);
     dockSlot.append(dock.el);
-    editor.applyCodeEdits = () => {
-        const dirty = dock.dirtyPanels();
-        for (const p of dirty) p.apply();
-        return dirty.length;
-    };
-    editor.beforePlay = () => {
-        const applied = editor.applyCodeEdits();
-        if (applied) toast(`Applied ${applied} edited file(s) before playing.`, 'info');
-    };
 
     // Scripts of an opened file stay paused until the user enables them.
     const scriptNotice = h('div', { class: 'viewport-notice', attrs: { role: 'status', hidden: true } });
@@ -331,8 +330,7 @@ async function main() {
     pipelineSlot.append(new PipelineBar(editor, { design: () => showTab('design'), brief: () => brief.open() }).el);
 
     // Page notifications: the assistant finished, save checkpoints.
-    const checkpoints = new Checkpoints(editor, aiPanel.agent);
-    editor.checkpoints = checkpoints;
+    new Checkpoints(editor, aiPanel.agent);
     aiPanel.agent.on('done', (d) => {
         const first = d.answer.replace(/[#*`>]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
         notices.show({
@@ -398,21 +396,9 @@ async function main() {
     });
     right.append(tabs, inspector.el, scenePanel.el, designPanel.el, aiPanel.el);
 
-    onLogLocation((file, line) => {
-        const script = store.doc.scripts.find((s) => s.name === file);
-        if (script) dock.open('script', script.id)?.reveal(line);
-        const shader = store.doc.shaders.find((s) => s.name === file);
-        if (shader) dock.open('shader', shader.id)?.reveal(line);
-    });
-
-    const rename = () => {
-        const id = store.primary?.id;
-        if (id) hierarchy.startRename(id);
-    };
-    editor.commands = new Commands(editorCommands(editor, { rename, toggleDock: () => dock.toggle() }));
     menuSlot.append(
         menubar(
-            menuDefinitions(editor, {
+            menuDefinitions(editor, commands, {
                 toggleLeft: () => setPanel('left'),
                 toggleRight: () => setPanel('right'),
                 showGraph: () => dock.show('graph'),
@@ -420,8 +406,16 @@ async function main() {
             }),
         ),
     );
-    toolbarSlot.append(toolbar(editor, () => createMenu(editor), () => showTab('ai')));
-    statusSlot.append(statusbar(editor));
+    toolbarSlot.append(toolbar(editor, commands, () => createMenu(editor), () => showTab('ai')));
+    // "[Name.js:12]" in the console opens the file at the line.
+    statusSlot.append(
+        statusbar(editor, (file, line) => {
+            const script = store.doc.scripts.find((s) => s.name === file);
+            if (script) dock.open('script', script.id)?.reveal(line);
+            const shader = store.doc.shaders.find((s) => s.name === file);
+            if (shader) dock.open('shader', shader.id)?.reveal(line);
+        }),
+    );
 
     const updateTitle = () => {
         sceneName.textContent = store.doc.name;
@@ -447,7 +441,7 @@ async function main() {
         if (st === 'stopped') camera.reapply();
     });
 
-    editor.commands.install(editor);
+    commands.install(editor);
     installDropGuard();
     autosave.schedule();
     if (unreadableAutosave) {

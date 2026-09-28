@@ -2,9 +2,9 @@ import type { Editor } from '../editor';
 import { getAssetUrl } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import type { MaterialSlotDoc, ParamValue } from '../core/types';
-import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
-import { roomSample, useSwatch } from '../design/materialSlots';
+import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
+import { roomSample, useSwatch, type RoomSample } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import {
     deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
@@ -14,7 +14,6 @@ import { optionField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, toast, type Modal } from './overlays';
 import { button, iconButton } from './widgets';
-import type { RoomSample } from '../viewport/referenceRoom';
 
 let current: SwatchDialog | null = null;
 /** A generation in progress; it keeps running when the dialog closes. */
@@ -291,7 +290,7 @@ class SwatchDialog {
     private async use(s: SwatchRecord) {
         if (!this.slotId) return;
         try {
-            const slot = await useSwatch(this.editor, this.slotId, s.id);
+            const slot = await useSwatch(this.editor.store, this.slotId, s.id);
             toast(`${slot.name} uses ${s.name} now.`, 'success');
             void this.renderLibrary();
         } catch (e: any) {
@@ -305,7 +304,7 @@ class SwatchDialog {
         const samples: RoomSample[] = [{ name: s.name, texture: s.blob, color: '#ffffff', roughness: s.roughness ?? slot?.roughness ?? 0.8, metallic: s.metallic ?? slot?.metallic ?? 0, tile: s.tile }];
         if (slot) samples.push({ ...roomSample(doc, slot), name: `${slot.name} (now)` });
         this.close();
-        void this.editor.room?.open(samples);
+        this.editor.emit('show-room', samples);
     }
 
     // ------------------------------------------------------------- actions

@@ -4,10 +4,10 @@ import { assetImageDataUrl } from '../core/images';
 import { Emitter } from '../core/events';
 import { designSummary, pipelineSummary } from '../design/context';
 import { uid } from '../core/ids';
-import { cacheStyle } from './caching';
-import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from './openrouter';
+import { cacheStyle } from '../openrouter/caching';
+import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from '../openrouter/client';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
-import { aiSettings } from './settings';
+import { aiSettings } from '../openrouter/settings';
 import { runTool, toolDefs } from './registry';
 import type { ToolChoice, ToolEnv } from './toolUtil';
 

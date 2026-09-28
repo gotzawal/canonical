@@ -1,7 +1,7 @@
 import { buildGame, gameScene, slug, type BuiltGame } from '../build/build';
 import { PREVIEW_KEY, type PreviewData } from '../build/gameFile';
 import { deployToGitHub, explainError, waitForPages, type DeployResult } from '../build/github';
-import { createZip } from '../build/zip';
+import { createZip } from '../core/zip';
 import { formatBytes } from '../core/assets';
 import { download, usedAssetIds } from '../core/persistence';
 import type { Editor } from '../editor';
@@ -80,8 +80,7 @@ export function openPreview(editor: Editor, title: string): boolean {
 export function showBuildDialog(editor: Editor) {
     const store = editor.store;
     if (editor.player.state !== 'stopped') editor.stopPlay();
-    const applied = editor.applyCodeEdits();
-    if (applied) toast(`Applied ${applied} edited file(s) first.`, 'info');
+    editor.emit('flush-edits', undefined);
 
     const settings = loadSettings();
     const saved = store.doc.build ?? {};

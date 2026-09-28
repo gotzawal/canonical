@@ -2,7 +2,7 @@
 // post effects, the console, and Play to test them.
 
 import type { ParamValue } from '../core/types';
-import { recentLogs } from '../ui/statusbar';
+import { recentLogs } from '../core/log';
 import { node, num, params, r3, script, shader, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
 export const codeTools = tools({

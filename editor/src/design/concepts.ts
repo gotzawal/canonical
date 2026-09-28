@@ -8,8 +8,8 @@ import { putDesignImage } from '../core/assets';
 import { assetImageDataUrl, blobToDataUrl, compactImage, imageExt } from '../core/images';
 import type { AreaDoc, AssetMeta, ConceptDoc, DesignDoc, ParamValue } from '../core/types';
 import type { Editor } from '../editor';
-import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../ai/images';
-import { aiSettings } from '../ai/settings';
+import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
+import { aiSettings } from '../openrouter/settings';
 import { imageModelId } from './paintover';
 
 export type ConceptView = 'exterior' | 'interior' | 'overview' | 'plan';

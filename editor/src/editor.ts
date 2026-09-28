@@ -8,6 +8,7 @@ import {
     defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
+import { ask, confirmDialog, toast } from './core/messages';
 import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
@@ -26,25 +27,34 @@ import type { ShaderManager } from './engine/shaders';
 import type { SceneSync } from './engine/sync';
 import type { ScriptCompiler } from './play/compiler';
 import type { Player } from './play/player';
-import { confirmDialog, dialog, toast } from './ui/overlays';
 import type { CameraController } from './viewport/cameraController';
-import type { Checkpoints } from './design/checkpoints';
-import type { Commands } from './commands';
 import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
+import type { RoomSample } from './design/materialSlots';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
-import type { WalkController } from './viewport/walk';
-import type { ReferenceRoom } from './viewport/referenceRoom';
 import { exampleGuard, exampleShowcase } from './examples';
 
-export interface EditorServices {
+/** What the editor works with; main.ts makes them. */
+export interface EditorDeps {
+    store: Store;
+    runtime: Runtime;
+    sync: SceneSync;
+    picker: Picker;
+    camera: CameraController;
+    autosave: AutoSaver;
     shaders: ShaderManager;
     compiler: ScriptCompiler;
     player: Player;
     graph: RenderGraphController;
+    /** The models of the agents. */
+    models: ModelServices;
+    viewport: Viewport;
 }
+
+/** What the viewport shows: the scene, or the walk camera or the reference room (viewport/walk.ts, referenceRoom.ts). */
+export type EditorView = 'scene' | 'walk' | 'room';
 
 interface EditorEvents {
     /** Open a script, shader or behavior tree (as JSON) in the code dock. */
@@ -65,53 +75,36 @@ interface EditorEvents {
     'show-brief': void;
     /** A prefab instance is edited on its own (id of its root), or editing ended (null). */
     isolate: string | null;
-    /** The walk camera started or stopped. */
-    walk: boolean;
+    /** The viewport's view changed (setView). */
+    view: EditorView;
+    /** Show material samples in the reference room. */
+    'show-room': RoomSample[];
+    /** Apply the edits in progress (code panels): Play or a build starts. */
+    'flush-edits': void;
     /** Show a behavior tree (or schema) in the Behavior tab of the dock. */
     'show-behavior': { tree?: string; schema?: string; node?: string };
 }
 
+// The dependencies are the editor's own fields (editor.store, editor.viewport...).
+export interface Editor extends Readonly<EditorDeps> {}
+
 /** Editor commands shared by menus, shortcuts, panels and the AI tools. */
 export class Editor extends Emitter<EditorEvents> {
-    viewport!: Viewport;
-    readonly shaders: ShaderManager;
-    readonly compiler: ScriptCompiler;
-    readonly player: Player;
-    readonly graph: RenderGraphController;
     /** Model part picked last, shown highlighted in the inspector. */
     focusedPart: { node: string; path: string } | null = null;
-    /** Save checkpoints (set up by main.ts once the assistant exists). */
-    checkpoints: Checkpoints | null = null;
     /** Stage gates, checklists, shots and snapshots of the planning pipeline. */
     readonly pipeline: Pipeline;
     /** Root of the prefab instance being edited on its own (everything else hidden). */
     isolated: string | null = null;
     /** Objects under the edited instance that were not generated parts when the edit started. */
     private isolatedKept = new Set<string>();
-    /** First person walk camera (set up by main.ts). */
-    walk: WalkController | null = null;
-    /** Neutral room to check swatches in (set up by main.ts). */
-    room: ReferenceRoom | null = null;
-    /** The models of the agents (set up by main.ts). */
-    models: ModelServices | null = null;
-    /** Keyboard shortcuts and menu commands (set up by main.ts). */
-    commands!: Commands;
+    view: EditorView = 'scene';
 
-    constructor(
-        readonly store: Store,
-        readonly runtime: Runtime,
-        readonly sync: SceneSync,
-        readonly picker: Picker,
-        readonly camera: CameraController,
-        readonly autosave: AutoSaver,
-        services: EditorServices,
-    ) {
+    constructor(deps: EditorDeps) {
         super();
-        this.shaders = services.shaders;
-        this.compiler = services.compiler;
-        this.player = services.player;
-        this.graph = services.graph;
-        this.pipeline = new Pipeline(this);
+        Object.assign(this, deps);
+        const { store, sync } = deps;
+        this.pipeline = new Pipeline({ ...deps, blocked: () => this.viewBlock() });
         // Parts added while a prefab instance is edited on its own stay visible.
         store.on('change', () => {
             if (!this.isolated) return;
@@ -1229,12 +1222,6 @@ export class Editor extends Emitter<EditorEvents> {
         else this.stopPlay();
     }
 
-    /** Called before Play starts, e.g. to apply unsaved code. */
-    beforePlay: () => void = () => {};
-
-    /** Applies code edited in the code panels but not applied yet; returns how many files. */
-    applyCodeEdits: () => number = () => 0;
-
     /** Starts Play; `asked` skips the question about paused scripts (already answered). */
     play(asked = false) {
         if (this.player.state === 'stopped') {
@@ -1243,8 +1230,7 @@ export class Editor extends Emitter<EditorEvents> {
                 toast('Finish editing the prefab first (Apply or Discard).', 'info');
                 return;
             }
-            if (this.walk?.active) this.walk.stop();
-            if (this.room?.active) this.room.close();
+            this.setView('scene');
         }
         if (!asked && this.player.state === 'stopped' && !this.compiler.trusted && this.usesScripts()) {
             void this.confirmScripts().then((run) => {
@@ -1252,7 +1238,7 @@ export class Editor extends Emitter<EditorEvents> {
             });
             return;
         }
-        if (this.player.state === 'stopped') this.beforePlay();
+        if (this.player.state === 'stopped') this.emit('flush-edits', undefined);
         if (this.store.inTransaction && this.player.state === 'stopped') {
             // Finish open edits (a drag in progress) before taking the checkpoint.
             this.viewport?.cancelInteraction();
@@ -1278,7 +1264,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Asks before running the paused scripts of an opened file; false cancels Play. */
     private async confirmScripts(): Promise<boolean> {
         const count = this.store.doc.scripts.length;
-        const choice = await dialog(
+        const choice = await ask(
             'Run the paused scripts?',
             `This scene has ${count} script${count === 1 ? '' : 's'} from an opened file or snapshot. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
             [
@@ -1297,6 +1283,25 @@ export class Editor extends Emitter<EditorEvents> {
         this.compiler.setTrusted(true);
         const failed = this.store.doc.scripts.filter((s) => this.compiler.get(s.id)?.error).length;
         toast(failed ? `Scripts enabled. ${failed} of them have errors.` : 'Scripts enabled.', failed ? 'error' : 'success');
+    }
+
+    /** Switches what the viewport shows (not while playing); the walk camera and the reference room follow. */
+    setView(view: EditorView) {
+        if (view === this.view) return;
+        if (view !== 'scene' && this.player.state !== 'stopped') {
+            toast('Stop Play mode first.', 'info');
+            return;
+        }
+        this.view = view;
+        this.emit('view', view);
+    }
+
+    /** Why the view does not show the scene now, or '' when it does (shots are captured from it). */
+    viewBlock(): string {
+        if (this.isolated) return 'The view shows only the prefab being edited. Finish the edit first (Apply or Discard).';
+        if (this.view === 'room') return 'The view shows the reference room. Leave it first.';
+        if (this.view === 'walk') return 'The view follows the walk camera. Stop walking first.';
+        return '';
     }
 
     /** Opens the AI panel with a prompt. */

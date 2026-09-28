@@ -1,4 +1,4 @@
-import { createZip, readZip, type ZipEntry } from '../build/zip';
+import { createZip, readZip, type ZipEntry } from './zip';
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
 import { designAssetIds } from './design';
 import { usedIds } from './refs';

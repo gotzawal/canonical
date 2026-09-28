@@ -8,7 +8,7 @@ import { sceneModelsNeeded } from '../core/behavior/format';
 import { usedAssetIds } from '../core/persistence';
 import type { AssetMeta, CameraState, SceneDoc } from '../core/types';
 import { GAME_FILE, PLAYER_MANIFEST, type GameFile, type PlayerManifest } from './gameFile';
-import type { ZipEntry } from './zip';
+import type { ZipEntry } from '../core/zip';
 
 export interface BuildOptions {
     title: string;

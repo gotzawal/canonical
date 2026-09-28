@@ -2,7 +2,7 @@
 // of the script API (play/script.ts) and of the shader conventions
 // (engine/shaders.ts), so keep them short and correct.
 
-import type { ShaderDoc } from './types';
+import type { SceneDoc, ShaderDoc } from './types';
 
 export interface ScriptTemplate {
     id: string;
@@ -228,6 +228,22 @@ fn frag() {
     BxDFShading();
 }
 `;
+
+/** A post shader running a template's code (found by a marker in it), else one by its file name. */
+export function findPostShader(doc: SceneDoc, name: string, marker: string): ShaderDoc | undefined {
+    const shaders = doc.shaders.filter((s) => s.kind === 'post');
+    return shaders.find((s) => s.code.includes(marker)) ?? shaders.find((s) => s.name === name);
+}
+
+export const GRADE_NAME = 'ColorGrade.wgsl';
+/** Found in the color grade's code (LGG_CODE), whatever its file is called. */
+export const GRADE_MARKER = 'lift, gamma and gain';
+
+/** True when the post chain runs the color grade (design/effects.ts adds it). */
+export function hasColorGrade(doc: SceneDoc): boolean {
+    const shader = findPostShader(doc, GRADE_NAME, GRADE_MARKER);
+    return !!shader && doc.renderGraph.posts.some((p) => p.enabled && p.shader === shader.id);
+}
 
 /** Lift / gamma / gain grade, used by the Finish stage (see ai/effectTools.ts). */
 export const LGG_CODE = `// Post shader: lift, gamma and gain, then saturation. It works on the HDR

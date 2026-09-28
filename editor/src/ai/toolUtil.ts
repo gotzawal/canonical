@@ -8,7 +8,7 @@ import type { DetailLevel, NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/t
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
 import type { Editor } from '../editor';
 import { normalizeHex } from '../engine/color';
-import type { ToolDef } from './openrouter';
+import type { ToolDef } from '../openrouter/client';
 
 export type Json = Record<string, any>;
 

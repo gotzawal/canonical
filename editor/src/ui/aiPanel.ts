@@ -4,10 +4,10 @@ import { getAssetUrl, putDesignImage } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
-} from '../ai/openrouter';
-import { aiSettings } from '../ai/settings';
-import { describeCache } from '../ai/caching';
-import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../ai/images';
+} from '../openrouter/client';
+import { aiSettings } from '../openrouter/settings';
+import { describeCache } from '../openrouter/caching';
+import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
 import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';

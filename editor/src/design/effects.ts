@@ -2,29 +2,15 @@
 // gamma / gain color grade, each a post shader in the render graph that
 // stays editable like any other (Render Graph panel, code editor).
 
-import { LGG_CODE, SHADER_TEMPLATES } from '../core/templates';
-import type { ParamValue, SceneDoc, ShaderDoc } from '../core/types';
+import { findPostShader, GRADE_MARKER, GRADE_NAME, LGG_CODE, SHADER_TEMPLATES } from '../core/templates';
+import type { ParamValue } from '../core/types';
 import type { Editor } from '../editor';
 
-const GRADE_NAME = 'ColorGrade.wgsl';
-const GRADE_MARKER = 'lift, gamma and gain';
 const VIGNETTE_NAME = 'Vignette.wgsl';
-
-/** An effect's post shader: the one running its code (found by a marker in it), else one by its file name. */
-function findShader(doc: SceneDoc, name: string, marker: string): ShaderDoc | undefined {
-    const shaders = doc.shaders.filter((s) => s.kind === 'post');
-    return shaders.find((s) => s.code.includes(marker)) ?? shaders.find((s) => s.name === name);
-}
-
-/** True when the post chain runs the color grade (found as addColorGrade finds it, whatever it is called). */
-export function hasColorGrade(doc: SceneDoc): boolean {
-    const shader = findShader(doc, GRADE_NAME, GRADE_MARKER);
-    return !!shader && doc.renderGraph.posts.some((p) => p.enabled && p.shader === shader.id);
-}
 
 /** The post effect running `shader`, added (and the shader created) when missing. Returns the post id. */
 function ensurePost(editor: Editor, name: string, marker: string, code: string): string | null {
-    let shader = findShader(editor.store.doc, name, marker);
+    let shader = findPostShader(editor.store.doc, name, marker);
     if (!shader) shader = editor.createShader({ name: name.replace(/\.wgsl$/, ''), kind: 'post', lighting: 'unlit', code, open: false });
     const existing = editor.store.doc.renderGraph.posts.find((p) => p.shader === shader!.id);
     if (existing) {
