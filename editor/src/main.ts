@@ -91,7 +91,7 @@ async function main() {
         h(
             'header',
             { class: 'topbar' },
-            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(22, 'brand-name')),
+            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             menuSlot,
             h('div', { class: 'spacer' }),
             sceneName,
@@ -572,7 +572,7 @@ function unsupported(app: HTMLElement, reason: string) {
         h(
             'div',
             { class: 'unsupported' },
-            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(22, 'brand-name')),
+            h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             h('h1', { text: 'WebGPU is required' }),
             h('p', { text: 'The editor renders with the Orillusion WebGPU engine, which could not start in this browser.' }),
             h('p', { class: 'reason', text: reason }),
