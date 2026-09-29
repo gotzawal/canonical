@@ -62,6 +62,7 @@ export function openPreview(editor: Editor, title: string): boolean {
         scene: gameScene(store.doc, true),
         camera: store.camera,
         trusted: editor.compiler.trusted,
+        compress: loadSettings().compress,
     };
     try {
         localStorage.setItem(PREVIEW_KEY, JSON.stringify(data));

@@ -58,7 +58,8 @@ async function loadGame(): Promise<Game> {
                 return url;
             },
         };
-        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true, textures };
+        // Without compression the built game gets the files, so the preview shows them too.
+        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true, textures: data.compress === false ? null : textures };
     }
     const url = new URL(GAME_FILE, location.href);
     // Revalidate so a redeployed game is picked up right away.

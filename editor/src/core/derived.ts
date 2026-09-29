@@ -83,10 +83,15 @@ export function shipsCopy(rec: Pick<DerivedRecord, 'role' | 'bytes' | 'textures'
     return rec.role !== 'model' || (rec.textures ?? 0) > 0 || rec.bytes < meta.size;
 }
 
-/** True when a copy was made from this file (its size, and fingerprint where both have one) with these options by this encoder. */
+/**
+ * True when a copy was made from this file (its size and fingerprint: a
+ * file with a fingerprint only fits a copy made from the same one, and a
+ * file without one only a copy made without) with these options by this
+ * encoder.
+ */
 export function isFresh(rec: DerivedRecord | null | undefined, meta: Pick<AssetMeta, 'size' | 'hash'>, opts: DerivedOptions): rec is DerivedRecord {
     if (!rec || rec.encoder !== ENCODER_VERSION || rec.src.size !== meta.size) return false;
-    if (rec.src.hash && meta.hash && rec.src.hash !== meta.hash) return false;
+    if ((rec.src.hash ?? '') !== (meta.hash ?? '')) return false;
     return rec.opts.codec === opts.codec && rec.opts.maxSize === opts.maxSize;
 }
 

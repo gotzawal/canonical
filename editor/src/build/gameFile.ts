@@ -57,4 +57,6 @@ export interface PreviewData {
     camera?: CameraState;
     /** False when the scene's scripts are paused in the editor: the preview runs without them. */
     trusted: boolean;
+    /** False when builds ship files as they are (the build dialog's Compress box): the preview shows the files too. */
+    compress?: boolean;
 }

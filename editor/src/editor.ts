@@ -2,6 +2,7 @@ import { applyBehaviorOps, writeBehaviorChanges, type OpsMode, type OpsResult } 
 import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { makeCharacterNode } from './core/character';
 import { kindOf, putAsset } from './core/assets';
+import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
@@ -684,7 +685,12 @@ export class Editor extends Emitter<EditorEvents> {
             delete p.modelOffset;
             regenerate(doc, p.id);
         });
-        if (existed) this.sync.reloadAsset(meta.id);
+        if (existed) {
+            this.sync.reloadAsset(meta.id);
+            // Copies of the file it replaced are of no use any more.
+            void deleteDerivedOf([meta.id]);
+            this.derived.forget(meta.id);
+        }
         this.settlePrefabModel(prefab.id);
         toast(`${prefab.name} now shows ${picked.name}.`, 'success');
     }

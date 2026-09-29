@@ -63,15 +63,19 @@ describe('compressed copies', () => {
     it('are stale once the file, the options or the encoder change', () => {
         const opts = derivedOptions('color')!;
         const rec = record('a', 'color', { src: { size: 1000, hash: 'abc' } });
-        expect(isFresh(rec, meta('a', { hash: 'abc' }), opts)).toBe(true);
-        // Without a fingerprint on either side, the size decides.
-        expect(isFresh(rec, meta('a'), opts)).toBe(true);
+        const file = meta('a', { hash: 'abc' });
+        expect(isFresh(rec, file, opts)).toBe(true);
         expect(isFresh(rec, meta('a', { hash: 'def' }), opts)).toBe(false);
-        expect(isFresh(rec, meta('a', { size: 999 }), opts)).toBe(false);
-        expect(isFresh(rec, meta('a'), { ...opts, maxSize: 1024 })).toBe(false);
-        expect(isFresh(rec, meta('a'), { ...opts, codec: 'uastc' })).toBe(false);
-        expect(isFresh({ ...rec, encoder: 'old' }, meta('a'), opts)).toBe(false);
-        expect(isFresh(null, meta('a'), opts)).toBe(false);
+        // A fingerprint on one side only: made from another file (a model stored before models had one, then replaced).
+        expect(isFresh(record('a', 'color'), file, opts)).toBe(false);
+        expect(isFresh(rec, meta('a'), opts)).toBe(false);
+        // Neither has one (a page that cannot make them): the size decides.
+        expect(isFresh(record('a', 'color'), meta('a'), opts)).toBe(true);
+        expect(isFresh(rec, meta('a', { hash: 'abc', size: 999 }), opts)).toBe(false);
+        expect(isFresh(rec, file, { ...opts, maxSize: 1024 })).toBe(false);
+        expect(isFresh(rec, file, { ...opts, codec: 'uastc' })).toBe(false);
+        expect(isFresh({ ...rec, encoder: 'old' }, file, opts)).toBe(false);
+        expect(isFresh(null, file, opts)).toBe(false);
     });
 
     it('stay in memory where IndexedDB is missing, and go when their files do', async () => {
