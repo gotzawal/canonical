@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { SHADER_TEMPLATES } from '../core/templates';
 import type { ParamValue, PostDoc } from '../core/types';
 import type { GraphInfo, PassInfo } from '../engine/renderGraph';
@@ -75,10 +76,8 @@ export class RenderGraphPanel {
             h('div', { class: 'graph-main' }, this.canvas, this.side),
         );
         editor.graph.on('changed', () => this.refresh());
-        editor.store.on('change', (hint) => {
-            if (hint?.nodes || hint?.behavior) return;
-            this.renderSide();
-        });
+        // The post chain is part of the environment; its texture pickers list the assets (a swatch comes with the design).
+        onChanges(editor.store, (hint) => touches(hint, 'env', 'design') && this.renderSide());
         editor.shaders.on('status', () => this.renderSide());
     }
 

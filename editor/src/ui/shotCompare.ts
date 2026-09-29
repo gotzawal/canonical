@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { getAssetUrl } from '../core/assets';
 import { describeComparison, type CompareMode, type CompareResult } from '../core/compare';
 import { stageDef } from '../design/stages';
@@ -44,8 +45,8 @@ export class ShotCompare {
         editor.pipeline.on('shot', (id) => {
             if (id !== this.shotId) this.close();
         });
-        editor.store.on('change', () => {
-            if (this.el.hidden || !this.last) return;
+        onChanges(editor.store, (hint) => {
+            if (this.el.hidden || !this.last || !touches(hint, 'design')) return;
             // A comparison of another framing or target does not hold: compare again.
             if (this.last.basis !== this.basis()) void this.run();
             else this.renderFooter();

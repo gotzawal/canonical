@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { getAssetUrl, putDesignImage } from '../core/assets';
 import { Emitter } from '../core/events';
 import { pickFiles } from '../core/persistence';
@@ -143,7 +144,7 @@ class PaintoverDialog {
         this.genBtn = button('Generate', () => void this.generate(), 'primary', 'paint');
         this.modal.footer.append(upload, h('div', { class: 'spacer' }), this.status, this.cancelBtn, this.genBtn);
 
-        this.offs.push(editor.store.on('change', () => this.refresh()));
+        this.offs.push(onChanges(editor.store, (hint) => touches(hint, 'design') && this.refresh()).off);
         this.renderRefs();
         this.refresh(true);
         this.modelChanged(last.params);

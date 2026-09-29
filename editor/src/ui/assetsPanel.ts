@@ -1,5 +1,6 @@
 import type { Editor } from '../editor';
-import { refs } from '../core/refs';
+import { useCounts } from '../core/refs';
+import { onChanges, touches } from './batch';
 import { formatBytes } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
@@ -41,7 +42,8 @@ export class AssetsPanel {
             ),
             this.list,
         );
-        editor.store.on('change', () => this.render());
+        // It lists the assets, scripts, shaders and prefabs, and how many objects use them: where objects are does not matter.
+        onChanges(editor.store, (hint) => touches(hint, 'nodes', 'design') && this.render());
         editor.store.on('load', () => this.render(true));
         editor.shaders.on('status', () => this.render(true));
         editor.compiler.on('compiled', () => this.render(true));
@@ -71,10 +73,9 @@ export class AssetsPanel {
         const doc = this.editor.store.doc;
         const assets = doc.assets.filter((a) => a.purpose !== 'design');
         const planning = doc.assets.length - assets.length;
-        const scriptUses = new Map<string, number>();
-        for (const r of refs(doc)) if (r.kind === 'script') scriptUses.set(r.id, (scriptUses.get(r.id) ?? 0) + 1);
+        const { scripts: scriptUses, prefabs: instances } = useCounts(doc);
         const key = [
-            doc.prefabs.map((p) => p.id + p.name + (p.useModel ? 'm' : '') + doc.nodes.filter((n) => n.prefab === p.id).length).join('|'),
+            doc.prefabs.map((p) => p.id + p.name + (p.useModel ? 'm' : '') + (instances.get(p.id) ?? 0)).join('|'),
             doc.assets.map((a) => a.id + a.name).join('|'),
             doc.scripts.map((s) => s.id + s.name + (scriptUses.get(s.id) ?? 0)).join('|'),
             doc.shaders.map((s) => s.id + s.name + s.kind).join('|'),
@@ -83,7 +84,7 @@ export class AssetsPanel {
         this.key = key;
         clear(this.list);
         for (const p of doc.prefabs) {
-            const count = doc.nodes.filter((n) => n.prefab === p.id).length;
+            const count = instances.get(p.id) ?? 0;
             this.list.appendChild(
                 this.item(`prefab:${p.id}`, 'prefab', p.name, `${count} placed`, '', 'Prefab: drag into the viewport or double-click to place an instance', () => this.editor.placePrefab(p.id), [
                     { label: 'Place Instance', icon: 'plus', action: () => this.editor.placePrefab(p.id) },

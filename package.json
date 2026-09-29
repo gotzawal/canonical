@@ -36,6 +36,7 @@
         "editor:typecheck": "tsc -b editor/tsconfig.json",
         "editor:test": "vitest run --config editor/vitest.config.ts",
         "editor:e2e": "playwright test -c editor/playwright.config.ts",
+        "editor:bench": "vitest bench --run --config editor/vitest.config.ts --outputJson bench-results.json && node editor/test/bench/budgets.mjs editor/bench-results.json",
         "build": "tsc --p tsconfig.build.json && vite build && npm run build:types && npm run minify",
         "build:test": "tsc --p tsconfig.build.json && vite build && npm run build:packages",
         "build:packages": "npm run build:physics && npm run build:media && npm run build:stats && npm run build:particle && npm run build:graphic && npm run build:geometry && npm run build:atmosphere",

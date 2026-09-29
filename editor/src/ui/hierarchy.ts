@@ -1,6 +1,7 @@
 import type { Commands } from '../commands';
 import type { Editor } from '../editor';
 import type { NodeDoc } from '../core/types';
+import { onChanges, touches, type FrameChanges } from './batch';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
 import { MenuItem, showMenu } from './overlays';
@@ -8,16 +9,57 @@ import { iconButton } from './widgets';
 
 type DropZone = 'before' | 'after' | 'inside';
 
-/** Scene tree with selection, rename, visibility and drag & drop re-parenting. */
+/** A row of the tree: an object shown at `depth`. */
+interface Row {
+    id: string;
+    depth: number;
+    kids: boolean;
+    open: boolean;
+}
+
+/**
+ * The data type of the tree's own drags. Rows out of view leave the page,
+ * and a dragged row that does can miss its dragend: other drags over the
+ * tree (assets, files) never move objects.
+ */
+const ROW_DRAG = 'application/x-morglay-tree-rows';
+
+/** Rows drawn beyond the visible ones, so scrolling a little shows no gap. */
+const OVERSCAN = 8;
+/** The tree's padding above the first row (styles.css .tree). */
+const PAD_TOP = 2;
+
+/**
+ * Scene tree with selection, rename, visibility and drag & drop
+ * re-parenting. Only the rows in view are in the page (a scene can have
+ * thousands of objects); a new selection only marks rows again.
+ */
 export class HierarchyPanel {
     readonly el: HTMLElement;
     private tree: HTMLElement;
+    /** As tall as every row together, so the tree scrolls as if they were all there. */
+    private sizer: HTMLElement;
+    /** The rows in view. */
+    private list: HTMLElement;
+    private banner: HTMLElement;
     private filter = '';
     private collapsed = new Set<string>();
-    private key = '';
     private anchor: string | null = null;
     private dragIds: string[] = [];
     private renaming: string | null = null;
+    /** Ends the rename in progress (applying it or not). */
+    private stopRename: ((apply: boolean) => void) | null = null;
+    private changes: FrameChanges;
+
+    /** Every row, in order (what the tree would show without scrolling). */
+    private rows: Row[] = [];
+    private rowOf = new Map<string, number>();
+    /** Row elements in the page by object id, with what they show (see stamp). */
+    private drawn = new Map<string, { el: HTMLElement; stamp: string }>();
+    /** The structure version the rows were made for. */
+    private structure = -1;
+    private rowHeight = 0;
+    private painting = 0;
 
     constructor(private editor: Editor, private commands: Commands, private createMenu: () => MenuItem[]) {
         const store = editor.store;
@@ -27,34 +69,41 @@ export class HierarchyPanel {
         });
         search.addEventListener('input', () => {
             this.filter = search.value.trim().toLowerCase();
-            this.render(true);
+            this.rebuild();
         });
         search.addEventListener('keydown', (e) => e.stopPropagation());
 
-        this.tree = h('div', { class: 'tree', attrs: { tabindex: 0, role: 'tree', 'aria-label': 'Scene objects' } });
+        this.list = h('div', { class: 'tree-rows' });
+        this.sizer = h('div', { class: 'tree-sizer' }, this.list);
+        this.tree = h('div', { class: 'tree', attrs: { tabindex: 0, role: 'tree', 'aria-label': 'Scene objects' } }, this.sizer);
+        this.banner = h('div', { class: 'isolation-slot' });
+        const onRow = (e: Event) => !!(e.target as HTMLElement).closest('.tree-row');
         this.tree.addEventListener('keydown', (e) => this.onKey(e));
+        this.tree.addEventListener('scroll', () => this.schedulePaint());
         this.tree.addEventListener('dragover', (e) => {
-            if (!this.dragIds.length) return;
-            if (e.target === this.tree) {
-                e.preventDefault();
-                this.tree.classList.add('drop-root');
-            }
+            if (!this.dragging(e) || onRow(e)) return;
+            e.preventDefault();
+            this.tree.classList.add('drop-root');
         });
         this.tree.addEventListener('dragleave', () => this.tree.classList.remove('drop-root'));
         this.tree.addEventListener('drop', (e) => {
             this.tree.classList.remove('drop-root');
-            if (e.target !== this.tree || !this.dragIds.length) return;
+            if (onRow(e) || !this.dragging(e)) return;
             e.preventDefault();
             editor.moveNodes(this.dragIds, null, null);
             this.dragIds = [];
         });
         this.tree.addEventListener('pointerdown', (e) => {
-            if (e.target === this.tree) store.select([]);
+            if (!onRow(e)) store.select([]);
         });
         this.tree.addEventListener('contextmenu', (e) => {
             e.preventDefault();
-            if (e.target === this.tree) showMenu(this.createMenu(), e.clientX, e.clientY);
+            if (!onRow(e)) showMenu(this.createMenu(), e.clientX, e.clientY);
         });
+        new ResizeObserver(() => {
+            this.rowHeight = 0;
+            this.schedulePaint();
+        }).observe(this.tree);
 
         this.el = h(
             'div',
@@ -71,63 +120,160 @@ export class HierarchyPanel {
                 }),
             ),
             h('div', { class: 'panel-search' }, icon('search', 14), search),
+            this.banner,
             this.tree,
         );
 
-        store.on('change', () => this.render());
-        store.on('selection', () => this.reveal(store.primary?.id));
-        editor.on('isolate', () => this.render(true));
-        editor.sync.on('model', () => this.render(true));
-        this.render(true);
+        // Where objects are does not show here.
+        this.changes = onChanges(store, (hint) => {
+            if (!touches(hint, 'nodes', 'behavior')) return;
+            // Names decide what a filter matches.
+            if (store.structureVersion !== this.structure || this.filter) this.rebuild();
+            else this.paint();
+        });
+        store.on('selection', () => this.selected());
+        editor.on('isolate', () => this.rebuild());
+        // A model finished loading: its row loses its badge (see stamp).
+        editor.sync.on('model', () => this.paint());
+        this.rebuild();
     }
 
-    private treeKey(): string {
-        return (
-            (this.editor.isolated ?? '') +
-            this.editor.store.doc.nodes.map((n) => `${n.id}:${n.parent}:${n.name}:${n.visible ? 1 : 0}:${nodeIcon(n)}:${n.prefabChild ? 1 : 0}:${n.agent ? `${n.agent.tree}${n.agent.enabled ? 1 : 0}` : ''}`).join('|')
-        );
-    }
+    // --------------------------------------------------------------- rows
 
-    render(force = false) {
-        const key = this.treeKey();
-        if (!force && key === this.key) return;
-        this.key = key;
-        if (this.renaming) return;
+    /** Works out the rows again (the objects, the open branches, the filter), then draws them. */
+    private rebuild() {
         const store = this.editor.store;
-        const scroll = this.tree.scrollTop;
-        clear(this.tree);
-        const selected = new Set(store.selection);
+        this.structure = store.structureVersion;
+        const rows: Row[] = [];
         const matches = this.filter ? this.filterMatches() : null;
-
         const isolated = this.editor.isolated;
         const walk = (parent: string | null, depth: number) => {
             for (const node of store.children(parent)) {
                 if (matches && !matches.has(node.id)) continue;
                 if (isolated && depth === 0 && node.id !== isolated) continue;
-                const kids = store.children(node.id);
+                const kids = store.children(node.id).length > 0;
                 const open = !this.collapsed.has(node.id) || !!matches;
-                this.tree.appendChild(this.row(node, depth, kids.length > 0, open, selected.has(node.id)));
-                if (kids.length && open) walk(node.id, depth + 1);
+                rows.push({ id: node.id, depth, kids, open });
+                if (kids && open) walk(node.id, depth + 1);
             }
         };
-        if (isolated && store.node(isolated)) {
-            const root = store.node(isolated)!;
-            this.tree.appendChild(this.isolationBanner(root));
-            this.tree.appendChild(this.row(root, 0, store.children(root.id).length > 0, true, selected.has(root.id)));
+        const root = isolated ? store.node(isolated) : undefined;
+        if (root) {
+            rows.push({ id: root.id, depth: 0, kids: store.children(root.id).length > 0, open: true });
             walk(root.id, 1);
         } else walk(null, 0);
-        if (!store.doc.nodes.length) {
-            this.tree.appendChild(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
-        }
-        this.tree.scrollTop = scroll;
+        this.rows = rows;
+        this.rowOf = new Map(rows.map((r, i) => [r.id, i]));
+        clear(this.banner);
+        if (root) this.banner.appendChild(this.isolationBanner(root));
+        this.paint();
     }
 
-    /** Shows the row of an object selected elsewhere (the viewport): its parents open, scrolled into view. */
-    private reveal(id: string | undefined) {
+    private schedulePaint() {
+        this.painting ||= requestAnimationFrame(() => this.paint());
+    }
+
+    /** Puts the rows in view into the page: rows that show the same as before stay as they are. */
+    private paint() {
+        cancelAnimationFrame(this.painting);
+        this.painting = 0;
         const store = this.editor.store;
-        for (let n = store.node(store.node(id)?.parent); n; n = store.node(n.parent)) this.collapsed.delete(n.id);
-        this.render(true);
-        if (id) this.tree.querySelector<HTMLElement>(`.tree-row[data-id="${CSS.escape(id)}"]`)?.scrollIntoView({ block: 'nearest' });
+        if (!store.doc.nodes.length) {
+            this.drawn.clear();
+            this.sizer.style.height = '';
+            this.list.style.transform = '';
+            this.list.replaceChildren(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
+            return;
+        }
+        const height = this.measure();
+        this.sizer.style.height = `${this.rows.length * height}px`;
+        const view = this.tree.clientHeight || 600;
+        const first = Math.max(0, Math.floor((this.tree.scrollTop - PAD_TOP) / height) - OVERSCAN);
+        const last = Math.min(this.rows.length, Math.ceil((this.tree.scrollTop + view) / height) + OVERSCAN);
+        this.list.style.transform = `translateY(${first * height}px)`;
+        // A row being renamed that scrolls away takes the name typed so far.
+        const renamed = this.renaming ? this.rowOf.get(this.renaming) : undefined;
+        if (this.renaming && (renamed === undefined || renamed < first || renamed >= last)) queueMicrotask(() => this.stopRename?.(true));
+
+        const selected = new Set(store.selection);
+        const primary = store.primary?.id;
+        const drawn = new Map<string, { el: HTMLElement; stamp: string }>();
+        const els: HTMLElement[] = [];
+        for (let i = first; i < last; i++) {
+            const row = this.rows[i];
+            const node = store.node(row.id);
+            if (!node) continue;
+            const stamp = this.stamp(node, row);
+            let item = this.drawn.get(row.id);
+            // The row being renamed keeps its input.
+            if (!item || (item.stamp !== stamp && row.id !== this.renaming)) item = { el: this.row(node, row), stamp };
+            this.mark(item.el, node.id, selected, primary);
+            drawn.set(row.id, item);
+            els.push(item.el);
+        }
+        this.drawn = drawn;
+        // Only moves what changed: a row keeps its hover and focus.
+        const current = Array.from(this.list.children);
+        if (current.length !== els.length || els.some((el, i) => current[i] !== el)) this.list.replaceChildren(...els);
+    }
+
+    /** Height of a row, from the first one drawn (taller on touch screens). */
+    private measure(): number {
+        if (this.rowHeight) return this.rowHeight;
+        const sample = this.list.querySelector<HTMLElement>('.tree-row');
+        const height = sample?.offsetHeight ?? 0;
+        if (height) this.rowHeight = height;
+        return height || (matchMedia('(pointer: coarse)').matches ? 34 : 26);
+    }
+
+    /** What a row shows besides the selection: when it is the same, the drawn row stays. */
+    private stamp(node: NodeDoc, row: Row): string {
+        const store = this.editor.store;
+        const model = node.model ? this.editor.sync.modelState(node.id)?.status ?? '' : '';
+        // An agent's mark names its tree (the behavior part of the document).
+        const agent = node.agent ? store.partsVersion : '';
+        return `${store.nodeVersion(node.id)}|${row.depth}|${row.kids ? 1 : 0}${row.open ? 1 : 0}|${model}|${agent}|${this.editor.isolated ? 1 : 0}`;
+    }
+
+    private mark(el: HTMLElement, id: string, selected: Set<string>, primary: string | undefined) {
+        const on = selected.has(id);
+        el.classList.toggle('selected', on);
+        el.classList.toggle('primary', id === primary);
+        el.setAttribute('aria-selected', on ? 'true' : 'false');
+    }
+
+    /** A new selection marks the rows in view and shows the primary object's row (opening its parents). */
+    private selected() {
+        const store = this.editor.store;
+        this.changes.flush();
+        if (this.reveal(store.primary?.id)) return;
+        const selected = new Set(store.selection);
+        const primary = store.primary?.id;
+        for (const [id, item] of this.drawn) this.mark(item.el, id, selected, primary);
+    }
+
+    /**
+     * Shows an object's row: its parents open, scrolled into view. True when
+     * that drew the rows again.
+     */
+    private reveal(id: string | undefined): boolean {
+        if (!id) return false;
+        const store = this.editor.store;
+        let opened = false;
+        for (let n = store.node(store.node(id)?.parent); n; n = store.node(n.parent)) opened = this.collapsed.delete(n.id) || opened;
+        if (opened) this.rebuild();
+        const i = this.rowOf.get(id);
+        if (i === undefined) return opened;
+        const height = this.measure();
+        const top = PAD_TOP + i * height;
+        const tree = this.tree;
+        let scroll = tree.scrollTop;
+        if (top < scroll) scroll = top;
+        else if (top + height > scroll + tree.clientHeight) scroll = top + height - tree.clientHeight;
+        if (scroll === tree.scrollTop) return opened;
+        tree.scrollTop = scroll;
+        this.paint();
+        return true;
     }
 
     private isolationBanner(root: NodeDoc): HTMLElement {
@@ -155,7 +301,7 @@ export class HierarchyPanel {
         for (const n of store.doc.nodes) {
             if (!n.name.toLowerCase().includes(this.filter)) continue;
             let cur: NodeDoc | undefined = n;
-            while (cur) {
+            while (cur && !out.has(cur.id)) {
                 out.add(cur.id);
                 cur = store.node(cur.parent);
             }
@@ -163,9 +309,9 @@ export class HierarchyPanel {
         return out;
     }
 
-    /** Rows in visual order, for shift-click ranges and keyboard navigation. */
+    /** Rows in visual order, for shift-click ranges and keyboard navigation (also those not in view). */
     private visibleIds(): string[] {
-        return Array.from(this.tree.querySelectorAll<HTMLElement>('.tree-row')).map((r) => r.dataset.id!);
+        return this.rows.map((r) => r.id);
     }
 
     /** Objects that run a behavior tree; a click shows the tree. */
@@ -182,7 +328,7 @@ export class HierarchyPanel {
         return mark;
     }
 
-    private row(node: NodeDoc, depth: number, hasKids: boolean, open: boolean, selected: boolean): HTMLElement {
+    private row(node: NodeDoc, { depth, kids: hasKids, open }: Row): HTMLElement {
         const editor = this.editor;
         const store = editor.store;
         const status = node.model ? editor.sync.modelState(node.id)?.status : null;
@@ -192,7 +338,7 @@ export class HierarchyPanel {
             if (!hasKids) return;
             if (this.collapsed.has(node.id)) this.collapsed.delete(node.id);
             else this.collapsed.add(node.id);
-            this.render(true);
+            this.rebuild();
         });
         const eye = h(
             'button',
@@ -214,8 +360,8 @@ export class HierarchyPanel {
         const row = h(
             'div',
             {
-                class: 'tree-row' + (selected ? ' selected' : '') + (node.visible ? '' : ' hidden-node') + (store.primary?.id === node.id ? ' primary' : '') + (locked ? ' prefab-part' : ''),
-                attrs: { draggable: 'true', role: 'treeitem', 'aria-selected': selected ? 'true' : 'false' },
+                class: 'tree-row' + (node.visible ? '' : ' hidden-node') + (locked ? ' prefab-part' : ''),
+                attrs: { draggable: 'true', role: 'treeitem', 'aria-level': depth + 1, ...(hasKids ? { 'aria-expanded': open ? 'true' : 'false' } : {}) },
                 dataset: { id: node.id },
                 style: { paddingLeft: 6 + depth * 14 + 'px' },
             },
@@ -271,6 +417,7 @@ export class HierarchyPanel {
             this.dragIds = store.selection.includes(node.id) ? store.selectionRoots() : [node.id];
             e.dataTransfer!.effectAllowed = 'move';
             e.dataTransfer!.setData('text/plain', node.name);
+            e.dataTransfer!.setData(ROW_DRAG, '');
             row.classList.add('dragging');
         });
         row.addEventListener('dragend', () => {
@@ -279,7 +426,7 @@ export class HierarchyPanel {
             this.clearDropMarks();
         });
         row.addEventListener('dragover', (e) => {
-            if (!this.dragIds.length) return;
+            if (!this.dragging(e)) return;
             const zone = this.zone(e, row);
             const invalid = this.dragIds.includes(node.id) || this.dragIds.some((id) => store.isAncestor(id, node.id));
             if (invalid) return;
@@ -290,7 +437,7 @@ export class HierarchyPanel {
         });
         row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after', 'drop-inside'));
         row.addEventListener('drop', (e) => {
-            if (!this.dragIds.length) return;
+            if (!this.dragging(e)) return;
             e.preventDefault();
             e.stopPropagation();
             const zone = this.zone(e, row);
@@ -304,11 +451,16 @@ export class HierarchyPanel {
                 editor.moveNodes(ids, node.parent, node.id);
             } else {
                 const siblings = store.children(node.parent);
-                const next = siblings[siblings.indexOf(node) + 1];
+                const next = siblings[siblings.findIndex((n) => n.id === node.id) + 1];
                 editor.moveNodes(ids, node.parent, next ? next.id : null);
             }
         });
         return row;
+    }
+
+    /** A drag of rows of this tree is over it. */
+    private dragging(e: DragEvent): boolean {
+        return this.dragIds.length > 0 && !!e.dataTransfer?.types.includes(ROW_DRAG);
     }
 
     private zone(e: DragEvent, row: HTMLElement): DropZone {
@@ -323,7 +475,9 @@ export class HierarchyPanel {
     }
 
     startRename(id: string) {
-        const row = this.tree.querySelector<HTMLElement>(`.tree-row[data-id="${CSS.escape(id)}"]`);
+        this.changes.flush();
+        this.reveal(id);
+        const row = this.drawn.get(id)?.el;
         const node = this.editor.store.node(id);
         if (!row || !node) return;
         const nameEl = row.querySelector('.tree-name') as HTMLElement;
@@ -338,10 +492,15 @@ export class HierarchyPanel {
             if (done) return;
             done = true;
             this.renaming = null;
+            this.stopRename = null;
+            // The row shows the name again, the new one or the old.
+            this.drawn.delete(id);
             if (apply && input.value.trim() && input.value !== node.name) this.editor.rename(id, input.value);
-            this.render(true);
+            this.changes.flush();
+            this.paint();
             this.tree.focus({ preventScroll: true });
         };
+        this.stopRename = finish;
         input.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter') finish(true);
@@ -393,7 +552,6 @@ export class HierarchyPanel {
             if (next) {
                 store.select([next]);
                 this.anchor = next;
-                this.tree.querySelector(`.tree-row[data-id="${CSS.escape(next)}"]`)?.scrollIntoView({ block: 'nearest' });
             }
         } else if ((e.key === 'ArrowLeft' || e.key === 'ArrowRight') && cur) {
             e.preventDefault();
@@ -405,7 +563,7 @@ export class HierarchyPanel {
                     if (parent) store.select([parent]);
                 }
             } else this.collapsed.delete(cur);
-            this.render(true);
+            this.rebuild();
         } else if (e.key === 'F2' && cur) {
             e.preventDefault();
             e.stopPropagation();

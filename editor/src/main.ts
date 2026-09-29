@@ -3,6 +3,7 @@ import { newScene } from './core/defaults';
 import { readLocal, writeLocal } from './core/local';
 import { captureConsole } from './core/log';
 import { messages } from './core/messages';
+import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
@@ -21,6 +22,7 @@ import { ModelServices, savedBackend } from './play/ai/services';
 import { scriptChat } from './ai/scriptChat';
 import { formatBytes } from './core/assets';
 import { AIPanel } from './ui/aiPanel';
+import { onChanges, touches } from './ui/batch';
 import { AssetsPanel } from './ui/assetsPanel';
 import { BriefScreen } from './ui/briefScreen';
 import { DesignPanel } from './ui/designPanel';
@@ -51,6 +53,8 @@ const LAYOUT_KEY = 'canonical-editor/layout';
 type RightTab = 'inspector' | 'scene' | 'design' | 'ai';
 
 async function main() {
+    // Development builds time every listener and report long tasks (core/perf.ts).
+    if (perfMonitorWanted()) startPerfMonitor();
     captureConsole();
     // Messages from below the UI (core/messages.ts).
     messages.on('toast', (m) => toast(m.text, m.kind, m.timeout));
@@ -238,6 +242,9 @@ async function main() {
 
     store.on('change', (hint) => sync.sync(hint));
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
+    // The viewport's frame rate limit and resolution (View menu, or the frame rate in the status bar).
+    runtime.setViewport(store.prefs.viewportFps, store.prefs.viewportQuality);
+    store.on('prefs', (p) => runtime.setViewport(p.viewportFps, p.viewportQuality));
     sync.sync();
     runtime.setGridVisible(store.prefs.grid);
     store.on('selection', (sel) => {
@@ -277,7 +284,8 @@ async function main() {
     };
     compiler.on('trust', updateNotice);
     store.on('load', updateNotice);
-    store.on('change', updateNotice);
+    // Only changes without a hint touch the scripts.
+    onChanges(store, (hint) => touches(hint) && updateNotice());
     updateNotice();
 
     const tabs = h('div', { class: 'tabs', attrs: { role: 'tablist' } });
@@ -421,7 +429,7 @@ async function main() {
         sceneName.textContent = store.doc.name;
         document.title = `${store.doc.name} - Morglay`;
     };
-    store.on('change', updateTitle);
+    onChanges(store, (hint) => touches(hint, 'env') && updateTitle());
     store.on('load', updateTitle);
     updateTitle();
 
@@ -473,7 +481,7 @@ function aiContext(editor: Editor, dock: Dock): string {
     if (f) lines.push(`Picked model mesh: ${f.path} of ${store.node(f.node)?.name ?? f.node}`);
     lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.prefabs.length} prefabs, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
     if (!editor.compiler.trusted && store.doc.scripts.length) lines.push('Scripts are paused: the scene was opened from a file and the user has not enabled its scripts yet.');
-    lines.push(...pipelineSummary(store.doc, editor.runtime.fps), ...designSummary(store.doc), ...memoLines(store.doc));
+    lines.push(...pipelineSummary(store.doc, editor.runtime.fps, editor.runtime.fpsLimit), ...designSummary(store.doc), ...memoLines(store.doc));
     return lines.join('\n');
 }
 

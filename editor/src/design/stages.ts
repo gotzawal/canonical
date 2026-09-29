@@ -40,6 +40,8 @@ export interface CheckContext {
     design: DesignDoc;
     /** Frames per second measured in the editor, for the performance item. */
     fps?: number;
+    /** The viewport's frame rate limit (0 or missing: none), which caps what `fps` can show. */
+    fpsLimit?: number;
 }
 
 export interface CheckDef {
@@ -195,7 +197,7 @@ export const STAGES: StageDef[] = [
                     // Letting the assistant decide, the user reviews them when they like.
                     return { done: !proposed || design.detail === 'quick', detail: proposed ? `${proposed} waiting for review` : undefined };
                 },
-                hint: 'Approve or reject them in the Design tab (Brief & Concepts).',
+                hint: 'Approve or reject them in the AI tab, where they were made, or in the Design tab (Brief & Concepts).',
             },
         ],
     },
@@ -393,7 +395,12 @@ export function evaluateStage(ctx: CheckContext, id: StageId): CheckState[] {
             out.push({ id: c.id, text: c.text, done: r.done, auto: true, custom: false, userOnly: !!c.userOnly, detail: r.detail, note: s?.note, hint: c.hint });
         } else {
             let detail: string | undefined;
-            if (c.id === 'effects.perf' && ctx.fps) detail = `${Math.round(ctx.fps)} fps now, budget ${ctx.design.budget.fps}`;
+            if (c.id === 'effects.perf' && ctx.fps) {
+                const limited = ctx.fpsLimit && ctx.fpsLimit < ctx.design.budget.fps;
+                detail = limited
+                    ? `${Math.round(ctx.fps)} fps now, but the viewport is limited to ${ctx.fpsLimit} (View > Viewport Frame Rate), budget ${ctx.design.budget.fps}`
+                    : `${Math.round(ctx.fps)} fps now, budget ${ctx.design.budget.fps}`;
+            }
             out.push({ id: c.id, text: c.text, done: !!s?.done, auto: false, custom: false, userOnly: !!c.userOnly, detail, note: s?.note, by: s?.by, hint: c.hint });
         }
     }

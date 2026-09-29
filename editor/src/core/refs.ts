@@ -87,6 +87,25 @@ export function refs(doc: SceneDoc): Ref[] {
     return out;
 }
 
+/**
+ * How many objects (in the scene and the prefab templates) use each script,
+ * and how many instances each prefab has: what the assets panel shows,
+ * without the walk over every reference refs() makes.
+ */
+export function useCounts(doc: SceneDoc): { scripts: Map<string, number>; prefabs: Map<string, number> } {
+    const scripts = new Map<string, number>();
+    const prefabs = new Map<string, number>();
+    const count = (n: SceneDoc['nodes'][number]) => {
+        if (n.scripts) for (const r of n.scripts) scripts.set(r.script, (scripts.get(r.script) ?? 0) + 1);
+    };
+    for (const n of doc.nodes) {
+        if (n.prefab) prefabs.set(n.prefab, (prefabs.get(n.prefab) ?? 0) + 1);
+        count(n);
+    }
+    for (const p of doc.prefabs) for (const n of p.nodes) count(n);
+    return { scripts, prefabs };
+}
+
 /** The ids of one kind the scene refers to. */
 export function usedIds(doc: SceneDoc, kind: RefKind): Set<string> {
     return new Set(refs(doc).filter((r) => r.kind === kind).map((r) => r.id));

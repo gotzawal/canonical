@@ -27,5 +27,6 @@ dist
 
 # test and probe artifacts
 /editor/test-results
+/editor/bench-results.json
 /test/multi/_out
 /.claude/scheduled_tasks.lock

@@ -4,7 +4,9 @@ import { defaultCharacter, defaultPlayer } from '../core/character';
 import { Animation, ANIMATION_MODES, Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
+import type { ChangeHint } from '../core/store';
 import { unassignSlot } from '../design/materialSlots';
+import { onChanges } from './batch';
 import { formatBytes } from '../core/assets';
 import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
@@ -94,7 +96,11 @@ export class InspectorPanel {
     readonly el: HTMLElement;
     private body: HTMLElement;
     private syncs: (() => void)[] = [];
+    /** The syncs of the transform fields, all a move changes. */
+    private moves: (() => void)[] = [];
     private shape = '';
+    /** The versions of what it shows, when it last showed them (see follow). */
+    private seen = { node: '', version: -1, parts: -1, structure: -1 };
     private steps: FieldSteps;
     /** For fields that move objects: refused while the stage locks placement (the fields then show the values again). */
     private placement: FieldGuard = {
@@ -113,10 +119,7 @@ export class InspectorPanel {
         const store = editor.store;
         this.steps = new FieldSteps(store);
         store.on('selection', () => this.render());
-        store.on('change', () => {
-            if (this.shapeKey() !== this.shape) this.render();
-            else this.refresh();
-        });
+        onChanges(store, (hint) => this.follow(hint));
         editor.sync.on('model', (id) => {
             if (store.selection.includes(id)) this.render();
         });
@@ -208,12 +211,37 @@ export class InspectorPanel {
 
     private refresh() {
         for (const s of this.syncs) s();
+        this.seen = this.versions();
+    }
+
+    /** The versions of what it shows: the primary object, the parts of the document and its structure (prefab instances). */
+    private versions() {
+        const id = this.store.primary?.id ?? '';
+        return { node: id, version: id ? this.store.nodeVersion(id) : 0, parts: this.store.partsVersion, structure: this.store.structureVersion };
+    }
+
+    /**
+     * Follows the changes of a frame: nothing when what it shows kept its
+     * versions, the values when the object only moved, else its sections
+     * when they are no longer the same (shapeKey) or their values.
+     */
+    private follow(hint: ChangeHint | undefined) {
+        const was = this.seen;
+        const now = this.versions();
+        if (now.node === was.node && now.version === was.version && now.parts === was.parts && now.structure === was.structure) return;
+        if (hint?.transform && now.node === was.node && now.parts === was.parts && now.structure === was.structure) {
+            for (const s of this.moves) s();
+            this.seen = now;
+        } else if (this.shapeKey() !== this.shape) this.render();
+        else this.refresh();
     }
 
     render() {
         this.steps.close();
         this.shape = this.shapeKey();
+        this.seen = this.versions();
         this.syncs = [];
+        this.moves = [];
         const scroll = this.body.scrollTop;
         clear(this.body);
         const node = this.store.primary;
@@ -259,17 +287,18 @@ export class InspectorPanel {
      * Edit hooks that write `apply` to every selected node passing `filter`.
      * With `read`, a vector field changes only the component that was edited
      * on each node: the other components of a multi-selection stay their own.
+     * `transform`: the field only moves, turns or scales the nodes.
      */
-    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined, guard?: FieldGuard): EditHooks<T> {
+    private hooks<T>(label: string, filter: Filter, apply: (n: NodeDoc, v: T) => void, read?: (n: NodeDoc) => T | undefined, guard?: FieldGuard, transform = false): EditHooks<T> {
         const store = this.store;
         const write = (v: T, part?: number) => {
             const ids = store.selection.filter((id) => {
                 const n = store.node(id);
                 return n && filter(n);
             });
-            store.update((doc) => {
-                for (const n of doc.nodes) {
-                    if (!ids.includes(n.id)) continue;
+            store.update(() => {
+                for (const id of ids) {
+                    const n = store.node(id)!;
                     const cur = part !== undefined && read ? read(n) : undefined;
                     if (Array.isArray(cur) && Array.isArray(v)) {
                         const next = [...cur];
@@ -277,15 +306,18 @@ export class InspectorPanel {
                         apply(n, next as T);
                     } else apply(n, v);
                 }
-            }, { nodes: ids });
+            }, transform ? { nodes: ids, transform } : { nodes: ids });
         };
         return this.steps.hooks(label, write, guard);
     }
 
-    private watch(fn: () => void) {
-        this.syncs.push(() => {
+    /** Runs `fn` to show the document's values again (`move`: also after the object only moved). */
+    private watch(fn: () => void, move = false) {
+        const sync = () => {
             if (this.store.primary) fn();
-        });
+        };
+        this.syncs.push(sync);
+        if (move) this.moves.push(sync);
     }
 
     private get node(): NodeDoc {
@@ -350,25 +382,25 @@ export class InspectorPanel {
             value: this.node.position,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position, this.placement),
+            ...this.hooks<Vec3>('Move', all, (n, v) => (n.position = v), (n) => n.position, this.placement, true),
         });
         const rot = new Vec3Field({
             value: this.node.rotation,
             step: 0.5,
             precision: 2,
-            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation, this.placement),
+            ...this.hooks<Vec3>('Rotate', all, (n, v) => (n.rotation = v), (n) => n.rotation, this.placement, true),
         });
         const scl = new Vec3Field({
             value: this.node.scale,
             step: 0.01,
             precision: 3,
-            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale, this.placement),
+            ...this.hooks<Vec3>('Scale', all, (n, v) => (n.scale = v), (n) => n.scale, this.placement, true),
         });
         this.watch(() => {
             pos.set(this.node.position);
             rot.set(this.node.rotation);
             scl.set(this.node.scale);
-        });
+        }, true);
         const reset = iconButton('dots', 'Transform options', (e) => {
             const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
             showMenu([

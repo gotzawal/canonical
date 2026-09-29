@@ -61,6 +61,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
     activeShot: string | null = null;
     /** The view's field of view before a shot was shown. */
     private viewFov: number | null = null;
+    /** The last progress worked out, for the document version it was worked out for. */
+    private progressCache: { version: number; stage: StageId; fps: number; result: ReturnType<typeof stageProgress> } | null = null;
 
     constructor(private host: PipelineHost) {
         super();
@@ -69,7 +71,9 @@ export class Pipeline extends Emitter<PipelineEvents> {
             this.viewFov = null;
             this.showShot(null);
         });
-        host.store.on('change', () => {
+        host.store.on('change', (hint) => {
+            // Shots are in the design section.
+            if (hint && !hint.design && (hint.nodes || hint.env || hint.meta || hint.behavior)) return;
             if (this.activeShot && !this.shot(this.activeShot)) this.showShot(null);
         });
     }
@@ -83,7 +87,13 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     progress(stage: StageId = this.design.stage): { done: number; total: number; open: CheckState[]; items: CheckState[] } {
-        return stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps }, stage);
+        // Views and the assistant ask again and again; some items look at every object (placed objects, the level check).
+        const fps = Math.round(this.host.runtime.fps) * 1000 + this.host.runtime.fpsLimit;
+        const c = this.progressCache;
+        if (c && c.version === this.store.version && c.stage === stage && c.fps === fps) return c.result;
+        const result = stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps, fpsLimit: this.host.runtime.fpsLimit }, stage);
+        this.progressCache = { version: this.store.version, stage, fps, result };
+        return result;
     }
 
     // --------------------------------------------------------------- locks
@@ -196,6 +206,21 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const stage = this.design.stage;
         this.store.commit('Dismiss Proposal', (d) => {
             d.design.stages[stage].proposal = null;
+        }, { design: true });
+    }
+
+    /**
+     * Approves concepts the image model made (they become references for
+     * shots and paintovers), or rejects them: they leave the plan.
+     */
+    reviewConcepts(assets: string[], approve: boolean) {
+        const ids = new Set(assets);
+        const count = this.design.concepts.filter((c) => ids.has(c.asset) && (!approve || c.review === 'proposed')).length;
+        if (!count) return;
+        const label = `${approve ? 'Approve' : 'Reject'} Concept${count === 1 ? '' : 's'}`;
+        this.store.commit(label, (d) => {
+            if (!approve) d.design.concepts = d.design.concepts.filter((c) => !ids.has(c.asset));
+            else for (const c of d.design.concepts) if (ids.has(c.asset) && c.review === 'proposed') c.review = 'approved';
         }, { design: true });
     }
 

@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, whenQuiet } from './batch';
 import { getAssetUrl, putDesignImage } from '../core/assets';
 import { areaName, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
@@ -44,7 +45,9 @@ export class DesignPanel {
         this.body = h('div', { class: 'panel-body design-body' });
         this.el = h('div', { class: 'panel design-panel' }, this.body);
         const store = editor.store;
-        store.on('change', () => this.schedule());
+        // Its checklist looks at every object: moving them updates it once the drag has ended.
+        const quiet = whenQuiet(250, () => this.schedule());
+        onChanges(store, (hint) => (hint?.transform ? quiet() : this.schedule()));
         store.on('load', () => this.schedule(true));
         editor.pipeline.on('busy', () => this.schedule(true));
         editor.pipeline.on('shot', () => this.schedule(true));
@@ -221,7 +224,10 @@ export class DesignPanel {
                     }, 'small', 'sliders') : null,
                     d.shots.some((s) => s.target) ? button('Compare shots', () => pipeline.openCompare((d.shots.find((s) => s.target && (id === 'finish' ? !s.approved : !s.matched?.includes(id))) ?? d.shots.find((s) => s.target))!.id), 'small', 'graph') : null,
                 ),
-                h('div', { class: 'muted small', text: `Now ${Math.round(this.editor.runtime.fps)} fps (budget ${d.budget.fps}), up to ${particles} particles alive.` }),
+                h('div', {
+                    class: 'muted small',
+                    text: `Now ${Math.round(this.editor.runtime.fps)} fps${this.editor.runtime.fpsLimit ? ` (the viewport is limited to ${this.editor.runtime.fpsLimit}: View > Viewport Frame Rate)` : ''} (budget ${d.budget.fps}), up to ${particles} particles alive.`,
+                }),
             );
         }
         if ((id === 'light' || id === 'material' || id === 'finish') && st.status !== 'done') {
@@ -319,13 +325,8 @@ export class DesignPanel {
                 ? h(
                       'div',
                       { class: 'concept-review' },
-                      button('Approve', () => this.edit('Approve Concept', (dd) => {
-                          const cc = dd.concepts.find((x) => x.asset === c.asset);
-                          if (cc) cc.review = 'approved';
-                      }), 'small primary', 'check'),
-                      button('Reject', () => this.edit('Reject Concept', (dd) => {
-                          dd.concepts = dd.concepts.filter((x) => x.asset !== c.asset);
-                      }), 'small', 'close'),
+                      button('Approve', () => this.editor.pipeline.reviewConcepts([c.asset], true), 'small primary', 'check'),
+                      button('Reject', () => this.editor.pipeline.reviewConcepts([c.asset], false), 'small', 'close'),
                       button('Redo...', () => this.editor.askAI(`Make a new concept image to replace ${c.asset}${c.area ? ` for ${areaName(d, c.area)}` : ''} (generate_concept), then remove the old one with update_design. What to change: `), 'small', 'refresh'),
                   )
                 : null;
@@ -353,9 +354,7 @@ export class DesignPanel {
                 'div',
                 { class: 'design-actions' },
                 button('Draw concepts with AI', () => this.hooks.ask('Draw concept images of the plan with the image model (generate_concept) for review: for every area without a concept one view that shows how it will look, closed and at a compact, believable scale. Show me the results.'), 'small', 'sparkle'),
-                waiting ? button(`Approve all ${waiting}`, () => this.edit('Approve Concepts', (dd) => {
-                    for (const c of dd.concepts) if (c.review === 'proposed') c.review = 'approved';
-                }), 'small', 'check') : null,
+                waiting ? button(`Approve all ${waiting}`, () => this.editor.pipeline.reviewConcepts(d.concepts.map((c) => c.asset), true), 'small', 'check') : null,
             ),
         );
         return section('design-brief', 'Brief & Concepts', 'open', rows);

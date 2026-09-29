@@ -98,6 +98,8 @@ export class Editor extends Emitter<EditorEvents> {
     isolated: string | null = null;
     /** Objects under the edited instance that were not generated parts when the edit started. */
     private isolatedKept = new Set<string>();
+    /** The document's structure version the isolation was made for. */
+    private isolatedShape = -1;
     view: EditorView = 'scene';
 
     constructor(deps: EditorDeps) {
@@ -114,6 +116,9 @@ export class Editor extends Emitter<EditorEvents> {
                 this.emit('isolate', null);
                 return;
             }
+            // Only objects added, removed or re-parented change what is shown.
+            if (store.structureVersion === this.isolatedShape) return;
+            this.isolatedShape = store.structureVersion;
             sync.setIsolation(new Set([this.isolated, ...store.descendants(this.isolated).map((n) => n.id)]));
         });
         store.on('load', () => {
@@ -285,7 +290,7 @@ export class Editor extends Emitter<EditorEvents> {
                 if (part === 'rotation' || part === 'all') n.rotation = [0, 0, 0];
                 if (part === 'scale' || part === 'all') n.scale = [1, 1, 1];
             }
-        }, { nodes: ids });
+        }, { nodes: ids, transform: true });
     }
 
     /** Drops objects onto the ground (y of their lowest point = 0). */
@@ -306,7 +311,7 @@ export class Editor extends Emitter<EditorEvents> {
                 const parentWorld = n.parent ? this.picker.worldMatrix(n.parent) : null;
                 n.position = tidy3(add(n.position, transformDir((parentWorld && invert(parentWorld)) || mat4(), [0, m.dy, 0])));
             }
-        }, { nodes: moves.map((m) => m.id) });
+        }, { nodes: moves.map((m) => m.id), transform: true });
     }
 
     /**
@@ -426,7 +431,7 @@ export class Editor extends Emitter<EditorEvents> {
         this.store.patch((doc) => {
             const n = doc.nodes.find((x) => x.id === id);
             if (n) n.position = tidy3([n.position[0] + dx, n.position[1] + dy, n.position[2] + dz], 3);
-        }, { nodes: [id] });
+        }, { nodes: [id], transform: true });
     }
 
     async importTexture(file: File) {
@@ -561,6 +566,7 @@ export class Editor extends Emitter<EditorEvents> {
         }
         if (!this.pipeline.canPlace([rootId])) return;
         this.isolated = rootId;
+        this.isolatedShape = this.store.structureVersion;
         this.isolatedKept = new Set(this.store.descendants(rootId).filter((n) => !n.prefabChild).map((n) => n.id));
         const ids = new Set([rootId, ...this.store.descendants(rootId).map((n) => n.id)]);
         this.sync.setIsolation(ids);
@@ -789,7 +795,7 @@ export class Editor extends Emitter<EditorEvents> {
                 n.position = pose.position;
                 n.rotation = pose.rotation;
             }
-        }, { nodes: targets });
+        }, { nodes: targets, transform: true });
     }
 
     /** Moves the editor camera to look through a camera node. */
@@ -1174,7 +1180,8 @@ export class Editor extends Emitter<EditorEvents> {
         const result = applyBehaviorOps(this.store.doc, ops, opts.mode ?? 'lenient');
         const changes = result.changes;
         if (result.ok && changes) {
-            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true, renamed: changes.renamed });
+            const agents = [...changes.agents.keys()];
+            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true, agents, renamed: changes.renamed });
         }
         return result;
     }

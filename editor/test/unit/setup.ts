@@ -1,6 +1,8 @@
 // The few browser globals the tested modules touch: preferences in
 // localStorage, and the script compiler's <script> injection (which falls
-// back to Function when the script does not run, as here).
+// back to Function when the script does not run, as here). An undo step
+// that would not bring back what its change touched (a change hint that
+// leaves something out) fails the test.
 
 const items = new Map<string, string>();
 const g = globalThis as any;
@@ -22,3 +24,10 @@ g.document ??= {
     createElement: () => ({ textContent: '', remove() {} }),
     head: { appendChild() {} },
 };
+
+const { Store } = await import('../../src/core/store');
+Store.historyProblem = (message) => {
+    throw new Error(message);
+};
+
+export {};

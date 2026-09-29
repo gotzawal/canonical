@@ -4,6 +4,7 @@ import { validateTree } from '../core/behavior/validate';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES, className } from '../core/templates';
 import type { BehaviorTreeDoc, ScriptDoc, ShaderDoc } from '../core/types';
 import type { ShaderMessage } from '../engine/shaders';
+import { onChanges, touches } from './batch';
 import { CodeEditor, type Diagnostic } from './codeEditor';
 import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
@@ -130,8 +131,14 @@ export class CodePanel {
         );
 
         const store = editor.store;
+        // Scripts and shaders change without a hint, behavior trees with a behavior hint. The action
+        // button also follows the post chain (environment) and the selected objects' meshes.
+        const changes = onChanges(store, (hint) => {
+            if (kind === 'behavior' ? touches(hint, 'behavior') : touches(hint)) this.onDocChange();
+            else if (touches(hint, 'nodes', 'env')) this.refreshAction();
+        });
         this.offs.push(
-            store.on('change', () => this.onDocChange()),
+            changes.off,
             store.on('load', () => this.onDocChange()),
             store.on('selection', () => this.refreshAction()),
         );

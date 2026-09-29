@@ -5,6 +5,7 @@
 // the edit operation layer.
 
 import { formatBytes } from '../../core/assets';
+import { onChanges, touches } from '../batch';
 import { findNode, modelsNeeded } from '../../core/behavior/format';
 import { formatValue } from '../../core/behavior/nodeTypes';
 import type { BehaviorOp } from '../../core/behavior/ops';
@@ -105,7 +106,8 @@ export class BehaviorPanel {
         this.el = h('div', { class: 'bt-panel' }, this.toolbar, this.body);
 
         const store = editor.store;
-        store.on('change', (hint) => this.refresh(hint?.renamed));
+        // Objects' names and agents show here, where they are does not.
+        onChanges(store, (hint) => touches(hint, 'nodes', 'behavior') && this.refresh(hint?.renamed));
         store.on('load', () => {
             this.treeId = null;
             this.outliner.select([]);

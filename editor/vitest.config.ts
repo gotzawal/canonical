@@ -18,5 +18,9 @@ export default defineConfig({
         include: ['test/unit/**/*.test.ts'],
         setupFiles: ['test/unit/setup.ts'],
         environment: 'node',
+        // Benchmarks of the editor's work on a large synthetic scene, with budgets (test/bench/budgets.mjs).
+        benchmark: {
+            include: ['test/bench/**/*.bench.ts'],
+        },
     },
 });

@@ -144,7 +144,8 @@ export class Scheduler {
     /** Raised per batch: an answer that comes after the watchdog gave up on its batch is dropped. */
     private batchSerial = 0;
 
-    constructor(private provider: ModelProvider, private fps: () => number) {}
+    /** `fps`: frames per second now; `target`: what the view aims at (its limit, else 60). */
+    constructor(private provider: ModelProvider, private fps: () => number, private target: () => number = () => 60) {}
 
     ready(model: string): boolean {
         return this.provider.ready(model);
@@ -248,9 +249,11 @@ export class Scheduler {
         this.spent = this.spent.filter((s) => now - s.at < 1000);
         if (now - this.lastAdapt >= 1000) {
             this.lastAdapt = now;
+            // Below three quarters of the frame rate aimed at, the models get less; close to it (55 of 60), more.
             const fps = this.fps();
-            if (fps > 0 && fps < 45) this.budget = Math.max(BUDGET_MIN, this.budget - 50);
-            else if (fps >= 55) this.budget = Math.min(BUDGET_MAX, this.budget + 25);
+            const target = this.target();
+            if (fps > 0 && fps < target * 0.75) this.budget = Math.max(BUDGET_MIN, this.budget - 50);
+            else if (fps >= (target * 11) / 12) this.budget = Math.min(BUDGET_MAX, this.budget + 25);
         }
         // The bucket holds at least one full batch, so a batch longer than a second's budget still goes out.
         const cap = Math.max(this.budget, this.msPerBatch + Math.max(COST_START, ...this.cost.values()) * MAX_BATCH);

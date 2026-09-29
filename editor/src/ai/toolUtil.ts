@@ -4,7 +4,7 @@
 import { tidy } from '../core/math';
 import { InputError as ToolError } from '../core/schema';
 import type { Store } from '../core/store';
-import type { DetailLevel, NodeDoc, ParamValue, SceneDoc, Vec3 } from '../core/types';
+import type { DetailLevel, NodeDoc, ParamValue, SceneDoc, StageId, Vec3 } from '../core/types';
 import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
 import type { Editor } from '../editor';
 import { normalizeHex } from '../engine/color';
@@ -35,7 +35,17 @@ export interface ToolResult {
     summary?: string;
     /** Buttons for the user to answer with in the chat (the assistant waits for the answer). */
     choice?: ToolChoice;
+    /** What the user approves in the chat, as in the Design tab. */
+    approval?: Approval;
 }
+
+/**
+ * Something the assistant proposed that the user approves in the chat as in
+ * the Design tab: completing a stage, or concept images the image model
+ * made. The chat shows what became of it (the plan says), wherever it was
+ * decided.
+ */
+export type Approval = { kind: 'stage'; stage: StageId } | { kind: 'concepts'; assets: string[] };
 
 /** A question with buttons shown in the chat; a button sends its label as the user's answer. */
 export interface ToolChoice {

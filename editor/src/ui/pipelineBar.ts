@@ -1,6 +1,7 @@
 import { STAGE_IDS, stageIndex } from '../core/design';
 import type { StageId } from '../core/types';
 import type { Editor } from '../editor';
+import { onChanges, whenQuiet } from './batch';
 import { stageDef } from '../design/stages';
 import { checklistView } from './checklist';
 import { clear, h } from './dom';
@@ -22,7 +23,9 @@ export class PipelineBar {
         this.el = h('div', { class: 'pipeline-bar', attrs: { role: 'navigation', 'aria-label': 'Pipeline stages' } });
         const store = editor.store;
         const rerender = () => this.render();
-        store.on('change', rerender);
+        // Its checklist looks at every object: moving them updates it once the drag has ended.
+        const quiet = whenQuiet(250, rerender);
+        onChanges(store, (hint) => (hint?.transform ? quiet() : this.render()));
         store.on('load', () => this.render(true));
         editor.pipeline.on('busy', () => this.render(true));
         editor.pipeline.on('proposed', (summary) =>
@@ -167,12 +170,12 @@ export class PipelineBar {
             h('div', { class: 'pipeline-popover-title', text: def.long }),
             checklistView(this.editor, stage, { add: stage === this.editor.pipeline.design.stage }),
         );
-        const refresh = this.editor.store.on('change', () => {
+        const changes = onChanges(this.editor.store, () => {
             const next = checklistView(this.editor, stage, { add: stage === this.editor.pipeline.design.stage });
             body.lastElementChild?.replaceWith(next);
         });
         this.closePopover = popover(anchor, body, '', () => {
-            refresh();
+            changes.off();
             this.closePopover = null;
         });
     }

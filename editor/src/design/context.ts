@@ -12,12 +12,12 @@ const clip = (s: string, n: number) => {
 };
 
 /** Pipeline state: current stage, its checklist and the stages around it. */
-export function pipelineSummary(doc: SceneDoc, fps?: number): string[] {
+export function pipelineSummary(doc: SceneDoc, fps?: number, fpsLimit?: number): string[] {
     const design = doc.design;
     const lines: string[] = [];
     const def = stageDef(design.stage);
     const st = design.stages[design.stage];
-    const prog = stageProgress({ doc, design, fps }, design.stage);
+    const prog = stageProgress({ doc, design, fps, fpsLimit }, design.stage);
     lines.push(`Pipeline stage ${stageIndex(design.stage) + 1}/${STAGE_IDS.length}: ${def.long}${st.status === 'done' ? ' (complete)' : ''}. Checklist ${prog.done}/${prog.total} done.`);
     if (prog.open.length) lines.push(`Open items: ${prog.open.map((i) => `[${i.id}] ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('; ')}`);
     if (st.proposal) lines.push(`You proposed completing this stage; waiting for the user to approve.`);

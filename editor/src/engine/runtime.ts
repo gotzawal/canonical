@@ -1,12 +1,34 @@
 import {
     AtmosphericComponent, BloomPost, Camera3D, Engine3D, GTAOPost, GlobalFog, GridObject,
-    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, SkyRenderer, SolidColorSky, View3D,
+    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, SkyRenderer, SolidColorSky, Texture, View3D,
 } from '@orillusion/core';
+import type { ViewportFps, ViewportQuality } from '../core/store';
 import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
 import { GIController, giEngineSetting } from './gi';
 
 type PostCtor = new () => PostBase;
+
+/** The viewport's frame rate limits (View > Viewport Frame Rate). */
+export const VIEWPORT_FPS: { value: ViewportFps; label: string }[] = [
+    { value: 30, label: '30 fps' },
+    { value: 60, label: '60 fps' },
+    { value: 0, label: 'As Fast as the Display' },
+];
+
+/** The screen's pixels per CSS pixel, as the engine uses them (at most 2). */
+const screenRatio = () => Math.min(window.devicePixelRatio || 1, 2);
+
+/**
+ * The viewport's resolutions (View > Viewport Quality): the canvas's pixels
+ * per CSS pixel, a share of the screen's, but never below what keeps the
+ * picture readable. The overlay (gizmo, helpers) is always sharp.
+ */
+export const VIEWPORT_QUALITY: { value: ViewportQuality; name: string; detail: string; ratio: () => number }[] = [
+    { value: 'low', name: 'Low', detail: 'half resolution', ratio: () => Math.min(screenRatio(), Math.max(0.75, screenRatio() * 0.5)) },
+    { value: 'medium', name: 'Medium', detail: 'three quarters', ratio: () => Math.min(screenRatio(), Math.max(1, screenRatio() * 0.75)) },
+    { value: 'high', name: 'High', detail: 'full resolution', ratio: screenRatio },
+];
 
 /**
  * Owns the engine instance and the pieces of the scene that are not part of
@@ -23,6 +45,13 @@ export class Runtime {
     readonly gi: GIController;
 
     fps = 0;
+    /** The viewport's frame rate limit; 0 for none (see setViewport). */
+    fpsLimit = 0;
+    private quality: ViewportQuality | null = null;
+    /** Follows the screen's pixel ratio (browser zoom, another screen) once the resolution is set. */
+    private watchingRatio = false;
+    /** Captures in progress, which draw at full resolution. */
+    private sharp = 0;
     private frameListeners = new Set<() => void>();
     private beforeListeners = new Set<() => void>();
     private graphListeners = new Set<() => void>();
@@ -82,6 +111,67 @@ export class Runtime {
         });
         runtime = new Runtime(engine, canvas);
         return runtime;
+    }
+
+    /**
+     * Limits how often the viewport draws and sets its resolution (the
+     * editor's preferences; games play without a limit, at full resolution).
+     */
+    setViewport(fps: ViewportFps, quality: ViewportQuality) {
+        this.fpsLimit = fps;
+        // The engine draws as often as the display refreshes from 360 on.
+        this.engine.frameRate = fps > 0 ? fps : 360;
+        this.quality = quality;
+        this.applyResolution();
+        this.watchRatio();
+    }
+
+    /** Sets the resolution again when the screen's pixel ratio changes (the engine's own resize keeps the ratio it was given). */
+    private watchRatio() {
+        if (this.watchingRatio || typeof matchMedia !== 'function') return;
+        this.watchingRatio = true;
+        const watch = () => {
+            matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener('change', () => {
+                this.applyResolution();
+                watch();
+            }, { once: true });
+        };
+        watch();
+    }
+
+    /** The frame rate the viewport aims at: its limit, or 60 without one. */
+    get fpsTarget(): number {
+        return this.fpsLimit || 60;
+    }
+
+    /** Sets the canvas's pixels per CSS pixel; true when that changed its size. */
+    private applyResolution(): boolean {
+        if (!this.quality) return false;
+        const ctx = this.engine.context3D;
+        const ratio = this.sharp > 0 ? screenRatio() : VIEWPORT_QUALITY.find((q) => q.value === this.quality)!.ratio();
+        if (ctx.canvasConfig?.devicePixelRatio === ratio) return false;
+        ctx.canvasConfig = { ...ctx.canvasConfig, devicePixelRatio: ratio };
+        const size = [ctx.windowWidth, ctx.windowHeight];
+        ctx.updateSize();
+        if (size[0] === ctx.windowWidth && size[1] === ctx.windowHeight) return false;
+        // As the engine does on a resize: the old render targets go once the GPU is done with them.
+        void ctx.device.queue.onSubmittedWorkDone().then(
+            () => Texture.destroyTexture(ctx),
+            () => {},
+        );
+        return true;
+    }
+
+    /** Runs a capture at full resolution, whatever the viewport's quality; `extra` frames wait for a resize to show. */
+    private async sharpened<T>(capture: (extra: number) => Promise<T>): Promise<T> {
+        this.sharp++;
+        const resized = this.applyResolution();
+        try {
+            return await capture(resized ? 1 : 0);
+        } finally {
+            this.sharp--;
+            this.applyResolution();
+        }
     }
 
     /** Called once per rendered frame, after the engine has drawn it. */
@@ -365,7 +455,7 @@ export class Runtime {
 
     /** JPEG data URL of the next rendered frame, at most `maxWidth` wide. */
     capture(maxWidth = 1024): Promise<string> {
-        return this.afterFrames(1, () => {
+        return this.sharpened((extra) => this.afterFrames(1 + extra, () => {
             const src = this.canvas;
             const k = Math.min(1, maxWidth / Math.max(1, src.width));
             const c = document.createElement('canvas');
@@ -373,7 +463,7 @@ export class Runtime {
             c.height = Math.max(1, Math.round(src.height * k));
             c.getContext('2d')!.drawImage(src, 0, 0, c.width, c.height);
             return c.toDataURL('image/jpeg', 0.82);
-        });
+        }));
     }
 
     /**
@@ -382,7 +472,7 @@ export class Runtime {
      * first, so a camera set just before shows up.
      */
     captureFrame(opts: { crop?: { x: number; y: number; w: number; h: number }; maxWidth?: number; type?: string; quality?: number; frames?: number } = {}): Promise<Blob> {
-        return this.afterFrames(opts.frames ?? 1, () => {
+        return this.sharpened((extra) => this.afterFrames((opts.frames ?? 1) + extra, () => {
             const src = this.canvas;
             const sx = src.width / Math.max(1, src.clientWidth);
             const sy = src.height / Math.max(1, src.clientHeight);
@@ -399,7 +489,7 @@ export class Runtime {
             return new Promise<Blob>((resolve, reject) =>
                 c.toBlob((b) => (b ? resolve(b) : reject(new Error('Could not encode the capture.'))), opts.type ?? 'image/jpeg', opts.quality ?? 0.9),
             );
-        });
+        }));
     }
 
     /** Current canvas size in CSS pixels. */

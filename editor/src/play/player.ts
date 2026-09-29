@@ -139,7 +139,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         // Rapier loads before the first Play that needs it.
         preloadPhysics(store.doc);
         store.on('load', () => preloadPhysics(store.doc));
-        store.on('change', () => preloadPhysics(store.doc));
+        // A body comes with an object's components (moving objects adds none).
+        store.on('change', (hint) => {
+            if (hint?.transform || hint?.env || hint?.meta || hint?.design || hint?.behavior) return;
+            preloadPhysics(store.doc);
+        });
     }
 
     get engine() {
