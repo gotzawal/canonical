@@ -177,10 +177,12 @@ export function unassignSlot(store: Store, nodeIds: string[]) {
 
 /** Deletes a slot; its meshes keep their current look. */
 export function deleteSlot(store: Store, slotId: string) {
+    // The meshes lose their link to it: then not only the design changes (undo has to bring the links back).
+    const hint = slotChangeHint(store, slotId);
     store.commit('Delete Material Slot', (d) => {
         d.design.materials = d.design.materials.filter((s) => s.id !== slotId);
         for (const { m } of linkedMaterials(d)) if (m.slot === slotId) delete m.slot;
-    }, { design: true });
+    }, hint);
 }
 
 function rootOf(doc: SceneDoc, n: NodeDoc): NodeDoc | undefined {
