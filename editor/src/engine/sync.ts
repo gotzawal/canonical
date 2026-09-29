@@ -7,6 +7,7 @@ import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type { AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole } from '../core/types';
+import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
@@ -88,13 +89,16 @@ const LIGHT_CLASSES: Record<LightType, new () => LightBase> = {
 let loadToken = 0;
 
 /**
- * Where compressed copies of texture assets come from (derive/ in the
- * editor, the game's files in a built game): the copy of a texture for a
- * role, and that a texture is shown (so its copy can be made).
+ * Where compressed copies of assets come from (derive/ in the editor, the
+ * game's files in a built game): the copy of a texture for a role, that a
+ * texture or model is shown from its file (so its copy can be made), and
+ * the URL of a model's copy (games only: the editor shows model files).
  */
 export interface TextureSource {
     resolve(meta: AssetMeta, role: TextureRole): Promise<Blob | null>;
-    used?(meta: AssetMeta, role: TextureRole): void;
+    used?(meta: AssetMeta, role: DerivedRole): void;
+    /** A URL ending in .glb, or null to load the file. */
+    model?(meta: AssetMeta): Promise<string | null>;
 }
 
 /**
@@ -823,9 +827,22 @@ export class SceneSync extends Emitter<SyncEvents> {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
                 if (!meta) throw new Error('Model asset is missing from this project.');
-                const url = await getAssetUrl(meta);
-                if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
-                const prefab = await this.runtime.engine.res.loadGltf(url);
+                const res = this.runtime.engine.res;
+                let prefab: Object3D | null = null;
+                const copy = await this.textureSource?.model?.(meta).catch(() => null);
+                if (copy) {
+                    try {
+                        prefab = await res.loadGltf(copy);
+                    } catch (e) {
+                        console.warn(`[editor] the compressed copy of "${meta.name}" failed, loading the file`, e);
+                    }
+                }
+                if (!prefab) {
+                    const url = await getAssetUrl(meta);
+                    if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
+                    prefab = await res.loadGltf(url);
+                    this.textureSource?.used?.(meta, 'model');
+                }
                 normalizeModelMaterials(prefab, this.runtime.engine.context3D);
                 // Parts whose bounds hold what they draw are culled when out of view (their copies inherit it).
                 prefab.traverse((o: Object3D) => {

@@ -5,7 +5,7 @@
 
 import { formatBytes, getAssetBlob } from '../core/assets';
 import { sceneModelsNeeded } from '../core/behavior/format';
-import type { DerivedRecord } from '../core/derived';
+import { shipsCopy, type DerivedRecord, type DerivedRole } from '../core/derived';
 import { usedAssetIds } from '../core/persistence';
 import { assetRoles } from '../core/refs';
 import { usesPhysics } from '../play/physics';
@@ -30,10 +30,10 @@ export interface BuiltGame {
     warnings: string[];
 }
 
-/** Compressed copies of textures for a build (derive/derivedAssets.ts in the editor). */
+/** Compressed copies of textures and models for a build (derive/derivedAssets.ts in the editor). */
 export interface BuildTextures {
-    /** The copy of a texture for a role, made now if missing; null ships the file itself. */
-    ensure(meta: AssetMeta, role: TextureRole, signal?: AbortSignal): Promise<DerivedRecord | null>;
+    /** The copy of a texture for a role (or of a model), made now if missing; null ships the file itself. */
+    ensure(meta: AssetMeta, role: DerivedRole, signal?: AbortSignal): Promise<DerivedRecord | null>;
 }
 
 /** What the player needs besides its core files. */
@@ -47,9 +47,9 @@ interface PlayerUses {
 
 const TEXTURE_ROLES: readonly string[] = ['color', 'normal', 'data'];
 
-/** The file of a texture's compressed copy for a role, next to where its file goes. */
-export function derivedPath(asset: AssetMeta, role: TextureRole): string {
-    return assetPath(asset).replace(/\.[a-z0-9]+$/, '') + `.${role}.ktx2`;
+/** The file of an asset's compressed copy (a texture's for a role, or a model's), next to where its file goes. */
+export function derivedPath(asset: AssetMeta, role: DerivedRole): string {
+    return assetPath(asset).replace(/\.[a-z0-9]+$/, '') + (role === 'model' ? '.game.glb' : `.${role}.ktx2`);
 }
 
 function sizeOf(data: ZipEntry['data']): number {
@@ -140,6 +140,8 @@ export function gameScene(source: SceneDoc, scripts: boolean): SceneDoc {
  * assets ship as compressed copies (KTX2) for the roles the scene uses
  * them in, made now when missing; the file itself ships only where a role
  * has no copy (compression off or failed, or shader code naming it).
+ * Models ship as their copies (KTX2 textures, meshopt geometry) in place
+ * of their files where the game is better off with them.
  */
 export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text: string) => void = () => {}, textures?: BuildTextures, signal?: AbortSignal): Promise<BuiltGame> {
     const title = opts.title.trim() || source.name || 'Game';
@@ -160,11 +162,18 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     const uses: PlayerUses = { ai, physics: usesPhysics(doc), ktx2: false, draco: false, meshopt: false };
     const roles = assetRoles(doc);
     let kept = 0;
-    let compressed = 0;
-    let compressedBytes = 0;
-    let originalBytes = 0;
-    const pending = textures ? doc.assets.filter((a) => a.kind === 'texture' && [...(roles.get(a.id) ?? [])].some((r) => TEXTURE_ROLES.includes(r))).length : 0;
-    if (pending) log(`Compressing ${pending} texture${pending === 1 ? '' : 's'} (copies made before are reused)...`);
+    const packed = { textures: 0, models: 0, bytes: 0, original: 0 };
+    const textureCount = textures ? doc.assets.filter((a) => a.kind === 'texture' && [...(roles.get(a.id) ?? [])].some((r) => TEXTURE_ROLES.includes(r))).length : 0;
+    const modelCount = textures ? doc.assets.filter((a) => a.kind === 'model').length : 0;
+    if (textureCount || modelCount) {
+        const what = [plural(textureCount, 'texture'), plural(modelCount, 'model')].filter(Boolean).join(' and ');
+        log(`Compressing ${what} (copies made before are reused)...`);
+    }
+    const copyOf = (asset: AssetMeta, role: DerivedRole) =>
+        textures!.ensure(asset, role, signal).catch((e) => {
+            if (e?.name === 'AbortError') throw e;
+            return null;
+        });
     for (const asset of doc.assets) {
         signal?.throwIfAborted();
         const blob = await getAssetBlob(asset.id);
@@ -179,10 +188,7 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
             // Shader code may load it any way: keep the file too.
             let covered = textureRoles.length > 0 && textureRoles.length === used.size;
             for (const role of textureRoles) {
-                const copy = await textures.ensure(asset, role, signal).catch((e) => {
-                    if (e?.name === 'AbortError') throw e;
-                    return null;
-                });
+                const copy = await copyOf(asset, role);
                 if (!copy) {
                     covered = false;
                     continue;
@@ -190,16 +196,28 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
                 const path = derivedPath(asset, role);
                 derived[`${asset.id}|${role}`] = path;
                 assetFiles.push({ path, data: copy.blob });
-                compressed++;
-                compressedBytes += copy.bytes;
+                packed.textures++;
+                packed.bytes += copy.bytes;
                 uses.ktx2 = true;
             }
-            if (textureRoles.length) originalBytes += blob.size;
+            if (textureRoles.length) packed.original += blob.size;
             needFile = !covered;
         }
         if (asset.kind === 'texture' && asset.name.toLowerCase().endsWith('.ktx2')) uses.ktx2 = true;
         if (asset.kind === 'model') {
-            const need = decodersFor(await gltfExtensions(blob));
+            // The copy when a game is better off with it (KTX2 textures, or smaller), else the file.
+            const copy = textures ? await copyOf(asset, 'model') : null;
+            const shipped = copy && shipsCopy(copy, asset) ? copy : null;
+            if (shipped) {
+                const path = derivedPath(asset, 'model');
+                derived[`${asset.id}|model`] = path;
+                assetFiles.push({ path, data: shipped.blob });
+                packed.models++;
+                packed.bytes += shipped.bytes;
+                packed.original += blob.size;
+                needFile = false;
+            }
+            const need = decodersFor(await gltfExtensions(shipped?.blob ?? blob));
             uses.ktx2 ||= need.ktx2;
             uses.draco ||= need.draco;
             uses.meshopt ||= need.meshopt;
@@ -210,7 +228,10 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
         kept++;
         assetFiles.push({ path, data: blob });
     }
-    if (compressed) log(`Compressed textures: ${compressed} cop${compressed === 1 ? 'y' : 'ies'}, ${formatBytes(compressedBytes)} (the files were ${formatBytes(originalBytes)}).`);
+    if (packed.textures || packed.models) {
+        const what = [plural(packed.textures, 'texture cop', 'y', 'ies'), plural(packed.models, 'model')].filter(Boolean).join(' and ');
+        log(`Compressed ${what}: ${formatBytes(packed.bytes)} (the files were ${formatBytes(packed.original)}).`);
+    }
     if (kept) log(`Added ${kept} asset file${kept === 1 ? '' : 's'}.`);
 
     log('Collecting the player app...');
@@ -224,7 +245,7 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
         scene: doc,
         camera: opts.camera,
         files: paths,
-        ...(compressed ? { derived } : {}),
+        ...(Object.keys(derived).length ? { derived } : {}),
         builtAt: new Date().toISOString(),
         editor: editorSha() || undefined,
     };
@@ -234,6 +255,11 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     files.push({ path: '.nojekyll', data: '' });
     const size = files.reduce((s, f) => s + sizeOf(f.data), 0);
     return { title, files, size, warnings };
+}
+
+/** "3 textures", "1 texture", or '' for none; `one`/`many` end the word (cop-y, cop-ies). */
+function plural(n: number, word: string, one = '', many = 's'): string {
+    return n ? `${n} ${word}${n === 1 ? one : many}` : '';
 }
 
 /** Folder-safe form of a title, for the .zip name and a new repository. */

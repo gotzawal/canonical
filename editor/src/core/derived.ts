@@ -1,8 +1,10 @@
-// Compressed copies of texture assets (KTX2), made in the background by the
-// encoder (derive/) and shipped with games in place of the originals. They
-// can always be made again, so they live apart from the imported files, in
-// a database of their own the browser may clear, and never in the document
-// (which only holds the user's options, AssetMeta.compress).
+// Compressed copies of assets, made in the background by the encoder
+// (derive/) and shipped with games in place of the originals: textures as
+// KTX2 for each role they are used in, models as GLB files whose textures
+// are KTX2 and whose geometry is meshopt compressed. They can always be
+// made again, so they live apart from the imported files, in a database of
+// their own the browser may clear, and never in the document (which only
+// holds the user's options, AssetMeta.compress).
 
 import type { AssetMeta, TextureCompression, TextureRole } from './types';
 
@@ -15,10 +17,18 @@ export const DEFAULT_MAX_SIZE = 2048;
 /** Longest sides the options offer. */
 export const MAX_SIZES = [4096, 2048, 1024, 512, 256] as const;
 
+/** What a copy is of: a texture for a role, or a model. */
+export type DerivedRole = TextureRole | 'model';
+
 /** What a copy is encoded with. */
 export interface DerivedOptions {
-    /** ETC1S: small, for colors. UASTC (with Zstandard): larger, near the original, for normal and data maps. */
+    /**
+     * ETC1S: small, for colors. UASTC (with Zstandard): larger, near the
+     * original, for normal and data maps. A model's is that of its color
+     * textures (its normal and data maps get UASTC).
+     */
     codec: 'etc1s' | 'uastc';
+    /** Longest side of a texture (of each texture in a model). */
     maxSize: number;
 }
 
@@ -26,33 +36,51 @@ export interface DerivedRecord {
     /** `${asset}|${role}|${encoder}` (derivedKey). */
     key: string;
     asset: string;
-    role: TextureRole;
+    role: DerivedRole;
     encoder: string;
     /** The file it was made from (a replaced file makes it stale). */
     src: { size: number; hash?: string };
     opts: DerivedOptions;
-    /** The KTX2 file. */
+    /** The KTX2 file (a GLB file for a model). */
     blob: Blob;
     bytes: number;
+    /** The texture's size, mip levels and whether it has alpha (0 and false for a model). */
     width: number;
     height: number;
     levels: number;
     alpha: boolean;
+    /** Models: how many of their textures were encoded to KTX2. */
+    textures?: number;
     /** When it was made and last used (ms since epoch), for evicting old copies. */
     made: number;
     used: number;
 }
 
-export function derivedKey(asset: string, role: TextureRole): string {
+export function derivedKey(asset: string, role: DerivedRole): string {
     return `${asset}|${role}|${ENCODER_VERSION}`;
 }
 
-/** The encoding a texture of this role gets with these options; null when it ships as it is. */
-export function derivedOptions(role: TextureRole, c?: TextureCompression | null): DerivedOptions | null {
+/** The encoding a texture of this role (or a model) gets with these options; null when it ships as it is. */
+export function derivedOptions(role: DerivedRole, c?: TextureCompression | null): DerivedOptions | null {
     const mode = c?.mode ?? 'auto';
     if (mode === 'off') return null;
     const maxSize = c?.maxSize && c.maxSize > 0 ? Math.round(c.maxSize) : DEFAULT_MAX_SIZE;
-    return { codec: mode === 'high' || role !== 'color' ? 'uastc' : 'etc1s', maxSize };
+    const colors = role === 'color' || role === 'model';
+    return { codec: mode === 'high' || !colors ? 'uastc' : 'etc1s', maxSize };
+}
+
+/** A texture that is a KTX2 file already: games get it as it is, whatever its options. */
+export function shipsAsIs(meta: Pick<AssetMeta, 'kind' | 'name' | 'mime'>): boolean {
+    return meta.kind === 'texture' && (meta.mime === 'image/ktx2' || /\.ktx2$/i.test(meta.name));
+}
+
+/**
+ * True when a game is better off with the copy than with the file. A
+ * texture's copy always is (a quarter or less of the GPU memory); a model's
+ * when it holds KTX2 textures, or else when it is smaller.
+ */
+export function shipsCopy(rec: Pick<DerivedRecord, 'role' | 'bytes' | 'textures'>, meta: Pick<AssetMeta, 'size'>): boolean {
+    return rec.role !== 'model' || (rec.textures ?? 0) > 0 || rec.bytes < meta.size;
 }
 
 /** True when a copy was made from this file (its size, and fingerprint where both have one) with these options by this encoder. */
@@ -104,7 +132,8 @@ function run<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<
                 const t = db.transaction(STORE, mode);
                 const req = fn(t.objectStore(STORE));
                 t.oncomplete = () => resolve(req ? req.result : undefined);
-                t.onerror = () => reject(t.error);
+                // A failed request (a full disk) reaches this first, before the transaction has its error.
+                t.onerror = (e) => reject((e.target as IDBRequest | null)?.error ?? t.error);
                 t.onabort = () => reject(t.error);
             }),
     );
@@ -137,6 +166,7 @@ export async function putDerived(rec: DerivedRecord): Promise<boolean> {
         if (e?.name === 'QuotaExceededError' && (await evictDerived(rec.bytes)) > 0) {
             try {
                 await run('readwrite', (s) => s.put(rec));
+                memory.delete(rec.key);
                 return true;
             } catch { /* kept in memory below */ }
         }
@@ -165,7 +195,7 @@ async function remove(keys: string[]): Promise<void> {
 
 /** Drops the copies of these assets (their files were replaced or deleted). */
 export async function deleteDerivedOf(assets: string[]): Promise<void> {
-    await remove(assets.flatMap((a) => (['color', 'normal', 'data'] as const).map((r) => derivedKey(a, r))));
+    await remove(assets.flatMap((a) => (['color', 'normal', 'data', 'model'] as const).map((r) => derivedKey(a, r))));
 }
 
 /** Drops copies of assets not in `keep`, and those of other encoders. Resolves with how many went. */
@@ -188,12 +218,12 @@ export async function evictDerived(bytes: number): Promise<number> {
     return freed;
 }
 
-/** The copy of a texture already made in this browser for its options, if any (previews of the editor's scene). */
-export async function storedCopy(meta: AssetMeta, role: TextureRole): Promise<Blob | null> {
+/** The copy of a texture (or model) already made in this browser for its options, if a game would ship it (previews of the editor's scene). */
+export async function storedCopy(meta: AssetMeta, role: DerivedRole): Promise<Blob | null> {
     const opts = derivedOptions(role, meta.compress);
     if (!opts) return null;
     const rec = await getDerived(derivedKey(meta.id, role));
-    return isFresh(rec, meta, opts) ? rec.blob : null;
+    return isFresh(rec, meta, opts) && shipsCopy(rec, meta) ? rec.blob : null;
 }
 
 /** How many copies there are and their size. */

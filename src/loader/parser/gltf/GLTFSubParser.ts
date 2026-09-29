@@ -207,6 +207,24 @@ export class GLTFSubParser {
             // Not loaded up front (a fallback source, or it failed then): load it now.
             return await Engine3D.resFor(this.ctx).loadTexture(this.gltf.resources['url:' + imageIndex], undefined, undefined, colorSpace) as BitmapTexture2D;
         }
+        if (image.uri?.startsWith('data:')) {
+            // Embedded in the .gltf (glTF-Embedded exports): decoded when a
+            // texture first uses it, once per color space.
+            const key = `dataimage_${imageIndex}:${colorSpace}`;
+            let loading: Promise<BitmapTexture2D> = this.gltf.resources[key];
+            if (!loading) {
+                loading = (async () => {
+                    const texture = new BitmapTexture2D(true, this.ctx, colorSpace);
+                    texture.name = image.name || `image_${imageIndex}`;
+                    const mimeType = image.mimeType || image.uri.slice(5, image.uri.search(/[;,]/));
+                    await texture.loadFromBlob(new Blob([this.decodeDataUri(image.uri)], { type: mimeType }));
+                    return texture;
+                })();
+                this.gltf.resources[key] = loading;
+                loading.catch(() => delete this.gltf.resources[key]);
+            }
+            return await loading;
+        }
         if (image.uri) {
             let name = image.uri;
             name = StringUtil.getURLName(name);

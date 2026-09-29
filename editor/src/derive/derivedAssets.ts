@@ -1,25 +1,30 @@
-// Keeps the compressed copies (KTX2) of the textures a scene uses. The
-// scene shows a copy as soon as it exists (SceneSync asks through
-// TextureSource); missing copies are made in the background while editing
+// Keeps the compressed copies of the textures (KTX2) and models (GLB with
+// KTX2 textures and meshopt geometry) a scene uses. The editor's view shows
+// a texture's copy as soon as it exists (SceneSync asks through
+// TextureSource); models show their file, their copies are for games.
+// Missing copies are made in the background while editing
 // (Prefs.backgroundCompression) and by builds; changed options or a
 // replaced file make them again. Copies never enter the document, only
 // the user's options do (AssetMeta.compress).
 
 import { getAssetBlob } from '../core/assets';
-import { derivedKey, derivedOptions, ENCODER_VERSION, getDerived, isFresh, putDerived, type DerivedRecord } from '../core/derived';
+import {
+    derivedKey, derivedOptions, ENCODER_VERSION, getDerived, isFresh, putDerived, shipsAsIs, type DerivedOptions, type DerivedRecord, type DerivedRole,
+} from '../core/derived';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
 import type { AssetMeta, TextureRole } from '../core/types';
+import { gltfExtensions } from '../build/modelInfo';
 import type { TextureSource } from '../engine/sync';
 import { DeriveQueue, PRIORITY, type WorkerLike } from './queue';
 
 export type DerivedState = 'off' | 'none' | 'queued' | 'encoding' | 'ready' | 'failed';
 
-/** Where a texture's copy for one role stands. */
+/** Where a texture's copy for one role (or a model's copy) stands. */
 export interface DerivedStatus {
     state: DerivedState;
     /** The copy, when ready. */
-    copy?: Pick<DerivedRecord, 'bytes' | 'width' | 'height' | 'levels' | 'alpha' | 'opts'>;
+    copy?: Pick<DerivedRecord, 'bytes' | 'width' | 'height' | 'levels' | 'alpha' | 'opts' | 'textures'>;
     error?: string;
 }
 
@@ -30,13 +35,32 @@ async function isKTX2File(blob: Blob): Promise<boolean> {
     return KTX2_MAGIC.every((b, i) => head[i] === b);
 }
 
-const copyOf = (r: DerivedRecord): DerivedStatus['copy'] => ({ bytes: r.bytes, width: r.width, height: r.height, levels: r.levels, alpha: r.alpha, opts: r.opts });
+/** Draco models are small already; packing them would mean decoding them. */
+async function isDracoModel(blob: Blob): Promise<boolean> {
+    return !!(await gltfExtensions(blob))?.includes('KHR_draco_mesh_compression');
+}
+
+const copyOf = (r: DerivedRecord): DerivedStatus['copy'] => ({ bytes: r.bytes, width: r.width, height: r.height, levels: r.levels, alpha: r.alpha, opts: r.opts, textures: r.textures });
+
+/** The asset kind a copy for a role is made from. */
+const kindFor = (role: DerivedRole) => (role === 'model' ? 'model' : 'texture');
+
+/**
+ * The encoding job of a copy: one per file and options, so a job for other
+ * options or for a replaced file is never shared (its copy is not the one
+ * wanted).
+ */
+function jobKey(key: string, src: DerivedRecord['src'], opts: DerivedOptions): string {
+    return `${key}|${opts.codec}|${opts.maxSize}|${src.size}|${src.hash ?? ''}`;
+}
 
 export class DerivedAssets extends Emitter<{ status: string }> implements TextureSource {
     readonly queue: DeriveQueue;
     private states = new Map<string, DerivedStatus>();
     private options = new Map<string, string>();
     private refresh: ((asset: string, role?: TextureRole) => void) | null = null;
+    /** Stops the background jobs of an asset once it leaves the document (removed, or another project opened). */
+    private stops = new Map<string, AbortController>();
 
     constructor(private store: Store, makeWorker: () => WorkerLike, wasmUrl: string, workers = 1) {
         super();
@@ -48,9 +72,9 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
             if (hint && (hint.nodes || hint.env || hint.behavior)) return;
             this.optionsChanged();
         });
+        // Assets kept under the same id whose options differ in the new document show again.
         store.on('load', () => {
             this.states.clear();
-            this.options.clear();
             this.optionsChanged();
         });
         this.queue.on('change', () => this.queueChanged());
@@ -67,6 +91,11 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         return this.queue.size;
     }
 
+    /** Model copies among them. */
+    get pendingModels(): number {
+        return this.queue.keys().filter((key) => key.split('|')[1] === 'model').length;
+    }
+
     async resolve(meta: AssetMeta, role: TextureRole): Promise<Blob | null> {
         const opts = derivedOptions(role, meta.compress);
         if (!opts) return null;
@@ -76,27 +105,31 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         return rec.blob;
     }
 
-    used(meta: AssetMeta, role: TextureRole) {
+    /** A texture (for a role) or model is shown: its copy is made in the background when missing. */
+    used(meta: AssetMeta, role: DerivedRole) {
         if (!this.store.prefs.backgroundCompression) return;
-        this.make(meta, role, PRIORITY.view).catch(() => {});
+        // Models come after the textures the view shows.
+        this.make(meta, role, role === 'model' ? PRIORITY.background : PRIORITY.view).catch(() => {});
     }
 
-    /** The copy of a texture for a role, made now if missing (builds); null when it ships as it is or failed. */
-    ensure(meta: AssetMeta, role: TextureRole, signal?: AbortSignal): Promise<DerivedRecord | null> {
+    /** The copy of a texture for a role (or of a model), made now if missing (builds); null when it ships as it is or failed. */
+    ensure(meta: AssetMeta, role: DerivedRole, signal?: AbortSignal): Promise<DerivedRecord | null> {
         return this.make(meta, role, PRIORITY.build, signal);
     }
 
-    /** Where a texture's copy for a role stands, as far as this session knows. */
-    statusOf(meta: AssetMeta, role: TextureRole): DerivedStatus {
-        if (!derivedOptions(role, meta.compress)) return { state: 'off' };
+    /** Where a copy stands, as far as this session knows ('off' also for KTX2 files, which ship as they are). */
+    statusOf(meta: AssetMeta, role: DerivedRole): DerivedStatus {
+        if (!derivedOptions(role, meta.compress) || shipsAsIs(meta)) return { state: 'off' };
         return this.states.get(derivedKey(meta.id, role)) ?? { state: 'none' };
     }
 
     /** Looks the copy up in storage (for a panel opening), then reports it with statusOf. */
-    async check(meta: AssetMeta, role: TextureRole): Promise<DerivedStatus> {
+    async check(meta: AssetMeta, role: DerivedRole): Promise<DerivedStatus> {
         const known = this.statusOf(meta, role);
         if (known.state !== 'none') return known;
-        await this.resolve(meta, role);
+        const opts = derivedOptions(role, meta.compress);
+        const rec = opts && (await getDerived(derivedKey(meta.id, role)));
+        if (opts && isFresh(rec, meta, opts)) this.set(meta.id, role, { state: 'ready', copy: copyOf(rec) });
         return this.statusOf(meta, role);
     }
 
@@ -110,9 +143,9 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         this.queue.dispose();
     }
 
-    private async make(meta: AssetMeta, role: TextureRole, priority: number, signal?: AbortSignal): Promise<DerivedRecord | null> {
+    private async make(meta: AssetMeta, role: DerivedRole, priority: number, signal?: AbortSignal): Promise<DerivedRecord | null> {
         const opts = derivedOptions(role, meta.compress);
-        if (!opts || meta.kind !== 'texture') return null;
+        if (!opts || meta.kind !== kindFor(role) || shipsAsIs(meta)) return null;
         const key = derivedKey(meta.id, role);
         const have = await getDerived(key);
         if (isFresh(have, meta, opts)) {
@@ -120,43 +153,54 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
             return have;
         }
         const blob = await getAssetBlob(meta.id);
-        // Not in this browser, or already a KTX2 file: it ships as it is.
-        if (!blob || (await isKTX2File(blob))) return null;
+        // Not in this browser, or compressed already (a KTX2 file, a Draco model): it ships as it is.
+        if (!blob || (role === 'model' ? await isDracoModel(blob) : await isKTX2File(blob))) return null;
+        const src = { size: blob.size, ...(meta.hash ? { hash: meta.hash } : {}) };
         const current = this.states.get(key)?.state;
         if (current !== 'queued' && current !== 'encoding') this.set(meta.id, role, { state: 'queued' });
+        // Builds wait with their own signal; the view's and background jobs go with the asset.
+        const stop = signal ?? (priority === PRIORITY.build ? undefined : this.stopOf(meta.id));
         try {
-            const out = await this.queue.run(key, { blob, role, opts }, priority, signal);
+            const out = await this.queue.run(jobKey(key, src, opts), { blob, role, opts }, priority, stop);
             const now = Date.now();
             const rec: DerivedRecord = {
                 key,
                 asset: meta.id,
                 role,
                 encoder: ENCODER_VERSION,
-                src: { size: blob.size, ...(meta.hash ? { hash: meta.hash } : {}) },
+                src,
                 opts,
-                blob: new Blob([out.data], { type: 'image/ktx2' }),
+                blob: new Blob([out.data], { type: role === 'model' ? 'model/gltf-binary' : 'image/ktx2' }),
                 bytes: out.data.byteLength,
                 width: out.width,
                 height: out.height,
                 levels: out.levels,
                 alpha: out.alpha,
+                ...(out.textures === undefined ? {} : { textures: out.textures }),
                 made: now,
                 used: now,
             };
-            await putDerived(rec);
-            // Options changed while it was made: this copy is not the one wanted.
+            // The asset as it is now: options changed, the file replaced or the asset gone while it was made.
             const latest = this.store.doc.assets.find((a) => a.id === meta.id);
-            if (!latest || !isFresh(rec, latest, derivedOptions(role, latest.compress) ?? opts)) {
-                this.set(meta.id, role, { state: 'none' });
+            const wanted = latest && derivedOptions(role, latest.compress);
+            if (!latest || !wanted || !isFresh(rec, latest, wanted)) {
+                // Not the copy wanted: it replaces nothing stored.
+                await this.settle(latest ?? null, role);
                 return null;
             }
+            await putDerived(rec);
             this.set(meta.id, role, { state: 'ready', copy: copyOf(rec) });
-            this.refresh?.(meta.id, role);
+            // The view shows models from their files.
+            if (role !== 'model') this.refresh?.(meta.id, role);
             return rec;
         } catch (e: any) {
-            if (e?.name === 'AbortError') {
-                this.set(meta.id, role, { state: 'none' });
-                throw e;
+            const latest = this.store.doc.assets.find((a) => a.id === meta.id) ?? null;
+            const wanted = latest && derivedOptions(role, latest.compress);
+            const stale = !latest || !wanted || jobKey(key, { size: latest.size, ...(latest.hash ? { hash: latest.hash } : {}) }, wanted) !== jobKey(key, src, opts);
+            if (e?.name === 'AbortError' || stale) {
+                await this.settle(latest, role);
+                if (e?.name === 'AbortError') throw e;
+                return null;
             }
             console.warn(`[editor] could not compress "${meta.name}"`, e);
             this.set(meta.id, role, { state: 'failed', error: String(e?.message || e) });
@@ -164,26 +208,57 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         }
     }
 
-    private set(asset: string, role: TextureRole, status: DerivedStatus) {
+    /** The signal that stops an asset's background jobs. */
+    private stopOf(asset: string): AbortSignal {
+        let c = this.stops.get(asset);
+        if (!c) {
+            c = new AbortController();
+            this.stops.set(asset, c);
+        }
+        return c.signal;
+    }
+
+    /**
+     * The state of a copy after a job ended that was not for the asset as it
+     * is now: ready when the stored copy fits it, waiting while a job for it
+     * is queued, else none.
+     */
+    private async settle(meta: AssetMeta | null, role: DerivedRole) {
+        if (!meta) return;
+        const key = derivedKey(meta.id, role);
+        const opts = derivedOptions(role, meta.compress);
+        const rec = opts ? await getDerived(key) : null;
+        if (opts && isFresh(rec, meta, opts)) return this.set(meta.id, role, { state: 'ready', copy: copyOf(rec) });
+        const jobs = this.queue.keys().filter((k) => k.startsWith(key + '|'));
+        if (jobs.length) return this.set(meta.id, role, { state: jobs.some((k) => this.queue.running(k)) ? 'encoding' : 'queued' });
+        this.set(meta.id, role, { state: 'none' });
+    }
+
+    private set(asset: string, role: DerivedRole, status: DerivedStatus) {
         this.states.set(derivedKey(asset, role), status);
         this.emit('status', asset);
     }
 
     /** Waiting copies that started encoding. */
     private queueChanged() {
+        const running = this.queue.keys().filter((k) => this.queue.running(k));
         for (const [key, s] of this.states) {
-            if (s.state === 'queued' && this.queue.running(key)) {
+            if (s.state === 'queued' && running.some((k) => k.startsWith(key + '|'))) {
                 this.states.set(key, { state: 'encoding' });
                 this.emit('status', key.split('|')[0]);
             }
         }
     }
 
-    /** Textures whose options changed are shown again: with their copy for the new options, or the original until it is made. */
+    /**
+     * Assets whose options changed forget their copies' state; textures are
+     * shown again, with their copy for the new options or the file until it
+     * is made.
+     */
     private optionsChanged() {
         const seen = new Set<string>();
         for (const a of this.store.doc.assets) {
-            if (a.kind !== 'texture') continue;
+            if (a.kind !== 'texture' && a.kind !== 'model') continue;
             seen.add(a.id);
             const json = JSON.stringify(a.compress ?? {});
             const before = this.options.get(a.id);
@@ -193,5 +268,11 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
             this.refresh?.(a.id);
         }
         for (const id of Array.from(this.options.keys())) if (!seen.has(id)) this.options.delete(id);
+        // Background jobs of assets that left the document stop (a build waiting on one keeps it).
+        for (const [id, c] of Array.from(this.stops)) {
+            if (seen.has(id)) continue;
+            c.abort();
+            this.stops.delete(id);
+        }
     }
 }

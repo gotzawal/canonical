@@ -162,10 +162,14 @@ export class RenderGraphController extends Emitter<GraphEvents> {
             if (!inst || inst.shader !== d.shader || inst.version !== version) {
                 const post = this.shaders.createPost(d.shader, d.id);
                 if (!post) continue;
+                // The asset each param asked for last: a slower earlier load never replaces a newer choice.
+                const wanted = new Map<string, string>();
                 post.onTextures = (assets) => {
+                    for (const name of Array.from(wanted.keys())) if (!assets.some((a) => a.name === name)) wanted.delete(name);
                     for (const { name, asset } of assets) {
+                        wanted.set(name, asset);
                         void this.sync.loadTexture(asset).then((tex) => {
-                            if (tex) post.setTexture(name, tex);
+                            if (tex && wanted.get(name) === asset) post.setTexture(name, tex);
                         });
                     }
                 };

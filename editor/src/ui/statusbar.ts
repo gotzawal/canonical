@@ -36,15 +36,17 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     // What a frame costs: draw calls and the GPU memory the editor asked for (a span: the fps button stays the only button here).
     const cost = h('span', { class: 'status-item muted mono gpu-cost', attrs: { hidden: !editor.runtime.stats } });
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
-    // Textures being compressed for the game in the background (derive/).
+    // Textures and models being compressed for the game in the background (derive/).
     const compressing = h('span', { class: 'status-item muted compressing', attrs: { hidden: true } });
     const showCompressing = () => {
         const n = editor.derived.pending;
+        const models = editor.derived.pendingModels;
+        const count = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
         compressing.hidden = n === 0;
-        compressing.textContent = `Compressing ${n} texture${n === 1 ? '' : 's'}`;
+        compressing.textContent = `Compressing ${[n - models ? count(n - models, 'texture') : '', models ? count(models, 'model') : ''].filter(Boolean).join(' and ')}`;
         compressing.title = store.playing
-            ? 'Texture compression waits while the game plays.'
-            : 'Making the GPU-compressed copies (KTX2) games ship. The view shows each copy once it is made.';
+            ? 'Compression waits while the game plays.'
+            : 'Making the compressed copies games ship: GPU-compressed textures (KTX2), and models with those textures and packed geometry. The view shows each texture copy once it is made.';
     };
     editor.derived.queue.on('change', showCompressing);
     store.on('playing', showCompressing);

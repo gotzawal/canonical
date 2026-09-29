@@ -105,9 +105,9 @@ export interface AssetMeta {
     /** Pixel size of images, when known. */
     width?: number;
     height?: number;
-    /** How the game ships a texture (see derive/): compressed copies made in the background. */
+    /** How the game ships a texture or model (see derive/): compressed copies made in the background. */
     compress?: TextureCompression;
-    /** Fingerprint of a texture's bytes (assets.ts fingerprint): tells a copy made from another file apart. */
+    /** Fingerprint of a texture's or model's bytes (assets.ts fingerprint): tells a copy made from another file apart. */
     hash?: string;
 }
 
@@ -119,9 +119,11 @@ export interface AssetMeta {
 export type TextureRole = 'color' | 'normal' | 'data';
 
 /**
- * Compression of a texture asset. `auto`: small ETC1S for colors, UASTC for
- * normal and data maps; `high`: UASTC for every role (larger, sharper);
- * `off`: the original file. `maxSize` caps the longer side, in pixels.
+ * Compression of a texture asset, or of a model's textures (its geometry
+ * is packed without loss either way). `auto`: small ETC1S for colors,
+ * UASTC for normal and data maps; `high`: UASTC for every role (larger,
+ * sharper); `off`: the original file. `maxSize` caps the longer side, in
+ * pixels.
  */
 export interface TextureCompression {
     mode?: 'auto' | 'high' | 'off';

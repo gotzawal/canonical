@@ -5,7 +5,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import { sharedEditor } from './editor';
 import { measure } from './measure';
-import { base64, basisuGlb, bufferViewZeroGltf, dracoGlb, ktx2, meshoptGlb, png, quantizedGltf, solid } from './fixtures';
+import { base64, basisuGlb, bufferViewZeroGltf, dataUriGltf, dracoGlb, ktx2, meshoptGlb, png, quantizedGltf, solid } from './fixtures';
 
 const problems: string[] = [];
 const editor = sharedEditor(async (page) => {
@@ -95,6 +95,12 @@ test('finds an image stored in the first bufferView of an embedded .gltf', async
     const id = await importModel(page, 'Green.gltf', bufferViewZeroGltf(png(32, 32, solid(32, 32, [0, 255, 0, 255]))));
     // Base color decodes as sRGB on the GPU, so the shader skips its own decode.
     expect(await loaded(page, id)).toMatchObject({ status: 'ready', texture: { name: 'Green', format: 'rgba8unorm-srgb' }, srgbAlbedo: true });
+});
+
+test('decodes an image embedded in a .gltf as a data URI', async () => {
+    const page = editor.page();
+    const id = await importModel(page, 'Blue.gltf', dataUriGltf(png(32, 32, solid(32, 32, [0, 0, 255, 255]))));
+    expect(await loaded(page, id)).toMatchObject({ status: 'ready', texture: { name: 'Blue', format: 'rgba8unorm-srgb', kind: 'BitmapTexture2D' }, srgbAlbedo: true });
 });
 
 test('transcodes KTX2 base colors for the device, or falls back to their PNG (KHR_texture_basisu)', async () => {

@@ -23,7 +23,7 @@ interface DeploySettings {
     create: boolean;
     /** Keep the token in localStorage (otherwise only while this tab is open). */
     remember: boolean;
-    /** Ship textures as compressed copies (KTX2), made when missing. */
+    /** Ship textures and models as compressed copies, made when missing. */
     compress: boolean;
 }
 
@@ -288,7 +288,7 @@ export function showBuildDialog(editor: Editor) {
         'div',
         { class: 'build-dialog' },
         row('Title', titleInput, 'Shown as the page title of the game'),
-        row('Textures', compressBox.el, 'Ships each texture as a GPU-compressed copy: smaller downloads and a quarter or less of the video memory. Copies are made in the background while you edit; a build makes the missing ones, which takes a few seconds a texture.'),
+        row('Compress', compressBox.el, 'Ships each texture as a GPU-compressed copy (a quarter or less of the video memory, usually a smaller download) and each model with such textures and packed geometry. Copies are made in the background while you edit; a build makes the missing ones, which takes a few seconds a texture.'),
         summary,
         notes,
         h('h3', null, icon('play', 14), h('span', { text: 'Test' })),

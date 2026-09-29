@@ -1,10 +1,10 @@
-// Runs texture encodes in a few workers (derive.worker.ts): one job per
-// copy, the most urgent first, none while paused (Play), and workers that
-// sit idle are stopped, since the encoder's memory never shrinks.
+// Runs the encodes of copies in a few workers (derive.worker.ts): one job
+// per copy (a texture for a role, or a model), the most urgent first, none
+// while paused (Play), and workers that sit idle are stopped, since the
+// encoder's memory never shrinks.
 
 import { Emitter } from '../core/events';
-import type { DerivedOptions } from '../core/derived';
-import type { TextureRole } from '../core/types';
+import type { DerivedOptions, DerivedRole } from '../core/derived';
 import type { DeriveIn, DeriveOut } from './derive.worker';
 
 /** How urgent a job is: a build waits on it, the view shows it, or it is for later. */
@@ -12,7 +12,7 @@ export const PRIORITY = { build: 2, view: 1, background: 0 } as const;
 
 export interface EncodeInput {
     blob: Blob;
-    role: TextureRole;
+    role: DerivedRole;
     opts: DerivedOptions;
 }
 
@@ -22,6 +22,8 @@ export interface Encoded {
     height: number;
     levels: number;
     alpha: boolean;
+    /** Models: textures encoded to KTX2. */
+    textures?: number;
 }
 
 /** The part of a Worker the queue uses (tests give a fake one). */
@@ -77,6 +79,11 @@ export class DeriveQueue extends Emitter<{ change: void }> {
     /** Jobs queued or running. */
     get size(): number {
         return this.jobs.size;
+    }
+
+    /** Keys of the jobs queued or running. */
+    keys(): string[] {
+        return Array.from(this.jobs.keys());
     }
 
     /** True while a job for this key is queued or running. */
@@ -150,7 +157,12 @@ export class DeriveQueue extends Emitter<{ change: void }> {
     }
 
     private pump() {
-        if (this.paused) return;
+        if (this.paused) {
+            // A worker whose job ended during Play stops as it would otherwise.
+            this.scheduleIdle();
+            return;
+        }
+        let started = false;
         for (;;) {
             const next = Array.from(this.jobs.values())
                 .filter((j) => !j.worker)
@@ -161,9 +173,13 @@ export class DeriveQueue extends Emitter<{ change: void }> {
             slot.job = next;
             next.worker = slot;
             next.id = this.nextId++;
-            slot.worker.postMessage({ type: 'texture', id: next.id, blob: next.input.blob, role: next.input.role, opts: next.input.opts });
+            const { blob, role, opts } = next.input;
+            slot.worker.postMessage(role === 'model' ? { type: 'model', id: next.id, blob, opts } : { type: 'texture', id: next.id, blob, role, opts });
+            started = true;
         }
         this.scheduleIdle();
+        // Jobs that started are encoding now.
+        if (started) this.emit('change', undefined);
     }
 
     private startWorker(): Slot {
@@ -176,7 +192,7 @@ export class DeriveQueue extends Emitter<{ change: void }> {
             this.slots = this.slots.filter((s) => s !== slot);
             const job = slot.job;
             slot.job = null;
-            if (job) this.finish(job, null, new Error(`The texture encoder stopped: ${e.message || 'worker error'}`));
+            if (job) this.finish(job, null, new Error(`The encoder stopped: ${e.message || 'worker error'}`));
             this.pump();
         };
         slot.worker.postMessage({ type: 'init', wasmUrl: this.wasmUrl });
@@ -188,7 +204,10 @@ export class DeriveQueue extends Emitter<{ change: void }> {
         const job = slot.job;
         if (!job || job.id !== msg.id) return;
         slot.job = null;
-        if (msg.type === 'done') this.finish(job, { data: msg.data, width: msg.width, height: msg.height, levels: msg.levels, alpha: msg.alpha }, null);
+        if (msg.type === 'done') {
+            const { data, width, height, levels, alpha, textures } = msg;
+            this.finish(job, { data, width, height, levels, alpha, ...(textures === undefined ? {} : { textures }) }, null);
+        }
         else this.finish(job, null, new Error(msg.message));
         this.pump();
     }

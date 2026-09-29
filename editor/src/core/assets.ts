@@ -56,8 +56,8 @@ export async function fingerprint(blob: Blob): Promise<string | undefined> {
  */
 export async function putAsset(blob: Blob, name: string, kind: AssetKind, id = uid('a'), extra: Partial<AssetMeta> = {}): Promise<AssetMeta> {
     const meta: AssetMeta = { ...extra, id, name, kind, mime: blob.type || guessMime(name), size: blob.size };
-    // Textures get a fingerprint: a compressed copy made from other bytes under this id is stale (core/derived.ts).
-    if (kind === 'texture') {
+    // Textures and models get a fingerprint: a compressed copy made from other bytes under this id is stale (core/derived.ts).
+    if (kind === 'texture' || kind === 'model') {
         const hash = await fingerprint(blob);
         if (hash) meta.hash = hash;
     }

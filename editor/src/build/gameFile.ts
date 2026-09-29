@@ -39,7 +39,11 @@ export interface GameFile {
     camera?: CameraState;
     /** Asset files by asset id, relative to the page. */
     files: Record<string, string>;
-    /** Compressed copies of textures (KTX2) by `${asset id}|${role}`, relative to the page; used in place of the files. */
+    /**
+     * Compressed copies by `${asset id}|${role}`, relative to the page, used
+     * in place of the files: textures (KTX2) for each role, and models
+     * (`|model`: GLB with KTX2 textures and meshopt geometry).
+     */
     derived?: Record<string, string>;
     builtAt: string;
     /** Commit of the editor that built the game, when known. */

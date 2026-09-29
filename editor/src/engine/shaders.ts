@@ -593,7 +593,7 @@ export class EditorPost extends PostBase {
         this.writeValues();
     }
 
-    /** Called with the texture assets the current values need; see applyProps. */
+    /** Called with the texture assets the current values need (none when no param names one); see applyProps. */
     onTextures: (assets: { name: string; asset: string }[]) => void = () => {};
 
     setValues(values: Record<string, ParamValue>) {
@@ -607,8 +607,7 @@ export class EditorPost extends PostBase {
 
     private writeValues() {
         if (!this.postQuad) return;
-        const assets = applyProps(this.postQuad.quadShader, this.props, this.values, this._boundCtx);
-        if (assets.length) this.onTextures(assets);
+        this.onTextures(applyProps(this.postQuad.quadShader, this.props, this.values, this._boundCtx));
     }
 
     public onResize() {

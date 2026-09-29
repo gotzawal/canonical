@@ -55,6 +55,26 @@ export function encoderSettings(role: TextureRole, opts: DerivedOptions): Encode
     };
 }
 
+/** Slots of glTF materials that hold normal maps. */
+const NORMAL_SLOTS = ['normalTexture', 'clearcoatNormalTexture'];
+
+/**
+ * The role of a model's texture from the material slots that use it (the
+ * name of each, and whether it samples the texture as color): a normal map
+ * wherever one uses it as such, else a color where one samples colors,
+ * else data (roughness, metalness, occlusion).
+ */
+export function slotRole(slots: { name: string; color: boolean }[]): TextureRole {
+    if (slots.some((s) => NORMAL_SLOTS.includes(s.name))) return 'normal';
+    if (slots.some((s) => s.color)) return 'color';
+    return 'data';
+}
+
+/** How a texture of a model is encoded: its colors with the model's codec, its normal and data maps in UASTC. */
+export function modelTextureOptions(role: TextureRole, model: DerivedOptions): DerivedOptions {
+    return { codec: role === 'color' ? model.codec : 'uastc', maxSize: model.maxSize };
+}
+
 /**
  * GPU memory of a texture with its mip chain: `blockBytes` per 4x4 block
  * (16 for BC7, ASTC and ETC2 with alpha, 8 for BC1 and ETC2 without), or

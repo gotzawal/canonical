@@ -45,7 +45,20 @@ async function loadGame(): Promise<Game> {
         } catch { /* reported below */ }
         if (!data?.scene) throw new Error('There is nothing to preview. Start a preview from the editor with File > Build & Deploy > Run.');
         // Assets come from this browser's IndexedDB, which the editor shares, with the compressed copies it made.
-        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true, textures: { resolve: storedCopy } };
+        const models = new Map<string, Promise<string | null>>();
+        const textures: TextureSource = {
+            resolve: storedCopy,
+            model(meta) {
+                let url = models.get(meta.id);
+                if (!url) {
+                    // The loader tells GLB from glTF by the name's extension.
+                    url = storedCopy(meta, 'model').then((blob) => (blob ? URL.createObjectURL(blob) + '#model.glb' : null));
+                    models.set(meta.id, url);
+                }
+                return url;
+            },
+        };
+        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true, textures };
     }
     const url = new URL(GAME_FILE, location.href);
     // Revalidate so a redeployed game is picked up right away.
@@ -60,7 +73,7 @@ async function loadGame(): Promise<Game> {
     if (game?.format !== 'canonical-game' || !game.scene) throw new Error(`${GAME_FILE} is not a Morglay game.`);
     const files = game.files ?? {};
     setAssetResolver((meta) => (files[meta.id] ? new URL(files[meta.id], url).href : null));
-    // Compressed copies of textures, by asset and role (the originals may not ship at all).
+    // Compressed copies of textures by asset and role, and of models (the originals may not ship at all).
     const derived = game.derived ?? {};
     const textures: TextureSource = {
         async resolve(meta, role) {
@@ -68,6 +81,10 @@ async function loadGame(): Promise<Game> {
             if (!path) return null;
             const r = await fetch(new URL(path, url));
             return r.ok ? r.blob() : null;
+        },
+        async model(meta) {
+            const path = derived[`${meta.id}|model`];
+            return path ? new URL(path, url).href : null;
         },
     };
     return { title: game.title, doc: game.scene, camera: game.camera, trusted: true, preview: false, textures };

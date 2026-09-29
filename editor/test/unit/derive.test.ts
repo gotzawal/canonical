@@ -2,19 +2,22 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { derivedPath } from '../../src/build/build';
 import { decodersFor, gltfExtensions } from '../../src/build/modelInfo';
 import {
-    DEFAULT_MAX_SIZE, deleteDerivedOf, derivedKey, derivedOptions, derivedUsage, ENCODER_VERSION, evictDerived, gcDerived, getDerived, isFresh, putDerived, storedCopy,
-    type DerivedRecord,
+    DEFAULT_MAX_SIZE, deleteDerivedOf, derivedKey, derivedOptions, derivedUsage, ENCODER_VERSION, evictDerived, gcDerived, getDerived, isFresh, putDerived, shipsCopy, storedCopy,
+    type DerivedRecord, type DerivedRole,
 } from '../../src/core/derived';
 import { assetRoles } from '../../src/core/refs';
 import type { AssetMeta, TextureRole } from '../../src/core/types';
 import type { DeriveIn, DeriveOut } from '../../src/derive/derive.worker';
-import { copyBlockBytes, encodedSize, encoderSettings, MAX_SOURCE_TEXELS, textureMemory } from '../../src/derive/encode';
+import { copyBlockBytes, encodedSize, encoderSettings, MAX_SOURCE_TEXELS, modelTextureOptions, slotRole, textureMemory } from '../../src/derive/encode';
 import { DeriveQueue, PRIORITY, type WorkerLike } from '../../src/derive/queue';
+import { DerivedAssets } from '../../src/derive/derivedAssets';
+import { putAsset } from '../../src/core/assets';
+import { Store } from '../../src/core/store';
 import { newScene } from '../../src/core/defaults';
 
 const meta = (id: string, extra: Partial<AssetMeta> = {}): AssetMeta => ({ id, name: `${id}.png`, kind: 'texture', mime: 'image/png', size: 1000, ...extra });
 
-function record(asset: string, role: TextureRole, extra: Partial<DerivedRecord> = {}): DerivedRecord {
+function record(asset: string, role: DerivedRole, extra: Partial<DerivedRecord> = {}): DerivedRecord {
     return {
         key: derivedKey(asset, role),
         asset,
@@ -42,6 +45,19 @@ describe('compressed copies', () => {
         expect(derivedOptions('color', { mode: 'high' })?.codec).toBe('uastc');
         expect(derivedOptions('color', { maxSize: 512 })?.maxSize).toBe(512);
         expect(derivedOptions('normal', { mode: 'off' })).toBeNull();
+        // A model's codec is that of its color textures.
+        expect(derivedOptions('model')).toEqual({ codec: 'etc1s', maxSize: DEFAULT_MAX_SIZE });
+        expect(derivedOptions('model', { mode: 'high', maxSize: 1024 })).toEqual({ codec: 'uastc', maxSize: 1024 });
+        expect(derivedOptions('model', { mode: 'off' })).toBeNull();
+    });
+
+    it('of models ship when they hold KTX2 textures or are smaller than the file', () => {
+        const model = meta('m', { name: 'm.glb', kind: 'model', size: 1000 });
+        expect(shipsCopy(record('m', 'model', { textures: 2, bytes: 5000 }), model)).toBe(true);
+        expect(shipsCopy(record('m', 'model', { textures: 0, bytes: 800 }), model)).toBe(true);
+        expect(shipsCopy(record('m', 'model', { textures: 0, bytes: 1000 }), model)).toBe(false);
+        // A texture's copy always does (its GPU memory is what it saves).
+        expect(shipsCopy(record('t', 'color', { bytes: 5000 }), meta('t'))).toBe(true);
     });
 
     it('are stale once the file, the options or the encoder change', () => {
@@ -78,6 +94,15 @@ describe('compressed copies', () => {
         expect(await getDerived(derivedKey('a', 'color'))).not.toBeNull();
         await deleteDerivedOf(['a']);
         expect(await derivedUsage()).toEqual({ count: 0, bytes: 0 });
+
+        // A model's copy that saves nothing is not one a preview uses.
+        const model = meta('m', { name: 'm.glb', kind: 'model', size: 1000 });
+        await putDerived(record('m', 'model', { opts: derivedOptions('model')!, textures: 0, bytes: 1200 }));
+        expect(await storedCopy(model, 'model')).toBeNull();
+        await putDerived(record('m', 'model', { opts: derivedOptions('model')!, textures: 1, bytes: 1200 }));
+        expect(await storedCopy(model, 'model')).toBeInstanceOf(Blob);
+        await deleteDerivedOf(['m']);
+        expect(await derivedUsage()).toEqual({ count: 0, bytes: 0 });
     });
 });
 
@@ -109,6 +134,15 @@ describe('texture encoding', () => {
         expect(copyBlockBytes('etc1s', true)).toBe(16);
         expect(copyBlockBytes('uastc', false)).toBe(16);
     });
+
+    it('takes the role of a model\'s texture from the material slots using it', () => {
+        expect(slotRole([{ name: 'baseColorTexture', color: true }])).toBe('color');
+        expect(slotRole([{ name: 'metallicRoughnessTexture', color: false }, { name: 'occlusionTexture', color: false }])).toBe('data');
+        // A normal map wherever one uses it as such.
+        expect(slotRole([{ name: 'emissiveTexture', color: true }, { name: 'clearcoatNormalTexture', color: false }])).toBe('normal');
+        expect(modelTextureOptions('color', { codec: 'etc1s', maxSize: 1024 })).toEqual({ codec: 'etc1s', maxSize: 1024 });
+        expect(modelTextureOptions('normal', { codec: 'etc1s', maxSize: 1024 })).toEqual({ codec: 'uastc', maxSize: 1024 });
+    });
 });
 
 /** A worker that answers when told to; `sent` holds what it got. */
@@ -127,17 +161,17 @@ class FakeWorker implements WorkerLike {
     terminate() {
         this.terminated = true;
     }
-    /** Answers its latest texture job. */
-    finish(ok = true) {
-        const job = [...this.sent].reverse().find((m) => m.type === 'texture') as Extract<DeriveIn, { type: 'texture' }>;
+    /** Answers its latest job. */
+    finish(ok = true, extra: Partial<Extract<DeriveOut, { type: 'done' }>> = {}) {
+        const job = [...this.sent].reverse().find((m) => m.type !== 'init') as Exclude<DeriveIn, { type: 'init' }>;
         const msg: DeriveOut = ok
-            ? { type: 'done', id: job.id, data: new ArrayBuffer(8), width: 4, height: 4, levels: 3, alpha: false }
+            ? { type: 'done', id: job.id, data: new ArrayBuffer(8), width: 4, height: 4, levels: 3, alpha: false, ...extra }
             : { type: 'failed', id: job.id, message: 'bad image' };
         this.onmessage?.({ data: msg } as MessageEvent<DeriveOut>);
     }
-    /** The names of the textures it was given. */
+    /** The names of the textures and models it was given. */
     get jobs(): string[] {
-        return this.sent.filter((m) => m.type === 'texture').map((m) => (m as any).blob.name);
+        return this.sent.filter((m) => m.type !== 'init').map((m) => (m as any).blob.name);
     }
 }
 
@@ -174,6 +208,18 @@ describe('the encoding queue', () => {
         expect(q.size).toBe(0);
     });
 
+    it('sends models as model jobs and keeps how many textures they encoded', async () => {
+        const q = new DeriveQueue(() => new FakeWorker(), 'encoder.wasm');
+        const m = q.run('m|model', { ...input('m'), role: 'model' });
+        const w = FakeWorker.all[0];
+        expect(w.sent[1]).toMatchObject({ type: 'model', opts: { codec: 'etc1s', maxSize: 2048 } });
+        expect(w.sent[1]).not.toHaveProperty('role');
+        expect(q.keys()).toEqual(['m|model']);
+        w.finish(true, { width: 0, height: 0, levels: 0, textures: 2 });
+        await expect(m).resolves.toMatchObject({ textures: 2 });
+        q.dispose();
+    });
+
     it('starts nothing while paused and uses more workers when allowed', async () => {
         const q = new DeriveQueue(() => new FakeWorker(), 'encoder.wasm', { workers: 2 });
         q.pause(true);
@@ -198,6 +244,22 @@ describe('the encoding queue', () => {
         FakeWorker.all[1].onerror?.({ message: 'out of memory', preventDefault() {} } as ErrorEvent);
         await expect(b).rejects.toThrow('out of memory');
         expect(q.size).toBe(0);
+    });
+
+    it('tells when jobs start encoding, and stops a worker that went idle during Play', async () => {
+        vi.useFakeTimers();
+        const q = new DeriveQueue(() => new FakeWorker(), 'encoder.wasm', { idleMs: 1000 });
+        const changes: boolean[] = [];
+        q.on('change', () => changes.push(q.running('a')));
+        const a = q.run('a', input('a'));
+        // Queued, then encoding.
+        expect(changes).toEqual([false, true]);
+        q.pause(true);
+        FakeWorker.all[0].finish();
+        await a;
+        vi.advanceTimersByTime(1000);
+        expect(FakeWorker.all[0].terminated).toBe(true);
+        q.dispose();
     });
 
     it('stops idle workers, whose memory never shrinks', async () => {
@@ -243,6 +305,7 @@ describe('game files', () => {
     it('name compressed copies after their texture and role', () => {
         expect(derivedPath(meta('a1', { name: 'Brick Wall.png' }), 'color')).toBe('media/a1-Brick-Wall.color.ktx2');
         expect(derivedPath(meta('a2', { name: 'noext' }), 'normal')).toBe('media/a2-noext.normal.ktx2');
+        expect(derivedPath(meta('m1', { name: 'Hero.gltf', kind: 'model' }), 'model')).toBe('media/m1-Hero.game.glb');
     });
 
     it('bring the decoders a model needs, read from its glTF', async () => {
@@ -260,5 +323,88 @@ describe('game files', () => {
         expect(decodersFor(await gltfExtensions(new Blob([JSON.stringify({ extensionsRequired: ['EXT_meshopt_compression'] })])))).toEqual({ ktx2: false, draco: false, meshopt: true });
         // Unreadable: every decoder, rather than a game that cannot load it.
         expect(decodersFor(await gltfExtensions(new Blob(['not json'])))).toEqual({ ktx2: true, draco: true, meshopt: true });
+    });
+});
+
+describe('the copies of a project', () => {
+    afterEach(() => {
+        FakeWorker.all = [];
+    });
+
+    /** A project with one texture, stored in this (Node) session, and its copies made by fake workers. */
+    async function project() {
+        const doc = newScene();
+        const blob = new Blob([new Uint8Array(1000)], { type: 'image/png' });
+        const meta = await putAsset(blob, 'Wall.png', 'texture');
+        doc.assets.push(meta);
+        const store = new Store(doc);
+        store.prefs = { ...store.prefs, backgroundCompression: true };
+        const derived = new DerivedAssets(store, () => new FakeWorker(), 'encoder.wasm');
+        const asset = () => store.doc.assets.find((a) => a.id === meta.id)!;
+        const setMax = (maxSize?: number) =>
+            store.commit('Compression', (d) => {
+                const a = d.assets.find((x) => x.id === meta.id)!;
+                if (maxSize) a.compress = { maxSize };
+                else delete a.compress;
+            }, { design: true });
+        return { store, derived, asset, setMax };
+    }
+
+    it('make a copy for other options in a job of its own, and keep only the one wanted', async () => {
+        const { derived, asset, setMax } = await project();
+        const first = derived.ensure(asset(), 'color');
+        await vi.waitFor(() => expect(FakeWorker.all[0]?.jobs).toHaveLength(1));
+        setMax(512);
+        const second = derived.ensure(asset(), 'color');
+        await vi.waitFor(() => expect(derived.queue.size).toBe(2));
+        const w = FakeWorker.all[0];
+        // The 2048 copy is done, but the asset now wants 512: it is not stored or shown.
+        w.finish();
+        await expect(first).resolves.toBeNull();
+        expect(await getDerived(derivedKey(asset().id, 'color'))).toBeNull();
+        expect(derived.statusOf(asset(), 'color').state).toMatch(/queued|encoding/);
+        await vi.waitFor(() => expect((w.sent.at(-1) as any).opts).toEqual({ codec: 'etc1s', maxSize: 512 }));
+        w.finish();
+        await expect(second).resolves.toMatchObject({ opts: { maxSize: 512 } });
+        expect((await getDerived(derivedKey(asset().id, 'color')))?.opts.maxSize).toBe(512);
+        expect(derived.statusOf(asset(), 'color').state).toBe('ready');
+
+        // Back to Auto, then to 512 before its job ends: the 512 copy stays stored and ready.
+        setMax();
+        const auto = derived.ensure(asset(), 'color');
+        await vi.waitFor(() => expect(derived.queue.size).toBe(1));
+        setMax(512);
+        expect((await derived.check(asset(), 'color')).state).toBe('ready');
+        w.finish();
+        await expect(auto).resolves.toBeNull();
+        expect((await getDerived(derivedKey(asset().id, 'color')))?.opts.maxSize).toBe(512);
+        expect(derived.statusOf(asset(), 'color').state).toBe('ready');
+        await deleteDerivedOf([asset().id]);
+        derived.dispose();
+    });
+
+    it('stop the background jobs of an asset that left the project, but not a build\'s', async () => {
+        const { store, derived, asset } = await project();
+        const meta = asset();
+        // The view and a build wait on the same job.
+        derived.used(meta, 'color');
+        const build = derived.ensure(meta, 'color');
+        await vi.waitFor(() => expect(FakeWorker.all[0]?.jobs).toHaveLength(1));
+        store.commit('Remove Asset', (d) => (d.assets = []), { design: true });
+        expect(derived.queue.size).toBe(1);
+        FakeWorker.all[0].finish();
+        // Gone meanwhile: nothing is stored.
+        await expect(build).resolves.toBeNull();
+        expect(await getDerived(derivedKey(meta.id, 'color'))).toBeNull();
+
+        // Only the view's: it stops with the asset.
+        store.commit('Restore Asset', (d) => d.assets.push(meta), { design: true });
+        derived.used(asset(), 'color');
+        await vi.waitFor(() => expect(derived.queue.running(derived.queue.keys()[0] ?? '')).toBe(true));
+        const worker = FakeWorker.all.at(-1)!;
+        store.commit('Remove Asset', (d) => (d.assets = []), { design: true });
+        expect(derived.queue.size).toBe(0);
+        expect(worker.terminated).toBe(true);
+        derived.dispose();
     });
 });

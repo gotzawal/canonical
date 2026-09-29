@@ -1,20 +1,22 @@
-// Encodes textures to KTX2 (Basis Universal) off the main thread, for the
-// derived copies games ship (derive/derivedAssets.ts). The encoder's
-// WebAssembly (3.3 MB) loads on the first texture, and only the editor
-// loads this worker: games never include it.
+// Encodes the compressed copies games ship (derive/derivedAssets.ts) off
+// the main thread: textures to KTX2 (Basis Universal), and models to GLB
+// files with KTX2 textures and meshopt geometry (model.ts, loaded with the
+// first model). The encoder's WebAssembly (3.3 MB) loads on the first
+// texture, and only the editor loads this worker: games never include it.
 
 /// <reference lib="webworker" />
 import BASIS from 'basis-encoder';
 import type { DerivedOptions } from '../core/derived';
 import type { TextureRole } from '../core/types';
-import { encodedSize, encoderSettings } from './encode';
+import { encodedSize, encoderSettings, modelTextureOptions } from './encode';
 
 export type DeriveIn =
     | { type: 'init'; wasmUrl: string }
-    | { type: 'texture'; id: number; blob: Blob; role: TextureRole; opts: DerivedOptions };
+    | { type: 'texture'; id: number; blob: Blob; role: TextureRole; opts: DerivedOptions }
+    | { type: 'model'; id: number; blob: Blob; opts: DerivedOptions };
 
 export type DeriveOut =
-    | { type: 'done'; id: number; data: ArrayBuffer; width: number; height: number; levels: number; alpha: boolean }
+    | { type: 'done'; id: number; data: ArrayBuffer; width: number; height: number; levels: number; alpha: boolean; textures?: number }
     | { type: 'failed'; id: number; message: string };
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -28,12 +30,11 @@ self.onmessage = (e: MessageEvent<DeriveIn>) => {
         wasmUrl = msg.wasmUrl;
         return;
     }
-    if (msg.type === 'texture') {
-        encode(msg).then(
-            (out) => self.postMessage({ type: 'done', id: msg.id, ...out } satisfies DeriveOut, [out.data]),
-            (err) => self.postMessage({ type: 'failed', id: msg.id, message: String(err?.message || err) } satisfies DeriveOut),
-        );
-    }
+    const job = msg.type === 'texture' ? encodeImage(msg.blob, msg.role, msg.opts) : packModel(msg.blob, msg.opts);
+    job.then(
+        (out) => self.postMessage({ type: 'done', id: msg.id, ...out } satisfies DeriveOut, [out.data]),
+        (err) => self.postMessage({ type: 'failed', id: msg.id, message: String(err?.message || err) } satisfies DeriveOut),
+    );
 };
 
 function encoder(): Promise<any> {
@@ -48,15 +49,21 @@ function encoder(): Promise<any> {
     return basis;
 }
 
-async function encode(msg: Extract<DeriveIn, { type: 'texture' }>) {
+async function packModel(blob: Blob, opts: DerivedOptions) {
+    const { packModel } = await import('./model');
+    const out = await packModel(blob, async (image, role) => new Uint8Array((await encodeImage(image, role, modelTextureOptions(role, opts))).data));
+    return { data: out.data, width: 0, height: 0, levels: 0, alpha: false, textures: out.textures };
+}
+
+async function encodeImage(blob: Blob, role: TextureRole, opts: DerivedOptions) {
     const module = await encoder();
     // Decoded as the engine decodes it (BitmapTexture2D): colors under
     // transparent pixels kept, the image's color profile applied.
-    const source = await createImageBitmap(msg.blob, { premultiplyAlpha: 'none' });
-    const size = encodedSize(source.width, source.height, msg.opts.maxSize);
+    const source = await createImageBitmap(blob, { premultiplyAlpha: 'none' });
+    const size = encodedSize(source.width, source.height, opts.maxSize);
     let bitmap = source;
     if (size.width !== source.width || size.height !== source.height) {
-        bitmap = await createImageBitmap(msg.blob, { premultiplyAlpha: 'none', resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'high' });
+        bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', resizeWidth: size.width, resizeHeight: size.height, resizeQuality: 'high' });
         source.close();
     }
     const pixels = readPixels(bitmap);
@@ -64,7 +71,7 @@ async function encode(msg: Extract<DeriveIn, { type: 'texture' }>) {
     let alpha = false;
     for (let i = 3; i < pixels.length && !alpha; i += 4) alpha = pixels[i] < 255;
 
-    const s = encoderSettings(msg.role, msg.opts);
+    const s = encoderSettings(role, opts);
     const enc = new module.BasisEncoder();
     try {
         enc.setCreateKTX2File(true);

@@ -66,6 +66,8 @@
     },
     "devDependencies": {
         "@dimforge/rapier3d-compat": "^0.19.3",
+        "@gltf-transform/core": "4.5.1",
+        "@gltf-transform/extensions": "4.5.1",
         "@huggingface/tokenizers": "0.2.0",
         "@playwright/test": "1.56.1",
         "@webgpu/types": "^0.1.45",

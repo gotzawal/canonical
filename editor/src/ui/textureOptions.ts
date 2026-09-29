@@ -3,7 +3,7 @@
 // inspector for the role the row uses the texture in.
 
 import { formatBytes, getAssetBlob, imageSize } from '../core/assets';
-import { DEFAULT_MAX_SIZE, derivedOptions, MAX_SIZES } from '../core/derived';
+import { DEFAULT_MAX_SIZE, derivedOptions, MAX_SIZES, shipsAsIs } from '../core/derived';
 import type { TextureCompression, TextureRole } from '../core/types';
 import { copyBlockBytes, encodedSize, textureMemory } from '../derive/encode';
 import type { Editor } from '../editor';
@@ -48,7 +48,9 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
         const size = sizeCache.value;
         const lines: string[] = [];
         let action: HTMLElement | null = null;
-        if (!opts) lines.push('Games get the file itself.');
+        const ktx2 = shipsAsIs(meta);
+        if (ktx2) lines.push('A KTX2 file already: games get it as it is.');
+        else if (!opts) lines.push('Games get the file itself.');
         else if (status.state === 'ready' && status.copy) {
             const c = status.copy;
             lines.push(`Ready: ${c.opts.codec.toUpperCase()} ${c.width} x ${c.height}, ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}).`);
@@ -68,8 +70,12 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
         }
         body.replaceChildren(
             h('div', { class: 'texture-options-title', text: `${meta.name} as ${ROLE_TEXT[role]}` }),
-            row('Compression', modeField.el, 'ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'),
-            row('Max Size', sizeField.el, 'The longer side of the copy, in pixels'),
+            ...(ktx2
+                ? []
+                : [
+                    row('Compression', modeField.el, 'ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'),
+                    row('Max Size', sizeField.el, 'The longer side of the copy, in pixels'),
+                ]),
             h('div', { class: 'texture-options-status muted small' }, ...lines.map((text) => h('div', { text }))),
             ...(action ? [action] : []),
         );
