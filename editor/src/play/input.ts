@@ -1,7 +1,10 @@
 /**
  * Keyboard, mouse and touch state for scripts. Key names are lower case and
  * match either KeyboardEvent.key ("w", "arrowup", "shift") or
- * KeyboardEvent.code ("keyw", "digit1"); the space bar is "space". On touch
+ * KeyboardEvent.code ("keyw", "digit1"); the space bar is "space". Letter and
+ * digit keys are also named by where they are on the keyboard ("w" is the
+ * key right of Q), so WASD works with any input language (a Korean layout
+ * types "ㅈ" there). On touch
  * screens the on-screen joystick adds to the axes and its buttons press keys
  * (the jump button is "space").
  */
@@ -12,6 +15,8 @@ export class Input {
     private buttons = new Set<number>();
     private buttonsDown = new Set<number>();
     private buttonsUp = new Set<number>();
+    /** The names each physical key went down with, to release the same ones (an IME may name it differently on the way up). */
+    private down = new Map<string, string[]>();
 
     /** Pointer position in CSS pixels relative to the viewport, and movement this frame. */
     readonly mouse = { x: 0, y: 0, dx: 0, dy: 0, wheel: 0 };
@@ -65,7 +70,14 @@ export class Input {
 
     /** @internal */
     keyEvent(e: KeyboardEvent, down: boolean) {
-        const names = keyNames(e);
+        let names = keyNames(e);
+        if (e.code) {
+            if (down) this.down.set(e.code, [...new Set([...(this.down.get(e.code) ?? []), ...names])]);
+            else {
+                names = [...new Set([...names, ...(this.down.get(e.code) ?? [])])];
+                this.down.delete(e.code);
+            }
+        }
         for (const n of names) this.setKey(n, down);
         return names[0];
     }
@@ -143,17 +155,26 @@ export class Input {
     reset() {
         for (const k of this.held) this.released.add(k);
         this.held.clear();
+        this.down.clear();
         for (const b of this.buttons) this.buttonsUp.add(b);
         this.buttons.clear();
         this.setStick(0, 0, false);
     }
 }
 
-function keyNames(e: KeyboardEvent): string[] {
+/**
+ * The names of a key: the letter or digit where it sits on a US keyboard
+ * first when the typed character is not plain ASCII (another input language,
+ * an IME's "Process"), then KeyboardEvent.key, then KeyboardEvent.code.
+ */
+export function keyNames(e: Pick<KeyboardEvent, 'key' | 'code'>): string[] {
     const out: string[] = [];
     const key = e.key === ' ' ? 'space' : (e.key || '').toLowerCase();
-    if (key) out.push(key);
     const code = (e.code || '').toLowerCase();
-    if (code && code !== key) out.push(code);
+    const place = /^key[a-z]$/.test(code) ? code.slice(3) : /^digit[0-9]$/.test(code) ? code.slice(5) : '';
+    if (place && !/^[\x20-\x7e]$/.test(key)) out.push(place);
+    if (key && !out.includes(key)) out.push(key);
+    if (place && !out.includes(place)) out.push(place);
+    if (code && !out.includes(code)) out.push(code);
     return out;
 }
