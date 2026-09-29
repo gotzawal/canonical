@@ -220,6 +220,43 @@ test('covers the shadow range around the camera with follow', async () => {
     expect(differing(around, followed)).toBeGreaterThan(0.01);
 });
 
+test('casts the shadows of a lamp while the sun casts its own', async () => {
+    const page = editor.page();
+    await flatGround(page);
+    // A post, and a lamp just left of it at half its height: its shadow falls to the right.
+    await page.evaluate(() => {
+        const ed = window.__editor;
+        ed.store.commit('Lamp', (d) => {
+            const ground = d.nodes.find((n) => n.name === 'Ground')!;
+            const post = JSON.parse(JSON.stringify(ground));
+            post.id = 'post';
+            post.name = 'Post';
+            post.mesh.geometry = { type: 'box', width: 0.5, height: 2, depth: 0.5 };
+            post.mesh.castShadow = true;
+            post.position = [0, 1, -10];
+            d.nodes.push(post);
+            const sun = d.nodes.find((n) => n.name === 'Sun')!;
+            const lamp = JSON.parse(JSON.stringify(sun));
+            lamp.id = 'lamp';
+            lamp.name = 'Lamp';
+            lamp.light = { ...lamp.light, type: 'point', intensity: 60, range: 20, radius: 0.1, castShadow: false };
+            lamp.position = [-1.5, 1, -10];
+            lamp.rotation = [0, 0, 0];
+            d.nodes.push(lamp);
+        });
+        ed.store.setCamera({ ...ed.store.camera, target: [1, 0, -10], yaw: 0, pitch: 70, distance: 9 });
+    });
+    await measure(page, 2);
+    const unshadowed = await pixels(page);
+    await page.evaluate(() => window.__editor.store.commit('Lamp Shadows', (d) => (d.nodes.find((n) => n.id === 'lamp')!.light!.castShadow = true)));
+    await measure(page, 2);
+    const shadowed = await pixels(page);
+    // The lamp got a cube shadow map next to the sun's, and its shadow shows.
+    const slot = await page.evaluate(() => (window.__editor.sync.entries.get('lamp') as any).light.lightData.castShadowIndex);
+    expect(slot).toBe(0);
+    expect(differing(unshadowed, shadowed)).toBeGreaterThan(0.01);
+});
+
 test('starts a built game at the quality tier of its device, or the one asked for', async ({ browser }) => {
     test.setTimeout(300_000);
     // The scene goes to the player as the editor's Run hands it over.

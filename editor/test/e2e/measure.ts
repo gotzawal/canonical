@@ -35,8 +35,9 @@ export function measure(page: Page, frames = 10): Promise<Measure> {
         let last = '';
         for (let i = 0; i < 600 && same < 5; i++) {
             await frame();
-            const s = stats.snapshot(1);
-            const key = `${s.frame.draws}|${s.pipelinesCreated}|${s.memory.stable}`;
+            // The busiest of two frames: the low tier draws shadows every other frame.
+            const s = stats.snapshot(2);
+            const key = `${s.peak.draws}|${s.pipelinesCreated}|${s.memory.stable}`;
             same = key === last ? same + 1 : 0;
             last = key;
         }
