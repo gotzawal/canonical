@@ -59,7 +59,7 @@ export class SortedTransparentPass extends RenderGraphPass {
     public execute(ctx: RenderGraphPassContext): void {
         const state = ctx.get<TransparentDrawContext>(TRANSPARENT_DRAW_CTX);
         const cluster = ctx.graph.getPass<ClusterLightingPass>('ClusterLightingPass')?.clusterLightingBuffer;
-        const layered = this.collectLayered(ctx.view);
+        const layered = this.collectLayered(ctx.view, undefined, 'frustum');
         drawSortedTransparent(ctx.view, cluster, state, this.filter, layered.transparent);
     }
 }

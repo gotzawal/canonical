@@ -234,7 +234,9 @@ export class ShadowPass extends RenderGraphPass {
         // Pass-side layer mask + shadow-camera's own cullingMask filter
         // which renderers cast into this shadow map. Default
         // layerMask=All keeps the old "every node casts shadow" path.
-        const layered = this.collectLayered(view, shadowCamera);
+        // Casters outside the shadow camera's sides cannot reach the map;
+        // those between the light and its near plane still can.
+        const layered = this.collectLayered(view, shadowCamera, 'shadow');
         const command = gpu.beginCommandEncoder();
         const encoder = gpu.beginRenderPass(command, state);
 

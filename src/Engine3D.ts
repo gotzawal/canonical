@@ -104,6 +104,7 @@ export class Engine3D {
                 drawOpMax: Number.MAX_SAFE_INTEGER,
                 drawTrMin: 0,
                 drawTrMax: Number.MAX_SAFE_INTEGER,
+                frustumCulling: true,
                 // Z-prepass on by default. PassGenerate.createDepthPass
                 // + RenderShaderPass gate at line ~864 make the
                 // infrastructure load-bearing — every opaque fragment

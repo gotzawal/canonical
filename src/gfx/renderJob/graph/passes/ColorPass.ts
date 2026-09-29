@@ -158,7 +158,7 @@ export class ColorPass extends RenderGraphPass {
         GlobalBindGroup.updateCameraGroup(camera);
         passState.camera3D = camera;
 
-        const layered = this.collectLayered(view);
+        const layered = this.collectLayered(view, camera, 'frustum');
 
         const opBundles = buildOpBundles(view, camera, this._passType, passState, cluster);
 

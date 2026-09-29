@@ -3,6 +3,7 @@ import { View3D } from '../../../core/View3D';
 import { CEventDispatcher } from '../../../event/CEventDispatcher';
 import { RenderNode } from '../../../components/renderer/RenderNode';
 import { EntityCollect } from '../collect/EntityCollect';
+import type { FrustumCullMode } from '../collect/FrustumCull';
 import { VisibleLayer } from '../config/VisibleLayer';
 import { OcclusionSystem } from '../occlusion/OcclusionSystem';
 import { PassType } from '../passRenderer/state/PassType';
@@ -411,13 +412,17 @@ export abstract class RenderGraphPass extends CEventDispatcher {
      * render through a non-main camera should pass that camera
      * explicitly so its own `cullingMask` (rather than the view's
      * main camera) participates in the bitwise AND.
+     *
+     * `cull` leaves out renderers the camera cannot see (only those with
+     * `frustumCulled` set; see {@link FrustumCullMode}).
      */
     protected collectLayered(
         view: View3D,
         camera?: Camera3D,
+        cull: FrustumCullMode = 'none',
     ): { opaque: RenderNode[]; transparent: RenderNode[] } {
         const cam = camera ?? view.camera;
         const camMask = cam?.cullingMask ?? VisibleLayer.All;
-        return EntityCollect.instance.getLayerLists(view.scene, cam, this.layerMask, camMask);
+        return EntityCollect.instance.getLayerLists(view.scene, cam, this.layerMask, camMask, cull);
     }
 }

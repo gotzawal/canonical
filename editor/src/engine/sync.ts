@@ -1,7 +1,7 @@
 import {
     BoxGeometry, Color, CylinderGeometry, DirectLight, GeometryBase, LightBase, LitMaterial, Material, MeshRenderer,
-    Object3D, PlaneGeometry, PointLight, RenderNode, RendererMask, SphereGeometry, SpotLight, Texture, TorusGeometry,
-    UnLitMaterial,
+    Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer, SkinnedMeshRenderer2,
+    SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
@@ -94,6 +94,14 @@ export class SceneSync extends Emitter<SyncEvents> {
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     private textures = new Map<string, Promise<Texture | null>>();
+    /**
+     * Shapes by their document (JSON): objects of the same shape share one
+     * geometry (its GPU buffers, and consecutive draws skip binding it
+     * again). The map holds a reference of its own, so the engine never
+     * frees a shape here; sweepGeometries frees those no object shows.
+     */
+    private geometries = new Map<string, GeometryBase>();
+    private geometriesChanged = false;
 
     constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager) {
         super();
@@ -121,7 +129,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (hint.transform) this.applyTransform(entry, node);
                 else this.apply(node);
             }
-            if (!hint.transform) this.updateVisibility(hint.nodes);
+            if (!hint.transform) {
+                this.updateVisibility(hint.nodes);
+                this.sweepGeometries();
+            }
             return;
         }
         const alive = new Set<string>();
@@ -137,6 +148,32 @@ export class SceneSync extends Emitter<SyncEvents> {
         }
         for (const node of doc.nodes) this.apply(node);
         this.updateVisibility();
+        this.sweepGeometries();
+    }
+
+    /** The shared geometry of a shape. */
+    private geometryFor(key: string, doc: GeometryDoc): GeometryBase {
+        let g = this.geometries.get(key);
+        if (!g) {
+            g = buildGeometry(doc);
+            this.geometries.set(key, g);
+            Reference.getInstance().attached(g, this.geometries);
+        }
+        return g;
+    }
+
+    /** Frees the shapes no object shows any more, once the GPU is done with them. */
+    private sweepGeometries() {
+        if (!this.geometriesChanged) return;
+        this.geometriesChanged = false;
+        const ref = Reference.getInstance();
+        for (const [key, g] of Array.from(this.geometries)) {
+            // Only the map's own reference is left.
+            if (ref.getReferenceCount(g) > 1) continue;
+            this.geometries.delete(key);
+            ref.detached(g, this.geometries);
+            this.disposeLater(g);
+        }
     }
 
     /**
@@ -145,6 +182,12 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     rebuild() {
         for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        // Scripts had engine access to the shared shapes too: build them again.
+        for (const g of this.geometries.values()) {
+            Reference.getInstance().detached(g, this.geometries);
+            if (!Reference.getInstance().hasReference(g)) this.disposeLater(g);
+        }
+        this.geometries.clear();
         this.sync();
     }
 
@@ -245,6 +288,7 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private destroy(entry: Entry) {
         this.entries.delete(entry.id);
+        if (entry.geometry) this.geometriesChanged = true;
         if (entry.model) {
             entry.model.token = -1;
             entry.model.overrides?.dispose();
@@ -342,6 +386,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     private applyMesh(entry: Entry, mesh: MeshDoc | undefined) {
         if (!mesh) {
             if (entry.mesh) {
+                if (entry.geometry) this.geometriesChanged = true;
                 entry.obj.removeComponent(MeshRenderer);
                 entry.mesh = null;
                 entry.geometry = null;
@@ -364,11 +409,11 @@ export class SceneSync extends Emitter<SyncEvents> {
 
         const geometryKey = JSON.stringify(mesh.geometry);
         if (geometryKey !== entry.geometryKey) {
-            const old = entry.geometry;
-            entry.geometry = buildGeometry(mesh.geometry);
+            // The renderer lets go of the old shape; the sweep frees it if nothing else shows it.
+            if (entry.geometry) this.geometriesChanged = true;
+            entry.geometry = this.geometryFor(geometryKey, mesh.geometry);
             mr.geometry = entry.geometry;
             entry.geometryKey = geometryKey;
-            if (old) this.disposeLater(old);
         }
 
         const kind = this.materialKind(entry, mesh.material);
@@ -391,9 +436,12 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.materialKey = '';
             entry.paramAssets = {};
             // Vertex shaders that move vertices cannot use the depth prepass,
-            // which draws the undisplaced mesh.
-            if (shaderId && this.shaders.movesVertices(shaderId)) mr.addRendererMask(RendererMask.IgnoreDepthPass);
+            // which draws the undisplaced mesh, and can draw outside the
+            // shape's bounds, so the camera's frustum does not cull them.
+            const moves = !!shaderId && this.shaders.movesVertices(shaderId);
+            if (moves) mr.addRendererMask(RendererMask.IgnoreDepthPass);
             else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
+            mr.frustumCulled = !moves;
             mr.material = mat;
             if (old) this.disposeLater(old);
         }
@@ -672,6 +720,12 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
                 const prefab = await this.runtime.engine.res.loadGltf(url);
                 normalizeModelMaterials(prefab, this.runtime.engine.context3D);
+                // Parts whose bounds hold what they draw are culled when out of view (their copies inherit it).
+                prefab.traverse((o: Object3D) => {
+                    o.components.forEach((c) => {
+                        if (c instanceof MeshRenderer) c.frustumCulled = !(c instanceof SkinnedMeshRenderer || c instanceof SkinnedMeshRenderer2) && !c.morphData?.enable;
+                    });
+                });
                 return prefab;
             })();
             p.catch(() => this.prefabs.delete(assetId));
@@ -734,6 +788,28 @@ function errorMaterial(ctx: any): Material {
     return mat;
 }
 
+/**
+ * One draw for a shape made of several contiguous index ranges (a
+ * cylinder's side and caps): the editor shows it with one material, so
+ * drawing the parts apart only costs draw calls, in every pass.
+ */
+function oneRange(g: GeometryBase): GeometryBase {
+    const subs = g.subGeometries;
+    if (subs.length < 2) return g;
+    let start = Infinity, end = 0, total = 0;
+    for (const s of subs) {
+        const d = s.lodLevels[0];
+        if (!d) return g;
+        start = Math.min(start, d.indexStart);
+        end = Math.max(end, d.indexStart + d.indexCount);
+        total += d.indexCount;
+    }
+    if (end - start !== total) return g;
+    subs.length = 0;
+    g.addSubGeometry({ indexStart: start, indexCount: total, vertexStart: 0, vertexCount: 0, firstStart: 0, index: 0, topology: 0 });
+    return g;
+}
+
 function nonZero(v: number): number {
     return Math.abs(v) < 1e-5 ? (v < 0 ? -1e-5 : 1e-5) : v;
 }
@@ -753,7 +829,7 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
         case 'plane':
             return new PlaneGeometry(pos(g.width), pos(g.height));
         case 'cylinder':
-            return new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1);
+            return oneRange(new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1));
         case 'cone':
             return new ConeGeometry(pos(g.radius), pos(g.height), seg(g.segments));
         case 'torus':

@@ -19,6 +19,7 @@ import { Probe } from '../passRenderer/ddgi/Probe';
 import { RendererMask } from '../passRenderer/state/RendererMask';
 import { CollectInfo } from './CollectInfo';
 import { EntityBatchCollect } from './EntityBatchCollect';
+import { FrustumCullMode, inCullPlanes, loadCullPlanes } from './FrustumCull';
 import { RenderShaderCollect } from './RenderShaderCollect';
 
 /**
@@ -422,12 +423,15 @@ export class EntityCollect {
      *                    {@link RenderGraphPass.layerMask}.
      * @param cullingMask Camera-side culling mask, defaults to
      *                    {@link VisibleLayer.All}.
+     * @param cull        Leave out renderers (with `frustumCulled`) the
+     *                    camera cannot see; see {@link FrustumCullMode}.
      */
     public getLayerLists(
         scene: Scene3D,
         camera: Camera3D,
         layerMask: number,
         cullingMask: number = VisibleLayer.All,
+        cull: FrustumCullMode = 'none',
     ): { opaque: RenderNode[]; transparent: RenderNode[] } {
         const mask = (layerMask & cullingMask) >>> 0;
         if (mask === 0) {
@@ -439,15 +443,22 @@ export class EntityCollect {
         const info = this.getRenderNodes(scene, camera);
         const opIn = info.opaqueList;
         const trIn = info.transparentList;
+        const engine = scene.view?.engine3D;
+        const planes = camera && cull !== 'none' && engine?.setting.render.frustumCulling !== false ? loadCullPlanes(camera, cull) : 0;
+        const frame = engine?.frameCount ?? Time.frame;
         const opOut: RenderNode[] = [];
         for (let i = 0, n = opIn.length; i < n; i++) {
             const node = opIn[i];
-            if (EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) opOut.push(node);
+            if (!EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) continue;
+            if (planes && !inCullPlanes(node, planes, frame)) continue;
+            opOut.push(node);
         }
         const trOut: RenderNode[] = [];
         for (let i = 0, n = trIn.length; i < n; i++) {
             const node = trIn[i];
-            if (EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) trOut.push(node);
+            if (!EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) continue;
+            if (planes && !inCullPlanes(node, planes, frame)) continue;
+            trOut.push(node);
         }
         return { opaque: opOut, transparent: trOut };
     }

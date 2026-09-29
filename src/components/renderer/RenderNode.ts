@@ -35,6 +35,14 @@ export class RenderNode extends ComponentBase {
     public instanceCount: number = 0;
     public lodLevel: number = 0;
     public alwaysRender: boolean = false;
+    /**
+     * Passes that cull (the main camera's, the directional shadow) leave
+     * this renderer out when its world bounds are outside their camera's
+     * frustum. Off by default: set it only when the geometry's bounds hold
+     * everything the renderer draws (not for skinned, morphed or
+     * vertex-displaced meshes).
+     */
+    public frustumCulled: boolean = false;
     public instanceID: string;
     public drawType: number = 0;
 
@@ -107,6 +115,7 @@ export class RenderNode extends ComponentBase {
         this.materials = from._materials.slice();
         this.drawType = from.drawType;
         this.alwaysRender = from.alwaysRender;
+        this.frustumCulled = from.frustumCulled;
         this.needSortOnCameraZ = from.needSortOnCameraZ;
         this.isRenderOrderChange = from.isRenderOrderChange;
         this.castShadow = from.castShadow;
