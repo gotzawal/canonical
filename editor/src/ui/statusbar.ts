@@ -1,3 +1,4 @@
+import { formatBytes } from '../core/assets';
 import { clearLogs, logEvents, logs } from '../core/log';
 import type { Editor } from '../editor';
 import { onChanges, touches } from './batch';
@@ -32,6 +33,8 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     });
     store.on('prefs', fpsTitle);
     fpsTitle();
+    // What a frame costs: draw calls and the GPU memory the editor asked for (a span: the fps button stays the only button here).
+    const cost = h('span', { class: 'status-item muted mono gpu-cost', attrs: { hidden: !editor.runtime.stats } });
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
     const b = build();
     const shortSha = b.sha ? b.sha.slice(0, 7) : 'dev';
@@ -102,6 +105,19 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     };
     setInterval(() => {
         fps.textContent = `${editor.runtime.fps.toFixed(0)} fps`;
+        const stats = editor.runtime.stats;
+        if (stats) {
+            // The busiest of the last frames, so a frame that skipped passes does not read as less.
+            const s = stats.snapshot(30);
+            const f = s.peak;
+            const m = s.memory;
+            const count = (n: number) => n.toLocaleString('en-US');
+            cost.textContent = `${count(f.draws)} draws · ${formatBytes(m.stable)}`;
+            cost.title = [
+                `Per frame: ${count(f.draws)} draw calls in ${count(f.renderPasses)} render passes, ${count(f.triangles)} triangles, ${count(f.pipelines + f.bindGroups)} pipeline and bind group changes, ${s.cpu.median.toFixed(1)} ms of CPU for the engine (median).`,
+                `GPU memory the editor asked for (an estimate): ${formatBytes(m.stable)}. Images ${formatBytes(m.textures.image.bytes)} (${m.textures.image.count}), render targets and shadow maps ${formatBytes(m.textures.target.bytes)} (${m.textures.target.count}), other textures ${formatBytes(m.textures.other.bytes)}, buffers ${formatBytes(m.buffers.vertex.bytes + m.buffers.index.bytes + m.buffers.uniform.bytes + m.buffers.storage.bytes + m.buffers.other.bytes)}.`,
+            ].join('\n');
+        }
     }, 500);
 
     const playing = h('span', { class: 'status-item play-indicator', attrs: { hidden: true } });
@@ -118,6 +134,6 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
         }
     });
 
-    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, fps, gpu, version, logButton);
+    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, fps, cost, gpu, version, logButton);
     return h('div', { class: 'status-wrap' }, drawer, bar);
 }

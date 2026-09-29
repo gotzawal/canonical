@@ -86,7 +86,8 @@ async function main() {
 
     let runtime: Runtime;
     try {
-        runtime = await Runtime.create(canvas);
+        // Draw calls and GPU memory are counted only when asked for (?stats): the counting costs a little on every call.
+        runtime = await Runtime.create(canvas, { stats: new URLSearchParams(location.search).has('stats') });
     } catch (e: any) {
         console.error(e);
         fail(root, 'WebGPU is required', e?.message || String(e), true);

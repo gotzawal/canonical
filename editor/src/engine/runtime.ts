@@ -6,6 +6,7 @@ import type { ViewportFps, ViewportQuality } from '../core/store';
 import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
 import { GIController, giEngineSetting } from './gi';
+import { installGpuStats, type GpuStats } from './gpuStats';
 
 type PostCtor = new () => PostBase;
 
@@ -43,6 +44,8 @@ export class Runtime {
     readonly canvas: HTMLCanvasElement;
     /** Dynamic diffuse global illumination (DDGI). */
     readonly gi: GIController;
+    /** Draw calls and GPU memory, counted at the WebGPU API (null when not asked for). */
+    readonly stats: GpuStats | null;
 
     fps = 0;
     /** The viewport's frame rate limit; 0 for none (see setViewport). */
@@ -59,6 +62,8 @@ export class Runtime {
     private customPosts: PostBase[] = [];
     private frames = 0;
     private fpsTime = performance.now();
+    /** When the engine started its update and draw calls this frame. */
+    private engineStart = 0;
     private atmosphere: AtmosphericComponent | null = null;
     private solidSky: SkyRenderer | null = null;
     private solidSkyTexture: SolidColorSky | null = null;
@@ -67,9 +72,10 @@ export class Runtime {
     /** Environment waiting for a sky component to finish starting. */
     private pendingEnv: EnvironmentDoc | null = null;
 
-    private constructor(engine: Engine3D, canvas: HTMLCanvasElement) {
+    private constructor(engine: Engine3D, canvas: HTMLCanvasElement, stats: GpuStats | null) {
         this.engine = engine;
         this.canvas = canvas;
+        this.stats = stats;
         this.scene = new Scene3D();
         this.scene.name = 'Scene';
 
@@ -93,8 +99,10 @@ export class Runtime {
         this.gi = new GIController(this);
     }
 
-    static async create(canvas: HTMLCanvasElement): Promise<Runtime> {
+    /** `stats` counts draw calls and GPU memory (the editor's status bar); it has to start before the engine. */
+    static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean } = {}): Promise<Runtime> {
         let runtime: Runtime | null = null;
+        const stats = opts.stats === false ? null : installGpuStats();
         const engine = await Engine3D.init({
             canvasConfig: { canvas },
             setting: {
@@ -109,7 +117,7 @@ export class Runtime {
             beforeRender: () => runtime?.beforeTick(),
             lateRender: () => runtime?.tick(),
         });
-        runtime = new Runtime(engine, canvas);
+        runtime = new Runtime(engine, canvas, stats);
         return runtime;
     }
 
@@ -203,6 +211,7 @@ export class Runtime {
     }
 
     private beforeTick() {
+        this.stats?.beginFrame();
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -210,6 +219,7 @@ export class Runtime {
                 console.error('[editor] before-frame listener failed', e);
             }
         }
+        this.engineStart = performance.now();
     }
 
     /** The camera the view renders through: the editor camera, or a scene camera in Play mode. */
@@ -230,6 +240,7 @@ export class Runtime {
     }
 
     private tick() {
+        this.stats?.endFrame(performance.now() - this.engineStart);
         if (this.pendingEnv) {
             const env = this.pendingEnv;
             this.pendingEnv = null;
