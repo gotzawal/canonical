@@ -6596,9 +6596,15 @@ input.text.bt-part-id {
     }
 }
 
+/* Both wings are up; they beat down as it crouches, rise at the top of the
+   hop and settle as it lands. */
 .heron[data-pose='celebrate'] .h-wing {
     transform-origin: var(--shoulder);
     animation: heron-flap 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.heron[data-pose='celebrate'] .h-wing-far {
+    transform-origin: var(--shoulder-far);
 }
 
 @keyframes heron-flap {
@@ -6607,17 +6613,17 @@ input.text.bt-part-id {
     100% {
         transform: none;
     }
-    14% {
-        transform: rotate(10deg);
+    10% {
+        transform: rotate(-7deg);
     }
     26% {
-        transform: rotate(-14deg);
+        transform: rotate(6deg);
     }
-    38% {
-        transform: rotate(8deg);
+    40% {
+        transform: rotate(-4deg);
     }
     50% {
-        transform: rotate(-4deg);
+        transform: rotate(1deg);
     }
 }
 
