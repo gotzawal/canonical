@@ -9,6 +9,7 @@ import { readLocal, writeLocal } from '../core/local';
 import type { NoticeKind, NoticeOptions } from '../core/messages';
 import { h } from './dom';
 import { icon } from './icons';
+import { mascotAvatar } from './mascot';
 import { toast } from './overlays';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
@@ -124,7 +125,7 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
             h(
                 'div',
                 { class: 'notice-head' },
-                icon(opts.icon ?? 'info', 16),
+                opts.mascot ? mascotAvatar(opts.mascot, 20, 'notice-heron') : icon(opts.icon ?? 'info', 16),
                 title,
                 h('button', { class: 'icon-btn notice-close', title: 'Close', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: close } }, icon('close', 14)),
             ),

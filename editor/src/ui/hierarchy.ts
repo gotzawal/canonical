@@ -4,6 +4,7 @@ import type { NodeDoc } from '../core/types';
 import { onChanges, touches, type FrameChanges } from './batch';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
+import { mascotPose } from './mascot';
 import { MenuItem, showMenu } from './overlays';
 import { iconButton } from './widgets';
 
@@ -182,7 +183,7 @@ export class HierarchyPanel {
             this.drawn.clear();
             this.sizer.style.height = '';
             this.list.style.transform = '';
-            this.list.replaceChildren(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
+            this.list.replaceChildren(h('div', { class: 'empty-hint roomy' }, mascotPose('rest', 132), h('span', { text: 'The scene is empty. Use + or the Create menu to add objects.' })));
             return;
         }
         const height = this.measure();

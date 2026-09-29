@@ -717,9 +717,36 @@ a {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 14px;
     color: var(--muted);
     background: var(--inset);
+}
+
+.viewport-loading-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+/* On its way: the heron walks in place while the engine starts. */
+.loading-heron {
+    animation: heron-walk 0.9s ease-in-out infinite;
+}
+
+@keyframes heron-walk {
+    0%,
+    100% {
+        transform: translateY(0);
+    }
+    50% {
+        transform: translateY(-3px);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loading-heron {
+        animation: none;
+    }
 }
 
 .spinner {
@@ -823,6 +850,16 @@ a {
     padding: 14px 12px;
     color: var(--faint);
     line-height: 1.5;
+}
+
+/* An empty panel with room for the heron over its hint. */
+.empty-hint.roomy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding-top: 28px;
+    text-align: center;
 }
 
 /* ----------------------------------------------------------------- tree */
@@ -1880,6 +1917,18 @@ kbd {
     word-break: break-word;
 }
 
+/* The heron beside the introduction. */
+.about-intro {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.about-intro p {
+    margin: 0;
+}
+
 .about dl {
     display: grid;
     grid-template-columns: 90px 1fr;
@@ -1905,6 +1954,12 @@ kbd {
     line-height: 1.6;
 }
 
+/* The heron beside the heading, wondering; the text goes around it. */
+.unsupported-heron {
+    float: right;
+    margin: 20px 0 8px 20px;
+}
+
 .unsupported h1 {
     font-size: 22px;
     margin: 28px 0 8px;
@@ -1912,6 +1967,8 @@ kbd {
 }
 
 .unsupported .reason {
+    /* Beside the heron, not under it. */
+    display: flow-root;
     font-family: var(--mono);
     font-size: 12px;
     color: #ff9c9c;
@@ -1923,6 +1980,15 @@ kbd {
 
 .unsupported li {
     color: var(--muted);
+}
+
+@media (max-width: 480px) {
+    .unsupported-heron {
+        float: none;
+        width: auto;
+        height: 120px;
+        margin: 22px 0 0;
+    }
 }
 
 /* ----------------------------------------------------------- scrollbars */
@@ -3130,19 +3196,35 @@ kbd {
     border-width: 2px;
 }
 
+/* An empty chat: the heron, what it is for, and what to start with. */
 .ai-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 10px;
     color: var(--muted);
     line-height: 1.5;
+    text-align: center;
+}
+
+.ai-welcome-heron {
+    margin-bottom: 8px;
 }
 
 .ai-welcome h3 {
-    margin: 4px 0 6px;
+    margin: 0 0 6px;
     color: var(--text-strong);
-    font-size: 14px;
+    font-size: 15px;
 }
 
 .ai-welcome p {
     margin: 0 0 10px;
+}
+
+.ai-welcome .ai-suggestions,
+.ai-welcome .ai-welcome-brief {
+    align-self: stretch;
+    text-align: left;
 }
 
 .ai-suggestions {
@@ -3169,6 +3251,7 @@ kbd {
 .ai-onboard-actions {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
     margin-bottom: 10px;
 }
@@ -3444,15 +3527,16 @@ kbd {
     transform: none;
 }
 
-.notice.checkpoint {
-    border-color: rgba(187, 153, 255, 0.55);
-}
-
 .notice-head {
     display: flex;
     align-items: center;
     gap: 8px;
     color: var(--accent);
+}
+
+/* The assistant's notices show its face, no taller than the icon's row. */
+.notice-heron {
+    margin: -2px 0;
 }
 
 .notice-title {
@@ -4287,22 +4371,40 @@ kbd {
     right: 10px;
 }
 
+/* The heron beside the question, its feet on the box the answer goes into
+   (over its border: the card's gap and the ground under the feet). */
+.start-head {
+    align-self: stretch;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin: -6px 0 -19px;
+    padding-left: 4px;
+    text-align: left;
+}
+
 .start-heron {
-    display: block;
-    margin: -4px 0 -6px;
+    position: relative;
+    z-index: 1;
+    align-self: flex-end;
+}
+
+.start-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0 26px 14px 0;
 }
 
 .start-title {
-    margin: 0;
+    margin: 0 0 6px;
     color: var(--text-strong);
-    font-size: 20px;
+    font-size: 22px;
     font-weight: 700;
     letter-spacing: -0.01em;
 }
 
 .start-sub {
-    max-width: 470px;
-    margin: 0 0 4px;
+    margin: 0;
     color: var(--muted);
     line-height: 1.5;
 }
@@ -4435,9 +4537,52 @@ kbd {
     color: var(--text);
 }
 
-@media (max-height: 640px) {
+/* Short windows: a smaller heron, none at all when even that does not fit.
+   Narrow ones: the heron over the question. */
+@media (max-height: 700px) {
+    .start-head {
+        margin-bottom: -15px;
+    }
+
+    .start-heron {
+        width: auto;
+        height: 104px;
+    }
+}
+
+@media (max-width: 560px) {
+    .start-head {
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: -4px;
+        padding: 0;
+        text-align: center;
+    }
+
+    .start-heron {
+        order: -1;
+        align-self: center;
+        width: auto;
+        height: 100px;
+    }
+
+    .start-text {
+        padding: 0;
+    }
+}
+
+@media (max-height: 520px) {
     .start-heron {
         display: none;
+    }
+
+    .start-head {
+        margin-bottom: 0;
+    }
+
+    .start-text {
+        padding: 0;
     }
 }
 
@@ -6144,6 +6289,22 @@ input.text.bt-part-id {
     background: var(--warn);
 }
 
+/* The heron at the side, on the popover's bottom edge. */
+.steps-popover {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.steps-heron {
+    margin: 0 0 -8px -4px;
+}
+
+.steps-popover-body {
+    flex: 1;
+    min-width: 0;
+}
+
 .steps-popover p {
     margin: 0 0 8px;
     line-height: 1.5;
@@ -6157,6 +6318,13 @@ input.text.bt-part-id {
     display: block;
     user-select: none;
     pointer-events: none;
+}
+
+/* A pose's element leaves out the empty canvas above the bird (ui/mascot.ts):
+   the picture keeps its shape, standing on the element's bottom. */
+.mascot-pose {
+    object-fit: cover;
+    object-position: 50% 100%;
 }
 
 /* Thinking, the heron bobs its head a little. */
@@ -6284,35 +6452,35 @@ input.text.bt-part-id {
     border-top: 1px solid var(--border);
 }
 
-/* What the user can say next: whether they like it, or what to change. */
+/* What the user can say next: whether they like it, or what to change. The
+   heron stands at its side, on its bottom edge. */
 .ai-next {
     display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px 10px 6px;
     border: 1px solid rgba(187, 153, 255, 0.35);
     border-radius: 10px;
     background: var(--accent-soft);
 }
 
-.ai-next-head {
+.ai-next-heron {
+    align-self: flex-end;
+    margin-bottom: -7px;
+}
+
+.ai-next-body {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ai-next-head {
     color: var(--text-strong);
     font-weight: 600;
     line-height: 1.45;
-}
-
-.ai-welcome-head {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin: 4px 0 8px;
-}
-
-.ai-welcome-head h3 {
-    margin: 0;
 }
 
 .ai-welcome-note {
@@ -6384,6 +6552,21 @@ input.text.bt-part-id {
 
 .dialog.version-dialog {
     width: min(560px, 100%);
+}
+
+.version-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px 4px;
+    text-align: center;
+}
+
+.version-empty p {
+    max-width: 380px;
+    margin: 0;
+    line-height: 1.5;
 }
 
 .version-history {

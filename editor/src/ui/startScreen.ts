@@ -101,9 +101,18 @@ export class StartScreen {
             'div',
             { class: 'start-card', attrs: { role: 'dialog', 'aria-label': 'Start a scene' } },
             h('button', { class: 'icon-btn start-close', title: 'Not now', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: () => this.close() } }, icon('close', 16)),
-            mascotPose('stand', 92, 'start-heron'),
-            h('h2', { class: 'start-title', text: 'What shall we make?' }),
-            h('p', { class: 'start-sub', text: 'Describe a place or a scene in your own words. The assistant plans it, builds it and shows you the result; you say what you like and what to change.' }),
+            // The heron asks, standing on the box the answer goes into.
+            h(
+                'div',
+                { class: 'start-head' },
+                mascotPose('ask', 172, 'start-heron'),
+                h(
+                    'div',
+                    { class: 'start-text' },
+                    h('h2', { class: 'start-title', text: 'What shall we make?' }),
+                    h('p', { class: 'start-sub', text: 'Describe a place or a scene in your own words. The assistant plans it, builds it and shows you the result; you say what you like and what to change.' }),
+                ),
+            ),
             composer,
             ideas,
         );

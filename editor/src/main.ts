@@ -38,6 +38,7 @@ import { HierarchyPanel } from './ui/hierarchy';
 import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
 import { logo, wordmark } from './ui/logo';
+import { mascotPose } from './ui/mascot';
 import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
@@ -81,7 +82,12 @@ async function main() {
 
     // ------------------------------------------------------------ shell
     const canvas = h('canvas', { class: 'gpu', style: 'width:100%;height:100%' });
-    const loading = h('div', { class: 'viewport-loading' }, h('div', { class: 'spinner' }), h('span', { text: 'Starting WebGPU engine...' }));
+    const loading = h(
+        'div',
+        { class: 'viewport-loading' },
+        mascotPose('walk', 150, 'loading-heron'),
+        h('div', { class: 'viewport-loading-text' }, h('div', { class: 'spinner small' }), h('span', { text: 'Starting WebGPU engine...' })),
+    );
     const viewportEl = h('div', { class: 'viewport' }, canvas, loading);
     const toolbarSlot = h('div', { class: 'toolbar-slot' });
     const dockSlot = h('div', { class: 'dock-slot' });
@@ -408,18 +414,20 @@ async function main() {
     });
     showTab(store.prefs.editMode ? 'inspector' : 'ai', false, false);
     applyMode();
-    pipelineSlot.append(new StepsBar(editor, () => showTab('design', true)).el, new PipelineBar(editor, { design: () => showTab('design', true) }).el);
+    /** The chat is on the screen: what it shows needs no card of its own. */
+    const chatInView = () => document.visibilityState === 'visible' && !aiPanel.el.hidden && aiPanel.el.offsetParent !== null;
+    pipelineSlot.append(new StepsBar(editor, () => showTab('design', true)).el, new PipelineBar(editor, { design: () => showTab('design', true), chatInView }).el);
 
     // Checkpoints refresh the assistant's memo and save versions; a notice tells when the assistant finished out of sight.
     new Checkpoints(editor, aiPanel.agent);
     aiPanel.agent.on('done', (d) => {
         // The chat in sight shows the answer itself: the card is for when it is not.
-        if (document.visibilityState === 'visible' && !aiPanel.el.hidden && aiPanel.el.offsetParent !== null) return;
+        if (chatInView()) return;
         const first = d.answer.replace(/[#*`>]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
         notices.show({
             kind: 'ai-done',
             key: 'ai-done',
-            icon: d.error ? 'alert' : 'sparkle',
+            mascot: d.error ? 'error' : d.stopped ? 'idle' : 'done',
             title: d.error ? 'The assistant ran into an error' : d.stopped ? 'The assistant stopped' : 'The assistant finished',
             body: d.error ? d.error.slice(0, 200) : first.length > 180 ? first.slice(0, 177) + '...' : first,
             timeout: d.error ? 0 : 9000,
@@ -715,6 +723,7 @@ function unsupported(app: HTMLElement, reason: string) {
             'div',
             { class: 'unsupported' },
             h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
+            mascotPose('ask', 170, 'unsupported-heron'),
             h('h1', { text: 'WebGPU is required' }),
             h('p', { text: 'The editor renders with the Orillusion WebGPU engine, which could not start in this browser.' }),
             h('p', { class: 'reason', text: reason }),

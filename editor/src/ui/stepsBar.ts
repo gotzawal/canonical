@@ -4,6 +4,7 @@ import { stageDef, stepsProgress, type StepProgress } from '../design/stages';
 import { onChanges, whenQuiet } from './batch';
 import { clear, h } from './dom';
 import { icon } from './icons';
+import { mascotPose, type MascotPose } from './mascot';
 import { popover } from './overlays';
 import { button } from './widgets';
 
@@ -68,19 +69,25 @@ export class StepsBar {
         return b;
     }
 
-    /** What a step is, how far it got and what needs another look. */
+    /** What a step is, how far it got and what needs another look, the heron beside it in the pose of that. */
     private explain(anchor: HTMLElement, p: StepProgress) {
         const d = this.editor.store.doc.design;
         const state = p.state === 'done' ? 'Done.' : p.state === 'current' ? `In progress: ${stageDef(d.stage).long}.` : 'Not started yet.';
+        const pose: MascotPose = p.recheck ? 'ask' : p.state === 'done' ? 'celebrate' : p.state === 'current' ? 'peck' : 'rest';
         popover(
             anchor,
             h(
                 'div',
                 { class: 'steps-popover' },
-                h('div', { class: 'pipeline-popover-title', text: p.step.title }),
-                h('p', { class: 'muted', text: `${p.step.hint}. ${state}` }),
-                p.recheck ? h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: `${p.recheck}. The assistant checks it again when it works on the scene.` })) : null,
-                h('div', { class: 'design-actions' }, button('Details', () => this.showDetails(), 'small subtle', 'sliders')),
+                mascotPose(pose, 108, 'steps-heron'),
+                h(
+                    'div',
+                    { class: 'steps-popover-body' },
+                    h('div', { class: 'pipeline-popover-title', text: p.step.title }),
+                    h('p', { class: 'muted', text: `${p.step.hint}. ${state}` }),
+                    p.recheck ? h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: `${p.recheck}. The assistant checks it again when it works on the scene.` })) : null,
+                    h('div', { class: 'design-actions' }, button('Details', () => this.showDetails(), 'small subtle', 'sliders')),
+                ),
             ),
         );
     }

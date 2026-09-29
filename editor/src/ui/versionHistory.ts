@@ -4,6 +4,7 @@ import { download } from '../core/persistence';
 import type { SnapshotDoc } from '../core/types';
 import { onChanges, touches } from './batch';
 import { clear, h } from './dom';
+import { mascotPose } from './mascot';
 import { modal, showMenu, toast } from './overlays';
 import { button, iconButton } from './widgets';
 
@@ -11,15 +12,17 @@ import { button, iconButton } from './widgets';
  * The version history: versions of the scene saved by themselves after a
  * stretch of work, when a stage of the pipeline was completed (with its shots
  * as they were), or by hand. Each can be restored (one undo step) or
- * downloaded. They are kept in this browser with the project.
+ * downloaded. They are kept in this browser with the project. `roomy`: a
+ * window of its own, where no versions yet shows the heron waiting.
  */
-export function versionList(editor: Editor, done?: () => void): HTMLElement {
+export function versionList(editor: Editor, done?: () => void, roomy = false): HTMLElement {
     const pipeline = editor.pipeline;
     const d = editor.store.doc.design;
     const list = h('div', { class: 'version-list' });
     const versions = [...d.snapshots].reverse();
     if (!versions.length) {
-        list.appendChild(h('div', { class: 'muted small pad', text: 'No versions yet. The editor saves one after the assistant changes the scene and whenever a step is done; you can save one yourself too.' }));
+        const text = 'No versions yet. The editor saves one after the assistant changes the scene and whenever a step is done; you can save one yourself too.';
+        list.appendChild(roomy ? h('div', { class: 'version-empty' }, mascotPose('rest', 150), h('p', { class: 'muted', text })) : h('div', { class: 'muted small pad', text }));
         return list;
     }
     for (const s of versions) {
@@ -85,7 +88,7 @@ export function openVersionHistory(editor: Editor) {
     const render = () => {
         clear(body);
         body.append(
-            versionList(editor, () => m.close()),
+            versionList(editor, () => m.close(), true),
             versionActions(editor),
             h('p', { class: 'muted small', text: 'Versions are kept in this browser with the project. Download the project to keep a copy elsewhere.' }),
         );

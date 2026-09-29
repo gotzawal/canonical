@@ -5,6 +5,7 @@ import type { Editor } from './editor';
 import { createAssetMenu } from './ui/assetsPanel';
 import { buildInfo } from './ui/statusbar';
 import { h } from './ui/dom';
+import { mascotPose } from './ui/mascot';
 import { dialog, MenuItem } from './ui/overlays';
 import { showBehaviorReference } from './ui/behaviorReference';
 import { showReference } from './ui/reference';
@@ -155,7 +156,12 @@ export function showAbout(editor: Editor) {
     const body = h(
         'div',
         { class: 'about' },
-        h('p', { text: 'An open-source, AI-automated development editor based on the Orillusion WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere. The optional AI assistant sends your messages and a description of the scene to OpenRouter, only when you use it.' }),
+        h(
+            'div',
+            { class: 'about-intro' },
+            mascotPose('stand', 128),
+            h('p', { text: 'An open-source, AI-automated development editor based on the Orillusion WebGPU engine. It runs entirely in your browser: scenes are autosaved to this browser, imported files are kept in IndexedDB, and nothing is uploaded anywhere. The optional AI assistant sends your messages and a description of the scene to OpenRouter, only when you use it.' }),
+        ),
         h(
             'dl',
             null,

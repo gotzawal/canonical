@@ -32,7 +32,7 @@
 
 Morglay is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant plans the scene, builds it, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them, and shows you the result. You say what you like and what to change. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
-The editor opens on the scene and a chat with the assistant, whose face is a small heron. **Edit mode** (the button in the top bar, `Ctrl+\`) shows the full editor around them: the hierarchy, the inspector, the pipeline bar and the code dock.
+The editor opens on the scene and a chat with the assistant, whose face is a heron: the whole bird where there is room (the start screen, an empty chat, the cards that ask you something, loading, empty panels), in a pose that says what is going on, and only its head where space is tight (the chat's header, the status over the view, notices). **Edit mode** (the button in the top bar, `Ctrl+\`) shows the full editor around them: the hierarchy, the inspector, the pipeline bar and the code dock.
 
 The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/morglay/** every time `main` is updated.
 
@@ -114,7 +114,7 @@ The key is kept in this browser's local storage, or only for the current tab whe
 
 The assistant remembers each project: its conversation is stored in this browser with the project, and when a conversation grows long the older part is replaced by a summary. Requests are shaped for prompt caching, so the steps of a request and the next requests read the unchanged start (instructions, tool definitions, the conversation so far) from the provider's cache at a fraction of the input price: DeepSeek, Kimi, GLM, MiniMax, OpenAI, Grok and Gemini cache by themselves, and Claude and the models Alibaba serves (Qwen, DeepSeek V3.2) get cache_control marks, with an option to keep Claude's cache for an hour. Every request of a conversation carries the same OpenRouter session id, so the conversation stays with the provider that holds its cache. The share of prompt tokens read from the cache is shown next to the token count. After a stretch of work the assistant rewrites a short scene memo, a note only it reads (with every later request), so a new session knows where the work stands.
 
-The chat groups the assistant's tool calls of a request into one line of steps in plain words ("Building rooms", "Checking the level"), which opens to show each call. When a request ends, the chat asks **Like how it looks?**: **Looks good, keep going** lets the assistant go on with the pipeline, **Change something** asks what to change. The heron in the chat's header shows what the assistant is doing: thinking, waiting for you, done, or stuck on an error.
+The chat groups the assistant's tool calls of a request into one line of steps in plain words ("Building rooms", "Checking the level"), which opens to show each call. When a request ends, the chat asks **Like how it looks?**: **Looks good, keep going** lets the assistant go on with the pipeline, **Change something** asks what to change. The heron in the chat's header shows what the assistant is doing: thinking, waiting for you, done, or stuck on an error. A notice asks for a finished stage only while the chat is out of sight, and closes once the stage is answered.
 
 How much the assistant decides by itself follows the **Details** setting (Design tab, in edit mode). By default it settles every detail itself, writes its choices into the plan and moves on, choosing the painted reference images, judging the shots and completing stages whose checklist is done. Set to work them out with you (or ask it to), it follows your words exactly, asks only what matters, and you complete the stages; its questions (at most three at a time) each say what it assumes meanwhile, so it keeps working, and **Keep the assumptions** in the Design tab accepts them.
 
@@ -239,7 +239,7 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 | `editor/src/core/behavior/` | Behavior formats: node type definitions, edit operations, validation, outlines |
 | `editor/src/play/ai/` | Agents while playing: tree runtime, blackboards, context pool, Ask and Model tasks, scheduler, memory, inference worker and model adapters, speech |
 | `editor/public/` | Favicons and the logo |
-| `editor/src/ui/mascot/` | The heron, the assistant's face: its head in six moods and two whole poses (SVG) |
+| `editor/src/ui/mascot/` | The heron, the assistant's face: its head in six moods and the whole bird in six poses (stand, ask, rest, walk, peck, celebrate; SVG) |
 | `src/` | Orillusion engine core |
 | `packages/` | Orillusion plugins (physics, particles, atmosphere, post effects and more) |
 | `samples/` | Engine samples, served by `pnpm run dev` (they load assets from the `public` submodule: `git submodule update --init`) |

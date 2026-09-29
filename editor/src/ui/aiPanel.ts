@@ -16,7 +16,7 @@ import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesIma
 import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';
-import { mascotAvatar, mascotPose, setMascotMood, type MascotMood } from './mascot';
+import { mascotAvatar, mascotPose, setMascotMood, type MascotMood, type MascotPose } from './mascot';
 import { dialog, toast } from './overlays';
 import { CheckboxField, NumberField, SliderField, button, iconButton, row, suggestions } from './widgets';
 
@@ -527,7 +527,7 @@ export class AIPanel {
         if (a.kind === 'stage') {
             const def = stageDef(a.stage);
             const st = design.stages[a.stage];
-            el.appendChild(h('div', { class: 'ai-choice-question' }, icon('flag', 14), h('span', { text: `${def.title} is done. Happy with it?` })));
+            el.appendChild(h('div', { class: 'ai-choice-question' }, mascotAvatar(st.status === 'done' ? 'done' : 'ask', 18), h('span', { text: `${def.title} is done. Happy with it?` })));
             if (st.status === 'done') {
                 const next = nextStage(a.stage);
                 el.appendChild(h('div', { class: 'ai-approval-state ok' }, icon('check', 13), h('span', { text: `${def.title} is complete.${next ? ` Next: ${stageDef(next).long}.` : ''}` })));
@@ -605,30 +605,34 @@ export class AIPanel {
         const show = !!aiSettings.apiKey && !this.agent.running && !!lastTurn && lastTurn.role !== 'user' && !pending && (started || unfinished);
         el.hidden = !show;
         if (!show) return;
+        // The heron stands at the card's side, in the pose of how things are.
+        const card = (pose: MascotPose, text: string, ...options: HTMLElement[]) =>
+            el.append(mascotPose(pose, 96, 'ai-next-heron'), h('div', { class: 'ai-next-body' }, h('div', { class: 'ai-next-head', text }), h('div', { class: 'ai-choice-options' }, ...options)));
         if (allDone && !unfinished) {
-            el.append(
-                h('div', { class: 'ai-next-head' }, mascotPose('celebrate', 44, 'ai-next-heron'), h('span', { text: 'Every step is done. Ask for any change, or turn the scene into a game you can share.' })),
-                h('div', { class: 'ai-choice-options' }, button('Build & Deploy', () => this.hooks.build(), 'small primary', 'rocket'), button('Change something', () => this.askForChange(), 'small subtle')),
+            card(
+                'celebrate',
+                'Every step is done. Ask for any change, or turn the scene into a game you can share.',
+                button('Build & Deploy', () => this.hooks.build(), 'small primary', 'rocket'),
+                button('Change something', () => this.askForChange(), 'small subtle'),
             );
             return;
         }
         const step = stepOf(design.stage);
         if (unfinished) {
             const text = this.lastEnd === 'limited' ? 'The assistant paused to let you look.' : this.lastEnd === 'stopped' ? 'Stopped.' : 'The request did not finish.';
-            el.append(
-                h('div', { class: 'ai-next-head' }, h('span', { text: started && !allDone ? `${text} ${step.title} is not finished yet.` : text })),
-                h('div', { class: 'ai-choice-options' }, button('Keep going', () => this.keepGoing(false), 'small primary', 'play'), button('Change something', () => this.askForChange(), 'small subtle')),
+            card(
+                this.lastEnd === 'error' ? 'ask' : 'rest',
+                started && !allDone ? `${text} ${step.title} is not finished yet.` : text,
+                button('Keep going', () => this.keepGoing(false), 'small primary', 'play'),
+                button('Change something', () => this.askForChange(), 'small subtle'),
             );
             return;
         }
-        el.append(
-            h('div', { class: 'ai-next-head' }, h('span', { text: 'Like how it looks?' })),
-            h(
-                'div',
-                { class: 'ai-choice-options' },
-                button('Looks good, keep going', () => this.keepGoing(true), 'small primary', 'check'),
-                button('Change something', () => this.askForChange(), 'small subtle'),
-            ),
+        card(
+            'ask',
+            'Like how it looks?',
+            button('Looks good, keep going', () => this.keepGoing(true), 'small primary', 'check'),
+            button('Change something', () => this.askForChange(), 'small subtle'),
         );
     }
 
@@ -641,7 +645,8 @@ export class AIPanel {
             return h(
                 'div',
                 { class: 'ai-welcome' },
-                h('div', { class: 'ai-welcome-head' }, mascotAvatar('ask', 34), h('h3', { text: 'Ready when you are' })),
+                mascotPose('ask', 132, 'ai-welcome-heron'),
+                h('h3', { text: 'Ready when you are' }),
                 h('p', { text: 'Your idea is saved. The assistant plans it, builds the layout and shows it to you.' }),
                 h('blockquote', { class: 'ai-welcome-brief', text: brief.length > 280 ? brief.slice(0, 277) + '...' : brief }),
                 h(
@@ -659,7 +664,8 @@ export class AIPanel {
         return h(
             'div',
             { class: 'ai-welcome' },
-            h('div', { class: 'ai-welcome-head' }, mascotAvatar('idle', 34), h('h3', { text: 'Ask for anything' })),
+            mascotPose('stand', 132, 'ai-welcome-heron'),
+            h('h3', { text: 'Ask for anything' }),
             h('p', { text: 'A whole scene or one change: the assistant builds it, writes scripts and shaders and plays the scene to test its work. You say what you like and what to change.' }),
             h(
                 'div',
@@ -681,7 +687,8 @@ export class AIPanel {
         return h(
             'div',
             { class: 'ai-welcome' },
-            h('div', { class: 'ai-welcome-head' }, mascotAvatar('sleep', 34), h('h3', { text: 'Connect OpenRouter' })),
+            mascotPose('rest', 132, 'ai-welcome-heron'),
+            h('h3', { text: 'Connect OpenRouter' }),
             waiting ? h('p', { class: 'ai-welcome-note', text: 'Your idea is saved. Connect, and the assistant starts on it.' }) : null,
             h('p', { text: 'The assistant runs on models from OpenRouter with your own account. Your key stays in this browser and requests go directly to openrouter.ai.' }),
             h(

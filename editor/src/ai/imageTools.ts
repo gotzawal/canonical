@@ -111,7 +111,7 @@ export const imageTools = tools({
                 notify({
                     kind: 'review',
                     key: 'concept-review',
-                    icon: 'image',
+                    mascot: 'ask',
                     title: `${res.concepts.length} reference image${res.concepts.length === 1 ? '' : 's'} drawn`,
                     body: `${area ? area.name : 'The whole place'}, ${view}. Keep or drop ${res.concepts.length === 1 ? 'it' : 'them'} in the chat.`,
                     actions: [{ label: 'Show', primary: true, run: () => ed.emit('show-ai', undefined) }],

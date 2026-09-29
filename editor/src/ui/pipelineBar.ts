@@ -20,7 +20,7 @@ export class PipelineBar {
     private key = '';
     private closePopover: (() => void) | null = null;
 
-    constructor(private editor: Editor, private show: { design: () => void }) {
+    constructor(private editor: Editor, private show: { design: () => void; chatInView: () => boolean }) {
         this.el = h('div', { class: 'pipeline-bar', attrs: { role: 'navigation', 'aria-label': 'Pipeline stages' } });
         const store = editor.store;
         const rerender = () => this.render();
@@ -29,22 +29,23 @@ export class PipelineBar {
         onChanges(store, (hint) => (hint?.transform ? quiet() : this.render()));
         store.on('load', () => this.render(true));
         editor.pipeline.on('busy', () => this.render(true));
-        // The chat holds the buttons that approve it, in both views.
-        editor.pipeline.on('proposed', (summary) =>
+        // The chat holds the buttons that approve it, in both views: the card is for when the chat is out of sight.
+        editor.pipeline.on('proposed', (summary) => {
+            if (this.show.chatInView()) return;
             notices.show({
                 kind: 'stage',
                 key: 'stage-proposal',
-                icon: 'flag',
+                mascot: 'ask',
                 title: `${stageDef(editor.pipeline.design.stage).title} is done. Happy with it?`,
                 body: summary.slice(0, 240),
                 actions: [{ label: 'Show', primary: true, run: () => editor.emit('show-ai', undefined) }],
-            }),
-        );
+            });
+        });
         // Told when one of the three steps is done, not for every stage.
         editor.pipeline.on('completed', ({ stage, next }) => {
             const step = stepOf(stage);
             if (next && stepOf(next).id === step.id) return;
-            notices.show({ kind: 'stage', key: 'stage-proposal', icon: 'check', title: `${step.title} is done`, body: next ? `Next: ${stepOf(next).title}, ${stepOf(next).hint.toLowerCase()}.` : 'Every step is done.', timeout: 6000 });
+            notices.show({ kind: 'stage', key: 'stage-done', mascot: 'done', title: `${step.title} is done`, body: next ? `Next: ${stepOf(next).title}, ${stepOf(next).hint.toLowerCase()}.` : 'Every step is done.', timeout: 6000 });
         });
         // The frame rate item of the effects stage follows the editor's fps.
         setInterval(rerender, 2000);
@@ -56,6 +57,8 @@ export class PipelineBar {
         const design = pipeline.design;
         const prog = pipeline.progress();
         const st = design.stages[design.stage];
+        // Answered (in the chat, the Design tab or here) or withdrawn: its card goes.
+        if (!st.proposal) notices.dismiss('stage-proposal');
         const key = JSON.stringify([
             design.stage,
             STAGE_IDS.map((id) => design.stages[id].status + (design.stages[id].recheck ?? '')),

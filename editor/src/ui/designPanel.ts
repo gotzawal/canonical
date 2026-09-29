@@ -16,6 +16,7 @@ import { addColorGrade, addVignette } from '../design/effects';
 import { assignSlot, deleteSlot, slotUsers, upsertSlot, type SlotPatch } from '../design/materialSlots';
 import { clear, h } from './dom';
 import { icon } from './icons';
+import { mascotAvatar } from './mascot';
 import { confirmDialog, popover, showMenu, toast } from './overlays';
 import { versionActions, versionList } from './versionHistory';
 import {
@@ -177,7 +178,7 @@ export class DesignPanel {
                 h(
                     'div',
                     { class: 'design-proposal' },
-                    h('div', { class: 'design-proposal-title' }, icon('flag', 14), h('span', { text: 'The assistant finished this stage. Happy with it?' })),
+                    h('div', { class: 'design-proposal-title' }, mascotAvatar('ask', 18), h('span', { text: 'The assistant finished this stage. Happy with it?' })),
                     h('div', { class: 'design-proposal-text', text: st.proposal.summary }),
                     h(
                         'div',

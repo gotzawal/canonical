@@ -22,6 +22,7 @@ import { validateAgent } from '../core/behavior/validate';
 import { valueControl } from './behavior/fields';
 import { clear, h, pressable } from './dom';
 import { icon, nodeIcon } from './icons';
+import { mascotPose } from './mascot';
 import { MenuItem, showMenu, toast } from './overlays';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import { schemaRows } from './schemaFields';
@@ -249,7 +250,7 @@ export class InspectorPanel {
                 h(
                     'div',
                     { class: 'inspector-empty' },
-                    icon('cursor', 28),
+                    mascotPose('rest', 128),
                     h('p', { text: 'Select an object in the viewport or the hierarchy to edit it.' }),
                     button('Scene settings', () => this.showScene(), 'subtle', 'sliders'),
                 ),
