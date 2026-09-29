@@ -1174,7 +1174,8 @@ export class Editor extends Emitter<EditorEvents> {
         const result = applyBehaviorOps(this.store.doc, ops, opts.mode ?? 'lenient');
         const changes = result.changes;
         if (result.ok && changes) {
-            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true, renamed: changes.renamed });
+            const agents = [...changes.agents.keys()];
+            this.store.commit(`Behavior: ${opts.label ?? result.label}`, (doc) => writeBehaviorChanges(doc, changes), { behavior: true, agents, renamed: changes.renamed });
         }
         return result;
     }
