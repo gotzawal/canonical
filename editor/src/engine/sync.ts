@@ -144,8 +144,12 @@ export class SceneSync extends Emitter<SyncEvents> {
     private materials = new Map<string, SharedMaterial>();
     private materialsChanged = false;
 
-    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null) {
+    /** Textures load at most this large (the longer side): games on a low quality tier skip the top mips. */
+    private readonly textureMaxSize: number;
+
+    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null, opts: { textureMaxSize?: number } = {}) {
         super();
+        this.textureMaxSize = opts.textureMaxSize ?? Infinity;
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
@@ -854,6 +858,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (!tex) {
                     tex = new CompressedTexture2D(this.runtime.engine.context3D, role === 'color' ? 'srgb' : 'linear');
                     tex.name = meta.name;
+                    tex.maxSize = this.textureMaxSize;
                     // Known before it has data, so a refresh meanwhile runs after this fill.
                     this.assetTextures.set(key, tex);
                 }
@@ -878,11 +883,14 @@ export class SceneSync extends Emitter<SyncEvents> {
         for (const [key, tex] of this.assetTextures) {
             const [id, r] = key.split('|') as [string, TextureRole];
             if (id !== assetId || (role && r !== role)) continue;
-            const done = this.fill(key, tex, assetId, r).then(
+            const done: Promise<Texture | null> = this.fill(key, tex, assetId, r).then(
                 () => tex,
                 (e) => {
                     console.error('[editor] texture reload failed', e);
-                    return tex;
+                    // Never filled: nothing may bind it (a texture without data has no view).
+                    if (tex.textureDescriptor) return tex;
+                    if (this.textures.get(key) === done) this.textures.delete(key);
+                    return null;
                 },
             );
             // whenLoaded waits for it.
@@ -910,7 +918,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (!res.ok && res.status !== 0) throw new Error(`"${meta.name}" failed to load (${res.status}).`);
             const blob = await res.blob();
             if (isKTX2(await blob.slice(0, 12).arrayBuffer())) await tex.loadKTX2(blob);
-            else tex.setImage(await decodeImage(blob));
+            else tex.setImage(await decodeImage(blob, this.textureMaxSize));
             this.textureSource?.used?.(meta, role);
         };
         const next = (this.fills.get(key) ?? Promise.resolve()).then(run, run);
@@ -941,11 +949,18 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 }
 
-/** An image file decoded as the engine decodes textures (BitmapTexture2D): colors kept under alpha, at least 32 pixels a side. */
-async function decodeImage(blob: Blob): Promise<ImageBitmap> {
+/**
+ * An image file decoded as the engine decodes textures (BitmapTexture2D):
+ * colors kept under alpha, at least 32 pixels a side, and here at most
+ * `maxSize` on the longer side.
+ */
+async function decodeImage(blob: Blob, maxSize = Infinity): Promise<ImageBitmap> {
     const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image', premultiplyAlpha: 'none' });
-    if (bmp.width >= 32 && bmp.height >= 32) return bmp;
-    const out = await createImageBitmap(bmp, { resizeWidth: Math.max(bmp.width, 32), resizeHeight: Math.max(bmp.height, 32), premultiplyAlpha: 'none' });
+    const k = Math.min(1, maxSize / Math.max(bmp.width, bmp.height));
+    const width = Math.max(32, Math.round(bmp.width * k));
+    const height = Math.max(32, Math.round(bmp.height * k));
+    if (width === bmp.width && height === bmp.height) return bmp;
+    const out = await createImageBitmap(bmp, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high', premultiplyAlpha: 'none' });
     bmp.close();
     return out;
 }

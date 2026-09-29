@@ -52,7 +52,8 @@ function transcode(module, buffer, table) {
         }
         const width = file.getWidth();
         const height = file.getHeight();
-        const levels = file.getLevels();
+        // No more levels than the size has (a file may claim more; WebGPU rejects them).
+        const levels = Math.min(file.getLevels(), Math.floor(Math.log2(Math.max(width, height, 1))) + 1);
         if (!width || !height || !levels) throw new Error('the KTX2 file has no image');
         if ((file.getFaces() || 1) > 1 || (file.getLayers() || 1) > 1) throw new Error('KTX2 cube maps and texture arrays are not supported');
         const alpha = !!file.getHasAlpha();

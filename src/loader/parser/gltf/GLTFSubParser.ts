@@ -9,7 +9,8 @@ import { EXT_meshopt_compression } from './extends/EXT_meshopt_compression';
 import { CompressedTexture2D } from '../../../textures/CompressedTexture2D';
 import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
 import { isSrgbFormat } from '../../../gfx/graphics/webGpu/core/texture/TextureFormatUtil';
-import { assertSupportedGltfExtensions } from './GLTFExtensions';
+import { assertSupportedGltfExtensions, textureSources } from './GLTFExtensions';
+import { FileLoader } from '../../FileLoader';
 import { BitmapTexture2D } from '../../../textures/BitmapTexture2D';
 import { GLTFSubParserCamera } from './GLTFSubParserCamera';
 import { GLTFSubParserMesh } from './GLTFSubParserMesh';
@@ -177,11 +178,7 @@ export class GLTFSubParser {
             // Image sources in order of preference: KTX2 (KHR_texture_basisu),
             // WebP or AVIF, then the plain source every viewer reads. A source
             // that fails falls back to the next one.
-            const ext = textureInfo.extensions;
-            const sources: number[] = [];
-            for (const s of [ext?.KHR_texture_basisu?.source, ext?.EXT_texture_webp?.source, ext?.EXT_texture_avif?.source, textureInfo.source]) {
-                if (s !== undefined && s !== null && !sources.includes(s)) sources.push(s);
-            }
+            const sources = textureSources(textureInfo);
             for (let i = 0; i < sources.length && !textureInfo.dtexture; i++) {
                 try {
                     textureInfo.dtexture = await this.parseImage(sources[i], colorSpace);
@@ -206,6 +203,10 @@ export class GLTFSubParser {
         const image = this.gltf.images[imageIndex];
         if (!image) return this.errorMiss('image', imageIndex);
         if (isKTX2Image(image)) return this.parseKTX2Image(imageIndex, colorSpace);
+        if (image.uri && !image.uri.startsWith('data:') && !this.gltf.resources[StringUtil.getURLName(image.uri)] && this.gltf.resources['url:' + imageIndex]) {
+            // Not loaded up front (a fallback source, or it failed then): load it now.
+            return await Engine3D.resFor(this.ctx).loadTexture(this.gltf.resources['url:' + imageIndex], undefined, undefined, colorSpace) as BitmapTexture2D;
+        }
         if (image.uri) {
             let name = image.uri;
             name = StringUtil.getURLName(name);
@@ -260,6 +261,9 @@ export class GLTFSubParser {
             if (image.bufferView !== undefined) bytes = this.parseBufferView(image.bufferView) || undefined;
             else bytes = this.gltf.resources['ktx2:' + imageIndex];
             if (!bytes && image.uri?.startsWith('data:')) bytes = this.decodeDataUri(image.uri);
+            // Not fetched up front (a fallback source, or it failed then): fetch it now.
+            const url = this.gltf.resources['url:' + imageIndex];
+            if (!bytes && url) bytes = await new FileLoader(this.ctx).loadBinData(url);
             if (!bytes) throw new Error(`glTF image ${imageIndex} (KTX2) has no data`);
             const texture = new CompressedTexture2D(this.ctx, colorSpace);
             texture.name = image.name || image.uri || `image_${imageIndex}`;

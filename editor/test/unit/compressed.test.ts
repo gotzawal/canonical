@@ -3,8 +3,8 @@
 // decoding and required glTF extensions.
 import { MeshoptEncoder } from 'meshoptimizer/encoder';
 import { describe, expect, it } from 'vitest';
-import { formatBlockInfo, isCompressedFormat, isSrgbFormat, levelBytes, toLinearFormat, toSrgbFormat } from '../../../src/gfx/graphics/webGpu/core/texture/TextureFormatUtil';
-import { assertSupportedGltfExtensions, unsupportedGltfExtensions } from '../../../src/loader/parser/gltf/GLTFExtensions';
+import { formatBlockInfo, isCompressedFormat, isSrgbFormat, levelBytes, levelsToSkip, toLinearFormat, toSrgbFormat } from '../../../src/gfx/graphics/webGpu/core/texture/TextureFormatUtil';
+import { assertSupportedGltfExtensions, preferredImages, textureSources, unsupportedGltfExtensions } from '../../../src/loader/parser/gltf/GLTFExtensions';
 import { dequantizeNormalized, fitIndices, toFloat32 } from '../../../src/loader/parser/gltf/GLTFQuantization';
 import { EXT_meshopt_compression } from '../../../src/loader/parser/gltf/extends/EXT_meshopt_compression';
 import { isKTX2, isKTX2Image, KTX2_MAGIC, readKTX2Header } from '../../../src/textures/ktx2/KTX2Container';
@@ -56,6 +56,30 @@ function ktx2Header(fields: { vkFormat?: number; width: number; height: number; 
     u32.forEach((n, i) => v.setUint32(12 + i * 4, n, true));
     return bytes;
 }
+
+describe('textures on a quality tier', () => {
+    const chain = (w: number, h: number) => {
+        const out: { width: number; height: number }[] = [];
+        for (;;) {
+            out.push({ width: w, height: h });
+            if (w === 1 && h === 1) return out;
+            w = Math.max(1, w >> 1);
+            h = Math.max(1, h >> 1);
+        }
+    };
+
+    it('start from the first level that fits the tier', () => {
+        expect(levelsToSkip('bc7-rgba-unorm', chain(2048, 2048), 1024)).toBe(1);
+        expect(levelsToSkip('etc2-rgb8unorm', chain(4096, 1024), 1024)).toBe(2);
+        expect(levelsToSkip('bc7-rgba-unorm', chain(1024, 1024), 1024)).toBe(0);
+        expect(levelsToSkip('rgba8unorm', chain(2048, 2048), Infinity)).toBe(0);
+        // Only whole blocks may be the base of a compressed texture.
+        expect(levelsToSkip('bc1-rgba-unorm', chain(1000, 600), 256)).toBe(1);
+        expect(levelsToSkip('rgba8unorm', chain(1000, 600), 256)).toBe(2);
+        // A single level stays.
+        expect(levelsToSkip('bc7-rgba-unorm', [{ width: 2048, height: 2048 }], 512)).toBe(0);
+    });
+});
 
 describe('KTX2 files', () => {
     it('are told by their identifier and read by their header', () => {
@@ -193,6 +217,17 @@ describe('meshopt compression', () => {
         expect(EXT_meshopt_compression.isUsed({ bufferViews: [{}] })).toBe(false);
         expect(EXT_meshopt_compression.isFallback({ extensions: { EXT_meshopt_compression: { fallback: true } } })).toBe(true);
         expect(EXT_meshopt_compression.isFallback({})).toBe(false);
+    });
+});
+
+describe('glTF texture sources', () => {
+    it('are tried KTX2 first, then WebP and AVIF, then the plain image', () => {
+        expect(textureSources({ source: 0, extensions: { KHR_texture_basisu: { source: 2 }, EXT_texture_webp: { source: 1 } } })).toEqual([2, 1, 0]);
+        expect(textureSources({ extensions: { KHR_texture_basisu: { source: 3 } } })).toEqual([3]);
+        expect(textureSources({ source: 1, extensions: { EXT_texture_avif: { source: 1 } } })).toEqual([1]);
+        expect(textureSources(undefined)).toEqual([]);
+        // Only the first choices load up front.
+        expect([...preferredImages({ textures: [{ source: 0, extensions: { KHR_texture_basisu: { source: 1 } } }, { source: 2 }, {}] })].sort()).toEqual([1, 2]);
     });
 });
 

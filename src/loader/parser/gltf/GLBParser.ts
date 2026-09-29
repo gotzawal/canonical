@@ -3,7 +3,7 @@ import { ParserBase } from '../ParserBase';
 import { ParserFormat } from '../ParserFormat';
 import { GLTF_Info } from './GLTFInfo';
 import { GLTFSubParser } from './GLTFSubParser';
-import { assertSupportedGltfExtensions } from './GLTFExtensions';
+import { assertSupportedGltfExtensions, preferredImages } from './GLTFExtensions';
 import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
 
 /**
@@ -121,23 +121,31 @@ export class GLBParser extends ParserBase {
     }
 
     /**
-     * Decode the images stored in the binary chunk, keyed by image index
-     * (names may repeat or be missing). KTX2 images are left to
-     * GLTFSubParser.parseTexture, which transcodes them for their role.
+     * Decode the images the textures prefer from the binary chunk, keyed by
+     * image index (names may repeat or be missing). KTX2 images, fallback
+     * sources and images that fail here are left to
+     * GLTFSubParser.parseTexture, which decodes or transcodes them when a
+     * texture needs them.
      */
     private async preloadImages() {
         const images = this._gltf.images;
         if (!images) return;
+        const preferred = preferredImages(this._gltf);
         for (let i = 0; i < images.length; i++) {
             const image = images[i];
-            if (image.bufferView === undefined || isKTX2Image(image)) continue;
+            if (image.bufferView === undefined || isKTX2Image(image) || !preferred.has(i)) continue;
             image.name = image.name || 'bufferView_' + image.bufferView;
             const view = this._gltf.bufferViews[image.bufferView];
             const buffer = view && this._gltf.buffers[view.buffer];
             if (!buffer?.dbuffer) continue;
             const data = new Uint8Array(buffer.dbuffer, view.byteOffset || 0, view.byteLength);
             const dtexture = new BitmapTexture2D(true, this.ctx);
-            await dtexture.loadFromBlob(new Blob([data], { type: image.mimeType }));
+            try {
+                await dtexture.loadFromBlob(new Blob([data], { type: image.mimeType }));
+            } catch (e) {
+                console.warn(`glTF image ${i} failed to decode: ${e?.message ?? e}`);
+                continue;
+            }
             dtexture.name = image.name;
             this._gltf.resources['image_' + i] = dtexture;
             this._gltf.resources[image.name] ??= dtexture;

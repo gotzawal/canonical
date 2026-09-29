@@ -72,3 +72,19 @@ export function levelBytes(format: GPUTextureFormat | string, width: number, hei
     const b = formatBlockInfo(format);
     return Math.ceil(Math.max(1, width) / b.w) * Math.ceil(Math.max(1, height) / b.h) * b.bytes;
 }
+
+/**
+ * How many top mip levels to skip so the base level's longer side is at
+ * most `maxSize`, keeping at least one level and, for block-compressed
+ * formats, a base level of whole blocks.
+ */
+export function levelsToSkip(format: GPUTextureFormat | string, levels: readonly { width: number; height: number }[], maxSize: number): number {
+    const block = formatBlockInfo(format);
+    let skip = 0;
+    while (skip + 1 < levels.length && Math.max(levels[skip].width, levels[skip].height) > maxSize) {
+        const next = levels[skip + 1];
+        if (next.width % block.w || next.height % block.h) break;
+        skip++;
+    }
+    return skip;
+}

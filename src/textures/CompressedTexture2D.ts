@@ -1,6 +1,6 @@
 import { Texture } from '../gfx/graphics/webGpu/core/texture/Texture';
 import { Context3D, bindCtx } from '../gfx/graphics/webGpu/Context3D';
-import { formatBlockInfo, isCompressedFormat, toSrgbFormat } from '../gfx/graphics/webGpu/core/texture/TextureFormatUtil';
+import { formatBlockInfo, isCompressedFormat, levelsToSkip, toSrgbFormat } from '../gfx/graphics/webGpu/core/texture/TextureFormatUtil';
 import { LoaderBase } from '../loader/LoaderBase';
 import { LoaderFunctions } from '../loader/LoaderFunctions';
 import { StringUtil } from '../util/StringUtil';
@@ -28,6 +28,9 @@ export class CompressedTexture2D extends Texture {
     /** `'srgb'` samples the data as sRGB-encoded color (base color, emissive); `'linear'` as data. */
     public colorSpace: TextureColorSpace;
 
+    /** Levels larger than this (the longer side, pixels) are left out when the data has smaller ones. */
+    public maxSize = Infinity;
+
     private _levels: KTX2Level[] | null = null;
     private _makeMips = false;
     /** Filled from levels (else from an image, or not yet). */
@@ -49,6 +52,16 @@ export class CompressedTexture2D extends Texture {
      */
     public setLevels(format: GPUTextureFormat, width: number, height: number, levels: KTX2Level[]) {
         if (!levels?.length) throw new Error('a texture needs at least one level');
+        // A file may claim more levels than its size has; WebGPU rejects such a texture.
+        const most = Math.floor(Math.log2(Math.max(width, height, 1))) + 1;
+        if (levels.length > most) levels = levels.slice(0, most);
+        // Too large for this device's tier: start from a smaller level.
+        const skip = levelsToSkip(format, levels, this.maxSize);
+        if (skip) {
+            levels = levels.slice(skip);
+            width = levels[0].width;
+            height = levels[0].height;
+        }
         const block = formatBlockInfo(format);
         if (isCompressedFormat(format) && (width % block.w || height % block.h)) {
             throw new Error(`${format} needs a size in whole ${block.w}x${block.h} blocks, not ${width}x${height}`);
@@ -81,6 +94,10 @@ export class CompressedTexture2D extends Texture {
 
     /** Fetch a KTX2 file and transcode it for this device. Rejects when either fails. */
     public async load(url: string, loaderFunctions?: LoaderFunctions): Promise<boolean> {
+        // Relative URLs are origin-absolute, as BitmapTexture2D.load and LoaderBase make them.
+        if (url && !/^[a-z][a-z0-9+.-]*:/i.test(url) && !url.startsWith('/') && typeof location !== 'undefined') {
+            url = '/' + url;
+        }
         this.url = url;
         this.name ||= StringUtil.getURLName(url);
         const response = await fetch(url, { headers: loaderFunctions?.headers });

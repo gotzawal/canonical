@@ -33,6 +33,8 @@ describe('graphics quality', () => {
         expect(QUALITY.high).toMatchObject({ shadowMapSize: 2048, pointShadowSize: 1024, shadowRangeMax: Infinity, shadowEvery: 1, giRealtime: true, ao: true });
         expect(QUALITY.low.shadowMapSize).toBeLessThan(QUALITY.high.shadowMapSize);
         expect(QUALITY.low.godRaySteps).toBe(0);
+        // Games on weak devices load textures smaller; the high tier as they are.
+        expect([QUALITY.low.textureMaxSize, QUALITY.medium.textureMaxSize, QUALITY.high.textureMaxSize]).toEqual([1024, 2048, Infinity]);
     });
 
     it('turns the fog glow into the engine setting', () => {
