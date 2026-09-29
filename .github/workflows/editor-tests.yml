@@ -1,8 +1,9 @@
 name: Editor tests
 
-# Unit tests of the editor's logic (Vitest, in Node) and browser tests of
-# the built editor (Playwright; WebGPU runs on the CPU with SwiftShader under
-# a virtual display).
+# Unit tests of the editor's logic (Vitest, in Node), benchmarks of its work
+# on a large scene with their budgets, and browser tests of the built editor
+# (Playwright; WebGPU runs on the CPU with SwiftShader under a virtual
+# display).
 
 on:
   push:
@@ -43,6 +44,9 @@ jobs:
 
       - name: Unit tests
         run: pnpm run editor:test
+
+      - name: Benchmarks within their budgets
+        run: pnpm run editor:bench
 
   browser:
     runs-on: ubuntu-latest

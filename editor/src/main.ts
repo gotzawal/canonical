@@ -3,6 +3,7 @@ import { newScene } from './core/defaults';
 import { readLocal, writeLocal } from './core/local';
 import { captureConsole } from './core/log';
 import { messages } from './core/messages';
+import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
 import { Editor } from './editor';
@@ -51,6 +52,8 @@ const LAYOUT_KEY = 'canonical-editor/layout';
 type RightTab = 'inspector' | 'scene' | 'design' | 'ai';
 
 async function main() {
+    // Development builds time every listener and report long tasks (core/perf.ts).
+    if (perfMonitorWanted()) startPerfMonitor();
     captureConsole();
     // Messages from below the UI (core/messages.ts).
     messages.on('toast', (m) => toast(m.text, m.kind, m.timeout));
