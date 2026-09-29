@@ -258,7 +258,7 @@ export const designTools = tools({
     },
     propose_stage_complete: {
         groups: ['design'],
-        description: 'Propose completing the current stage once its checklist is done. The user reviews and approves; with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.',
+        description: 'Propose completing the current stage once its checklist is done. The user reviews and approves (in the chat or the Design tab); with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.',
         params: {
             summary: { type: 'string', description: 'What was done and what was checked, a few lines.' },
         },
@@ -290,10 +290,11 @@ export const designTools = tools({
             return {
                 data: {
                     ok: true,
-                    note: 'The user was asked to review and complete the stage.',
+                    note: 'The user was asked to review and complete the stage (buttons in the chat and the Design tab).',
                     ...(prog.open.length ? { still_open: prog.open.map((i) => i.text) } : {}),
                 },
                 summary: stageDef(store.doc.design.stage).title,
+                approval: { kind: 'stage', stage: store.doc.design.stage },
             };
         },
     },

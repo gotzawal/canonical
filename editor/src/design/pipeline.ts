@@ -209,6 +209,21 @@ export class Pipeline extends Emitter<PipelineEvents> {
         }, { design: true });
     }
 
+    /**
+     * Approves concepts the image model made (they become references for
+     * shots and paintovers), or rejects them: they leave the plan.
+     */
+    reviewConcepts(assets: string[], approve: boolean) {
+        const ids = new Set(assets);
+        const count = this.design.concepts.filter((c) => ids.has(c.asset) && (!approve || c.review === 'proposed')).length;
+        if (!count) return;
+        const label = `${approve ? 'Approve' : 'Reject'} Concept${count === 1 ? '' : 's'}`;
+        this.store.commit(label, (d) => {
+            if (!approve) d.design.concepts = d.design.concepts.filter((c) => !ids.has(c.asset));
+            else for (const c of d.design.concepts) if (ids.has(c.asset) && c.review === 'proposed') c.review = 'approved';
+        }, { design: true });
+    }
+
     // ------------------------------------------------------------- stages
 
     /**

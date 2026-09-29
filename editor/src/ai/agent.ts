@@ -9,7 +9,7 @@ import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type Ch
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { aiSettings } from '../openrouter/settings';
 import { runTool, toolDefs } from './registry';
-import type { ToolChoice, ToolEnv } from './toolUtil';
+import type { Approval, ToolChoice, ToolEnv } from './toolUtil';
 
 export interface ToolTurn {
     name: string;
@@ -40,6 +40,8 @@ export interface AgentTurn {
     detail?: string;
     /** A note asking the user to pick an option (see ToolChoice); `picked` once answered. */
     choice?: ToolChoice & { picked?: string };
+    /** A note with buttons that approve what the assistant proposed (see Approval). */
+    approval?: Approval;
 }
 
 /** What one finished request did, for notifications and checkpoints. */
@@ -401,6 +403,7 @@ export class Agent extends Emitter<AgentEvents> {
                             images.push(...shown);
                         }
                         if (result.choice) this.push({ role: 'note', text: result.choice.question, choice: { ...result.choice, options: result.choice.options.map((o) => ({ ...o })) } });
+                        if (result.approval) this.push({ role: 'note', text: toolTurn.tool!.summary ?? '', approval: structuredClone(result.approval) });
                     }
                     toolLines.push(`${call.function.name.replace(/_/g, ' ')}${toolTurn.tool!.summary ? `: ${toolTurn.tool!.summary}` : ''}`);
                     if (content.length > MAX_TOOL_RESULT) content = content.slice(0, MAX_TOOL_RESULT) + '... (truncated)';

@@ -325,13 +325,8 @@ export class DesignPanel {
                 ? h(
                       'div',
                       { class: 'concept-review' },
-                      button('Approve', () => this.edit('Approve Concept', (dd) => {
-                          const cc = dd.concepts.find((x) => x.asset === c.asset);
-                          if (cc) cc.review = 'approved';
-                      }), 'small primary', 'check'),
-                      button('Reject', () => this.edit('Reject Concept', (dd) => {
-                          dd.concepts = dd.concepts.filter((x) => x.asset !== c.asset);
-                      }), 'small', 'close'),
+                      button('Approve', () => this.editor.pipeline.reviewConcepts([c.asset], true), 'small primary', 'check'),
+                      button('Reject', () => this.editor.pipeline.reviewConcepts([c.asset], false), 'small', 'close'),
                       button('Redo...', () => this.editor.askAI(`Make a new concept image to replace ${c.asset}${c.area ? ` for ${areaName(d, c.area)}` : ''} (generate_concept), then remove the old one with update_design. What to change: `), 'small', 'refresh'),
                   )
                 : null;
@@ -359,9 +354,7 @@ export class DesignPanel {
                 'div',
                 { class: 'design-actions' },
                 button('Draw concepts with AI', () => this.hooks.ask('Draw concept images of the plan with the image model (generate_concept) for review: for every area without a concept one view that shows how it will look, closed and at a compact, believable scale. Show me the results.'), 'small', 'sparkle'),
-                waiting ? button(`Approve all ${waiting}`, () => this.edit('Approve Concepts', (dd) => {
-                    for (const c of dd.concepts) if (c.review === 'proposed') c.review = 'approved';
-                }), 'small', 'check') : null,
+                waiting ? button(`Approve all ${waiting}`, () => this.editor.pipeline.reviewConcepts(d.concepts.map((c) => c.asset), true), 'small', 'check') : null,
             ),
         );
         return section('design-brief', 'Brief & Concepts', 'open', rows);

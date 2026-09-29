@@ -197,7 +197,7 @@ export const STAGES: StageDef[] = [
                     // Letting the assistant decide, the user reviews them when they like.
                     return { done: !proposed || design.detail === 'quick', detail: proposed ? `${proposed} waiting for review` : undefined };
                 },
-                hint: 'Approve or reject them in the Design tab (Brief & Concepts).',
+                hint: 'Approve or reject them in the AI tab, where they were made, or in the Design tab (Brief & Concepts).',
             },
         ],
     },

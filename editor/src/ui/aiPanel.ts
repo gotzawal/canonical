@@ -6,6 +6,9 @@ import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../openrouter/client';
 import { aiSettings } from '../openrouter/settings';
+import { STAGE_PROMPTS } from '../design/prompts';
+import { nextStage, stageDef } from '../design/stages';
+import { onChanges, touches } from './batch';
 import { describeCache } from '../openrouter/caching';
 import { DEFAULT_IMAGE_MODEL, listImageModels, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
 import { highlight } from './codeEditor';
@@ -116,6 +119,9 @@ export class AIPanel {
         this.sendBtn.addEventListener('click', () => (this.agent.busy ? this.agent.stop() : this.submit()));
         this.agent.on('update', (turn) => this.update(turn));
         this.agent.on('busy', () => this.renderControls());
+        // Approvals in the chat follow the plan, also when decided in the Design tab.
+        onChanges(editor.store, (hint) => touches(hint, 'design') && this.refreshApprovals());
+        editor.pipeline.on('busy', () => this.refreshApprovals());
         aiSettings.on('change', () => {
             this.renderControls();
             this.render();
@@ -349,6 +355,8 @@ export class AIPanel {
             el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, details);
         } else if (t.choice) {
             el = h('div', { class: 'ai-msg choice' }, h('div', { class: 'ai-choice-question', text: t.text }), this.choiceButtons(t));
+        } else if (t.approval) {
+            el = this.approvalView(t);
         } else {
             el = h('div', { class: 'ai-msg note' + (t.error ? ' error' : '') }, icon(t.error ? 'alert' : 'info', 13), h('span', { text: t.text }));
         }
@@ -393,6 +401,77 @@ export class AIPanel {
                 return b;
             }),
         );
+    }
+
+    private refreshApprovals() {
+        for (const t of this.agent.turns) if (t.approval && this.views.has(t.id)) this.update(t);
+    }
+
+    /**
+     * What the assistant proposed, with the buttons that decide it as in the
+     * Design tab (which they share): completing the stage, or approving the
+     * concept images. Once decided, here or there, it says how.
+     */
+    private approvalView(t: AgentTurn): HTMLElement {
+        const a = t.approval!;
+        const pipeline = this.editor.pipeline;
+        const design = this.editor.store.doc.design;
+        const el = h('div', { class: 'ai-msg choice approval' });
+        if (a.kind === 'stage') {
+            const def = stageDef(a.stage);
+            const st = design.stages[a.stage];
+            el.appendChild(h('div', { class: 'ai-choice-question' }, icon('flag', 14), h('span', { text: `The assistant proposes completing ${def.title}.` })));
+            if (st.status === 'done') {
+                const next = nextStage(a.stage);
+                el.appendChild(h('div', { class: 'ai-approval-state ok' }, icon('check', 13), h('span', { text: `${def.title} is complete.${next ? ` Next: ${stageDef(next).long}.` : ''}` })));
+                // Just completed: the assistant can go on with the next stage.
+                if (next && design.stage === next && design.stages[next].status !== 'done') {
+                    el.appendChild(h('div', { class: 'ai-choice-options' }, button(`Go on with ${stageDef(next).title}`, () => this.send(STAGE_PROMPTS[next]), 'small', 'sparkle')));
+                }
+            } else if (st.proposal && design.stage === a.stage) {
+                el.appendChild(h('div', { class: 'ai-approval-text', text: st.proposal.summary }));
+                const complete = button(pipeline.busy ? 'Capturing shots...' : `Complete ${def.title}`, () => void pipeline.complete(), 'small primary', 'flag');
+                complete.disabled = pipeline.busy;
+                el.appendChild(
+                    h(
+                        'div',
+                        { class: 'ai-choice-options' },
+                        complete,
+                        button('Not yet', () => pipeline.dismissProposal(), 'small subtle'),
+                        button('Checklist', () => this.editor.emit('show-design', undefined), 'small subtle', 'open'),
+                    ),
+                );
+            } else {
+                el.appendChild(h('div', { class: 'ai-approval-state', text: 'Not completed: the stage is still open.' }));
+            }
+            return el;
+        }
+        const concepts = a.assets.map((asset) => ({ asset, concept: design.concepts.find((c) => c.asset === asset) }));
+        const waiting = concepts.filter((c) => c.concept?.review === 'proposed').map((c) => c.asset);
+        el.appendChild(h('div', { class: 'ai-choice-question' }, icon('image', 14), h('span', { text: `Concept images to review${t.text ? `: ${t.text}` : ''}` })));
+        const grid = h('div', { class: 'ai-approval-grid' });
+        for (const { asset, concept } of concepts) {
+            const img = h('img', { class: 'ai-approval-img', attrs: { alt: 'Concept image' } });
+            const meta = this.editor.store.doc.assets.find((x) => x.id === asset);
+            if (meta) void getAssetUrl(meta).then((url) => url && (img.src = url));
+            const tile = h('div', { class: 'ai-approval-tile' }, img);
+            // A click shows it as wide as the chat.
+            img.addEventListener('click', () => tile.classList.toggle('large'));
+            if (concept?.review === 'proposed') {
+                tile.appendChild(
+                    h(
+                        'div',
+                        { class: 'ai-choice-options' },
+                        button('Approve', () => pipeline.reviewConcepts([asset], true), 'small primary', 'check'),
+                        button('Reject', () => pipeline.reviewConcepts([asset], false), 'small', 'close'),
+                    ),
+                );
+            } else tile.appendChild(h('div', { class: 'ai-approval-state' + (concept ? ' ok' : '') }, icon(concept ? 'check' : 'close', 13), h('span', { text: concept ? 'Approved' : 'Rejected' })));
+            grid.appendChild(tile);
+        }
+        el.appendChild(grid);
+        if (waiting.length > 1) el.appendChild(h('div', { class: 'ai-choice-options' }, button(`Approve all ${waiting.length}`, () => pipeline.reviewConcepts(waiting, true), 'small', 'check')));
+        return el;
     }
 
     private welcome(): HTMLElement {

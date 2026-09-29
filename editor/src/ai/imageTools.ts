@@ -75,7 +75,7 @@ export const imageTools = tools({
     generate_concept: {
         groups: ['concepts'],
         needs: 'images',
-        description: 'Draw concept images of the design with the image model, so the user can review how it will look before and while it is built: an area from outside or inside, an overview of the whole place, or a floor plan. They are added as concepts of the area, proposed until the user approves them in the Design tab; approved concepts are the references for shots and paintovers. With capture, a capture of the greybox (the current view or a shot) is painted over, keeping its shapes. Costs credits: one or two per area.',
+        description: 'Draw concept images of the design with the image model, so the user can review how it will look before and while it is built: an area from outside or inside, an overview of the whole place, or a floor plan. They are added as concepts of the area, proposed until the user approves them (in the chat or the Design tab); approved concepts are the references for shots and paintovers. With capture, a capture of the greybox (the current view or a shot) is painted over, keeping its shapes. Costs credits: one or two per area.',
         params: {
             area: { type: 'string', description: 'Area id or name; leave out for the whole place.' },
             view: { type: 'string', enum: ['exterior', 'interior', 'overview', 'plan'], description: 'Default exterior.' },
@@ -112,7 +112,7 @@ export const imageTools = tools({
                     key: 'concept-review',
                     icon: 'image',
                     title: `${res.concepts.length} concept image${res.concepts.length === 1 ? '' : 's'} to review`,
-                    body: `${area ? area.name : 'The whole place'}, ${view}. Approve or reject ${res.concepts.length === 1 ? 'it' : 'them'} in the Design tab.`,
+                    body: `${area ? area.name : 'The whole place'}, ${view}. Approve or reject ${res.concepts.length === 1 ? 'it' : 'them'} in the AI tab or the Design tab.`,
                     actions: [{ label: 'Review', primary: true, run: () => ed.emit('show-design', undefined) }],
                 });
             }
@@ -125,10 +125,11 @@ export const imageTools = tools({
                     ...(res.cost != null ? { cost_usd: Number(res.cost.toFixed(4)) } : {}),
                     ...(res.dropped.length ? { left_out: res.dropped } : {}),
                     ...(res.errors.length ? { failed_requests: res.errors } : {}),
-                    note: `${images.length ? 'The images are attached in this order. Say in a line or two what they show and whether they fit the plan. ' : ''}They are proposed: the user approves or rejects them in the Design tab.${d.detail === 'quick' ? ' The user lets you decide, so go on with them meanwhile.' : ''}`,
+                    note: `${images.length ? 'The images are attached in this order. Say in a line or two what they show and whether they fit the plan. ' : ''}They are proposed: the user approves or rejects them (buttons in the chat and the Design tab).${d.detail === 'quick' ? ' The user lets you decide, so go on with them meanwhile.' : ''}`,
                 },
                 images,
                 summary: `${res.concepts.length} for ${area?.name ?? 'the whole place'}`,
+                ...(res.concepts.length ? { approval: { kind: 'concepts' as const, assets: res.concepts.map((c) => c.asset) } } : {}),
             };
         },
     },
