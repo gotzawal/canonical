@@ -3,7 +3,8 @@ import type { Editor } from '../editor';
 import { onChanges, touches } from './batch';
 import { clear, h } from './dom';
 import { icon } from './icons';
-import { toast } from './overlays';
+import { showMenu, toast } from './overlays';
+import { viewportMenu, viewportSummary } from './viewportMenu';
 
 function build(): { sha: string; ref: string; repo: string; time: string } {
     try {
@@ -22,7 +23,15 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     const store = editor.store;
     const selection = h('span', { class: 'status-item grow' });
     const saved = h('span', { class: 'status-item muted', text: 'Not saved yet' });
-    const fps = h('span', { class: 'status-item mono' });
+    // The frame rate; a click sets the viewport's frame rate limit and resolution.
+    const fps = h('button', { class: 'status-btn status-item mono', attrs: { type: 'button' } });
+    const fpsTitle = () => (fps.title = `The viewport draws ${viewportSummary(store)}. Click to change.`);
+    fps.addEventListener('click', () => {
+        const r = fps.getBoundingClientRect();
+        showMenu(viewportMenu(store, true), r.left, r.top - 4);
+    });
+    store.on('prefs', fpsTitle);
+    fpsTitle();
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
     const b = build();
     const shortSha = b.sha ? b.sha.slice(0, 7) : 'dev';

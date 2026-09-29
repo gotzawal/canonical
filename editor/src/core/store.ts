@@ -37,6 +37,10 @@ export interface ChangeHint {
 
 export type Tool = 'select' | 'translate' | 'rotate' | 'scale';
 export type Space = 'world' | 'local';
+/** How often the viewport draws: at most this many frames per second, or as often as the display refreshes (0). */
+export type ViewportFps = 30 | 60 | 0;
+/** How sharp the viewport draws (see engine/runtime.ts VIEWPORT_QUALITY). */
+export type ViewportQuality = 'low' | 'medium' | 'high';
 
 export interface Prefs {
     tool: Tool;
@@ -51,6 +55,10 @@ export interface Prefs {
     giProbes: boolean;
     /** Glass surfaces; null follows the system's transparency setting (ui/theme.ts). */
     glass: boolean | null;
+    /** The viewport's frame rate limit. Low by default: a scene being edited seldom needs more. */
+    viewportFps: ViewportFps;
+    /** The viewport's resolution, low by default. Captures (the assistant's, shots) are taken sharp either way. */
+    viewportQuality: ViewportQuality;
 }
 
 /**
@@ -153,11 +161,16 @@ function defaultPrefs(): Prefs {
         helpers: true,
         giProbes: false,
         glass: null,
+        viewportFps: 30,
+        viewportQuality: 'low',
     };
 }
 
 function loadPrefs(): Prefs {
-    return { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
+    const prefs = { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
+    if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = 30;
+    if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = 'low';
+    return prefs;
 }
 
 /**

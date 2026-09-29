@@ -242,6 +242,9 @@ async function main() {
 
     store.on('change', (hint) => sync.sync(hint));
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
+    // The viewport's frame rate limit and resolution (View menu, or the frame rate in the status bar).
+    runtime.setViewport(store.prefs.viewportFps, store.prefs.viewportQuality);
+    store.on('prefs', (p) => runtime.setViewport(p.viewportFps, p.viewportQuality));
     sync.sync();
     runtime.setGridVisible(store.prefs.grid);
     store.on('selection', (sel) => {
@@ -478,7 +481,7 @@ function aiContext(editor: Editor, dock: Dock): string {
     if (f) lines.push(`Picked model mesh: ${f.path} of ${store.node(f.node)?.name ?? f.node}`);
     lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.prefabs.length} prefabs, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
     if (!editor.compiler.trusted && store.doc.scripts.length) lines.push('Scripts are paused: the scene was opened from a file and the user has not enabled its scripts yet.');
-    lines.push(...pipelineSummary(store.doc, editor.runtime.fps), ...designSummary(store.doc), ...memoLines(store.doc));
+    lines.push(...pipelineSummary(store.doc, editor.runtime.fps, editor.runtime.fpsLimit), ...designSummary(store.doc), ...memoLines(store.doc));
     return lines.join('\n');
 }
 

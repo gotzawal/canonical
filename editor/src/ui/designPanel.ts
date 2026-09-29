@@ -224,7 +224,10 @@ export class DesignPanel {
                     }, 'small', 'sliders') : null,
                     d.shots.some((s) => s.target) ? button('Compare shots', () => pipeline.openCompare((d.shots.find((s) => s.target && (id === 'finish' ? !s.approved : !s.matched?.includes(id))) ?? d.shots.find((s) => s.target))!.id), 'small', 'graph') : null,
                 ),
-                h('div', { class: 'muted small', text: `Now ${Math.round(this.editor.runtime.fps)} fps (budget ${d.budget.fps}), up to ${particles} particles alive.` }),
+                h('div', {
+                    class: 'muted small',
+                    text: `Now ${Math.round(this.editor.runtime.fps)} fps${this.editor.runtime.fpsLimit ? ` (the viewport is limited to ${this.editor.runtime.fpsLimit}: View > Viewport Frame Rate)` : ''} (budget ${d.budget.fps}), up to ${particles} particles alive.`,
+                }),
             );
         }
         if ((id === 'light' || id === 'material' || id === 'finish') && st.status !== 'done') {

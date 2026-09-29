@@ -54,7 +54,7 @@ export class ModelServices extends Emitter<{ status: string; needed: string }> i
             run: (id, inputs) => client.run(id, inputs, PRIORITY.batch),
             prepare: (id, inputs) => client.prepare(id, inputs),
         };
-        this.scheduler = new Scheduler(provider, () => runtime.fps);
+        this.scheduler = new Scheduler(provider, () => runtime.fps, () => runtime.fpsTarget);
         this.scheduler.speechPending = () => speech.pending > 0;
         // The scheduler sends its batches right after the engine drew a frame.
         runtime.onFrame(() => this.scheduler.frame());

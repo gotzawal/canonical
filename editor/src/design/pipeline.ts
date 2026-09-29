@@ -88,10 +88,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
 
     progress(stage: StageId = this.design.stage): { done: number; total: number; open: CheckState[]; items: CheckState[] } {
         // Views and the assistant ask again and again; some items look at every object (placed objects, the level check).
-        const fps = Math.round(this.host.runtime.fps);
+        const fps = Math.round(this.host.runtime.fps) * 1000 + this.host.runtime.fpsLimit;
         const c = this.progressCache;
         if (c && c.version === this.store.version && c.stage === stage && c.fps === fps) return c.result;
-        const result = stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps }, stage);
+        const result = stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps, fpsLimit: this.host.runtime.fpsLimit }, stage);
         this.progressCache = { version: this.store.version, stage, fps, result };
         return result;
     }

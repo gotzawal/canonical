@@ -583,7 +583,7 @@ function readDesign(env: ToolEnv, section: string): Json {
         }));
     }
     if (want('stages')) {
-        const ctx = { doc, design: d, fps: ed.runtime.fps };
+        const ctx = { doc, design: d, fps: ed.runtime.fps, fpsLimit: ed.runtime.fpsLimit };
         out.current_stage = d.stage;
         out.stages = STAGE_IDS.map((id) => ({
             id,

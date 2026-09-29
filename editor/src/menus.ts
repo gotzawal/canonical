@@ -9,6 +9,7 @@ import { dialog, MenuItem } from './ui/overlays';
 import { showBehaviorReference } from './ui/behaviorReference';
 import { showReference } from './ui/reference';
 import { glassOn } from './ui/theme';
+import { viewportMenu } from './ui/viewportMenu';
 
 export function createMenu(editor: Editor): MenuItem[] {
     return [
@@ -114,6 +115,8 @@ export function menuDefinitions(
                 { label: 'Helpers', checked: () => store.prefs.helpers, action: () => store.setPrefs({ helpers: !store.prefs.helpers }) },
                 { label: 'Snapping', checked: () => store.prefs.snap, action: () => store.setPrefs({ snap: !store.prefs.snap }) },
                 { label: 'Glass Effects', checked: () => glassOn(store.prefs), action: () => store.setPrefs({ glass: !glassOn(store.prefs) }) },
+                { separator: true },
+                ...viewportMenu(store),
                 { separator: true },
                 { label: 'Toggle Hierarchy Panel', action: panels.toggleLeft },
                 { label: 'Toggle Inspector Panel', action: panels.toggleRight },
