@@ -15,6 +15,8 @@ import { Quaternion } from "../../../math/Quaternion";
 import { UUID } from "../../../util/Global";
 import { GLTF_Info, GLTF_Node } from "./GLTFInfo";
 import { GLTFSubParser } from "./GLTFSubParser";
+import { dequantizeNormalized, fitIndices, toFloat32 } from "./GLTFQuantization";
+import { isSrgbFormat } from "../../../gfx/graphics/webGpu/core/texture/TextureFormatUtil";
 import { GLTFType } from "./GLTFType";
 import { KHR_materials_clearcoat } from "./extends/KHR_materials_clearcoat";
 import { KHR_materials_emissive_strength } from "./extends/KHR_materials_emissive_strength";
@@ -288,7 +290,7 @@ export class GLTFSubParserConverter {
                         // software `gammaToLiner` decode. Mismatching
                         // here would render the asset double-decoded
                         // (too dark) or non-decoded (too bright).
-                        if ((baseColorTexture as any).format === 'rgba8unorm-srgb') {
+                        if (isSrgbFormat((baseColorTexture as any).format)) {
                             physicMaterial.shader.setDefine("USE_SRGB_ALBEDO", true);
                         }
                     }
@@ -341,7 +343,7 @@ export class GLTFSubParserConverter {
                     indices.push(a + 1);
                 }
                 attribArrays[`indices`] = {
-                    data: new Uint8Array(indices),
+                    data: new Uint32Array(indices),
                     normalize: false,
                     numComponents: 1,
                 };
@@ -536,26 +538,25 @@ export class GLTFSubParserConverter {
     }
 
     private createGeometryBase(name: string, attribArrays: any, primitive: any, skin?:any): GeometryBase {
-        if ('indices' in attribArrays) {
-            let bigIndices = attribArrays[`indices`].data.length > 65534;
-            if (bigIndices) {
-                attribArrays[`indices`].data = new Uint32Array(attribArrays[`indices`].data);
-            } else {
-                attribArrays[`indices`].data = new Uint16Array(attribArrays[`indices`].data);
-            }
-        }
-
         let geometry = new GeometryBase();
         geometry.name = name;
 
-        // Only Uint16Array and Uint32Array are supported
+        // Only Uint16Array and Uint32Array are supported, and the width
+        // follows the largest index, not the count.
         if ('indices' in attribArrays) {
-            let bigIndices = attribArrays[`indices`].data.length > 65535;
-            if (bigIndices) {
-                attribArrays[`indices`].data = new Uint32Array(attribArrays[`indices`].data);
-            } else {
-                attribArrays[`indices`].data = new Uint16Array(attribArrays[`indices`].data);
-            }
+            attribArrays[`indices`].data = fitIndices(attribArrays[`indices`].data);
+        }
+
+        // Quantized attributes (KHR_mesh_quantization, or normalized
+        // integers that parseAccessor already turned into floats) reach
+        // the vertex buffer as floats by value; do it once here so
+        // bounds, picking and morph targets read the same numbers.
+        for (const attributeName in attribArrays) {
+            const acc = attribArrays[attributeName];
+            if (attributeName === 'indices' || !acc?.data || acc.data instanceof Float32Array) continue;
+            if (attributeName === VertexAttributeName.weights0 || attributeName === VertexAttributeName.weights1) continue;
+            acc.data = acc.normalize ? dequantizeNormalized(acc.data) : toFloat32(acc.data);
+            acc.normalize = false;
         }
 
         // BlendShapeData

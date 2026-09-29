@@ -7,6 +7,8 @@ import { GLBParser } from '../loader/parser/gltf/GLBParser';
 import { GLTFParser } from '../loader/parser/gltf/GLTFParser';
 import { OBJParser } from '../loader/parser/OBJParser';
 import { BitmapTexture2D, TextureColorSpace } from '../textures/BitmapTexture2D';
+import { CompressedTexture2D } from '../textures/CompressedTexture2D';
+import { isKTX2Image } from '../textures/ktx2/KTX2Container';
 import { BitmapTextureCube } from '../textures/BitmapTextureCube';
 import { HDRTextureCube } from '../textures/HDRTextureCube';
 import { B3DMParser } from '../loader/parser/B3DMParser';
@@ -276,6 +278,14 @@ export class Res {
         const cacheKey = colorSpace === 'srgb' ? url + '#srgb' : url;
         if (this._texturePool.has(cacheKey)) {
             return this._texturePool.get(cacheKey);
+        }
+        // KTX2 files stay compressed on the GPU (the name may follow a
+        // blob URL's '#', as the editor names its asset URLs).
+        if (isKTX2Image(url)) {
+            const compressed = new CompressedTexture2D(this._ctx, colorSpace);
+            await compressed.load(url, loaderFunctions);
+            this._texturePool.set(cacheKey, compressed);
+            return compressed;
         }
         let texture = new BitmapTexture2D(true, this._ctx, colorSpace);
         texture.flipY = flipY;

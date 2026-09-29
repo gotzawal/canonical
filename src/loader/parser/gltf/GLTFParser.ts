@@ -4,6 +4,8 @@ import { ParserBase } from '../ParserBase';
 import { ParserFormat } from '../ParserFormat';
 import { GLTF_Info } from './GLTFInfo';
 import { GLTFSubParser } from './GLTFSubParser';
+import { assertSupportedGltfExtensions } from './GLTFExtensions';
+import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
 
 /**
  * GLTF file Parser
@@ -18,6 +20,7 @@ export class GLTFParser extends ParserBase {
         this._gltf = new GLTF_Info();
         this._gltf = { ...this._gltf, ...obj };
         this._gltf.resources = {};
+        assertSupportedGltfExtensions(this._gltf);
         // load bin & texture together
         await Promise.all([this.load_gltf_bin(), this.load_gltf_textures()])
         //step 0: load bin
@@ -158,7 +161,8 @@ export class GLTFParser extends ParserBase {
             let binArray = []
             for (let i = 0; i < this._gltf.buffers.length; i++) {
                 const element = this._gltf.buffers[i];
-                if (element.uri.substring(0, 5) !== 'data:') {
+                // A buffer without a uri (a meshopt fallback) has no file to load.
+                if (element.uri && element.uri.substring(0, 5) !== 'data:') {
                     let url = StringUtil.parseUrl(this.baseUrl, element.uri)
                     if (this.loaderFunctions?.onUrl)
                         url = await this.loaderFunctions.onUrl(url)
@@ -178,7 +182,17 @@ export class GLTFParser extends ParserBase {
             let textureArray = []
             for (let i = 0; i < this._gltf.images.length; i++) {
                 const element = this._gltf.images[i];
-                if (element.uri) {
+                if (element.uri && isKTX2Image(element)) {
+                    // KTX2 is transcoded per role (color or data) by
+                    // GLTFSubParser.parseTexture; only fetch its bytes here.
+                    if (element.uri.startsWith('data:')) continue;
+                    let url = StringUtil.parseUrl(this.baseUrl, element.uri)
+                    if (this.loaderFunctions?.onUrl)
+                        url = await this.loaderFunctions.onUrl(url)
+                    textureArray.push(new FileLoader(this.ctx).loadBinData(url, this.loaderFunctions).then(data => {
+                        this._gltf.resources['ktx2:' + i] = data;
+                    }));
+                } else if (element.uri) {
                     let url = StringUtil.parseUrl(this.baseUrl, element.uri)
                     if (this.loaderFunctions?.onUrl)
                         url = await this.loaderFunctions.onUrl(url)

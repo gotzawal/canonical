@@ -42,6 +42,16 @@ export class Context3D extends CEventDispatcher {
     public adapter: GPUAdapter;
     /** The GPUDevice owned by this context; the root handle for all GPU work. */
     public device: GPUDevice;
+
+    /** The block-compressed texture families the device can sample. */
+    public get compressedTextureSupport(): { bc: boolean; etc2: boolean; astc: boolean } {
+        const f = this.device?.features;
+        return {
+            bc: !!f?.has('texture-compression-bc'),
+            etc2: !!f?.has('texture-compression-etc2'),
+            astc: !!f?.has('texture-compression-astc'),
+        };
+    }
     /** The format pipelines target — the sRGB view variant, so the
      *  GPU does the linear→sRGB encode at write time. Must match the
      *  view created in `GPUContext.beginRenderPass`. */
@@ -137,6 +147,10 @@ export class Context3D extends CEventDispatcher {
         }
         const avail = Array.from((this.adapter.features as any) || []);
         // if (import.meta.env.DEV) console.log('[Context3D] adapter.features =', avail.join(', '));
+        // Block-compressed texture families are optional: ask for the ones
+        // the adapter has, so KTX2 textures stay compressed on the GPU.
+        const compression = (['texture-compression-bc', 'texture-compression-etc2', 'texture-compression-astc'] as GPUFeatureName[])
+            .filter((f) => this.adapter.features.has(f));
         this.device = await this.adapter.requestDevice({
             requiredFeatures: [
                 'bgra8unorm-storage',
@@ -144,6 +158,7 @@ export class Context3D extends CEventDispatcher {
                 'depth32float-stencil8',
                 'indirect-first-instance',
                 'rg11b10ufloat-renderable',
+                ...compression,
             ],
             requiredLimits: {
                 minUniformBufferOffsetAlignment: 256,

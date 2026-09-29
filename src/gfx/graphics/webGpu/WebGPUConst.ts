@@ -237,6 +237,12 @@ export let GPUTextureFormat = {
     bc6h_rgb_float: 'bc6h-rgb-float' as GPUTextureFormat,
     bc7_rgba_unorm: 'bc7-rgba-unorm' as GPUTextureFormat,
     bc7_rgba_unorm_srgb: 'bc7-rgba-unorm-srgb' as GPUTextureFormat,
+    etc2_rgb8unorm: 'etc2-rgb8unorm' as GPUTextureFormat,
+    etc2_rgb8unorm_srgb: 'etc2-rgb8unorm-srgb' as GPUTextureFormat,
+    etc2_rgba8unorm: 'etc2-rgba8unorm' as GPUTextureFormat,
+    etc2_rgba8unorm_srgb: 'etc2-rgba8unorm-srgb' as GPUTextureFormat,
+    astc_4x4_unorm: 'astc-4x4-unorm' as GPUTextureFormat,
+    astc_4x4_unorm_srgb: 'astc-4x4-unorm-srgb' as GPUTextureFormat,
     depth24unorm_stencil8: 'depth24unorm-stencil8' as GPUTextureFormat,
     depth32float_stencil8: 'depth32float-stencil8' as GPUTextureFormat,
 };

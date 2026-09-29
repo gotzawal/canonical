@@ -1,6 +1,7 @@
 import { GPUAddressMode, GPUFilterMode } from '../../WebGPUConst';
 import { TextureMipmapGenerator } from './TextureMipmapGenerator';
 import { Context3D, bindCtx, resolveDefaultCtx } from '../../Context3D';
+import { isSrgbFormat } from './TextureFormatUtil';
 
 /**
  * Texture — CPU-authoritative scene-graph object (Plan B).
@@ -56,7 +57,7 @@ export class Texture implements GPUSamplerDescriptor {
         if (!this._gpuTexture && this.textureDescriptor) {
             this._ensureBound();
             this._gpuTexture = this._boundCtx!.device.createTexture(this.textureDescriptor);
-            this._uploadSourceImage(this._gpuTexture);
+            this.uploadInitialData(this._gpuTexture);
             // Auto-mipmap only for single-layer 2D textures. Cube / 2d-array
             // / cube-array textures have their own mipmap pipeline (e.g.
             // TextureCubeFaceData.generateMipmap → IBLEnvMapCreator). The
@@ -362,7 +363,7 @@ export class Texture implements GPUSamplerDescriptor {
         // separate compute RTs in `rgba16float` / `rgba8unorm`),
         // so it's safe to drop the bit unconditionally for sRGB
         // formats.
-        if (typeof format === 'string' && format.endsWith('-srgb')) {
+        if (isSrgbFormat(format)) {
             usage &= ~GPUTextureUsage.STORAGE_BINDING;
         }
         this.width = width;
@@ -449,9 +450,16 @@ export class Texture implements GPUSamplerDescriptor {
     }
 
     /**
+     * Fill a newly made GPU texture with the data this texture keeps on
+     * the CPU. Called from the gpuTexture getter; subclasses that keep
+     * other data than a source image (compressed mip levels) override it.
+     */
+    protected uploadInitialData(tex: GPUTexture) {
+        this._uploadSourceImage(tex);
+    }
+
+    /**
      * Upload the cached source image (if any) into the given GPU texture.
-     * Called from the gpuTexture getter when materializing the GPU texture
-     * on first access.
      */
     private _uploadSourceImage(tex: GPUTexture) {
         if (!this._sourceImageData) return;
@@ -506,6 +514,13 @@ export class Texture implements GPUSamplerDescriptor {
      */
     public get sourceImageData() {
         return this._sourceImageData;
+    }
+
+    /** Forget the cached source image (a subclass filling the texture another way). */
+    protected dropSourceImage() {
+        const image = this._sourceImageData;
+        this._sourceImageData = null;
+        if (typeof ImageBitmap !== 'undefined' && image instanceof ImageBitmap) image.close();
     }
 
     /**

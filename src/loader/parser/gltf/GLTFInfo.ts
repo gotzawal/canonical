@@ -15,7 +15,8 @@ export class GLTF_Info {
         isParsed: boolean;
         dbuffer: any;
         byteLength: number;
-        uri: string;
+        uri?: string;
+        extensions?: { [name: string]: any };
     }[];
 
     public bufferViews: {
@@ -25,6 +26,7 @@ export class GLTF_Info {
         dbufferView: any;
         byteStride: number;
         byteLength: number;
+        extensions?: { [name: string]: any };
     }[];
 
     public materials: {
@@ -47,6 +49,7 @@ export class GLTF_Info {
         source: number;
         name: string;
         dtexture: any;
+        extensions?: { [name: string]: any };
     }[];
     cameras: any;
     skins: any;
@@ -73,6 +76,9 @@ export class GLTF_Info {
             lights: GLTF_Light[];
         };
     };
+
+    extensionsUsed?: string[];
+    extensionsRequired?: string[];
 }
 
 /**

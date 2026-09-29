@@ -3,7 +3,13 @@ import { Object3D } from '../../../core/entities/Object3D';
 import { StringUtil } from '../../../util/StringUtil';
 import { GLTF_Info, GLTF_Node } from './GLTFInfo';
 import { getTypedArrayTypeFromGLType } from './TypeArray';
+import { dequantizeNormalized } from './GLTFQuantization';
 import { KHR_draco_mesh_compression } from './extends/KHR_draco_mesh_compression';
+import { EXT_meshopt_compression } from './extends/EXT_meshopt_compression';
+import { CompressedTexture2D } from '../../../textures/CompressedTexture2D';
+import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
+import { isSrgbFormat } from '../../../gfx/graphics/webGpu/core/texture/TextureFormatUtil';
+import { assertSupportedGltfExtensions } from './GLTFExtensions';
 import { BitmapTexture2D } from '../../../textures/BitmapTexture2D';
 import { GLTFSubParserCamera } from './GLTFSubParserCamera';
 import { GLTFSubParserMesh } from './GLTFSubParserMesh';
@@ -62,6 +68,8 @@ export class GLTFSubParser {
             console.error(`GLTFParser only support glTF 2.0 for now! Received glTF version: ${this.version}`);
             return false;
         }
+        assertSupportedGltfExtensions(this.gltf);
+        if (EXT_meshopt_compression.isUsed(this.gltf)) await EXT_meshopt_compression.ready();
 
         const result = {
             nodes: await this.parseScene(sceneId),
@@ -166,46 +174,23 @@ export class GLTFSubParser {
     public async parseTexture(index: number, colorSpace: 'srgb' | 'linear' = 'linear') {
         let textureInfo = this.gltf.textures[index];
         if (textureInfo && !textureInfo.dtexture) {
-            if (textureInfo && textureInfo.source != null) {
-                let image = this.gltf.images[textureInfo.source];
-                if (image.uri) {
-                    let name = image.uri;
-                    name = StringUtil.getURLName(name);
-                    let preloaded: BitmapTexture2D = this.gltf.resources[name];
-                    // External .gltf path: GLTFParser.load_gltf_textures
-                    // preloads images via FileLoader.loadAsyncBitmapTexture
-                    // which always materializes `rgba8unorm`. When this
-                    // role asks for `'srgb'`, the preloaded texture has
-                    // the wrong format — re-load via Res.loadTexture
-                    // (which keys the cache by url+colorSpace) so
-                    // baseColor / emissive get hardware sRGB decode.
-                    if (colorSpace === 'srgb' && preloaded && (preloaded as any).format !== 'rgba8unorm-srgb') {
-                        // The preloaded BitmapTexture2D's `url` field
-                        // already holds the resolved absolute URL (set
-                        // by GLTFParser.load_gltf_textures via
-                        // FileLoader.loadAsyncBitmapTexture). Falling
-                        // back to image.uri keeps the path working for
-                        // any preload variants that didn't set `url`.
-                        const url = preloaded.url ?? image.uri;
-                        textureInfo.dtexture = await Engine3D.resFor(this.ctx).loadTexture(url, undefined, undefined, 'srgb') as BitmapTexture2D;
-                    } else {
-                        textureInfo.dtexture = preloaded;
-                    }
-                } else if (image.bufferView) {
-                    const name = image?.name;
-                    let bitmapTexture: BitmapTexture2D = this.gltf.resources[name];
-                    if (!bitmapTexture) {
-                        let buffer = this.parseBufferView(image.bufferView);
-                        bitmapTexture = new BitmapTexture2D(true, this.ctx, colorSpace);
-                        let img = new Blob([buffer], { type: image.mimeType });
-                        await bitmapTexture.loadFromBlob(img);
-                    }
-                    textureInfo.dtexture = bitmapTexture;
-
-                } else {
-                    textureInfo.dtexture = this.gltf.resources[image.name];
+            // Image sources in order of preference: KTX2 (KHR_texture_basisu),
+            // WebP or AVIF, then the plain source every viewer reads. A source
+            // that fails falls back to the next one.
+            const ext = textureInfo.extensions;
+            const sources: number[] = [];
+            for (const s of [ext?.KHR_texture_basisu?.source, ext?.EXT_texture_webp?.source, ext?.EXT_texture_avif?.source, textureInfo.source]) {
+                if (s !== undefined && s !== null && !sources.includes(s)) sources.push(s);
+            }
+            for (let i = 0; i < sources.length && !textureInfo.dtexture; i++) {
+                try {
+                    textureInfo.dtexture = await this.parseImage(sources[i], colorSpace);
+                } catch (e) {
+                    const next = i + 1 < sources.length ? `, using image ${sources[i + 1]}` : '';
+                    (next ? console.warn : console.error)(`glTF texture ${index}: image ${sources[i]} failed (${e?.message ?? e})${next}`);
                 }
-            } else if (textureInfo.name) {
+            }
+            if (!sources.length && textureInfo.name) {
                 let name = StringUtil.getURLName(textureInfo.name);
                 textureInfo.dtexture = this.gltf.resources[name];
             }
@@ -214,6 +199,84 @@ export class GLTFSubParser {
             console.log("miss texture , please check texture!", index, textureInfo);
         }
         return textureInfo.dtexture;
+    }
+
+    /** The texture of one glTF image, decoded or transcoded for its color space. */
+    private async parseImage(imageIndex: number, colorSpace: 'srgb' | 'linear') {
+        const image = this.gltf.images[imageIndex];
+        if (!image) return this.errorMiss('image', imageIndex);
+        if (isKTX2Image(image)) return this.parseKTX2Image(imageIndex, colorSpace);
+        if (image.uri) {
+            let name = image.uri;
+            name = StringUtil.getURLName(name);
+            let preloaded: BitmapTexture2D = this.gltf.resources[name];
+            // External .gltf path: GLTFParser.load_gltf_textures
+            // preloads images via FileLoader.loadAsyncBitmapTexture
+            // which always materializes `rgba8unorm`. When this
+            // role asks for `'srgb'`, the preloaded texture has
+            // the wrong format — re-load via Res.loadTexture
+            // (which keys the cache by url+colorSpace) so
+            // baseColor / emissive get hardware sRGB decode.
+            if (colorSpace === 'srgb' && preloaded && !isSrgbFormat((preloaded as any).format)) {
+                // The preloaded BitmapTexture2D's `url` field
+                // already holds the resolved absolute URL (set
+                // by GLTFParser.load_gltf_textures via
+                // FileLoader.loadAsyncBitmapTexture). Falling
+                // back to image.uri keeps the path working for
+                // any preload variants that didn't set `url`.
+                const url = preloaded.url ?? image.uri;
+                return await Engine3D.resFor(this.ctx).loadTexture(url, undefined, undefined, 'srgb') as BitmapTexture2D;
+            }
+            return preloaded;
+        }
+        if (image.bufferView !== undefined) {
+            // Preloaded by GLBParser (linear), else decoded here for this color space.
+            const key = `image_${imageIndex}:${colorSpace}`;
+            let bitmapTexture: BitmapTexture2D = this.gltf.resources['image_' + imageIndex] ?? this.gltf.resources[key];
+            if (!bitmapTexture) {
+                let buffer = this.parseBufferView(image.bufferView);
+                bitmapTexture = new BitmapTexture2D(true, this.ctx, colorSpace);
+                bitmapTexture.name = image.name || `image_${imageIndex}`;
+                let img = new Blob([buffer], { type: image.mimeType });
+                await bitmapTexture.loadFromBlob(img);
+                this.gltf.resources[key] = bitmapTexture;
+            }
+            return bitmapTexture;
+        }
+        return this.gltf.resources[image.name];
+    }
+
+    /**
+     * A KTX2 image transcoded for this device, once per color space (the
+     * GPU format of a base color and of a normal map differ).
+     */
+    private parseKTX2Image(imageIndex: number, colorSpace: 'srgb' | 'linear'): Promise<CompressedTexture2D> {
+        const key = `ktx2tex:${imageIndex}:${colorSpace}`;
+        const cached = this.gltf.resources[key];
+        if (cached) return cached;
+        const image = this.gltf.images[imageIndex];
+        const loading = (async () => {
+            let bytes: ArrayBuffer | undefined;
+            if (image.bufferView !== undefined) bytes = this.parseBufferView(image.bufferView) || undefined;
+            else bytes = this.gltf.resources['ktx2:' + imageIndex];
+            if (!bytes && image.uri?.startsWith('data:')) bytes = this.decodeDataUri(image.uri);
+            if (!bytes) throw new Error(`glTF image ${imageIndex} (KTX2) has no data`);
+            const texture = new CompressedTexture2D(this.ctx, colorSpace);
+            texture.name = image.name || image.uri || `image_${imageIndex}`;
+            await texture.loadKTX2(bytes);
+            return texture;
+        })();
+        this.gltf.resources[key] = loading;
+        loading.catch(() => delete this.gltf.resources[key]);
+        return loading;
+    }
+
+    private decodeDataUri(uri: string): ArrayBuffer {
+        const base64Idx = uri.indexOf(this._BASE64_MARKER) + this._BASE64_MARKER.length;
+        const blob = window.atob(uri.substring(base64Idx));
+        const bytes = new Uint8Array(blob.length);
+        for (let i = 0; i < blob.length; i++) bytes[i] = blob.charCodeAt(i);
+        return bytes.buffer;
     }
 
     public async parseMaterial(materialId) {
@@ -576,15 +639,25 @@ export class GLTFSubParser {
             for (let i = 0; i < indicesArray.length; i++) typedArray.set(valuesArray.slice(i * numComponents, i * numComponents + numComponents), indicesArray[i] * numComponents);
         }
 
+        // Normalized integers (quantized normals, UVs, colors, weights,
+        // animation rotations) become the floats they stand for, so no
+        // reader has to know about the integer encoding.
+        let quantized = false;
+        if (normalize && !(typedArray instanceof Float32Array)) {
+            typedArray = dequantizeNormalized(typedArray);
+            quantized = true;
+        }
+
         accessor.computeResult = {
             typedArray,
-            arrayType,
+            arrayType: quantized ? Float32Array : arrayType,
             numComponents,
         };
         accessor.daccessor = {
             data: typedArray,
             numComponents,
-            normalize,
+            normalize: normalize && !quantized,
+            quantized,
         };
 
         return accessor.daccessor;
@@ -614,6 +687,15 @@ export class GLTFSubParser {
         bufferView.isParsed = true;
         bufferView.dbufferView = false;
 
+        // Packed by meshoptimizer: unpack from the extension's buffer and
+        // never touch the view's own (fallback) buffer, which may be empty.
+        const meshopt = EXT_meshopt_compression.extOf(bufferView);
+        if (meshopt) {
+            const source = this.parseBuffer(meshopt.buffer);
+            if (source) bufferView.dbufferView = EXT_meshopt_compression.decode(meshopt, source);
+            return bufferView.dbufferView;
+        }
+
         const buffer = this.parseBuffer(bufferView.buffer);
         if (buffer) {
             const { byteOffset, byteLength } = bufferView;
@@ -633,6 +715,10 @@ export class GLTFSubParser {
         buffer.isParsed = true;
         buffer.dbuffer = false;
 
+        if (!buffer.uri) {
+            const why = EXT_meshopt_compression.isFallback(buffer) ? 'is a meshopt fallback, read through a bufferView it does not back' : 'has no data';
+            throw new Error(`glTF buffers[${bufferId}] ${why}`);
+        }
         if (buffer.uri.substring(0, 5) !== 'data:') {
             const uri = buffer.uri;
             const arrayBuffer = this.gltf.resources[uri];
@@ -642,11 +728,7 @@ export class GLTFSubParser {
                 } else console.error(`load gltf resource "${uri}" at buffers[${bufferId} failed, ArrayBuffer.byteLength not equals buffer's byteLength]`);
             else console.error(`load gltf resource "${uri}" at buffers[${bufferId}] failed`);
         } else {
-            const base64Idx = buffer.uri.indexOf(this._BASE64_MARKER) + this._BASE64_MARKER.length;
-            const blob = window.atob(buffer.uri.substring(base64Idx));
-            const bytes = new Uint8Array(blob.length);
-            for (let i = 0; i < blob.length; i++) bytes[i] = blob.charCodeAt(i);
-            buffer.dbuffer = bytes.buffer;
+            buffer.dbuffer = this.decodeDataUri(buffer.uri);
         }
 
         return buffer.dbuffer;
