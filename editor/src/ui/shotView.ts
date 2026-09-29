@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { getAssetUrl } from '../core/assets';
 import type { ShotDoc } from '../core/types';
 import { FRAME_MARGIN, frameRect } from '../design/shotCamera';
@@ -88,8 +89,8 @@ export class ShotView {
         pipeline.on('compare', (id) => {
             if (pipeline.activeShot === id && !this.compare.open) this.compare.show(id);
         });
-        editor.store.on('change', () => {
-            if (pipeline.activeShot) this.update();
+        onChanges(editor.store, (hint) => {
+            if (pipeline.activeShot && touches(hint, 'design')) this.update();
         });
         new ResizeObserver(() => {
             if (!pipeline.activeShot) return;

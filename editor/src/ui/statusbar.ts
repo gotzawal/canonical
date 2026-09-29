@@ -1,5 +1,6 @@
 import { clearLogs, logEvents, logs } from '../core/log';
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { toast } from './overlays';
@@ -78,7 +79,7 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
         selection.textContent = n ? (count > 1 ? `${count} selected (${n.name})` : n.name) + ` - ${total} objects` : `${total} objects`;
     };
     store.on('selection', updateSelection);
-    store.on('change', updateSelection);
+    onChanges(store, (hint) => touches(hint, 'nodes') && updateSelection());
     updateSelection();
 
     let warned = '';

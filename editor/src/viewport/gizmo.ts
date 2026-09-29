@@ -299,13 +299,13 @@ export class Gizmo {
                 delta = sub(rayAt(ray, t), d.startHit!);
             }
             if (snapping) delta = this.snapDelta(L, d.handle, delta, prefs.snapMove);
-            this.store.update((doc) => {
+            this.store.update(() => {
                 for (const it of d.items) {
-                    const node = doc.nodes.find((n) => n.id === it.id);
+                    const node = this.store.node(it.id);
                     if (!node) continue;
                     node.position = tidy3(transformPoint(it.invParent, add(it.worldPos, delta!)));
                 }
-            }, { nodes: ids });
+            }, { nodes: ids, transform: true });
             d.info = `Δ ${fmt(delta[0])}, ${fmt(delta[1])}, ${fmt(delta[2])}`;
         } else if (L.mode === 'rotate') {
             let raw: number;
@@ -328,9 +328,9 @@ export class Gizmo {
             let angle = d.angle;
             if (snapping) angle = snap(angle / DEG, prefs.snapRotate) * DEG;
             const dq = quatAxisAngle(d.rotAxis, angle);
-            this.store.update((doc) => {
+            this.store.update(() => {
                 for (const it of d.items) {
-                    const node = doc.nodes.find((n) => n.id === it.id);
+                    const node = this.store.node(it.id);
                     if (!node) continue;
                     // Turn the object's own rotation by the turn seen from its parent (a mirroring
                     // parent reverses it): the rotation of a mirrored matrix cannot be read back.
@@ -338,7 +338,7 @@ export class Gizmo {
                     node.rotation = tidy3(eulerFromQuat(quatMul(turn, quatFromEuler(it.start.rotation))), 4);
                     node.position = aroundPivot(it, L.pivot, (o) => quatRotate(dq, o));
                 }
-            }, { nodes: ids });
+            }, { nodes: ids, transform: true });
             d.info = `${fmt(angle / DEG, 1)}°`;
         } else {
             let factors: Vec3;
@@ -354,9 +354,9 @@ export class Gizmo {
                 factors = [1, 1, 1];
                 factors[i] = f;
             }
-            this.store.update((doc) => {
+            this.store.update(() => {
                 for (const it of d.items) {
-                    const node = doc.nodes.find((n) => n.id === it.id);
+                    const node = this.store.node(it.id);
                     if (!node) continue;
                     let s: Vec3 = [it.scale[0] * factors[0], it.scale[1] * factors[1], it.scale[2] * factors[2]];
                     if (snapping) s = s.map((v, k) => (factors[k] !== 1 ? snap(v, prefs.snapScale) || prefs.snapScale : v)) as Vec3;
@@ -364,7 +364,7 @@ export class Gizmo {
                     // Origins spread from the pivot along the scaled axes.
                     node.position = aroundPivot(it, L.pivot, (o) => L.axes.reduce((v, a, k) => add(v, scale(a, (factors[k] - 1) * dot(o, a))), o));
                 }
-            }, { nodes: ids });
+            }, { nodes: ids, transform: true });
             const shown = d.handle === 'uniform' ? factors[0] : factors[AXIS_HANDLES.indexOf(d.handle)];
             d.info = `×${fmt(shown, 3)}`;
         }
@@ -397,15 +397,15 @@ export class Gizmo {
         this.drag = null;
         // Put back only what this drag moved. The drag may run inside a longer
         // transaction (an AI request), whose own edits have to stay.
-        this.store.update((doc) => {
+        this.store.update(() => {
             for (const it of d.items) {
-                const node = doc.nodes.find((n) => n.id === it.id);
+                const node = this.store.node(it.id);
                 if (!node) continue;
                 node.position = [...it.start.position] as Vec3;
                 node.rotation = [...it.start.rotation] as Vec3;
                 node.scale = [...it.start.scale] as Vec3;
             }
-        }, { nodes: d.items.map((i) => i.id) });
+        }, { nodes: d.items.map((i) => i.id), transform: true });
         this.store.end();
     }
 

@@ -104,16 +104,17 @@ export function startPerfMonitor() {
     log(`[perf] Timing the editor's listeners (__perf.report() lists them). Long tasks are reported${PerformanceObserver.supportedEntryTypes?.includes('longtask') ? '' : ' where the browser supports it (not this one)'}.`);
 }
 
-/** "Function (file:line)" of the first caller outside this module and events.ts, from a stack trace. */
+/** "Function (file:line)" of the first caller outside this module, events.ts and ui/batch.ts, from a stack trace. */
 export function callSite(stack: string): string {
     for (const line of stack.split('\n').slice(1)) {
         // Chrome: "    at fn (url:line:col)" or "    at url:line:col"; Firefox and Safari: "fn@url:line:col".
         const m = /^\s*at (?:(.*?) \()?(.+?):(\d+):\d+\)?$/.exec(line) ?? /^(.*?)@(.+?):(\d+):\d+$/.exec(line);
         if (!m) continue;
         const url = m[2];
-        if (/\/core\/(events|perf)\.ts|[/\\]events\.[jt]s|[/\\]perf\.[jt]s/.test(url)) continue;
-        const file = /\/src\/(.+?)(\?|$)/.exec(url)?.[1] ?? url.split('/').pop()!.split('?')[0];
         const fn = (m[1] ?? '').replace(/^(new |async |Object\.)/, '');
+        // In a build every module is in one file: the functions that add listeners tell them apart.
+        if (/\/(core\/events|core\/perf|ui\/batch)\.ts/.test(url) || /^(site|callSite|listenerSite|timed|onChanges|on)$|\.on$/.test(fn)) continue;
+        const file = /\/src\/(.+?)(\?|$)/.exec(url)?.[1] ?? url.split('/').pop()!.split('?')[0];
         return `${fn ? fn + ' ' : ''}(${file}:${m[3]})`;
     }
     return 'unknown';

@@ -1,5 +1,6 @@
 import type { Editor } from '../editor';
 import { BehaviorPanel } from './behavior/behaviorPanel';
+import { onChanges, touches } from './batch';
 import { CodePanel, type CodeKind } from './codePanel';
 import { DecisionLogPanel } from './decisionLogPanel';
 import { clear, h, shortcutLabel } from './dom';
@@ -62,7 +63,8 @@ export class Dock {
         editor.on('show-graph', () => this.show('graph'));
         editor.on('show-behavior', () => this.show('behavior'));
         editor.on('flush-edits', () => this.applyEdits());
-        editor.store.on('change', () => this.syncDocs());
+        // Scripts and shaders change without a hint, behavior trees with a behavior hint.
+        onChanges(editor.store, (hint) => touches(hint, 'behavior') && this.syncDocs());
         editor.store.on('load', () => this.syncDocs());
         this.restore();
     }

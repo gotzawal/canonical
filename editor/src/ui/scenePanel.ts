@@ -1,5 +1,6 @@
 import type { z } from 'zod';
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { Environment } from '../core/model';
 import { inner } from '../core/schema';
 import type { EnvironmentDoc, SkyType } from '../core/types';
@@ -23,7 +24,8 @@ export class ScenePanel {
         this.steps = new FieldSteps(editor.store);
         this.body = h('div', { class: 'panel-body' });
         this.el = h('div', { class: 'panel scene-panel' }, this.body);
-        editor.store.on('change', () => {
+        onChanges(editor.store, (hint) => {
+            if (!touches(hint, 'env')) return;
             const env = editor.store.doc.environment;
             if (env.sky !== this.sky || env.gi.enable !== this.giOn) this.render();
             else for (const s of this.syncs) s();

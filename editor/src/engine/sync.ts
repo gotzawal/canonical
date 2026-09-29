@@ -107,30 +107,35 @@ export class SceneSync extends Emitter<SyncEvents> {
     sync(hint?: ChangeHint) {
         if (hint?.meta || hint?.design || hint?.behavior) return;
         const doc = this.store.doc;
-        this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
         this.runtime.gi.invalidate();
-        if (hint?.env) return;
+        if (!hint?.nodes || hint.env) this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
+        if (hint?.env && !hint.nodes) return;
 
         if (hint?.nodes) {
+            // Only these objects changed; moving them (a gizmo drag) shows or hides nothing.
             for (const id of hint.nodes) {
                 const node = this.store.node(id);
-                if (node && this.entries.has(id)) this.apply(node);
+                const entry = this.entries.get(id);
+                if (!node || !entry) continue;
+                if (hint.transform) this.applyTransform(entry, node);
+                else this.apply(node);
             }
-        } else {
-            const alive = new Set<string>();
-            for (const node of doc.nodes) {
-                alive.add(node.id);
-                if (!this.entries.has(node.id)) this.create(node);
-            }
-            // Re-parent before destroying so surviving children of removed
-            // nodes are moved out of the subtree that is about to die.
-            for (const node of doc.nodes) this.parent(node);
-            for (const [id, entry] of Array.from(this.entries)) {
-                if (!alive.has(id)) this.destroy(entry);
-            }
-            for (const node of doc.nodes) this.apply(node);
+            if (!hint.transform) this.updateVisibility(hint.nodes);
+            return;
         }
+        const alive = new Set<string>();
+        for (const node of doc.nodes) {
+            alive.add(node.id);
+            if (!this.entries.has(node.id)) this.create(node);
+        }
+        // Re-parent before destroying so surviving children of removed
+        // nodes are moved out of the subtree that is about to die.
+        for (const node of doc.nodes) this.parent(node);
+        for (const [id, entry] of Array.from(this.entries)) {
+            if (!alive.has(id)) this.destroy(entry);
+        }
+        for (const node of doc.nodes) this.apply(node);
         this.updateVisibility();
     }
 
@@ -592,7 +597,18 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.runtime.applyEnvironment(env ?? this.store.doc.environment);
     }
 
-    private updateVisibility() {
+    /** Shows and hides objects as they and their parents are visible (all, or `ids` and what is below them). */
+    private updateVisibility(ids?: readonly string[]) {
+        if (ids) {
+            for (const id of ids) {
+                const node = this.store.node(id);
+                if (!node) continue;
+                let shown = true;
+                for (let p = this.store.node(node.parent); p && shown; p = this.store.node(p.parent)) shown = p.visible;
+                this.showBranch(node, shown);
+            }
+            return;
+        }
         const effective = new Map<string, boolean>();
         const resolve = (node: NodeDoc | undefined): boolean => {
             if (!node) return true;
@@ -606,6 +622,13 @@ export class SceneSync extends Emitter<SyncEvents> {
             const entry = this.entries.get(node.id);
             if (entry) this.setEnabled(entry, resolve(node) && (this.inView(node.id) || (!!node.light && !this.isolateLights)));
         }
+    }
+
+    private showBranch(node: NodeDoc, parentShown: boolean) {
+        const shown = parentShown && node.visible;
+        const entry = this.entries.get(node.id);
+        if (entry) this.setEnabled(entry, shown && (this.inView(node.id) || (!!node.light && !this.isolateLights)));
+        for (const child of this.store.children(node.id)) this.showBranch(child, shown);
     }
 
     private setEnabled(entry: Entry, visible: boolean, force = false) {

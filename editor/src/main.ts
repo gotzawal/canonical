@@ -22,6 +22,7 @@ import { ModelServices, savedBackend } from './play/ai/services';
 import { scriptChat } from './ai/scriptChat';
 import { formatBytes } from './core/assets';
 import { AIPanel } from './ui/aiPanel';
+import { onChanges, touches } from './ui/batch';
 import { AssetsPanel } from './ui/assetsPanel';
 import { BriefScreen } from './ui/briefScreen';
 import { DesignPanel } from './ui/designPanel';
@@ -280,7 +281,8 @@ async function main() {
     };
     compiler.on('trust', updateNotice);
     store.on('load', updateNotice);
-    store.on('change', updateNotice);
+    // Only changes without a hint touch the scripts.
+    onChanges(store, (hint) => touches(hint) && updateNotice());
     updateNotice();
 
     const tabs = h('div', { class: 'tabs', attrs: { role: 'tablist' } });
@@ -424,7 +426,7 @@ async function main() {
         sceneName.textContent = store.doc.name;
         document.title = `${store.doc.name} - Morglay`;
     };
-    store.on('change', updateTitle);
+    onChanges(store, (hint) => touches(hint, 'env') && updateTitle());
     store.on('load', updateTitle);
     updateTitle();
 

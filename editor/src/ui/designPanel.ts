@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, whenQuiet } from './batch';
 import { getAssetUrl, putDesignImage } from '../core/assets';
 import { areaName, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
@@ -44,7 +45,9 @@ export class DesignPanel {
         this.body = h('div', { class: 'panel-body design-body' });
         this.el = h('div', { class: 'panel design-panel' }, this.body);
         const store = editor.store;
-        store.on('change', () => this.schedule());
+        // Its checklist looks at every object: moving them updates it once the drag has ended.
+        const quiet = whenQuiet(250, () => this.schedule());
+        onChanges(store, (hint) => (hint?.transform ? quiet() : this.schedule()));
         store.on('load', () => this.schedule(true));
         editor.pipeline.on('busy', () => this.schedule(true));
         editor.pipeline.on('shot', () => this.schedule(true));

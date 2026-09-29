@@ -6,6 +6,7 @@
 
 import { bench, describe } from 'vitest';
 import { mergeHints, Store, type ChangeHint } from '../../src/core/store';
+import { refs, useCounts } from '../../src/core/refs';
 import type { NodeDoc, SceneDoc } from '../../src/core/types';
 import { LegacyStore } from '../unit/legacyStore';
 import { syntheticScene } from './scene';
@@ -83,6 +84,13 @@ describe('one frame of a gizmo drag: the store and what listens to it', () => {
             }
         }, { nodes: ids });
     });
+});
+
+describe('what the assets panel works out when objects change', () => {
+    // How many objects use each script and prefab. It skips moves (transform hints) altogether.
+    const doc = copy();
+    bench('counting uses (budget 0.5 ms)', () => void useCounts(doc));
+    bench('before: every reference in the document', () => void refs(doc), { iterations: 50, time: 0 });
 });
 
 describe('walk the whole tree', () => {

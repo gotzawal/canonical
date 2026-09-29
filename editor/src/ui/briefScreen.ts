@@ -1,4 +1,5 @@
 import type { Editor } from '../editor';
+import { onChanges, touches } from './batch';
 import { getAssetUrl } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import { addConcepts } from './designPanel';
@@ -99,8 +100,8 @@ export class BriefScreen {
                 this.el.hidden = false;
             }
         });
-        store.on('change', () => {
-            if (this.el.hidden) return;
+        onChanges(store, (hint) => {
+            if (this.el.hidden || !touches(hint, 'design')) return;
             this.renderConcepts();
             // The brief was filled in or skipped elsewhere (the Design tab, undo, a loaded file).
             if (this.auto && !this.wanted() && !this.text.value.trim()) this.hide();

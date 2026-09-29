@@ -184,7 +184,7 @@ export class ScriptCompiler extends Emitter<CompilerEvents> {
         super();
         this._trusted = trusted;
         store.on('change', (hint) => {
-            if (!hint?.nodes && !hint?.env && !hint?.meta && !hint?.behavior) this.check();
+            if (!hint?.nodes && !hint?.env && !hint?.meta && !hint?.design && !hint?.behavior) this.check();
         });
         store.on('load', () => this.check());
         this.check();

@@ -60,7 +60,11 @@ export class RenderGraphController extends Emitter<GraphEvents> {
 
     constructor(private runtime: Runtime, private store: Store, private shaders: ShaderManager, private sync: SceneSync) {
         super();
-        store.on('change', () => this.apply());
+        // The render graph changes with the environment (or without a hint).
+        store.on('change', (hint) => {
+            if (!hint?.env && (hint?.nodes || hint?.meta || hint?.design || hint?.behavior)) return;
+            this.apply();
+        });
         store.on('load', () => this.apply(true));
         shaders.on('compiled', () => this.apply(true));
         // GI adds passes the first time it is switched on.
