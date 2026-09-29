@@ -40,6 +40,8 @@ export class HierarchyPanel {
     private anchor: string | null = null;
     private dragIds: string[] = [];
     private renaming: string | null = null;
+    /** Ends the rename in progress (applying it or not). */
+    private stopRename: ((apply: boolean) => void) | null = null;
     private changes: FrameChanges;
 
     /** Every row, in order (what the tree would show without scrolling). */
@@ -182,6 +184,9 @@ export class HierarchyPanel {
         const first = Math.max(0, Math.floor((this.tree.scrollTop - PAD_TOP) / height) - OVERSCAN);
         const last = Math.min(this.rows.length, Math.ceil((this.tree.scrollTop + view) / height) + OVERSCAN);
         this.list.style.transform = `translateY(${first * height}px)`;
+        // A row being renamed that scrolls away takes the name typed so far.
+        const renamed = this.renaming ? this.rowOf.get(this.renaming) : undefined;
+        if (this.renaming && (renamed === undefined || renamed < first || renamed >= last)) queueMicrotask(() => this.stopRename?.(true));
 
         const selected = new Set(store.selection);
         const primary = store.primary?.id;
@@ -474,6 +479,7 @@ export class HierarchyPanel {
             if (done) return;
             done = true;
             this.renaming = null;
+            this.stopRename = null;
             // The row shows the name again, the new one or the old.
             this.drawn.delete(id);
             if (apply && input.value.trim() && input.value !== node.name) this.editor.rename(id, input.value);
@@ -481,6 +487,7 @@ export class HierarchyPanel {
             this.paint();
             this.tree.focus({ preventScroll: true });
         };
+        this.stopRename = finish;
         input.addEventListener('keydown', (e) => {
             e.stopPropagation();
             if (e.key === 'Enter') finish(true);
