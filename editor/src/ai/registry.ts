@@ -1,8 +1,10 @@
 // The assistant's tools in one list. toolDefs() gives the model the tools
-// the current stage, detail level and AI settings offer; runTool() runs one
-// and refuses what is not offered. Each tool is an entry of its module's list
-// (see Tool in toolUtil.ts): its name, arguments, groups, needs and handler.
+// the detail level and AI settings offer (and the current stage, when the
+// settings limit the tools by stage); runTool() runs one and refuses what is
+// not offered. Each tool is an entry of its module's list (see Tool in
+// toolUtil.ts): its name, arguments, groups, needs and handler.
 
+import { detailLevel } from '../core/design';
 import { stageDef } from '../design/stages';
 import { behaviorTools } from './behaviorTools';
 import { codeTools } from './codeTools';
@@ -23,12 +25,12 @@ const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 function unavailable(env: ToolEnv, t: Tool, allowed = allowedGroups(env)): string {
     if (!t.groups.some((g) => allowed.has(g))) {
         const stage = stageDef(env.editor.pipeline.design.stage);
-        return `${t.name} is not available in the ${stage.title} stage. Ask the user to reopen the right stage, or to let the assistant use every tool in the AI settings.`;
+        return `${t.name} belongs to another stage, and the AI settings limit your tools to the ${stage.title} stage. Tell the user what you would do; they can turn the limit off in the AI settings.`;
     }
     if (t.needs === 'play' && !env.allowPlay()) return 'Play is turned off in the AI settings.';
     if (t.needs === 'screenshots' && !env.screenshots()) return 'Screenshots are turned off in the AI settings.';
     if (t.needs === 'images' && !env.allowImages()) return 'Image generation is turned off in the AI settings.';
-    const quick = env.editor.store.doc.design.detail === 'quick';
+    const quick = detailLevel(env.editor.store.doc.design) === 'quick';
     if (t.detail === 'detailed' && quick) return 'The user wants you to decide the details yourself: decide, write your choice into the plan and go on.';
     if (t.detail === 'quick' && !quick) return 'Only the user judges this, unless they let you decide the details (detail level quick).';
     return '';

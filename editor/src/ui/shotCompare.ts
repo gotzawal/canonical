@@ -39,7 +39,7 @@ export class ShotCompare {
         this.el = h(
             'div',
             { class: 'shot-compare', attrs: { hidden: true } },
-            h('div', { class: 'shot-compare-head' }, icon('graph', 15), h('span', { class: 'shot-compare-title', text: 'Compare with the target' }), h('div', { class: 'spacer' }), this.modeSel, again, close),
+            h('div', { class: 'shot-compare-head' }, icon('graph', 15), h('span', { class: 'shot-compare-title', text: 'Compare with the reference' }), h('div', { class: 'spacer' }), this.modeSel, again, close),
             this.body,
         );
         editor.pipeline.on('shot', (id) => {
@@ -122,7 +122,7 @@ export class ShotCompare {
             void getAssetUrl(meta).then((url) => {
                 if (!url) return;
                 target.src = url;
-                target.addEventListener('click', () => lightbox(url, last.against === 'target' ? 'Target paintover' : 'Concept'));
+                target.addEventListener('click', () => lightbox(url, last.against === 'target' ? 'Painted reference' : 'Reference image'));
             });
         }
         const heat = h('img', { class: 'shot-compare-img heat', attrs: { src: r.heat, alt: 'Difference' } });
@@ -137,9 +137,9 @@ export class ShotCompare {
                 { class: 'shot-compare-metrics' },
                 metric('Score', String(r.score), 'Reference only: 100 minus twice the mean difference on a 64 pixel grid'),
                 metric('Structure', String(r.structure), 'Correlation of the lightness maps (100: lights and darks in the same places, whatever the exposure)'),
-                metric('Brightness', `${r.brightness[0]} / ${r.brightness[1]}`, 'Mean lightness L* of the capture / the target'),
-                metric('Contrast', `${r.contrast[0]} / ${r.contrast[1]}`, 'Spread of lightness of the capture / the target'),
-                r.mode === 'color' ? metric('Saturation', `${r.chroma[0]} / ${r.chroma[1]}`, 'Mean chroma of the capture / the target') : null,
+                metric('Brightness', `${r.brightness[0]} / ${r.brightness[1]}`, 'Mean lightness L* of the capture / the reference'),
+                metric('Contrast', `${r.contrast[0]} / ${r.contrast[1]}`, 'Spread of lightness of the capture / the reference'),
+                r.mode === 'color' ? metric('Saturation', `${r.chroma[0]} / ${r.chroma[1]}`, 'Mean chroma of the capture / the reference') : null,
             ),
             h('ul', { class: 'shot-compare-notes' }, describeComparison(r).map((t) => h('li', { text: t }))),
             h('div', { class: 'shot-compare-foot' }),
@@ -174,7 +174,7 @@ export class ShotCompare {
             });
             foot.append(h('label', { class: 'checkbox' }, box, h('span', { text: def.matchLabel })));
         } else if (!shot.target) {
-            foot.append(h('span', { class: 'muted small', text: 'Choose a target paintover for this shot to mark it as matching.' }));
+            foot.append(h('span', { class: 'muted small', text: 'Choose a painted reference image for this shot to mark it as matching.' }));
         }
         foot.append(h('span', { class: 'muted small', text: 'The numbers are a reference; judge by eye.' }));
     }

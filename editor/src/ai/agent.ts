@@ -9,7 +9,7 @@ import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type Ch
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { aiSettings } from '../openrouter/settings';
 import { runTool, toolDefs } from './registry';
-import type { Approval, ToolChoice, ToolEnv } from './toolUtil';
+import type { Approval, ToolEnv } from './toolUtil';
 
 export interface ToolTurn {
     name: string;
@@ -38,8 +38,6 @@ export interface AgentTurn {
     images?: Attachment[];
     /** Longer text a note can expand to (the summary of compacted messages). */
     detail?: string;
-    /** A note asking the user to pick an option (see ToolChoice); `picked` once answered. */
-    choice?: ToolChoice & { picked?: string };
     /** A note with buttons that approve what the assistant proposed (see Approval). */
     approval?: Approval;
 }
@@ -54,13 +52,23 @@ export interface AgentDone {
     /** The request changed the project. */
     changed: boolean;
     stopped: boolean;
+    /** It ran out of model calls (AI settings, Max steps) before the model finished. */
+    limited?: boolean;
     error?: string;
+}
+
+/** How a request is shown in the chat when that differs from what the model is sent. */
+export interface SendOptions {
+    /** The user's words for the chat (and the undo step's name); the model gets the full text. */
+    show?: string;
 }
 
 interface AgentEvents {
     /** A turn came, changed (streamed text, tool state) or went (it is no longer in turns); null: the whole conversation. */
     update: AgentTurn | null;
     busy: boolean;
+    /** The tool the assistant runs now ('' while it thinks or writes). */
+    activity: string;
     done: AgentDone;
 }
 
@@ -108,8 +116,12 @@ export class Agent extends Emitter<AgentEvents> {
     private placeholders = new Map<ChatMessage, string>();
     private abort: AbortController | null = null;
     busy = false;
-    /** Compaction running (the Send button waits). */
+    /** Compaction running (the Send button stops it). */
     working = false;
+    /** Stops the compaction started by hand (a request's compaction stops with the request). */
+    private compacting: AbortController | null = null;
+    /** What the assistant is doing now, for the status the UI shows: the tool running, or '' while it thinks or writes. */
+    activity = '';
     usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
     lastModel = '';
     private sessionKey = '';
@@ -146,7 +158,7 @@ export class Agent extends Emitter<AgentEvents> {
             editor: this.editor,
             allowPlay: () => aiSettings.value.allowPlay,
             screenshots: () => aiSettings.value.screenshots,
-            stageTools: () => aiSettings.value.stageTools,
+            limitTools: () => aiSettings.value.limitTools,
             allowImages: () => aiSettings.value.allowImages,
             signal: this.abort?.signal,
         };
@@ -224,16 +236,15 @@ export class Agent extends Emitter<AgentEvents> {
         this.saveSession();
     }
 
+    /** Stops the running request, or the compaction started by hand. */
     stop() {
         this.abort?.abort();
+        this.compacting?.abort();
     }
 
-    /** Records the option the user picked on a choice note (the answer itself is sent as a message). */
-    answerChoice(turn: AgentTurn, value: string) {
-        if (!turn.choice || turn.choice.picked) return;
-        turn.choice.picked = value;
-        this.emit('update', turn);
-        this.saveSession();
+    /** Something is running that stop() ends. */
+    get running(): boolean {
+        return this.busy || this.working;
     }
 
     private push(turn: Omit<AgentTurn, 'id'>): AgentTurn {
@@ -241,6 +252,12 @@ export class Agent extends Emitter<AgentEvents> {
         this.turns.push(t);
         this.emit('update', t);
         return t;
+    }
+
+    private setActivity(tool: string) {
+        if (this.activity === tool) return;
+        this.activity = tool;
+        this.emit('activity', tool);
     }
 
     /** Characters in the history, roughly proportional to its tokens (an image counts as IMAGE_CHARS, not its data). */
@@ -275,10 +292,15 @@ export class Agent extends Emitter<AgentEvents> {
 
     // ------------------------------------------------------------ requests
 
-    /** Runs a request; false when it could not start (busy, no key or no model). */
-    async send(text: string, attachments: Attachment[] = []): Promise<boolean> {
+    /**
+     * Runs a request; false when it could not start (busy, no key or no
+     * model). `opts.show` is what the chat shows of it, when the model is
+     * sent more than the user's words (the start of a project, a step).
+     */
+    async send(text: string, attachments: Attachment[] = [], opts: SendOptions = {}): Promise<boolean> {
         const prompt = text.trim();
         if ((!prompt && !attachments.length) || this.busy) return false;
+        const shown = opts.show?.trim() || prompt;
         await this.loading;
         const gen = this.generation;
         // False once the conversation was switched: then nothing more is written to it.
@@ -298,12 +320,13 @@ export class Agent extends Emitter<AgentEvents> {
         const { key, model } = cred;
 
         this.busy = true;
+        this.activity = '';
         this.emit('busy', true);
-        this.push({ role: 'user', text: prompt, images: attachments.length ? attachments : undefined });
+        this.push({ role: 'user', text: shown, images: attachments.length ? attachments : undefined });
         this.abort = new AbortController();
         const signal = this.abort.signal;
         const store = this.editor.store;
-        const label = `AI: ${(prompt || 'images').replace(/\s+/g, ' ').slice(0, 40)}${prompt.length > 40 ? '...' : ''}`;
+        const label = `AI: ${(shown || 'images').replace(/\s+/g, ' ').slice(0, 40)}${shown.length > 40 ? '...' : ''}`;
         // The tools' edits undo as one step (store.squash); edits by hand meanwhile stay apart.
         const batch = uid('r');
         let committed = false;
@@ -312,6 +335,7 @@ export class Agent extends Emitter<AgentEvents> {
         const toolLines: string[] = [];
         let error = '';
         let stopped = false;
+        let limited = false;
         let vision = false;
         let caches = false;
         try {
@@ -333,6 +357,7 @@ export class Agent extends Emitter<AgentEvents> {
             for (; step < maxSteps; step++) {
                 const turn = this.push({ role: 'assistant', text: '' });
                 last = turn;
+                this.setActivity('');
                 const res = await chat(
                     key,
                     {
@@ -379,6 +404,7 @@ export class Agent extends Emitter<AgentEvents> {
                 for (const call of calls) {
                     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
                     const toolTurn = this.push({ role: 'tool', text: '', tool: { name: call.function.name, args: call.function.arguments || '{}', state: 'running' } });
+                    this.setActivity(call.function.name);
                     let args: Record<string, any> = {};
                     let content: string;
                     try {
@@ -402,7 +428,6 @@ export class Agent extends Emitter<AgentEvents> {
                             toolTurn.tool!.image = shown[0];
                             images.push(...shown);
                         }
-                        if (result.choice) this.push({ role: 'note', text: result.choice.question, choice: { ...result.choice, options: result.choice.options.map((o) => ({ ...o })) } });
                         if (result.approval) this.push({ role: 'note', text: toolTurn.tool!.summary ?? '', approval: structuredClone(result.approval) });
                     }
                     toolLines.push(`${call.function.name.replace(/_/g, ' ')}${toolTurn.tool!.summary ? `: ${toolTurn.tool!.summary}` : ''}`);
@@ -424,7 +449,10 @@ export class Agent extends Emitter<AgentEvents> {
                 }
                 this.trimHistory();
             }
-            if (step >= maxSteps) this.push({ role: 'note', text: `Stopped after ${maxSteps} steps. Send another message to continue.` });
+            if (step >= maxSteps) {
+                limited = true;
+                this.push({ role: 'note', text: `Paused after ${maxSteps} steps (AI settings, Max steps). Keep going to continue.` });
+            }
         } catch (e: any) {
             if (e?.name === 'AbortError') {
                 stopped = true;
@@ -440,6 +468,7 @@ export class Agent extends Emitter<AgentEvents> {
             if (live()) this.settle(stopped);
             this.busy = false;
             this.abort = null;
+            this.activity = '';
             if (committed && live()) {
                 const turn = [...this.turns].reverse().find((t) => t.role === 'assistant' || t.role === 'note') ?? last;
                 if (turn) {
@@ -449,7 +478,7 @@ export class Agent extends Emitter<AgentEvents> {
             }
             this.emit('busy', false);
             if (live()) this.saveSession();
-            this.emit('done', { prompt, answer, tools: toolLines, changed: committed, stopped, error: error || undefined });
+            this.emit('done', { prompt: shown, answer, tools: toolLines, changed: committed, stopped, limited, error: error || undefined });
         }
         return true;
     }
@@ -534,6 +563,10 @@ export class Agent extends Emitter<AgentEvents> {
         const note = this.push({ role: 'note', text: auto ? 'The conversation is long: compacting the earlier messages...' : 'Compacting the earlier messages...' });
         // Another conversation can be opened while the model summarizes: this one is not about it.
         const gen = this.generation;
+        // By hand it has no request to stop with: Stop ends it on its own.
+        const own = signal ? null : new AbortController();
+        if (own) this.compacting = own;
+        signal ??= own?.signal;
         this.working = true;
         this.emit('busy', this.busy);
         try {
@@ -568,7 +601,13 @@ export class Agent extends Emitter<AgentEvents> {
             this.saveSession();
             return true;
         } catch (e: any) {
-            if (e?.name === 'AbortError') throw e;
+            if (e?.name === 'AbortError') {
+                if (!own) throw e;
+                // Stopped by hand: the conversation stays as it was.
+                note.text = 'Compacting stopped.';
+                this.emit('update', note);
+                return false;
+            }
             if (this.generation !== gen) return false;
             note.text = `Compacting failed (${e?.message || e}); the oldest messages were dropped instead.`;
             note.error = true;
@@ -576,6 +615,7 @@ export class Agent extends Emitter<AgentEvents> {
             this.trimHistory(COMPACT_CHARS);
             return false;
         } finally {
+            if (own && this.compacting === own) this.compacting = null;
             this.working = false;
             this.emit('busy', this.busy);
         }

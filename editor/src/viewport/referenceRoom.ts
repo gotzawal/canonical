@@ -1,6 +1,7 @@
 import {
     BoxGeometry, DirectLight, LitMaterial, MeshRenderer, Object3D, PlaneGeometry, SphereGeometry, Texture, Vector3,
 } from '@orillusion/core';
+import { blobToDataUrl } from '../core/images';
 import type { CameraState, EnvironmentDoc } from '../core/types';
 import type { RoomSample } from '../design/materialSlots';
 import type { Editor } from '../editor';
@@ -14,10 +15,11 @@ const GRAY = '#767676';
 
 /**
  * The reference room: swatches under neutral light next to a gray ball and
- * a chrome ball, to check them apart from the level's lighting. It is shown
- * in the same view like prefab editing: the scene is hidden (lights too),
- * a plain gray sky and a white sun take over, and closing brings the scene,
- * its environment and the camera back.
+ * a chrome ball, to check them apart from the level's lighting. The
+ * assistant looks at material slots in it (capture-room, the view_materials
+ * tool); it is shown in the same view like prefab editing: the scene is
+ * hidden (lights too), a plain gray sky and a white sun take over, and
+ * closing brings the scene, its environment and the camera back.
  */
 export class ReferenceRoom {
     active = false;
@@ -40,11 +42,30 @@ export class ReferenceRoom {
         );
         viewportEl.appendChild(this.hud);
         editor.on('show-room', (samples) => void this.open(samples));
+        editor.on('capture-room', ({ samples, done }) => void this.capture(samples).then(done, () => done(null)));
         editor.on('view', (view) => view !== 'room' && this.close());
     }
 
-    /** Shows the room with these samples (up to eight). */
-    async open(samples: RoomSample[]) {
+    /**
+     * A picture of the samples in the room, for the assistant: the room
+     * shows for a few frames and the view goes back. Null while the view
+     * cannot leave what it shows (Play, a prefab edited on its own, walking).
+     */
+    async capture(samples: RoomSample[]): Promise<string | null> {
+        const ed = this.editor;
+        if (!samples.length || ed.player.state !== 'stopped' || ed.viewBlock()) return null;
+        await this.open(samples, false);
+        if (!this.active) return null;
+        try {
+            // A few frames: the samples' materials are new to the renderer.
+            return await blobToDataUrl(await ed.runtime.captureFrame({ frames: 3, maxWidth: 1024, type: 'image/jpeg', quality: 0.82 }));
+        } finally {
+            this.close();
+        }
+    }
+
+    /** Shows the room with these samples (up to eight); `hud` lists them over the view. */
+    async open(samples: RoomSample[], hud = true) {
         if (this.active) this.close();
         const ed = this.editor;
         ed.stopPlay();
@@ -52,7 +73,8 @@ export class ReferenceRoom {
         ed.setView('room');
         ed.pipeline.showShot(null);
         this.active = true;
-        ed.store.select([]);
+        // Shown to the user, the room takes the selection's place; the assistant's picture leaves it alone.
+        if (hud) ed.store.select([]);
         this.camera = { ...ed.store.camera, target: [...ed.store.camera.target] as CameraState['target'] };
         ed.sync.setIsolation(new Set(), true);
         ed.sync.setEnvironmentOverride(neutralEnv(ed.store.doc.environment));
@@ -95,7 +117,7 @@ export class ReferenceRoom {
         ed.runtime.scene.addChild(root);
         ed.camera.jump({ ...ed.store.camera, target: [0, 0.6, 0], distance: Math.max(5.5, width * 0.7), yaw: 0, pitch: -14 });
         this.renderList(samples.slice(0, n));
-        this.hud.hidden = false;
+        this.hud.hidden = !hud;
         const store = ed.store;
         this.offs.push(store.on('load', () => this.close()));
         this.offs.push(ed.on('isolate', (id) => id && this.close()));

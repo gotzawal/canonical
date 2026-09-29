@@ -26,6 +26,8 @@ export interface Command {
 export interface CommandUI {
     rename(): void;
     toggleDock(): void;
+    /** Between the simple view (the scene and the chat) and the full editor. */
+    toggleEditMode(): void;
 }
 
 export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
@@ -36,6 +38,7 @@ export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
         { id: 'play.toggle', label: 'Play', icon: 'play', keys: ['Mod+P'], global: true, run: () => editor.togglePlay() },
         { id: 'play.pause', label: 'Pause', icon: 'pause', keys: ['Mod+Shift+P'], global: true, enabled: () => editor.player.state !== 'stopped', run: () => editor.pausePlay() },
         { id: 'dock.toggle', label: 'Toggle Code Panel', icon: 'panelBottom', keys: ['Mod+J', 'Mod+`'], global: true, run: () => ui.toggleDock() },
+        { id: 'view.editMode', label: 'Edit Mode', icon: 'panels', keys: ['Mod+\\'], global: true, run: () => ui.toggleEditMode() },
         { id: 'file.open', label: 'Open Scene or Project...', icon: 'open', keys: ['Mod+O'], global: true, run: () => void editor.openSceneFile() },
         // Mod+S in the code editor applies the file (codeEditor.ts).
         { id: 'file.save', label: 'Save Scene File', icon: 'save', keys: ['Mod+S'], global: true, localIn: '.code-editor', run: () => void editor.saveSceneFile() },

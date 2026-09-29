@@ -8,7 +8,7 @@ import { Emitter } from './events';
 
 export type ToastKind = 'info' | 'success' | 'error';
 
-export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'review' | 'model';
+export type NoticeKind = 'ai-done' | 'stage' | 'review' | 'model';
 
 export interface NoticeAction {
     label: string;

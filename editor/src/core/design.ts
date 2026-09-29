@@ -7,8 +7,8 @@ import { uid } from './ids';
 import { Specs } from './model';
 import { defaults, finite, hexOr as hex, isObj, list, repair, str } from './schema';
 import type {
-    AreaDoc, CameraState, CheckItemDoc, ConceptDoc, DesignDoc, EffectItemDoc, LayoutDoc, MaterialSlotDoc, MoodDoc,
-    PaintoverDoc, ParamValue, PlayDoc, QuestionDoc, RoutePointDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SightlineDoc,
+    AreaDoc, CameraState, CheckItemDoc, ConceptDoc, DesignDoc, DetailLevel, EffectItemDoc, LayoutDoc, MaterialSlotDoc, MoodDoc,
+    NodeDoc, PaintoverDoc, ParamValue, PlayDoc, QuestionDoc, RoutePointDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SightlineDoc,
     SnapshotDoc, SpecsDoc, StageDoc, StageId, StageStatus, Vec3,
 } from './types';
 
@@ -328,6 +328,7 @@ export function sanitizeDesign(input: any): DesignDoc {
         }
         if (typeof st.doneAt === 'string') doc.doneAt = st.doneAt;
         if (typeof st.recheck === 'string' && st.recheck) doc.recheck = st.recheck.slice(0, 2000);
+        if (typeof st.signature === 'string' && st.signature) doc.signature = st.signature.slice(0, 200);
         out.stages[id] = doc;
     }
     // Exactly the current stage is active (or done, once the last stage is
@@ -346,10 +347,12 @@ export function sanitizeDesign(input: any): DesignDoc {
             .map((sn): SnapshotDoc => ({
                 id: str(sn.id, '', 64),
                 asset: sn.asset,
-                name: str(sn.name, 'Snapshot', 200) || 'Snapshot',
+                name: str(sn.name, 'Version', 200) || 'Version',
                 stage: stageId(sn.stage),
                 at: str(sn.at, '', 64),
                 assets: list(sn.assets).filter((a) => typeof a === 'string'),
+                ...(typeof sn.thumb === 'string' && sn.thumb ? { thumb: sn.thumb } : {}),
+                ...(sn.auto === true ? { auto: true } : {}),
             })),
         'sn',
     );
@@ -357,7 +360,6 @@ export function sanitizeDesign(input: any): DesignDoc {
     const memo = isObj(input.memo) ? input.memo : {};
     out.memo = { text: str(memo.text, '', 12000) };
     if (typeof memo.at === 'string') out.memo.at = memo.at;
-    if (input.unlocked === true) out.unlocked = true;
     if (input.detail === 'quick' || input.detail === 'detailed') out.detail = input.detail;
     const check = isObj(input.levelCheck) ? input.levelCheck : null;
     if (check && typeof check.signature === 'string') {
@@ -384,9 +386,75 @@ export function designAssetIds(design: DesignDoc): Set<string> {
     for (const m of design.materials) if (m.swatch) out.add(m.swatch);
     for (const sn of design.snapshots) {
         out.add(sn.asset);
+        if (sn.thumb) out.add(sn.thumb);
         for (const a of sn.assets) out.add(a);
     }
     return out;
+}
+
+/**
+ * The pipeline has started: there is a brief, a reference image or a
+ * planned area (or it went past the Brief stage). Until then the Brief stage
+ * is only where a project begins, and the first request of the user that
+ * describes a scene becomes its brief.
+ */
+export function planStarted(design: DesignDoc): boolean {
+    return design.stage !== 'brief' || !!design.brief.text.trim() || design.concepts.length > 0 || design.areas.length > 0;
+}
+
+/** The detail level in effect: the assistant decides the details unless the user asked to work them out together. */
+export function detailLevel(design: DesignDoc): DetailLevel {
+    return design.detail === 'detailed' ? 'detailed' : 'quick';
+}
+
+/** Objects that make up the level: everything but lights, cameras, effects and the player, which may move without changing it. */
+export function isLevelObject(n: NodeDoc): boolean {
+    return !n.light && !n.camera && !n.particles && !n.player;
+}
+
+/**
+ * A signature of the layout: where the level's objects are and what they
+ * are, leaving out lights, cameras, effects and the player. When it changes
+ * after the Layout step was done, that step is marked for a recheck. Hashed
+ * field by field (no JSON): views ask for it after changes, on scenes of
+ * thousands of objects.
+ */
+export function layoutSignature(doc: SceneDoc): string {
+    let h = 5381;
+    let count = 0;
+    const text = (s: string) => {
+        for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0;
+        h = ((h * 33) ^ 0x7c) >>> 0;
+    };
+    // To a tenth of a millimeter (or degree, or percent of scale).
+    const num = (v: number) => {
+        h = ((h * 33) ^ Math.round(v * 1e4)) >>> 0;
+    };
+    for (const n of doc.nodes) {
+        if (!isLevelObject(n)) continue;
+        count++;
+        text(n.id);
+        text(n.parent ?? '');
+        num(n.visible ? 1 : 0);
+        for (const v of n.position) num(v);
+        for (const v of n.rotation) num(v);
+        for (const v of n.scale) num(v);
+        const g = n.mesh?.geometry as Record<string, unknown> | undefined;
+        if (g) {
+            for (const k in g) {
+                const v = g[k];
+                text(k);
+                if (typeof v === 'number') num(v);
+                else text(String(v));
+            }
+        }
+        if (n.model) {
+            text(n.model.asset);
+            if (n.model.parts) text(JSON.stringify(n.model.parts));
+        }
+        if (n.prefab) text(n.prefab);
+    }
+    return `L${count}:${h.toString(36)}`;
 }
 
 /** A signature of the level's geometry: when it changes, a level check is stale. */

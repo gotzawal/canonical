@@ -2,7 +2,7 @@ import { STAGE_IDS, stageIndex } from '../core/design';
 import type { StageId } from '../core/types';
 import type { Editor } from '../editor';
 import { onChanges, whenQuiet } from './batch';
-import { stageDef } from '../design/stages';
+import { stageDef, stepOf } from '../design/stages';
 import { checklistView } from './checklist';
 import { clear, h } from './dom';
 import { icon } from './icons';
@@ -10,16 +10,17 @@ import { notices } from './notify';
 import { popover, showMenu } from './overlays';
 
 /**
- * The pipeline bar under the menu: the stages in order, the current stage's
- * checklist progress, the assistant's completion proposal and the button
- * that completes the stage.
+ * The pipeline bar of the full editor, under the menu: the stages in order,
+ * the current stage's checklist progress, the assistant's completion
+ * proposal and the button that completes the stage. (The simple view shows
+ * the three steps instead, ui/stepsBar.ts.)
  */
 export class PipelineBar {
     readonly el: HTMLElement;
     private key = '';
     private closePopover: (() => void) | null = null;
 
-    constructor(private editor: Editor, private show: { design: () => void; brief: () => void }) {
+    constructor(private editor: Editor, private show: { design: () => void }) {
         this.el = h('div', { class: 'pipeline-bar', attrs: { role: 'navigation', 'aria-label': 'Pipeline stages' } });
         const store = editor.store;
         const rerender = () => this.render();
@@ -28,19 +29,23 @@ export class PipelineBar {
         onChanges(store, (hint) => (hint?.transform ? quiet() : this.render()));
         store.on('load', () => this.render(true));
         editor.pipeline.on('busy', () => this.render(true));
+        // The chat holds the buttons that approve it, in both views.
         editor.pipeline.on('proposed', (summary) =>
             notices.show({
                 kind: 'stage',
                 key: 'stage-proposal',
                 icon: 'flag',
-                title: `The assistant proposes completing ${stageDef(editor.pipeline.design.stage).title}`,
+                title: `${stageDef(editor.pipeline.design.stage).title} is done. Happy with it?`,
                 body: summary.slice(0, 240),
-                actions: [{ label: 'Review', primary: true, run: show.design }],
+                actions: [{ label: 'Show', primary: true, run: () => editor.emit('show-ai', undefined) }],
             }),
         );
-        editor.pipeline.on('completed', ({ stage, next }) =>
-            notices.show({ kind: 'stage', key: 'stage-proposal', icon: 'check', title: `${stageDef(stage).title} complete`, body: next ? `Next: ${stageDef(next).long}.` : 'Every stage is complete.', timeout: 6000 }),
-        );
+        // Told when one of the three steps is done, not for every stage.
+        editor.pipeline.on('completed', ({ stage, next }) => {
+            const step = stepOf(stage);
+            if (next && stepOf(next).id === step.id) return;
+            notices.show({ kind: 'stage', key: 'stage-proposal', icon: 'check', title: `${step.title} is done`, body: next ? `Next: ${stepOf(next).title}, ${stepOf(next).hint.toLowerCase()}.` : 'Every step is done.', timeout: 6000 });
+        });
         // The frame rate item of the effects stage follows the editor's fps.
         setInterval(rerender, 2000);
         this.render(true);
@@ -57,8 +62,7 @@ export class PipelineBar {
             prog.done,
             prog.total,
             !!st.proposal,
-            pipeline.placementLocked,
-            !!design.unlocked,
+            pipeline.layoutChanged,
             pipeline.busy,
         ]);
         if (!force && key === this.key) return;
@@ -74,22 +78,6 @@ export class PipelineBar {
         this.el.appendChild(h('div', { class: 'spacer' }));
 
         const def = stageDef(design.stage);
-        if (def.locksPlacement && st.status !== 'done') {
-            const locked = pipeline.placementLocked;
-            const lock = h(
-                'button',
-                {
-                    class: 'pipeline-btn' + (locked ? '' : ' warn'),
-                    title: locked ? 'Placement is locked in this stage: only lights, cameras and effects move. Click to unlock.' : 'Placement is unlocked. Click to lock it again.',
-                    attrs: { type: 'button' },
-                },
-                icon(locked ? 'lock' : 'unlock', 14),
-                h('span', { text: locked ? 'Placement locked' : 'Placement unlocked' }),
-            );
-            lock.addEventListener('click', () => pipeline.setUnlocked(locked));
-            this.el.appendChild(lock);
-        }
-
         if (st.proposal) {
             const prop = h('button', { class: 'pipeline-btn accent', title: st.proposal.summary, attrs: { type: 'button' } }, icon('flag', 14), h('span', { text: 'AI proposes completion' }));
             prop.addEventListener('click', () => this.show.design());
@@ -106,7 +94,7 @@ export class PipelineBar {
         this.el.appendChild(checks);
 
         if (pipeline.busy) {
-            this.el.appendChild(h('span', { class: 'pipeline-busy' }, h('span', { class: 'spinner small' }), h('span', { text: 'Capturing shots...' })));
+            this.el.appendChild(h('span', { class: 'pipeline-busy' }, h('span', { class: 'spinner small' }), h('span', { text: 'Saving the shots...' })));
         } else if (st.status === 'done') {
             this.el.appendChild(h('span', { class: 'pipeline-done' }, icon('check', 14), h('span', { text: 'All stages complete' })));
         } else {
@@ -132,17 +120,19 @@ export class PipelineBar {
         const st = design.stages[id];
         const current = design.stage === id;
         const def = stageDef(id);
-        const cls = ['pipeline-chip', st.status, current ? 'current' : ''].filter(Boolean).join(' ');
+        // A change after the stage was done marks it, without reopening it.
+        const changed = id === 'level' && pipeline.layoutChanged;
+        const recheck = st.recheck ?? (changed ? 'the layout changed after it was done' : '');
+        const cls = ['pipeline-chip', changed ? 'recheck' : st.status, current ? 'current' : ''].filter(Boolean).join(' ');
         const chip = h(
             'button',
-            { class: cls, title: `${def.long}${st.recheck ? ` - needs a recheck: ${st.recheck}` : ''}`, attrs: { type: 'button' } },
-            h('span', { class: 'pipeline-num' }, st.status === 'done' ? icon('check', 11) : st.status === 'recheck' ? icon('alert', 11) : String(i + 1)),
+            { class: cls, title: `${def.long}${recheck ? ` - needs a recheck: ${recheck}` : ''}`, attrs: { type: 'button' } },
+            h('span', { class: 'pipeline-num' }, changed || st.status === 'recheck' ? icon('alert', 11) : st.status === 'done' ? icon('check', 11) : String(i + 1)),
             h('span', { class: 'pipeline-title', text: def.title }),
         );
         chip.addEventListener('click', () => {
             if (current) {
-                if (id === 'brief' && !design.brief.text.trim()) this.show.brief();
-                else this.show.design();
+                this.show.design();
                 return;
             }
             const r = chip.getBoundingClientRect();
@@ -150,7 +140,7 @@ export class PipelineBar {
             showMenu(
                 [
                     { label: `Checklist of ${def.title}`, icon: 'check', action: () => this.openChecklist(chip, id) },
-                    ...(id === 'brief' ? [{ label: 'Open the brief', icon: 'open', action: () => this.show.brief() }] : []),
+                    ...(id === 'brief' ? [{ label: 'The brief', icon: 'open', action: () => this.show.design() }] : []),
                     { separator: true },
                     { label: `Reopen ${def.title}`, icon: 'undo', enabled: () => earlier && !pipeline.busy, action: () => void pipeline.reopen(id) },
                 ],

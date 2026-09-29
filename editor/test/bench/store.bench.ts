@@ -5,6 +5,7 @@
 // (its 75th percentile; see budgets.mjs).
 
 import { bench, describe } from 'vitest';
+import { layoutSignature } from '../../src/core/design';
 import { mergeHints, Store, type ChangeHint } from '../../src/core/store';
 import { refs, useCounts } from '../../src/core/refs';
 import type { NodeDoc, SceneDoc } from '../../src/core/types';
@@ -119,4 +120,11 @@ describe('commit adding an object (a snapshot of the whole document, as before)'
     const before = new LegacyStore(copy());
     bench('snapshot and index with children', () => add(now), { iterations: 20, time: 0 });
     bench('before: snapshot and index', () => add(before), { iterations: 20, time: 0 });
+});
+
+describe('the layout step after a change (once per change, for the steps and the pipeline bar)', () => {
+    const doc = copy();
+    bench('layout signature of 5,000 objects (budget 10 ms)', () => {
+        layoutSignature(doc);
+    });
 });

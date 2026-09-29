@@ -1,13 +1,14 @@
-// The pipeline's stages: what each one is for, what the assistant may do in
-// it, and the checklist that has to be done before moving on. Automatic
-// items are computed from the document; the others are ticked by the user
-// or proposed by the assistant.
+// The pipeline's stages: what each one is for, the tools it is about, and
+// the checklist that has to be done before moving on. Automatic items are
+// computed from the document; the others are ticked by the assistant or the
+// user. The assistant runs the stages; the user sees them as three steps
+// (STEPS): layout, look and finish.
 
-import { levelSignature, STAGE_IDS, stageIndex } from '../core/design';
+import { detailLevel, layoutSignature, levelSignature, planStarted, STAGE_IDS, stageIndex } from '../core/design';
 import { hasColorGrade } from '../core/templates';
-import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId } from '../core/types';
+import type { CheckItemDoc, DesignDoc, NodeDoc, SceneDoc, StageId, StepId } from '../core/types';
 
-/** Groups of assistant tools; each stage allows some of them (see ai/tools.ts). */
+/** Groups of assistant tools; each stage is about some of them (see ai/registry.ts). */
 export type ToolGroup =
     | 'read'
     | 'design'
@@ -60,8 +61,7 @@ export interface StageDef {
     /** Longer name shown in the stage header. */
     long: string;
     description: string;
-    /** Objects other than lights, cameras and effects stay where they are. */
-    locksPlacement: boolean;
+    /** The tool groups of its work (they limit the assistant only when the AI settings say so). */
     tools: ToolGroup[];
     checks: CheckDef[];
     /** How shots are compared with their targets in this stage (lightness only, or color). */
@@ -139,8 +139,7 @@ export const STAGES: StageDef[] = [
         title: 'Brief',
         long: 'Planning input',
         description:
-            'Give the planning document and concept images. The assistant decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements. What the plan leaves open it decides, or asks about when you want to work out the details. It can draw concept images for you to review.',
-        locksPlacement: false,
+            'What to make, in the user\'s words, with any planning document and reference images. The assistant decides how the scene is built (layout, size, how the areas connect), then structures the areas, specs, mood and play requirements. What the plan leaves open it decides, or asks about when you want to work out the details. It can draw reference images for you to look at.',
         tools: ['read', 'design', 'concepts'],
         checks: [
             {
@@ -155,7 +154,7 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'brief.concepts',
-                text: 'Every area has at least one concept image',
+                text: 'Every area has at least one reference image',
                 auto: ({ design }) => {
                     const ok = design.areas.filter((a) => design.concepts.some((c) => c.area === a.id)).length;
                     return { done: design.areas.length > 0 && ok === design.areas.length, detail: count(ok, design.areas.length, 'areas') };
@@ -191,13 +190,13 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'brief.review',
-                text: 'Concept images the assistant made are reviewed',
+                text: 'Reference images the assistant drew are reviewed',
                 auto: ({ design }) => {
                     const proposed = design.concepts.filter((c) => c.review === 'proposed').length;
                     // Letting the assistant decide, the user reviews them when they like.
-                    return { done: !proposed || design.detail === 'quick', detail: proposed ? `${proposed} waiting for review` : undefined };
+                    return { done: !proposed || detailLevel(design) === 'quick', detail: proposed ? `${proposed} waiting for review` : undefined };
                 },
-                hint: 'Approve or reject them in the AI tab, where they were made, or in the Design tab (Brief & Concepts).',
+                hint: 'Keep or drop them in the chat, where they were drawn, or in the Design tab (Brief & Reference Images).',
             },
         ],
     },
@@ -206,8 +205,7 @@ export const STAGES: StageDef[] = [
         title: 'Level',
         long: 'Level (greybox)',
         description:
-            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Frame a shot for every concept, walk the route at eye height, then make a paintover per shot: the chosen one becomes the target image.',
-        locksPlacement: false,
+            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Frame a shot for every reference image, walk the route at eye height, then paint a reference image over each shot: the chosen one is what the look is compared with.',
         tools: ['read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts'],
         checks: [
             {
@@ -220,10 +218,10 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'level.shots',
-                text: 'Every concept has a shot',
+                text: 'Every reference image has a shot',
                 auto: ({ design }) => {
                     const ok = design.concepts.filter((c) => design.shots.some((s) => s.concept === c.asset)).length;
-                    return { done: ok === design.concepts.length && design.shots.length > 0, detail: count(ok, design.concepts.length, 'concepts') };
+                    return { done: ok === design.concepts.length && design.shots.length > 0, detail: count(ok, design.concepts.length, 'reference images') };
                 },
             },
             {
@@ -259,7 +257,7 @@ export const STAGES: StageDef[] = [
             { id: 'level.play', text: 'Play check passed (scale, paths, heights)' },
             {
                 id: 'level.paintovers',
-                text: 'Every shot has a chosen paintover',
+                text: 'Every shot has a chosen reference image, painted over the greybox',
                 auto: ({ design }) => {
                     const ok = design.shots.filter((s) => s.target && !s.stale).length;
                     return { done: design.shots.length > 0 && ok === design.shots.length, detail: count(ok, design.shots.length, 'shots') };
@@ -272,15 +270,14 @@ export const STAGES: StageDef[] = [
         title: 'Lighting',
         long: 'Lighting, pass 1',
         description:
-            'Placement is locked and every surface is gray, so only light is judged. Set the sky and time of day, key and fill lights, interior lights, exposure and GI. Compare each shot with its paintover in grayscale.',
-        locksPlacement: true,
+            'Every surface is still gray, so only light is judged. Set the sky and time of day, key and fill lights, interior lights, exposure and GI. Compare each shot with its reference image in grayscale.',
         compare: 'gray',
         matchLabel: 'Values match the target',
         tools: ['read', 'design', 'lights', 'environment', 'capture', 'compare'],
         checks: [
             {
                 id: 'light.values',
-                text: 'Every shot matches its paintover in grayscale (value structure)',
+                text: 'Every shot matches its reference image in grayscale (value structure)',
                 hint: 'Compare each shot in the shot bar and mark it; the score is only a reference, judge by eye.',
                 auto: shotsMatched('light'),
             },
@@ -301,7 +298,6 @@ export const STAGES: StageDef[] = [
         long: 'Materials and lighting, pass 2',
         description:
             'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Then correct light intensities and exposure for the new albedo.',
-        locksPlacement: true,
         compare: 'color',
         matchLabel: 'Colors match the target',
         tools: ['read', 'design', 'materials', 'lights', 'environment', 'capture', 'compare', 'images'],
@@ -317,7 +313,7 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'material.colors',
-                text: 'Every shot matches its paintover in color',
+                text: 'Every shot matches its reference image in color',
                 hint: 'Compare each shot in color in the shot bar and mark it.',
                 auto: shotsMatched('material'),
             },
@@ -328,8 +324,7 @@ export const STAGES: StageDef[] = [
         id: 'effects',
         title: 'Effects',
         long: 'Effects',
-        description: 'Particles and post effects (fog, bloom, vignette). Compare the shots with their paintovers again, also in grayscale so the effects keep the value structure.',
-        locksPlacement: true,
+        description: 'Particles and post effects (fog, bloom, vignette). Compare the shots with their reference images again, also in grayscale so the effects keep the value structure.',
         compare: 'gray',
         matchLabel: 'Value structure still holds',
         tools: ['read', 'design', 'effects', 'environment', 'lights', 'code', 'play', 'capture', 'compare'],
@@ -356,8 +351,7 @@ export const STAGES: StageDef[] = [
         id: 'finish',
         title: 'Finish',
         long: 'Finish',
-        description: 'Final lighting pass and polish, then color grading (lift, gamma, gain and saturation as a post effect). Compare every shot with its paintover one last time and approve it.',
-        locksPlacement: false,
+        description: 'Final lighting pass and polish, then color grading (lift, gamma, gain and saturation as a post effect). Compare every shot with its reference image one last time and approve it.',
         compare: 'color',
         tools: [...ALL_TOOL_GROUPS],
         checks: [
@@ -369,7 +363,7 @@ export const STAGES: StageDef[] = [
             },
             {
                 id: 'finish.shots',
-                text: 'Every shot was compared with its paintover and approved',
+                text: 'Every shot was compared with its reference image and approved',
                 auto: ({ design }) => {
                     const ok = design.shots.filter((s) => s.approved).length;
                     return { done: ok === design.shots.length, detail: design.shots.length ? count(ok, design.shots.length, 'approved') : 'no shots' };
@@ -435,4 +429,64 @@ export function stageProgress(ctx: CheckContext, id: StageId): { done: number; t
 export function nextStage(id: StageId): StageId | null {
     const i = stageIndex(id);
     return i >= 0 && i + 1 < STAGE_IDS.length ? STAGE_IDS[i + 1] : null;
+}
+
+// ------------------------------------------------------------------ steps
+
+/** The steps the user sees: the stages the assistant runs, in three parts. */
+export interface StepDef {
+    id: StepId;
+    title: string;
+    /** What the step makes, in a line. */
+    hint: string;
+    stages: StageId[];
+}
+
+export const STEPS: StepDef[] = [
+    { id: 'layout', title: 'Layout', hint: 'The plan and the greybox: what goes where, at the right size', stages: ['brief', 'level'] },
+    { id: 'look', title: 'Look', hint: 'Light, materials and effects', stages: ['light', 'material', 'effects'] },
+    { id: 'finish', title: 'Finish', hint: 'A last lighting pass and the color grade', stages: ['finish'] },
+];
+
+export function stepOf(stage: StageId): StepDef {
+    return STEPS.find((s) => s.stages.includes(stage)) ?? STEPS[0];
+}
+
+export type StepState = 'todo' | 'current' | 'done';
+
+export interface StepProgress {
+    step: StepDef;
+    state: StepState;
+    /** Why it needs another look: a stage of it to recheck, or the layout changed after it was done. */
+    recheck?: string;
+}
+
+/**
+ * Where the three steps stand. Before the pipeline starts every step is to
+ * do; the current stage's step is current; once the last stage is complete
+ * every step is done. `changed`: layoutChanged, when the caller has it.
+ */
+export function stepsProgress(doc: SceneDoc, design: DesignDoc = doc.design, changed = layoutChanged(doc, design)): StepProgress[] {
+    const started = planStarted(design);
+    const cur = stageIndex(design.stage);
+    const allDone = design.stages[design.stage].status === 'done' && cur === STAGE_IDS.length - 1;
+    return STEPS.map((step) => {
+        const first = stageIndex(step.stages[0]);
+        const last = stageIndex(step.stages[step.stages.length - 1]);
+        const state: StepState = !started ? 'todo' : allDone || cur > last ? 'done' : cur >= first ? 'current' : 'todo';
+        const rechecks = step.stages.filter((id) => design.stages[id].status === 'recheck' && design.stages[id].recheck).map((id) => design.stages[id].recheck!);
+        if (step.id === 'layout' && changed) rechecks.unshift('The layout changed after it was done');
+        return { step, state, ...(rechecks.length ? { recheck: rechecks.join('; ') } : {}) };
+    });
+}
+
+/**
+ * The level changed after the Level stage was done (the layout signature
+ * it was completed with, or its level check last passed with, differs).
+ * Nothing is refused for it: the stage is marked for a recheck until the
+ * level check passes again.
+ */
+export function layoutChanged(doc: SceneDoc, design: DesignDoc = doc.design): boolean {
+    const st = design.stages.level;
+    return stageIndex(design.stage) > stageIndex('level') && !!st.signature && st.signature !== layoutSignature(doc);
 }

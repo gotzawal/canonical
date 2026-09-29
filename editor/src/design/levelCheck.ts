@@ -5,7 +5,7 @@
 // do large empty spaces make it less compact? The level is sampled on a
 // grid of columns with ray casts; the findings come with a plan view.
 
-import { levelSignature } from '../core/design';
+import { layoutSignature, levelSignature, stageIndex } from '../core/design';
 import type { RayHit } from '../core/math';
 import type { AreaDoc, Vec3 } from '../core/types';
 import type { Editor } from '../editor';
@@ -737,13 +737,16 @@ export function summarize(r: LevelReport): string {
  * Checks the whole level, one area of the plan or one object (a building),
  * with the player's body (the brief's without a player), walking from the
  * player or the first route point to the route points. A check of the whole
- * level is kept in the plan, where the Level checklist reads it.
+ * level is kept in the plan, where the Level checklist reads it; once the
+ * Level stage is done, a passing check also clears its recheck mark (the
+ * layout it passed with is what later changes are measured against).
  */
 export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | null; object?: string | null; step?: number } = {}): Promise<{ report: LevelReport; map: string; scope: string }> {
     const { store, picker, sync } = editor;
     const doc = store.doc;
     const d = doc.design;
     const signature = levelSignature(doc);
+    const layout = layoutSignature(doc);
     const playerNode = doc.nodes.find((n) => n.player && n.character && sync.entries.get(n.id)?.visible);
     // Characters are not the level: they move in Play.
     const skip = new Set(doc.nodes.filter((n) => n.character).flatMap((n) => [n.id, ...store.descendants(n.id).map((c) => c.id)]));
@@ -799,6 +802,7 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
         const summary = summarize(result.report);
         store.patch((dd) => {
             dd.design.levelCheck = { at: new Date().toISOString(), ok: result.report.ok, signature, summary };
+            if (result.report.ok && stageIndex(dd.design.stage) > stageIndex('level')) dd.design.stages.level.signature = layout;
         }, { design: true });
     }
     return { ...result, scope: label };

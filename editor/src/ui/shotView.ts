@@ -40,7 +40,7 @@ export class ShotView {
         this.frame = h('div', { class: 'shot-frame' }, this.ref);
         this.title = h('span', { class: 'shot-bar-title' });
         this.refSelect = h('select', { class: 'select shot-ref-select', title: 'Image laid over the frame' });
-        for (const [v, l] of [['concept', 'Concept'], ['target', 'Paintover'], ['capture', 'Last capture'], ['none', 'No overlay']]) {
+        for (const [v, l] of [['concept', 'Reference image'], ['target', 'Painted reference'], ['capture', 'Last capture'], ['none', 'No overlay']]) {
             this.refSelect.appendChild(h('option', { text: l, attrs: { value: v } }));
         }
         this.refSelect.addEventListener('change', () => {
@@ -73,9 +73,9 @@ export class ShotView {
             }
         });
         this.compare = new ShotCompare(editor);
-        const compare = h('button', { class: 'tool-btn wide', title: 'Compare with the target: a score and where it is darker or brighter', attrs: { type: 'button' } }, icon('graph', 15), h('span', { text: 'Compare' }));
+        const compare = h('button', { class: 'tool-btn wide', title: 'Compare with the reference image: a score and where it is darker or brighter', attrs: { type: 'button' } }, icon('graph', 15), h('span', { text: 'Compare' }));
         compare.addEventListener('click', () => pipeline.activeShot && this.compare.toggle(pipeline.activeShot));
-        const paint = h('button', { class: 'tool-btn wide', title: 'Paintovers of this shot', attrs: { type: 'button' } }, icon('paint', 15), h('span', { text: 'Paintover' }));
+        const paint = h('button', { class: 'tool-btn wide', title: 'Reference images painted over this shot', attrs: { type: 'button' } }, icon('paint', 15), h('span', { text: 'Reference' }));
         paint.addEventListener('click', () => pipeline.activeShot && openPaintoverDialog(editor, pipeline.activeShot));
         const back = h('button', { class: 'tool-btn', title: 'Back to the shot camera', attrs: { type: 'button' } }, icon('undo', 15));
         back.addEventListener('click', () => pipeline.activeShot && pipeline.showShot(pipeline.activeShot));

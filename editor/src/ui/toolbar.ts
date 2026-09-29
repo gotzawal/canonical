@@ -16,7 +16,7 @@ function toolButton(iconName: string, title: string, onClick: (e: MouseEvent) =>
     return h('button', { class: 'tool-btn', title, attrs: { type: 'button', 'aria-label': title }, on: { click: onClick } }, icon(iconName, 17));
 }
 
-/** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls. */
+/** Viewport toolbar: tools, gizmo space, snapping, view helpers, play controls (the simple view shows a few: see .edit-only). */
 export function toolbar(editor: Editor, cmds: Commands, createMenu: () => MenuItem[], showAI: () => void): HTMLElement {
     const store = editor.store;
     /** A button for a command: its tooltip names the key. */
@@ -34,7 +34,7 @@ export function toolbar(editor: Editor, cmds: Commands, createMenu: () => MenuIt
     editor.on('view', () => walk.classList.toggle('active', editor.view === 'walk'));
     const undo = command('edit.undo', 'undo');
     const redo = command('edit.redo', 'redo');
-    const add = h('button', { class: 'tool-btn wide accent', attrs: { type: 'button' } }, icon('plus', 16), h('span', { text: 'Add' }));
+    const add = h('button', { class: 'tool-btn wide accent edit-only', attrs: { type: 'button' } }, icon('plus', 16), h('span', { text: 'Add' }));
     add.addEventListener('click', () => {
         const r = add.getBoundingClientRect();
         showMenu(createMenu(), r.left, r.bottom + 4);
@@ -65,7 +65,10 @@ export function toolbar(editor: Editor, cmds: Commands, createMenu: () => MenuIt
     updatePlay();
     const build = command('file.build', 'rocket', 'Build & Deploy: run, download or publish the game');
     const dock = command('dock.toggle', 'panelBottom', 'Code and render graph panel');
-    const ai = h('button', { class: 'tool-btn wide', title: 'AI assistant (OpenRouter)', attrs: { type: 'button' } }, icon('sparkle', 16), h('span', { text: 'AI' }));
+    dock.classList.add('edit-only');
+    // The simple view keeps undo, framing the scene, Play and Build: the rest is edit mode's.
+    grid.classList.add('edit-only');
+    const ai = h('button', { class: 'tool-btn wide edit-only', title: 'AI assistant (OpenRouter)', attrs: { type: 'button' } }, icon('sparkle', 16), h('span', { text: 'AI' }));
     ai.addEventListener('click', showAI);
 
     const update = () => {
@@ -89,8 +92,8 @@ export function toolbar(editor: Editor, cmds: Commands, createMenu: () => MenuIt
     return h(
         'div',
         { class: 'toolbar', attrs: { role: 'toolbar', 'aria-label': 'Viewport tools' } },
-        h('div', { class: 'tool-group' }, toolButtons),
-        h('div', { class: 'tool-group space-group' }, space, snap),
+        h('div', { class: 'tool-group edit-only' }, toolButtons),
+        h('div', { class: 'tool-group space-group edit-only' }, space, snap),
         h('div', { class: 'tool-group history-group' }, undo, redo),
         h('div', { class: 'tool-group view-group' }, frame, grid, walk),
         h('div', { class: 'spacer' }),

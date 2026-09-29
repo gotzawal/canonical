@@ -1,5 +1,5 @@
 // Page notifications: cards in the corner of the editor for events that
-// need the user's attention (the assistant finished, a save checkpoint).
+// need the user's attention (the assistant finished, images to look at).
 // Every kind can be switched off from its card ("Don't show this
 // notification") or from the bell menu, and optionally also arrives as a
 // system notification while the tab is in the background.
@@ -13,9 +13,8 @@ import { toast } from './overlays';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
     { kind: 'ai-done', label: 'AI finished', hint: 'When the assistant finishes a request' },
-    { kind: 'checkpoint', label: 'Save checkpoints', hint: 'Asks to save the project after a stretch of work' },
-    { kind: 'stage', label: 'Stage proposals', hint: 'When the assistant proposes completing a stage' },
-    { kind: 'review', label: 'Images to review', hint: 'When the assistant drew concept images for you to review' },
+    { kind: 'stage', label: 'Steps to approve', hint: 'When the assistant asks you to approve a finished step' },
+    { kind: 'review', label: 'Reference images', hint: 'When the assistant drew reference images for you to look at' },
     { kind: 'model', label: 'AI models', hint: 'When agents need a model that is not downloaded yet' },
 ];
 

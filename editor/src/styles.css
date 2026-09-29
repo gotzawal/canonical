@@ -11,6 +11,8 @@
     --surface: rgba(27, 30, 37, 0.5);
     /* Menus, dialogs, notices and chips over the 3D view: blurred. */
     --surface-float: rgba(28, 32, 40, 0.5);
+    /* Submenus: inside a blurred menu they cannot blur what is behind them, so nearly opaque. */
+    --surface-menu: rgba(27, 30, 38, 0.97);
     --surface-hud: rgba(14, 16, 21, 0.4);
     /* Panels over the 3D view on narrow screens: large, so not blurred. */
     --surface-sheet: rgba(24, 27, 33, 0.96);
@@ -58,6 +60,7 @@
     --glass: none;
     --surface: #1b1e23;
     --surface-float: #20242a;
+    --surface-menu: #20242a;
     --surface-hud: rgba(15, 17, 21, 0.92);
     --surface-sheet: #1b1e23;
     --blur: none;
@@ -133,9 +136,10 @@ a {
 .notice,
 .popover,
 .log-drawer,
-.brief-card,
+.start-card,
 .shot-compare,
 .viewport-notice,
+.ai-status,
 .shot-bar,
 .walk-hud,
 .room-hud {
@@ -148,6 +152,7 @@ a {
 
 /* Chips over the 3D view let more of it through. */
 .viewport-notice,
+.ai-status,
 .shot-bar,
 .walk-hud,
 .room-hud {
@@ -191,12 +196,89 @@ a {
     display: block;
 }
 
+/* The scene's name: a click renames it (main.ts sceneNameField). */
+.scene-name-wrap {
+    display: flex;
+    min-width: 0;
+    max-width: 30vw;
+}
+
 .scene-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
     color: var(--muted);
-    white-space: nowrap;
+    cursor: text;
+}
+
+.scene-name:hover {
+    background: var(--fill);
+    color: var(--text);
+}
+
+.scene-name-text {
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 30vw;
+    white-space: nowrap;
+}
+
+.scene-name.untitled .scene-name-text {
+    color: var(--faint);
+    font-style: italic;
+}
+
+.scene-name-edit {
+    color: var(--faint);
+    opacity: 0;
+}
+
+.scene-name:hover .scene-name-edit,
+.scene-name:focus-visible .scene-name-edit {
+    opacity: 1;
+}
+
+.scene-name-input {
+    width: min(280px, 30vw);
+    padding: 4px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 7px;
+    outline: none;
+    background: var(--inset);
+    color: var(--text-strong);
+    font: inherit;
+    text-align: center;
+}
+
+/* Between the simple view and the full editor. */
+.mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--fill);
+    color: var(--text);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    flex: none;
+}
+
+.mode-toggle:hover {
+    border-color: var(--accent);
+}
+
+.mode-toggle[aria-pressed='true'] {
+    border-color: rgba(187, 153, 255, 0.6);
+    background: var(--accent-soft);
+    color: var(--accent-text);
 }
 
 .panel-toggle {
@@ -389,7 +471,8 @@ a {
     color: var(--muted);
 }
 
-.menu-item:hover:not(.disabled) .menu-icon {
+/* Only the item's own parts: a submenu inside a hovered item keeps its colors. */
+.menu-item:hover:not(.disabled) > .menu-icon {
     color: var(--on-accent);
 }
 
@@ -403,7 +486,7 @@ a {
     margin-left: 18px;
 }
 
-.menu-item:hover:not(.disabled) .menu-shortcut {
+.menu-item:hover:not(.disabled) > .menu-shortcut {
     color: rgba(28, 20, 51, 0.72);
 }
 
@@ -463,6 +546,16 @@ a {
     position: fixed;
     z-index: 1001;
     max-height: calc(100vh - 12px);
+    /* The menu around it blurs what is behind it, which makes the menu the
+       backdrop root of what it holds: a blur here would only see the menu,
+       and nothing where the submenu sticks out of it, leaving it as clear as
+       its glass. So it gets a surface of its own and no blur. */
+    background: var(--glass), var(--surface-menu);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* It sits inside its item, which turns its text dark while hovered. */
+    color: var(--text);
+    font-weight: normal;
 }
 
 /* Touch keeps a sticky hover: there overlays.ts opens submenus on tap. */
@@ -3539,7 +3632,8 @@ kbd {
     color: var(--text);
 }
 
-.pipeline-num {
+.pipeline-num,
+.step-num {
     display: grid;
     place-items: center;
     width: 18px;
@@ -4157,110 +4251,194 @@ kbd {
     white-space: nowrap;
 }
 
-/* ---------------------------------------------------------- brief screen */
+/* ---------------------------------------------------------- start screen */
 
-.brief-screen {
+.start-screen {
     position: absolute;
     inset: 0;
     z-index: 20;
     display: grid;
     place-items: center;
     padding: 18px;
-    background: rgba(8, 9, 11, 0.2);
+    overflow: auto;
+    background: rgba(8, 9, 11, 0.28);
 }
 
-.brief-card {
-    width: min(720px, 100%);
-    max-height: 100%;
-    overflow: auto;
+.start-card {
+    position: relative;
+    width: min(620px, 100%);
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 10px;
-    padding: 16px 18px;
-    border-radius: 16px;
+    padding: 22px 22px 18px;
+    border-radius: 18px;
+    text-align: center;
 }
 
-.brief-card.drop-target {
+.start-card.drop-target {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent), 0 24px 60px rgba(0, 0, 0, 0.55);
 }
 
-.brief-head {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    color: var(--accent);
+.start-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
 }
 
-.brief-head h2 {
+.start-heron {
+    display: block;
+    margin: -4px 0 -6px;
+}
+
+.start-title {
     margin: 0;
     color: var(--text-strong);
-    font-size: 16px;
+    font-size: 20px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 
-.brief-intro {
-    margin: 0;
+.start-sub {
+    max-width: 470px;
+    margin: 0 0 4px;
     color: var(--muted);
     line-height: 1.5;
 }
 
-.brief-text {
+.start-composer {
     width: 100%;
-    min-height: 200px;
-    resize: vertical;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 10px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
     background: var(--inset);
-    color: var(--text);
-    font: 12.5px/1.55 var(--font);
+    text-align: left;
 }
 
-.brief-text:focus {
+.start-composer:focus-within {
     border-color: var(--accent);
 }
 
-.brief-drop {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 12px;
-    border: 1px dashed var(--border-strong);
-    border-radius: 8px;
-    color: var(--muted);
-}
-
-.brief-concepts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 6px;
-}
-
-.brief-concepts:empty {
-    display: none;
-}
-
-.brief-concept img {
+.start-input {
     width: 100%;
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    display: block;
+    min-height: 64px;
+    max-height: 40vh;
+    resize: none;
+    padding: 2px 2px 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--text);
+    font: 14px/1.5 var(--font);
 }
 
-.brief-actions {
+.start-files {
     display: flex;
     flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 2px;
+}
+
+.start-file {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.start-file.image img {
+    display: block;
+    width: 68px;
+    height: 46px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.start-file.doc {
+    max-width: 220px;
+    height: 28px;
+    padding: 0 26px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--fill);
+    color: var(--text);
+}
+
+.start-file.doc span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.start-file-remove {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: var(--surface-menu);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.start-file.doc .start-file-remove {
+    top: 4px;
+    right: 4px;
+    border: 0;
+    background: none;
+}
+
+.start-row {
+    display: flex;
     align-items: center;
     gap: 8px;
 }
 
-.brief-actions .btn.primary {
+.start-attach,
+.start-go {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+}
+
+.start-ideas {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.start-idea {
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--fill);
+    color: var(--muted);
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+.start-idea:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+@media (max-height: 640px) {
+    .start-heron {
+        display: none;
+    }
 }
 
 /* ------------------------------------------------------------ shot view */
@@ -5843,6 +6021,382 @@ input.text.bt-part-id {
     color: var(--danger);
 }
 
+/* ------------------------------------------------------------ simple view */
+
+/* The scene and the chat with the assistant (main.ts applyMode): the
+   hierarchy, the inspector's tabs, the code dock, the pipeline bar and most
+   of the toolbar belong to edit mode. */
+#app.simple .workspace {
+    grid-template-columns: 0 0 minmax(0, 1fr) var(--gutter) var(--right-w);
+}
+
+#app.simple.hide-right .workspace {
+    grid-template-columns: 0 0 minmax(0, 1fr) 0 0;
+}
+
+#app.simple .side.left,
+#app.simple .splitter[data-side='left'],
+#app.simple .side.right > .tabs,
+#app.simple .dock-splitter,
+#app.simple .dock-slot,
+#app.simple .pipeline-bar,
+#app.simple .left-toggle,
+#app.simple .edit-only {
+    display: none !important;
+}
+
+#app:not(.simple) .steps-bar {
+    display: none;
+}
+
+/* The three steps the simple view shows instead of the pipeline bar. */
+.steps-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    padding: 0 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.steps-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.steps {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.steps > li {
+    display: flex;
+    align-items: center;
+}
+
+.steps-sep {
+    color: var(--faint);
+}
+
+.step {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 11px 0 5px;
+    border: 1px solid transparent;
+    border-radius: 13px;
+    background: none;
+    color: var(--faint);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.step:hover {
+    background: var(--fill);
+    color: var(--text);
+}
+
+.step.done {
+    color: var(--muted);
+}
+
+.step.done .step-num {
+    border-color: transparent;
+    background: rgba(63, 191, 127, 0.18);
+    color: var(--success);
+}
+
+.step.current {
+    border-color: rgba(187, 153, 255, 0.5);
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+.step.current .step-num {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.step-sub {
+    color: var(--accent-text);
+    font-weight: 400;
+}
+
+.step-sub::before {
+    content: '·';
+    margin-right: 6px;
+    color: var(--muted);
+}
+
+/* Needs another look: a change reached back into the step after it was done. */
+.step-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--warn);
+}
+
+.steps-popover p {
+    margin: 0 0 8px;
+    line-height: 1.5;
+}
+
+/* ------------------------------------------------------------- the heron */
+
+.mascot-avatar,
+.mascot-pose {
+    flex: none;
+    display: block;
+    user-select: none;
+    pointer-events: none;
+}
+
+/* Thinking, the heron bobs its head a little. */
+.ai-heron[data-mood='think'],
+.ai-status-heron {
+    animation: heron-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes heron-bob {
+    0%,
+    100% {
+        transform: translateY(0) rotate(0);
+    }
+    50% {
+        transform: translateY(-1.5px) rotate(-5deg);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .ai-heron[data-mood='think'],
+    .ai-status-heron {
+        animation: none;
+    }
+}
+
+/* ------------------------------------------------------ assistant status */
+
+/* What the assistant is doing, over the view while it works, with Stop. */
+.ai-status {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100% - 24px);
+    padding: 4px 5px 4px 10px;
+    border-radius: 999px;
+    color: var(--text);
+}
+
+/* Below the notice of paused scripts and the walk camera's line. */
+.viewport:has(.viewport-notice:not([hidden])) .ai-status,
+.viewport:has(.walk-hud:not([hidden])) .ai-status {
+    top: 56px;
+}
+
+.ai-status-text {
+    min-width: 0;
+    padding: 2px;
+    overflow: hidden;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.ai-status-text:hover {
+    color: var(--text-strong);
+}
+
+.ai-status-stop {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 999px;
+}
+
+/* ------------------------------------------------ chat: steps and what next */
+
+.ai-header .ai-heron {
+    margin-right: 2px;
+}
+
+/* The assistant's steps in a row: one line with the latest, open for all. */
+.ai-steps {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--fill);
+    font-size: 11.5px;
+}
+
+.ai-steps > summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    color: var(--muted);
+    list-style: none;
+    cursor: pointer;
+}
+
+.ai-steps > summary::-webkit-details-marker {
+    display: none;
+}
+
+.ai-steps > summary .icon {
+    color: var(--success);
+}
+
+.ai-steps-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-steps-count {
+    color: var(--faint);
+    white-space: nowrap;
+}
+
+.ai-steps-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-top: 1px solid var(--border);
+}
+
+/* What the user can say next: whether they like it, or what to change. */
+.ai-next {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px;
+    border: 1px solid rgba(187, 153, 255, 0.35);
+    border-radius: 10px;
+    background: var(--accent-soft);
+}
+
+.ai-next-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: var(--text-strong);
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.ai-welcome-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin: 4px 0 8px;
+}
+
+.ai-welcome-head h3 {
+    margin: 0;
+}
+
+.ai-welcome-note {
+    color: var(--accent-text);
+}
+
+.ai-welcome-brief {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: var(--fill);
+    color: var(--text);
+    white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------- version history */
+
+.version-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.version-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 8px;
+}
+
+.version-item:hover {
+    background: var(--fill);
+}
+
+.version-thumb {
+    flex: none;
+    width: 64px;
+    height: 40px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--inset);
+}
+
+/* No picture (saved while the view showed something else): the frame stays. */
+.version-thumb.missing {
+    content: url('data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==');
+}
+
+.version-info {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.version-name {
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.version-item.auto .version-name {
+    color: var(--muted);
+}
+
+.dialog.version-dialog {
+    width: min(560px, 100%);
+}
+
+.version-history {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.version-history .version-list {
+    max-height: min(56vh, 460px);
+    overflow-y: auto;
+}
+
 /* ================================================================ responsive */
 
 /* Last, so these override the sections above. */
@@ -5861,7 +6415,7 @@ input.text.bt-part-id {
         background: var(--fill-strong);
     }
 
-    .scene-name {
+    .scene-name-wrap {
         display: none;
     }
 
@@ -5940,6 +6494,14 @@ input.text.bt-part-id {
         padding-inline: 6px;
     }
 
+    .mode-toggle {
+        padding: 0 7px;
+    }
+
+    .mode-toggle-label {
+        display: none;
+    }
+
     .statusbar .status-item.muted,
     .statusbar .status-item.mono {
         display: none;
@@ -5962,7 +6524,8 @@ input.text.bt-part-id {
    to the view; its stages and checklist are in the Design tab too. */
 @media (max-height: 500px) {
     /* The slot stays, holding its row of the page grid. */
-    .pipeline-bar {
+    .pipeline-bar,
+    .steps-bar {
         display: none;
     }
 }
@@ -6000,7 +6563,8 @@ input.text.bt-part-id {
         height: 42px;
     }
 
-    .pipeline-chip {
+    .pipeline-chip,
+    .step {
         height: 32px;
     }
 

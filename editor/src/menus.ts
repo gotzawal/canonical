@@ -56,7 +56,7 @@ export function createMenu(editor: Editor): MenuItem[] {
 export function menuDefinitions(
     editor: Editor,
     commands: Commands,
-    panels: { toggleLeft: () => void; toggleRight: () => void; showGraph: () => void; showAI: () => void },
+    panels: { toggleLeft: () => void; toggleRight: () => void; showGraph: () => void; showAI: () => void; versions: () => void },
 ) {
     const store = editor.store;
     const cmd = (id: string, patch?: Partial<MenuItem>) => commands.item(id, patch);
@@ -75,6 +75,7 @@ export function menuDefinitions(
                 cmd('file.open'),
                 cmd('file.save'),
                 cmd('file.saveProject'),
+                { label: 'Version History...', icon: 'history', action: panels.versions },
                 { separator: true },
                 cmd('file.build'),
                 { separator: true },
@@ -118,6 +119,7 @@ export function menuDefinitions(
                 { separator: true },
                 ...viewportMenu(store),
                 { separator: true },
+                cmd('view.editMode', { icon: undefined, checked: () => store.prefs.editMode }),
                 { label: 'Toggle Hierarchy Panel', action: panels.toggleLeft },
                 { label: 'Toggle Inspector Panel', action: panels.toggleRight },
                 cmd('dock.toggle'),

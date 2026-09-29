@@ -91,6 +91,8 @@ const PATHS: Record<string, string> = {
     list: '<path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"/>',
     book: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 20.5A2.5 2.5 0 0 1 7.5 18H19v3H7.5"/>',
     minimize: '<path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
+    panels: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M8.5 4.5v15M15.5 4.5v15"/>',
+    edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>',
 };
 
 export type IconName = keyof typeof PATHS;

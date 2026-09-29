@@ -77,7 +77,6 @@ export const levelTools = tools({
         },
         required: ['name', 'rooms'],
         run({ env, args, ed, store }) {
-            if (ed.pipeline.placementLocked) throw new ToolError('Placement is locked in this stage: new objects would change the level. It can be unlocked in the pipeline bar.');
             const rooms = roomsFrom(env, args);
             const wall = args.wall_thickness !== undefined ? Math.min(2, Math.max(0.05, num(args.wall_thickness, 'wall_thickness'))) : 0.2;
             const slab = args.slab !== undefined ? Math.min(2, Math.max(0.05, num(args.slab, 'slab'))) : 0.2;

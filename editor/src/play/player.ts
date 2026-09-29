@@ -297,13 +297,24 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     }
 
     /** Plays for `seconds`, stops, and returns what the scripts reported. */
-    async runFor(seconds: number): Promise<{ logs: ScriptLog[]; issues: ScriptIssue[]; frames: number }> {
+    /** Plays for `seconds`, then stops and restores the scene; `signal` stops it early (and rejects with an AbortError). */
+    async runFor(seconds: number, signal?: AbortSignal): Promise<{ logs: ScriptLog[]; issues: ScriptIssue[]; frames: number }> {
         if (this.state !== 'stopped') this.stop();
         if (usesPhysics(this.store.doc)) await loadPhysics();
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         this.play();
-        await new Promise((r) => setTimeout(r, Math.max(0, seconds) * 1000));
+        await new Promise<void>((resolve) => {
+            const done = () => {
+                clearTimeout(timer);
+                signal?.removeEventListener('abort', done);
+                resolve();
+            };
+            const timer = setTimeout(done, Math.max(0, seconds) * 1000);
+            signal?.addEventListener('abort', done);
+        });
         const result = { logs: this.logs.slice(), issues: this.issues.slice(), frames: this.time.frame };
         this.stop();
+        if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
         return result;
     }
 

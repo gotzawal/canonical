@@ -137,7 +137,7 @@ class PaintoverDialog {
         this.resultsEl = h('div', { class: 'po-results' });
         const body = h('div', { class: 'po-dialog' }, form, this.resultsEl);
 
-        this.modal = modal(`Paintover: ${shot.name}`, body, { cls: 'po-modal', onClose: () => this.dispose() });
+        this.modal = modal(`Reference Images: ${shot.name}`, body, { cls: 'po-modal', onClose: () => this.dispose() });
         const upload = button('Upload Your Own...', () => void this.upload(), 'subtle', 'open');
         this.status = h('span', { class: 'muted small po-status' });
         this.cancelBtn = button('Cancel Generation', () => jobs.get(this.shotId)?.abort.abort(), '', 'close');
@@ -240,7 +240,7 @@ class PaintoverDialog {
             cap.addEventListener('click', () => lightbox(this.preview!, 'Greybox capture'));
         } else cap.classList.add('missing');
         this.refsEl.appendChild(tile(cap, this.preview ? 'Greybox capture' : 'Capture (made when generating)', iconButton('refresh', 'Capture again', () => void this.capturePreview())));
-        if (shot.concept) this.refsEl.appendChild(tile(this.thumb(shot.concept), 'Concept'));
+        if (shot.concept) this.refsEl.appendChild(tile(this.thumb(shot.concept), 'Reference image'));
         for (const id of this.extra) {
             this.refsEl.appendChild(tile(this.thumb(id), this.assetName(id), iconButton('close', 'Remove', () => {
                 this.extra = this.extra.filter((x) => x !== id);
@@ -259,11 +259,11 @@ class PaintoverDialog {
         const items: MenuItem[] = [];
         for (const c of doc.design.concepts) {
             if (used.has(c.asset)) continue;
-            items.push({ label: `Concept: ${this.assetName(c.asset)}`, icon: 'image', action: () => this.pushExtra(c.asset) });
+            items.push({ label: `Reference image: ${this.assetName(c.asset)}`, icon: 'image', action: () => this.pushExtra(c.asset) });
         }
         for (const s of doc.design.shots) {
             if (s.id === shot.id || !s.target || used.has(s.target)) continue;
-            items.push({ label: `Paintover of ${s.name}`, icon: 'paint', action: () => this.pushExtra(s.target!) });
+            items.push({ label: `Painted reference of ${s.name}`, icon: 'paint', action: () => this.pushExtra(s.target!) });
         }
         const r = anchor.getBoundingClientRect();
         showMenu(
@@ -326,13 +326,13 @@ class PaintoverDialog {
         this.key = key;
         clear(this.resultsEl);
         const d = this.editor.store.doc.design;
-        const head = h('div', { class: 'po-results-head' }, h('div', { class: 'group-label', text: `Paintovers (${shot.paintovers.length})` }));
+        const head = h('div', { class: 'po-results-head' }, h('div', { class: 'group-label', text: `Painted over the greybox (${shot.paintovers.length})` }));
         this.resultsEl.appendChild(head);
         const notes: string[] = [];
         const open = this.editor.pipeline.progress('level').items.filter((i) => ['level.route', 'level.sightlines', 'level.play'].includes(i.id) && !i.done);
-        if (open.length && d.stage === 'level') notes.push('Play checks are still open. Paintovers are best made once the blockout passes them.');
-        if (shot.stale) notes.push('The level or the framing changed after the target was chosen. Make a new paintover or choose the target again.');
-        if (!shot.target && shot.paintovers.length) notes.push('Choose the paintover that becomes the target of this shot.');
+        if (open.length && d.stage === 'level') notes.push('Play checks are still open. Reference images are best painted once the blockout passes them.');
+        if (shot.stale) notes.push('The level or the framing changed after the reference image was chosen. Paint a new one or choose again.');
+        if (!shot.target && shot.paintovers.length) notes.push('Choose the painted image this shot is compared with from now on.');
         for (const n of notes) this.resultsEl.appendChild(h('div', { class: 'design-note' }, icon('info', 14), h('span', { text: n })));
         const grid = h('div', { class: 'po-grid' });
         if (job) {
@@ -345,10 +345,10 @@ class PaintoverDialog {
             }
         }
         for (const p of [...shot.paintovers].reverse()) grid.appendChild(this.tile(shot, p));
-        if (!shot.paintovers.length && !job) grid.appendChild(h('div', { class: 'muted small pad', text: 'No paintovers yet. Generate some from the capture and the concept, or upload your own.' }));
+        if (!shot.paintovers.length && !job) grid.appendChild(h('div', { class: 'muted small pad', text: 'Nothing painted yet. Paint some over the capture in the style of the reference image, or upload your own.' }));
         this.resultsEl.appendChild(grid);
         const spent = paintoverSpend(d);
-        this.status.textContent = job ? `Generating ${job.done}/${job.count}...` : spent > 0 ? `Spent on paintovers: $${spent.toFixed(3)}` : '';
+        this.status.textContent = job ? `Generating ${job.done}/${job.count}...` : spent > 0 ? `Spent on painting: $${spent.toFixed(3)}` : '';
         this.updateButtons();
     }
 
@@ -358,8 +358,8 @@ class PaintoverDialog {
         const meta = this.editor.store.doc.assets.find((a) => a.id === p.asset);
         const label = p.source === 'upload' ? 'Uploaded' : `${(p.model ?? 'generated').split('/').pop()}${p.seed != null ? ` · ${p.seed}` : ''}`;
         const choose = isTarget
-            ? h('span', { class: 'shot-badge ok', text: shot.stale ? 'target (needs update)' : 'target' })
-            : button('Use as Target', () => pipeline.choosePaintover(shot.id, p.asset), 'small primary', 'check');
+            ? h('span', { class: 'shot-badge ok', text: shot.stale ? 'in use (needs update)' : 'in use' })
+            : button('Use as Reference', () => pipeline.choosePaintover(shot.id, p.asset), 'small primary', 'check');
         const info = iconButton('info', 'Details', (e) => this.details(e.currentTarget as HTMLElement, p));
         const reuse = p.source === 'generated' ? iconButton('undo', 'Use these settings again', () => this.reuse(p)) : null;
         const remove = iconButton('trash', 'Delete', () => pipeline.deletePaintover(shot.id, p.asset));
@@ -400,7 +400,7 @@ class PaintoverDialog {
         this.params = { ...(p.params ?? {}) };
         this.modelChanged(this.params);
         this.renderRefs();
-        toast('Settings of that paintover are back in the form.', 'info');
+        toast('Settings of that image are back in the form.', 'info');
     }
 
     private updateButtons() {
@@ -491,7 +491,7 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
         const n = res.paintovers.length;
         const cost = res.cost != null ? ` ($${res.cost.toFixed(3)})` : '';
         const kept = job.abort.signal.aborted ? 'Cancelled; kept ' : '';
-        toast(`${kept}${n} paintover${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
+        toast(`${kept}${n} reference image${n === 1 ? '' : 's'} for ${shotName()}${cost}.`, 'success');
         if (res.errors.length) toast(`${res.errors.length} request${res.errors.length === 1 ? '' : 's'} failed: ${res.errors[0]}`, 'error');
         if (res.dropped.length) toast(`Left out options the model does not take: ${res.dropped.join(', ')}`, 'info', 6000);
         const away = document.hidden || !document.hasFocus() || !current || current.closed || current.shotId !== shotId;
@@ -500,7 +500,7 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
                 kind: 'ai-done',
                 key: `paintover-${shotId}`,
                 icon: 'paint',
-                title: 'Paintovers are ready',
+                title: 'Reference images are ready',
                 body: `${n} for ${shotName()}. Choose the target.`,
                 actions: [{ label: 'Open', primary: true, run: () => openPaintoverDialog(editor, shotId) }],
             });

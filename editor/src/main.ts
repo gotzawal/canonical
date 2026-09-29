@@ -6,6 +6,7 @@ import { messages } from './core/messages';
 import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
 import { Store } from './core/store';
+import { UNTITLED_SCENE } from './core/types';
 import { Editor } from './editor';
 import { Picker } from './engine/picking';
 import { RenderGraphController } from './engine/renderGraph';
@@ -22,11 +23,14 @@ import { ModelServices, savedBackend } from './play/ai/services';
 import { scriptChat } from './ai/scriptChat';
 import { formatBytes } from './core/assets';
 import { AIPanel } from './ui/aiPanel';
+import { AIStatus } from './ui/aiStatus';
 import { onChanges, touches } from './ui/batch';
 import { AssetsPanel } from './ui/assetsPanel';
-import { BriefScreen } from './ui/briefScreen';
 import { DesignPanel } from './ui/designPanel';
 import { PipelineBar } from './ui/pipelineBar';
+import { StartScreen } from './ui/startScreen';
+import { StepsBar } from './ui/stepsBar';
+import { openVersionHistory } from './ui/versionHistory';
 import { ShotView } from './ui/shotView';
 import { Dock } from './ui/dock';
 import { h } from './ui/dom';
@@ -85,10 +89,16 @@ async function main() {
     const right = h('aside', { class: 'side right' });
     const menuSlot = h('div', { class: 'menu-slot' });
     const pipelineSlot = h('div', { class: 'pipeline-slot' });
-    const sceneName = h('span', { class: 'scene-name' });
+    const sceneName = sceneNameField(store);
     const statusSlot = h('div', { class: 'status-slot' });
     const bell = h('button', { class: 'icon-btn', title: 'Notifications', attrs: { type: 'button', 'aria-label': 'Notification settings' } }, icon('bell', 16));
-    const leftToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Hierarchy', attrs: { type: 'button', 'aria-label': 'Toggle hierarchy' } }, icon('layers', 16));
+    const modeToggle = h(
+        'button',
+        { class: 'mode-toggle', attrs: { type: 'button', 'aria-pressed': 'false' } },
+        icon('panels', 15),
+        h('span', { class: 'mode-toggle-label', text: 'Edit mode' }),
+    );
+    const leftToggle = h('button', { class: 'icon-btn panel-toggle left-toggle', title: 'Hierarchy', attrs: { type: 'button', 'aria-label': 'Toggle hierarchy' } }, icon('layers', 16));
     const rightToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Inspector', attrs: { type: 'button', 'aria-label': 'Toggle inspector' } }, icon('sliders', 16));
 
     app.append(
@@ -98,8 +108,9 @@ async function main() {
             h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             menuSlot,
             h('div', { class: 'spacer' }),
-            sceneName,
+            sceneName.el,
             h('div', { class: 'spacer' }),
+            modeToggle,
             bell,
             leftToggle,
             rightToggle,
@@ -148,7 +159,7 @@ async function main() {
     const sync = new SceneSync(runtime, store, shaders);
     const picker = new Picker(runtime, sync, store);
     const camera = new CameraController(runtime, store, picker);
-    const gizmo = new Gizmo(store, picker, (ids) => editor.pipeline.canPlace(ids));
+    const gizmo = new Gizmo(store, picker);
     const autosave = new AutoSaver(store);
     const compiler = new ScriptCompiler(store, !saved?.scriptsPaused);
     autosave.scriptsPaused = !compiler.trusted;
@@ -232,8 +243,16 @@ async function main() {
     const editor: Editor = new Editor({ store, runtime, sync, picker, camera, autosave, shaders, compiler, player, graph, models, viewport });
     const commands = new Commands(
         editorCommands(editor, {
-            rename: () => store.primary && hierarchy.startRename(store.primary.id),
-            toggleDock: () => dock.toggle(),
+            rename: () => {
+                if (!store.primary) return;
+                setEditMode(true);
+                hierarchy.startRename(store.primary.id);
+            },
+            toggleDock: () => {
+                setEditMode(true);
+                dock.toggle();
+            },
+            toggleEditMode: () => setEditMode(!store.prefs.editMode),
         }),
     );
     new WalkController(editor, viewport.overlay, viewportEl);
@@ -274,10 +293,12 @@ async function main() {
         const one = count === 1;
         scriptNotice.replaceChildren(
             icon('alert', 15),
-            h('span', { text: `${count} script${one ? '' : 's'} from an opened file or snapshot ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
+            h('span', { text: `${count} script${one ? '' : 's'} from an opened file or an earlier version ${one ? 'is' : 'are'} paused. Scripts run JavaScript in this page: read ${one ? 'it' : 'them'} first.` }),
             button('Review', () => {
                 const first = store.doc.scripts[0];
-                if (first) dock.open('script', first.id);
+                if (!first) return;
+                setEditMode(true);
+                dock.open('script', first.id);
             }, 'small'),
             button('Enable Scripts', () => editor.enableScripts(), 'small primary'),
         );
@@ -296,18 +317,40 @@ async function main() {
     tabs.append(inspectorTab, sceneTab, designTab, aiTab);
     const scenePanel = new ScenePanel(editor);
     const inspector = new InspectorPanel(editor, () => showTab('scene'));
-    const aiPanel = new AIPanel(editor, () => aiContext(editor, dock));
-    const brief = new BriefScreen(editor, () => designPanel.structure());
-    viewportEl.append(brief.el);
+    const aiPanel = new AIPanel(editor, () => aiContext(editor, dock), {
+        showDetails: () => showTab('design', true),
+        build: () => commands.get('file.build').run(),
+    });
+    const start = new StartScreen(editor, {
+        start: (request, images, fresh) => {
+            showTab('ai');
+            aiPanel.start(request, images, fresh);
+        },
+    });
+    viewportEl.append(start.el);
+    // A request in the chat starts the project as well: the start screen is not needed any more.
+    aiPanel.agent.on('busy', (busy) => {
+        if (busy && !start.el.hidden) start.close();
+    });
     const designPanel = new DesignPanel(editor, {
-        showBrief: () => brief.open(),
         ask: (text, images) => {
             showTab('ai');
             aiPanel.send(text, images);
         },
     });
     new ShotView(editor, viewportEl);
-    const showTab = (tab: RightTab) => {
+    viewportEl.append(new AIStatus(aiPanel.agent, () => showTab('ai')).el);
+    /**
+     * Shows a tab of the right panel. The simple view has only the chat:
+     * `edit` (a user's request for that tab) opens the full editor for the
+     * others, which the simple view otherwise leaves alone. `reveal: false`
+     * leaves a closed panel (or drawer) closed.
+     */
+    const showTab = (tab: RightTab, edit = false, reveal = true) => {
+        if (tab !== 'ai' && !store.prefs.editMode) {
+            if (!edit) return;
+            setEditMode(true);
+        }
         inspectorTab.classList.toggle('active', tab === 'inspector');
         sceneTab.classList.toggle('active', tab === 'scene');
         designTab.classList.toggle('active', tab === 'design');
@@ -316,6 +359,7 @@ async function main() {
         scenePanel.el.hidden = tab !== 'scene';
         designPanel.el.hidden = tab !== 'design';
         aiPanel.el.hidden = tab !== 'ai';
+        if (!reveal) return;
         if (tab === 'ai' || tab === 'design') setPanel('right', true);
         if (tab === 'ai') aiPanel.focus();
         if (tab === 'design') designPanel.shown();
@@ -328,18 +372,49 @@ async function main() {
         if (sel.length && aiPanel.el.hidden && designPanel.el.hidden) showTab('inspector');
     });
     editor.on('ai-prompt', () => showTab('ai'));
-    editor.on('show-design', () => showTab('design'));
+    editor.on('show-ai', () => showTab('ai'));
+    editor.on('show-design', () => showTab('design', true));
     editor.on('show-scene', () => {
-        showTab('scene');
+        showTab('scene', true);
         setPanel('right', true);
     });
-    editor.on('show-brief', () => brief.open());
-    showTab('inspector');
-    pipelineSlot.append(new PipelineBar(editor, { design: () => showTab('design'), brief: () => brief.open() }).el);
 
-    // Page notifications: the assistant finished, save checkpoints.
+    /**
+     * The simple view (the scene and the chat, with the three steps above)
+     * or the full editor (hierarchy, inspector, pipeline bar, code dock).
+     * The assistant works the same in both.
+     */
+    const applyMode = () => {
+        const edit = store.prefs.editMode;
+        app.classList.toggle('simple', !edit);
+        modeToggle.setAttribute('aria-pressed', String(edit));
+        modeToggle.title = edit ? `Back to the simple view: the scene and the chat${commands.hint('view.editMode')}` : `Edit mode: the hierarchy, inspector, pipeline and code${commands.hint('view.editMode')}`;
+        rightToggle.title = edit ? 'Inspector' : 'Assistant';
+        rightToggle.replaceChildren(icon(edit ? 'sliders' : 'sparkle', 16));
+        if (!edit) {
+            showTab('ai', false, false);
+            app.classList.remove('show-left');
+        } else if (aiPanel.el.hidden && designPanel.el.hidden && scenePanel.el.hidden) showTab('inspector', false, false);
+    };
+    const setEditMode = (edit: boolean) => {
+        if (edit !== store.prefs.editMode) store.setPrefs({ editMode: edit });
+    };
+    modeToggle.addEventListener('click', () => setEditMode(!store.prefs.editMode));
+    let modeShown = store.prefs.editMode;
+    store.on('prefs', (p) => {
+        if (p.editMode === modeShown) return;
+        modeShown = p.editMode;
+        applyMode();
+    });
+    showTab(store.prefs.editMode ? 'inspector' : 'ai', false, false);
+    applyMode();
+    pipelineSlot.append(new StepsBar(editor, () => showTab('design', true)).el, new PipelineBar(editor, { design: () => showTab('design', true) }).el);
+
+    // Checkpoints refresh the assistant's memo and save versions; a notice tells when the assistant finished out of sight.
     new Checkpoints(editor, aiPanel.agent);
     aiPanel.agent.on('done', (d) => {
+        // The chat in sight shows the answer itself: the card is for when it is not.
+        if (document.visibilityState === 'visible' && !aiPanel.el.hidden && aiPanel.el.offsetParent !== null) return;
         const first = d.answer.replace(/[#*`>]/g, '').split('\n').map((l) => l.trim()).find(Boolean) ?? '';
         notices.show({
             kind: 'ai-done',
@@ -372,6 +447,7 @@ async function main() {
                     label: 'Download',
                     primary: true,
                     run: async () => {
+                        setEditMode(true);
                         dock.show('behavior');
                         const ok = await models.download(id);
                         toast(ok ? `${m.name} is ready.` : `${m.name} could not be loaded: ${models.status(id).message ?? 'unknown error'}`, ok ? 'success' : 'error', 6000);
@@ -407,10 +483,17 @@ async function main() {
     menuSlot.append(
         menubar(
             menuDefinitions(editor, commands, {
-                toggleLeft: () => setPanel('left'),
+                toggleLeft: () => {
+                    setEditMode(true);
+                    setPanel('left');
+                },
                 toggleRight: () => setPanel('right'),
-                showGraph: () => dock.show('graph'),
+                showGraph: () => {
+                    setEditMode(true);
+                    dock.show('graph');
+                },
                 showAI: () => showTab('ai'),
+                versions: () => openVersionHistory(editor),
             }),
         ),
     );
@@ -418,6 +501,7 @@ async function main() {
     // "[Name.js:12]" in the console opens the file at the line.
     statusSlot.append(
         statusbar(editor, (file, line) => {
+            setEditMode(true);
             const script = store.doc.scripts.find((s) => s.name === file);
             if (script) dock.open('script', script.id)?.reveal(line);
             const shader = store.doc.shaders.find((s) => s.name === file);
@@ -426,7 +510,7 @@ async function main() {
     );
 
     const updateTitle = () => {
-        sceneName.textContent = store.doc.name;
+        sceneName.render();
         document.title = `${store.doc.name} - Morglay`;
     };
     onChanges(store, (hint) => touches(hint, 'env') && updateTitle());
@@ -461,12 +545,60 @@ async function main() {
         ).then((v) => {
             if (v === 'download') download(new Blob([lost.raw], { type: 'application/json' }), 'saved-scene.scene.json');
         });
-    } else if (!saved) toast('Welcome! Drop a .glb model onto the viewport, use Add to build a scene, or ask the AI assistant.', 'info', 6000);
+    }
     void otherTabsOpen().then((others) => {
         if (others) toast('The editor is also open in another tab. Both keep their scene in this browser, so the tab that saves last replaces the other one. Use one tab, or save a project file first.', 'info', 12000);
     });
 
     (window as any).__editor = editor;
+}
+
+/**
+ * The scene's name in the top bar: a click edits it in place (Enter or
+ * leaving the field keeps it, Escape cancels). The assistant names a scene
+ * nobody has named yet.
+ */
+function sceneNameField(store: Store): { el: HTMLElement; render(): void } {
+    const label = h('span', { class: 'scene-name-text' });
+    const button = h('button', { class: 'scene-name', title: 'Rename the scene', attrs: { type: 'button' } }, label, icon('edit', 12, 'scene-name-edit'));
+    const input = h('input', { class: 'scene-name-input', attrs: { type: 'text', spellcheck: 'false', 'aria-label': 'Scene name', maxlength: 120, hidden: true } });
+    const el = h('div', { class: 'scene-name-wrap' }, button, input);
+    const render = () => {
+        const name = store.doc.name;
+        label.textContent = name;
+        button.classList.toggle('untitled', name === UNTITLED_SCENE);
+    };
+    const finish = (keep: boolean) => {
+        if (input.hidden) return;
+        const name = input.value.replace(/\s+/g, ' ').trim();
+        input.hidden = true;
+        button.hidden = false;
+        if (keep && name && name !== store.doc.name) {
+            store.commit('Rename Scene', (d) => {
+                d.name = name;
+            }, { env: true });
+        }
+        render();
+    };
+    button.addEventListener('click', () => {
+        input.value = store.doc.name === UNTITLED_SCENE ? '' : store.doc.name;
+        input.placeholder = store.doc.name;
+        button.hidden = true;
+        input.hidden = false;
+        input.focus();
+        input.select();
+    });
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        // Not while an input method composes (Enter ends the composition first).
+        if (e.isComposing) return;
+        if (e.key === 'Enter') finish(true);
+        else if (e.key === 'Escape') finish(false);
+    });
+    input.addEventListener('blur', () => finish(true));
+    store.on('load', () => finish(false));
+    render();
+    return { el, render };
 }
 
 /** What the assistant is told about the editor with every message. */
@@ -480,6 +612,8 @@ function aiContext(editor: Editor, dock: Dock): string {
     const f = editor.focusedPart;
     if (f) lines.push(`Picked model mesh: ${f.path} of ${store.node(f.node)?.name ?? f.node}`);
     lines.push(`Scene "${store.doc.name}": ${store.doc.nodes.length} objects, ${store.doc.prefabs.length} prefabs, ${store.doc.scripts.length} scripts, ${store.doc.shaders.length} shaders. Play mode: ${editor.player.state}.`);
+    if (store.doc.name === UNTITLED_SCENE) lines.push('The scene has no name yet: give it a short one (update_design scene_name) as soon as you know what it is.');
+    lines.push(`The user sees ${store.prefs.editMode ? 'the full editor (hierarchy, inspector, pipeline bar)' : 'the simple view: the scene, this chat and the three steps; no panels'}.`);
     if (!editor.compiler.trusted && store.doc.scripts.length) lines.push('Scripts are paused: the scene was opened from a file and the user has not enabled its scripts yet.');
     lines.push(...pipelineSummary(store.doc, editor.runtime.fps, editor.runtime.fpsLimit), ...designSummary(store.doc), ...memoLines(store.doc));
     return lines.join('\n');

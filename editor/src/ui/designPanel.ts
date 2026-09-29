@@ -1,37 +1,37 @@
 import type { Editor } from '../editor';
 import { onChanges, whenQuiet } from './batch';
 import { getAssetUrl, putDesignImage } from '../core/assets';
-import { areaName, STAGE_IDS, stageIndex } from '../core/design';
+import { areaName, detailLevel, planStarted, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
-import { download, pickFiles } from '../core/persistence';
+import { pickFiles } from '../core/persistence';
 import type { AreaDoc, AssetMeta, DesignDoc, DetailLevel, MaterialSlotDoc, ShotDoc, StageId, Vec3 } from '../core/types';
 import { STAGE_PROMPTS, structurePrompt } from '../design/prompts';
-import { stageDef } from '../design/stages';
+import { stageDef, stepOf } from '../design/stages';
 import { checklistView } from './checklist';
 import { openLevelCheck } from './levelCheckDialog';
 import { generating, openPaintoverDialog, paintoverJobs } from './paintoverDialog';
 import { openSwatchDialog } from './swatchDialog';
 import { PARTICLE_PRESETS, sceneParticles } from '../core/particles';
 import { addColorGrade, addVignette } from '../design/effects';
-import { assignSlot, deleteSlot, roomSample, slotUsers, upsertSlot, type SlotPatch } from '../design/materialSlots';
+import { assignSlot, deleteSlot, slotUsers, upsertSlot, type SlotPatch } from '../design/materialSlots';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { confirmDialog, popover, showMenu, toast } from './overlays';
+import { versionActions, versionList } from './versionHistory';
 import {
     CheckboxField, ColorField, NumberField, SelectField, SliderField, TextAreaField, TextField, Vec3Field, button, iconButton, row, section,
 } from './widgets';
 
 export interface DesignPanelHooks {
-    /** Opens the brief screen. */
-    showBrief(): void;
     /** Sends a request to the assistant (and shows the AI tab). */
     ask(text: string, images?: { asset: string; name: string }[]): void;
 }
 
 /**
- * The Design tab: the current stage with its checklist, the brief and its
- * concept images, the structured plan, the shots, snapshots and the scene
- * memo.
+ * The Design tab of the full editor: the current stage with its checklist,
+ * the brief and its reference images, the structured plan, the shots, the
+ * material slots and the version history. The assistant runs all of this;
+ * the tab shows it and lets the user change any of it by hand.
  */
 export class DesignPanel {
     readonly el: HTMLElement;
@@ -105,7 +105,7 @@ export class DesignPanel {
     private render() {
         const scroll = this.body.scrollTop;
         clear(this.body);
-        this.body.append(this.stageSection(), this.briefSection(), this.planSection(), this.shotsSection(), this.materialsSection(), this.snapshotSection(), this.memoSection());
+        this.body.append(this.stageSection(), this.briefSection(), this.planSection(), this.shotsSection(), this.materialsSection(), this.versionSection());
         this.body.scrollTop = scroll;
     }
 
@@ -122,27 +122,38 @@ export class DesignPanel {
             h(
                 'div',
                 { class: 'stage-head' },
-                h('span', { class: 'stage-count', text: `Stage ${stageIndex(id) + 1} of ${STAGE_IDS.length}` }),
+                h('span', { class: 'stage-count', text: `${stepOf(id).title} step · stage ${stageIndex(id) + 1} of ${STAGE_IDS.length}` }),
                 h('span', { class: 'stage-status ' + st.status, text: st.status === 'done' ? 'complete' : st.status }),
             ),
             h('div', { class: 'stage-title', text: def.long }),
             h('p', { class: 'stage-desc', text: def.description }),
         );
-        const detail = new SelectField<string>(
+        const detail = new SelectField<DetailLevel>(
             [
-                { value: '', label: 'The assistant judges from your words' },
                 { value: 'quick', label: 'Decide for me and move on' },
                 { value: 'detailed', label: 'Work out the details with me' },
             ],
-            d.detail ?? '',
+            detailLevel(d),
             (v) => this.edit('Detail Level', (dd) => {
-                if (v) dd.detail = v as DetailLevel;
+                if (v === 'detailed') dd.detail = v;
                 else delete dd.detail;
             }),
         );
-        rows.push(row('Details', detail.el, 'Deciding for you, the assistant asks nothing small, chooses paintovers, judges the shots and completes stages whose checklist is done. Working them out with you, it asks about what matters, each question with what it assumes meanwhile.'));
+        rows.push(row('Details', detail.el, 'Deciding for you (the default), the assistant asks nothing small, chooses the reference images, judges the shots and completes stages whose checklist is done. Working them out with you, it asks about what matters, each question with what it assumes meanwhile, and you complete the stages.'));
         const rechecks = STAGE_IDS.filter((s) => d.stages[s].recheck && d.stages[s].status === 'recheck');
         for (const s of rechecks) rows.push(h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: `${stageDef(s).title} needs a recheck: ${d.stages[s].recheck}` })));
+        // Nothing was refused for it: the level changed after it was done, and a passing level check clears this.
+        if (this.editor.pipeline.layoutChanged) {
+            rows.push(
+                h(
+                    'div',
+                    { class: 'design-note warn' },
+                    icon('alert', 14),
+                    h('span', { text: 'The layout changed after the Level stage was done. A passing level check clears this.' }),
+                    button('Check the level', () => void openLevelCheck(this.editor), 'small'),
+                ),
+            );
+        }
         const rework = d.areas.filter((a) => a.rework);
         for (const a of rework) {
             rows.push(
@@ -166,7 +177,7 @@ export class DesignPanel {
                 h(
                     'div',
                     { class: 'design-proposal' },
-                    h('div', { class: 'design-proposal-title' }, icon('flag', 14), h('span', { text: 'The assistant proposes completing this stage' })),
+                    h('div', { class: 'design-proposal-title' }, icon('flag', 14), h('span', { text: 'The assistant finished this stage. Happy with it?' })),
                     h('div', { class: 'design-proposal-text', text: st.proposal.summary }),
                     h(
                         'div',
@@ -186,10 +197,9 @@ export class DesignPanel {
                 button(id === 'brief' ? 'Structure with AI' : 'Ask AI to work on it', () => this.askStage(id), 'small', 'sparkle'),
             );
         } else actions.append(h('span', { class: 'muted small', text: 'Every stage is complete. Reopen a stage from the pipeline bar to change it.' }));
-        if (id === 'brief') actions.append(button('Open brief', () => this.hooks.showBrief(), 'small', 'open'));
         rows.push(actions);
-        // Without a brief the level is built right away: its checks are here from the start.
-        if ((id === 'level' && st.status !== 'done') || (id === 'brief' && d.brief.skipped)) {
+        // Before anything is planned the level may be built right away: its checks are here from the start.
+        if ((id === 'level' && st.status !== 'done') || !planStarted(d)) {
             rows.push(
                 h(
                     'div',
@@ -255,11 +265,12 @@ export class DesignPanel {
         this.hooks.ask(STAGE_PROMPTS[id]);
     }
 
-    /** Asks the assistant to structure (or restructure) the brief, with the concept images attached. */
+    /** Asks the assistant to structure (or restructure) the brief, with the reference images attached. */
     structure() {
         const d = this.design;
         if (!d.brief.text.trim() && !d.concepts.length) {
-            this.hooks.showBrief();
+            toast('Write the brief first: what to make, in your words.', 'info');
+            this.body.querySelector<HTMLTextAreaElement>('.design-brief-text')?.focus();
             return;
         }
         const restructure = !!d.brief.structuredAt && d.brief.structured !== d.brief.text;
@@ -289,33 +300,36 @@ export class DesignPanel {
     private briefSection(): HTMLElement {
         const d = this.design;
         const rows: Node[] = [];
-        if (d.brief.text.trim()) {
-            const text = d.brief.text.trim();
-            rows.push(h('div', { class: 'design-brief', text: text.length > 600 ? text.slice(0, 600) + '...' : text }));
-            const changed = !!d.brief.structuredAt && d.brief.structured !== d.brief.text;
-            if (changed) rows.push(h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: 'The brief changed since it was structured.' })));
-        } else {
-            rows.push(h('div', { class: 'muted small pad', text: d.brief.skipped ? 'This project works without a brief.' : 'No brief yet. Paste the planning document and drop the concept images.' }));
-        }
+        const brief = new TextAreaField(d.brief.text, (v) => {
+            const text = v.replace(/\r\n?/g, '\n').trim();
+            if (text !== d.brief.text) this.edit('Edit Brief', (dd) => (dd.brief.text = text));
+        }, 'What to make, in your words, with any planning notes. The assistant structures it into the plan below.', 5);
+        brief.el.classList.add('design-brief-text');
+        rows.push(brief.el);
         const changed = !!d.brief.structuredAt && d.brief.structured !== d.brief.text;
+        if (changed) rows.push(h('div', { class: 'design-note warn' }, icon('alert', 14), h('span', { text: 'The brief changed since it was structured.' })));
         rows.push(
             h(
                 'div',
                 { class: 'design-actions' },
-                button(d.brief.text.trim() ? 'Edit brief' : 'Add brief', () => this.hooks.showBrief(), 'small', 'open'),
                 button(changed ? 'Restructure' : d.brief.structuredAt ? 'Structure again' : 'Structure with AI', () => this.structure(), 'small', 'sparkle'),
+                button('Add a document', async () => {
+                    const files = await pickFiles('.md,.markdown,.txt,text/plain,text/markdown', true);
+                    const texts = await Promise.all(files.map(async (f) => `${f.name}:\n${(await f.text()).trim()}`));
+                    if (texts.length) this.edit('Edit Brief', (dd) => (dd.brief.text = [dd.brief.text.trim(), ...texts].filter(Boolean).join('\n\n')));
+                }, 'small subtle', 'open'),
             ),
         );
 
-        // Concept images and their areas.
+        // Reference images and their areas.
         const grid = h('div', { class: 'concept-grid' });
         const areas = [{ value: '', label: 'No area' }, ...d.areas.map((a) => ({ value: a.id, label: a.name }))];
         for (const c of d.concepts) {
-            const sel = new SelectField<string>(areas, c.area ?? '', (v) => this.edit('Concept Area', (dd) => {
+            const sel = new SelectField<string>(areas, c.area ?? '', (v) => this.edit('Reference Image Area', (dd) => {
                 const cc = dd.concepts.find((x) => x.asset === c.asset);
                 if (cc) cc.area = v || null;
             }));
-            const remove = iconButton('close', 'Remove concept', () => this.edit('Remove Concept', (dd) => {
+            const remove = iconButton('close', 'Remove the reference image', () => this.edit('Remove Reference Image', (dd) => {
                 dd.concepts = dd.concepts.filter((x) => x.asset !== c.asset);
             }));
             const img = this.thumb(c.asset, 'concept-img');
@@ -325,39 +339,39 @@ export class DesignPanel {
                 ? h(
                       'div',
                       { class: 'concept-review' },
-                      button('Approve', () => this.editor.pipeline.reviewConcepts([c.asset], true), 'small primary', 'check'),
-                      button('Reject', () => this.editor.pipeline.reviewConcepts([c.asset], false), 'small', 'close'),
+                      button('Keep', () => this.editor.pipeline.reviewConcepts([c.asset], true), 'small primary', 'check'),
+                      button('Drop', () => this.editor.pipeline.reviewConcepts([c.asset], false), 'small', 'close'),
                       button('Redo...', () => this.editor.askAI(`Make a new concept image to replace ${c.asset}${c.area ? ` for ${areaName(d, c.area)}` : ''} (generate_concept), then remove the old one with update_design. What to change: `), 'small', 'refresh'),
                   )
                 : null;
             grid.appendChild(
                 h(
                     'div',
-                    { class: 'concept-tile' + (proposed ? ' proposed' : ''), title: c.prompt ? `Generated from: ${c.prompt.slice(0, 300)}` : '' },
+                    { class: 'concept-tile' + (proposed ? ' proposed' : ''), title: c.prompt ? `Drawn from: ${c.prompt.slice(0, 300)}` : '' },
                     img,
-                    proposed ? h('span', { class: 'concept-badge', text: 'Proposed' }) : null,
+                    proposed ? h('span', { class: 'concept-badge', text: 'New' }) : null,
                     h('div', { class: 'concept-meta' }, sel.el, remove),
                     review,
                 ),
             );
         }
-        const add = h('button', { class: 'concept-add', attrs: { type: 'button' } }, icon('plus', 18), h('span', { text: 'Concept images' }));
+        const add = h('button', { class: 'concept-add', attrs: { type: 'button' } }, icon('plus', 18), h('span', { text: 'Reference images' }));
         add.addEventListener('click', async () => {
             const files = await pickFiles('image/*', true);
             await addConcepts(this.editor, files);
         });
         grid.appendChild(add);
-        rows.push(h('div', { class: 'group-label', text: `Concepts (${d.concepts.length})` }), grid);
+        rows.push(h('div', { class: 'group-label', text: `Reference images (${d.concepts.length})` }), grid);
         const waiting = d.concepts.filter((c) => c.review === 'proposed').length;
         rows.push(
             h(
                 'div',
                 { class: 'design-actions' },
-                button('Draw concepts with AI', () => this.hooks.ask('Draw concept images of the plan with the image model (generate_concept) for review: for every area without a concept one view that shows how it will look, closed and at a compact, believable scale. Show me the results.'), 'small', 'sparkle'),
-                waiting ? button(`Approve all ${waiting}`, () => this.editor.pipeline.reviewConcepts(d.concepts.map((c) => c.asset), true), 'small', 'check') : null,
+                button('Draw reference images with AI', () => this.hooks.ask('Draw concept images of the plan with the image model (generate_concept) for me to look at: for every area without a concept one view that shows how it will look, closed and at a compact, believable scale. Show me the results.'), 'small', 'sparkle'),
+                waiting ? button(`Keep all ${waiting}`, () => this.editor.pipeline.reviewConcepts(d.concepts.map((c) => c.asset), true), 'small', 'check') : null,
             ),
         );
-        return section('design-brief', 'Brief & Concepts', 'open', rows);
+        return section('design-brief', 'Brief & Reference Images', 'open', rows);
     }
 
     /** Shows an image large in a popover. */
@@ -598,14 +612,14 @@ export class DesignPanel {
         const pipeline = this.editor.pipeline;
         const rows: Node[] = [];
         for (const shot of d.shots) rows.push(this.shotItem(shot));
-        if (!d.shots.length) rows.push(h('div', { class: 'muted small pad', text: 'Shots are camera bookmarks framed like the concept images. Frame the view and add one, or make one per concept.' }));
+        if (!d.shots.length) rows.push(h('div', { class: 'muted small pad', text: 'Shots are camera bookmarks framed like the reference images. Frame the view and add one, or make one per reference image.' }));
         const missing = d.concepts.filter((c) => !d.shots.some((s) => s.concept === c.asset));
         const actions = h('div', { class: 'design-actions' }, button('Shot from view', () => {
             const shot = pipeline.createShot();
             pipeline.showShot(shot.id, false);
         }, 'small', 'camera'));
         if (missing.length) {
-            actions.appendChild(button(`Shot for a concept (${missing.length})`, (e) => {
+            actions.appendChild(button(`Shot for a reference image (${missing.length})`, (e) => {
                 const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                 showMenu(
                     missing.map((c) => ({
@@ -614,7 +628,7 @@ export class DesignPanel {
                         action: () => {
                             const shot = pipeline.createShot({ concept: c.asset, name: c.area ? areaName(d, c.area) : undefined });
                             pipeline.showShot(shot.id, false);
-                            toast('Frame the view to match the concept, then use "Update" in the shot bar.', 'info', 5000);
+                            toast('Frame the view to match the reference image, then use "Update" in the shot bar.', 'info', 5000);
                         },
                     })),
                     r.left,
@@ -634,9 +648,9 @@ export class DesignPanel {
         const img = this.thumb(shot.target ?? shot.concept ?? last?.asset ?? null, 'shot-thumb');
         img.addEventListener('click', () => pipeline.showShot(active ? null : shot.id));
         const badges: HTMLElement[] = [];
-        if (shot.target) badges.push(h('span', { class: 'shot-badge ok', text: 'target' }));
-        else badges.push(h('span', { class: 'shot-badge', text: 'no target' }));
-        if (shot.stale) badges.push(h('span', { class: 'shot-badge warn', text: 'needs update', title: 'The level was reopened or the shot reframed after this paintover was chosen' }));
+        if (shot.target) badges.push(h('span', { class: 'shot-badge ok', text: 'reference', title: 'A reference image painted over this shot is what it is compared with' }));
+        else badges.push(h('span', { class: 'shot-badge', text: 'no reference' }));
+        if (shot.stale) badges.push(h('span', { class: 'shot-badge warn', text: 'needs update', title: 'The level was reopened or the shot reframed after its reference image was painted' }));
         if (shot.approved) badges.push(h('span', { class: 'shot-badge ok', text: 'approved' }));
         const stage = stageDef(d.stage);
         if (stage.matchLabel && shot.target) {
@@ -653,8 +667,8 @@ export class DesignPanel {
                     { label: active ? 'Hide Frame' : 'Show', icon: 'camera', action: () => pipeline.showShot(active ? null : shot.id) },
                     { label: 'Update from View', icon: 'focus', enabled: () => active, action: () => pipeline.updateShotFromView(shot.id) },
                     { label: 'Capture Now', icon: 'image', action: () => void this.captureNow(shot) },
-                    { label: 'Paintovers...', icon: 'paint', action: () => openPaintoverDialog(this.editor, shot.id) },
-                    { label: 'Compare with Target', icon: 'graph', enabled: () => !!(shot.target || shot.concept), action: () => pipeline.openCompare(shot.id) },
+                    { label: 'Reference Images...', icon: 'paint', action: () => openPaintoverDialog(this.editor, shot.id) },
+                    { label: 'Compare with the Reference', icon: 'graph', enabled: () => !!(shot.target || shot.concept), action: () => pipeline.openCompare(shot.id) },
                     { label: 'History', icon: 'history', enabled: () => shot.history.length > 0, action: () => this.showHistory(shot, img) },
                     { separator: true },
                     {
@@ -686,7 +700,7 @@ export class DesignPanel {
                     'div',
                     { class: 'inline' },
                     button(active ? 'Showing' : 'Show', () => pipeline.showShot(active ? null : shot.id), 'small' + (active ? ' primary' : ''), 'camera'),
-                    button(generating(shot.id) ? 'Painting...' : `Paintover${shot.paintovers.length ? ` (${shot.paintovers.length})` : ''}`, () => openPaintoverDialog(this.editor, shot.id), 'small', 'paint'),
+                    button(generating(shot.id) ? 'Painting...' : `Reference${shot.paintovers.length ? ` (${shot.paintovers.length})` : ''}`, () => openPaintoverDialog(this.editor, shot.id), 'small', 'paint'),
                 ),
             ),
         );
@@ -709,8 +723,8 @@ export class DesignPanel {
             const img = this.thumb(asset, 'shot-history-img');
             strip.appendChild(h('figure', null, img, h('figcaption', { text: label })));
         };
-        add(shot.concept, 'Concept');
-        add(shot.target, 'Target');
+        add(shot.concept, 'Reference image');
+        add(shot.target, 'Painted reference');
         for (const c of shot.history) add(c.asset, `${stageDef(c.stage).title}${c.manual ? '' : ' done'} ${c.at.slice(5, 16).replace('T', ' ')}${c.score != null ? ` · ${Math.round(c.score)}` : ''}`);
         popover(anchor, h('div', { class: 'design-preview' }, h('div', { class: 'pipeline-popover-title', text: shot.name }), strip), 'wide');
     }
@@ -734,9 +748,6 @@ export class DesignPanel {
                     this.schedule(true);
                 }, 'small', 'plus'),
                 button('Swatch library', () => openSwatchDialog(this.editor, null), 'small', 'image'),
-                d.materials.length
-                    ? button('Reference room', () => this.editor.emit('show-room', d.materials.map((m) => roomSample(this.store.doc, m))), 'small', 'sun')
-                    : null,
             ),
         );
         return section('design-materials', `Material Slots (${d.materials.length})`, 'sliders', rows);
@@ -801,60 +812,11 @@ export class DesignPanel {
         return item;
     }
 
-    // ------------------------------------------------------------ snapshots
+    // ------------------------------------------------------ version history
 
-    private snapshotSection(): HTMLElement {
-        const pipeline = this.editor.pipeline;
+    private versionSection(): HTMLElement {
         const d = this.design;
-        const rows: Node[] = [];
-        for (const s of [...d.snapshots].reverse()) {
-            const menu = iconButton('dots', 'Snapshot options', (e) => {
-                const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
-                showMenu(
-                    [
-                        { label: 'Restore', icon: 'undo', action: () => void pipeline.restoreSnapshot(s.id) },
-                        {
-                            label: 'Download Scene File',
-                            icon: 'save',
-                            action: async () => {
-                                const file = await pipeline.readSnapshot(s);
-                                if (!file) return toast('This snapshot is not stored in this browser.', 'error');
-                                download(new Blob([JSON.stringify({ ...file.scene, camera: file.camera })], { type: 'application/json' }), `${s.name.replace(/[^\w-]+/g, '-')}.scene.json`);
-                            },
-                        },
-                        { separator: true },
-                        { label: 'Delete', icon: 'trash', action: () => pipeline.deleteSnapshot(s.id) },
-                    ],
-                    r.left - 160,
-                    r.bottom + 4,
-                );
-            });
-            rows.push(
-                h(
-                    'div',
-                    { class: 'design-line' },
-                    icon('history', 13),
-                    h('span', { class: 'snapshot-name', text: s.name }),
-                    h('span', { class: 'muted small', text: s.at.slice(0, 16).replace('T', ' ') }),
-                    h('div', { class: 'spacer' }),
-                    menu,
-                ),
-            );
-        }
-        if (!d.snapshots.length) rows.push(h('div', { class: 'muted small pad', text: 'Completing a stage takes a snapshot of the scene. Restore brings the scene back to it.' }));
-        rows.push(button('Take Snapshot', () => void pipeline.takeSnapshot('Snapshot').then(() => toast('Snapshot taken.', 'success')), 'small', 'history'));
-        return section('design-snapshots', `Snapshots (${d.snapshots.length})`, 'history', rows);
-    }
-
-    // ----------------------------------------------------------------- memo
-
-    private memoSection(): HTMLElement {
-        const d = this.design;
-        const memo = new TextAreaField(d.memo.text, (v) => this.edit('Edit Scene Memo', (dd) => (dd.memo = { text: v.trim(), at: new Date().toISOString() })), 'A few lines about where the work stands. The assistant reads this with every request and refreshes it at checkpoints.', 5);
-        return section('design-memo', 'Scene Memo', 'sparkle', [
-            memo.el,
-            h('div', { class: 'muted small', text: d.memo.at ? `Updated ${d.memo.at.slice(0, 16).replace('T', ' ')}` : 'Not written yet.' }),
-        ]);
+        return section('design-versions', `Version History (${d.snapshots.length})`, 'history', [versionList(this.editor), versionActions(this.editor)]);
     }
 }
 
@@ -862,7 +824,7 @@ function round(v: number): number {
     return Math.round(v * 100) / 100;
 }
 
-/** Stores images as concept images of the project. */
+/** Stores images as reference (concept) images of the project. */
 export async function addConcepts(editor: Editor, files: File[]): Promise<AssetMeta[]> {
     const metas: AssetMeta[] = [];
     for (const f of files) {
@@ -874,7 +836,7 @@ export async function addConcepts(editor: Editor, files: File[]): Promise<AssetM
         }
     }
     if (!metas.length) return metas;
-    editor.store.commit(metas.length === 1 ? 'Add Concept' : `Add ${metas.length} Concepts`, (d) => {
+    editor.store.commit(metas.length === 1 ? 'Add Reference Image' : `Add ${metas.length} Reference Images`, (d) => {
         d.assets.push(...metas);
         for (const m of metas) d.design.concepts.push({ asset: m.id, area: null });
     }, { design: true });
