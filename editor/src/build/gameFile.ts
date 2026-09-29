@@ -20,6 +20,12 @@ export interface PlayerManifest {
     ai?: string[];
     /** Files of `files` only physics uses (Rapier). */
     physics?: string[];
+    /** Files of `files` only KTX2 textures use (the Basis transcoder). */
+    ktx2?: string[];
+    /** Files of `files` only Draco-compressed models use (the Draco decoder). */
+    draco?: string[];
+    /** Files of `files` only meshopt-compressed models use (the meshopt decoder). */
+    meshopt?: string[];
     /** Prefix of the files on this server ('' for a production build). */
     base?: string;
 }
@@ -33,6 +39,8 @@ export interface GameFile {
     camera?: CameraState;
     /** Asset files by asset id, relative to the page. */
     files: Record<string, string>;
+    /** Compressed copies of textures (KTX2) by `${asset id}|${role}`, relative to the page; used in place of the files. */
+    derived?: Record<string, string>;
     builtAt: string;
     /** Commit of the editor that built the game, when known. */
     editor?: string;

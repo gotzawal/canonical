@@ -3,7 +3,7 @@
 // code. Every question about them goes through this one walk: what a file
 // must carry, whether something is in use, and what deleting it clears.
 
-import type { MaterialDoc, ParamValue, SceneDoc } from './types';
+import type { MaterialDoc, ParamValue, SceneDoc, TextureRole } from './types';
 
 export type RefKind = 'asset' | 'shader' | 'script';
 
@@ -12,11 +12,16 @@ export interface Ref {
     id: string;
     /** An object's (a prefab template's too), the post chain's, a prefab's model, or shader code. */
     at: 'object' | 'post' | 'prefab' | 'code';
+    /** Of an asset: what it is to its holder, a texture's role or a model; unknown for shader code. */
+    role?: TextureRole | 'model';
     /** Takes the reference out (the holder goes back to its default); missing where that is not done. */
     drop?(): void;
 }
 
 const MAPS = ['map', 'normalMap', 'metalRoughMap', 'aoMap', 'emissiveMap'] as const satisfies readonly (keyof MaterialDoc)[];
+
+/** The role of the texture of each map of a material. */
+export const MAP_ROLES: Record<(typeof MAPS)[number], TextureRole> = { map: 'color', normalMap: 'normal', metalRoughMap: 'data', aoMap: 'data', emissiveMap: 'color' };
 
 export function refs(doc: SceneDoc): Ref[] {
     const out: Ref[] = [];
@@ -24,13 +29,14 @@ export function refs(doc: SceneDoc): Ref[] {
     // Texture properties of custom shaders hold asset ids as values.
     const params = (values: Record<string, ParamValue> | undefined, at: Ref['at']) => {
         for (const [name, v] of Object.entries(values ?? {})) {
-            if (typeof v === 'string' && known.has(v)) out.push({ kind: 'asset', id: v, at, drop: () => delete values![name] });
+            // Loaded as colors, like every texture property (SceneSync.loadTexture).
+            if (typeof v === 'string' && known.has(v)) out.push({ kind: 'asset', id: v, at, role: 'color', drop: () => delete values![name] });
         }
     };
     for (const n of [...doc.nodes, ...doc.prefabs.flatMap((p) => p.nodes)]) {
         const m = n.mesh?.material;
         if (m) {
-            for (const key of MAPS) if (m[key]) out.push({ kind: 'asset', id: m[key]!, at: 'object', drop: () => (m[key] = null) });
+            for (const key of MAPS) if (m[key]) out.push({ kind: 'asset', id: m[key]!, at: 'object', role: MAP_ROLES[key], drop: () => (m[key] = null) });
             if (m.shader) {
                 out.push({
                     kind: 'shader',
@@ -45,9 +51,9 @@ export function refs(doc: SceneDoc): Ref[] {
             }
             params(m.params, 'object');
         }
-        if (n.model?.asset) out.push({ kind: 'asset', id: n.model.asset, at: 'object' });
+        if (n.model?.asset) out.push({ kind: 'asset', id: n.model.asset, at: 'object', role: 'model' });
         for (const o of Object.values(n.model?.materials ?? {})) {
-            if (o.map) out.push({ kind: 'asset', id: o.map, at: 'object', drop: () => delete o.map });
+            if (o.map) out.push({ kind: 'asset', id: o.map, at: 'object', role: 'color', drop: () => delete o.map });
             if (o.shader) {
                 out.push({
                     kind: 'shader',
@@ -62,7 +68,7 @@ export function refs(doc: SceneDoc): Ref[] {
             params(o.params, 'object');
         }
         const particles = n.particles;
-        if (particles?.texture) out.push({ kind: 'asset', id: particles.texture, at: 'object', drop: () => (particles.texture = null) });
+        if (particles?.texture) out.push({ kind: 'asset', id: particles.texture, at: 'object', role: 'color', drop: () => (particles.texture = null) });
         for (const r of n.scripts ?? []) {
             out.push({
                 kind: 'script',
@@ -76,7 +82,7 @@ export function refs(doc: SceneDoc): Ref[] {
         }
     }
     // A prefab keeps its model while its instances show the template.
-    for (const p of doc.prefabs) if (known.has(p.asset)) out.push({ kind: 'asset', id: p.asset, at: 'prefab' });
+    for (const p of doc.prefabs) if (known.has(p.asset)) out.push({ kind: 'asset', id: p.asset, at: 'prefab', role: 'model' });
     const rg = doc.renderGraph;
     for (const p of rg.posts) {
         out.push({ kind: 'shader', id: p.shader, at: 'post', drop: () => (rg.posts = rg.posts.filter((x) => x !== p)) });
@@ -104,6 +110,21 @@ export function useCounts(doc: SceneDoc): { scripts: Map<string, number>; prefab
     }
     for (const p of doc.prefabs) for (const n of p.nodes) count(n);
     return { scripts, prefabs };
+}
+
+/**
+ * What each asset the scene uses is to it: texture roles, 'model', or
+ * 'unknown' where only shader code names it (the game may load it any way).
+ */
+export function assetRoles(doc: SceneDoc): Map<string, Set<TextureRole | 'model' | 'unknown'>> {
+    const out = new Map<string, Set<TextureRole | 'model' | 'unknown'>>();
+    for (const r of refs(doc)) {
+        if (r.kind !== 'asset') continue;
+        let set = out.get(r.id);
+        if (!set) out.set(r.id, (set = new Set()));
+        set.add(r.role ?? 'unknown');
+    }
+    return out;
 }
 
 /** The ids of one kind the scene refers to. */

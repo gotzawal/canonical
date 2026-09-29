@@ -2,7 +2,7 @@ import {
     AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
-import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, Vec3 } from '../core/types';
+import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, TextureRole, Vec3 } from '../core/types';
 import { colorToHex, hexToColor } from './color';
 import { applyAlpha, applyUVTransform, createBuiltinMaterial, EngineAlpha, engineAlpha, MaterialMaps, BASE_MAP } from './materials';
 import { applyProps, MODEL_MAPS, type ShaderManager } from './shaders';
@@ -274,7 +274,7 @@ interface OverrideMaterial {
 
 export interface OverrideDeps {
     shaders: ShaderManager;
-    loadTexture(assetId: string, linear?: boolean): Promise<Texture | null>;
+    loadTexture(assetId: string, role?: TextureRole): Promise<Texture | null>;
     dispose(mat: Material): void;
     ctx: any;
 }
@@ -429,7 +429,7 @@ export class ModelOverrides {
                 material = cloneMaterial(source, ctx);
             }
             material.name = source.name;
-            om = { material, structure, maps: new MaterialMaps(material, ctx, (id, linear) => this.deps.loadTexture(id, linear)), paramAssets: {} };
+            om = { material, structure, maps: new MaterialMaps(material, ctx, (id, role) => this.deps.loadTexture(id, role)), paramAssets: {} };
             this.mats.set(key, om);
         }
         const mat = om.material;

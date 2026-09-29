@@ -43,10 +43,14 @@ function shared() {
             }),
         },
         resolve: {
-            alias: {
-                '@orillusion/core': here('../src/index.ts'),
-                '@orillusion/particle': here('../packages/particle/index.ts'),
-            },
+            alias: [
+                { find: '@orillusion/core', replacement: here('../src/index.ts') },
+                { find: '@orillusion/particle', replacement: here('../packages/particle/index.ts') },
+                // The Basis encoder of ktx2-encoder, which its package exports do not
+                // expose: its module and its WebAssembly (imported with ?url).
+                { find: /^basis-encoder$/, replacement: here('../node_modules/ktx2-encoder/dist/basis/basis_encoder.js') },
+                { find: /^basis-encoder\/wasm/, replacement: here('../node_modules/ktx2-encoder/dist/basis/basis_encoder.wasm') },
+            ],
         },
         // Parts of the engine dispatch on `constructor.name` (Struct sizes,
         // ValueOp, post-effect registry), so minification must keep names.
@@ -67,7 +71,9 @@ function shared() {
  * files their code names, the favicon). `ai` lists the files only agents
  * with models use (the inference worker, ONNX Runtime and its WebAssembly),
  * which games without Ask or Recall leave out; `physics` those of Rapier,
- * which games without physics bodies leave out.
+ * which games without physics bodies leave out; `ktx2`, `draco` and
+ * `meshopt` the decoders of compressed textures and models, which games
+ * without such assets leave out.
  */
 function playerManifest() {
     return {
@@ -136,6 +142,10 @@ function playerManifest() {
                 files: Array.from(files).sort(),
                 ai: only('/play/ai/services.ts'),
                 physics: only('/@dimforge/rapier3d-compat/'),
+                // Decoders the engine loads only for assets that need them.
+                ktx2: only('/src/textures/ktx2/_KTX2Assets.ts'),
+                draco: only('/extends/_DracoAssets.ts'),
+                meshopt: only('/meshoptimizer/meshopt_decoder'),
             }
             fs.writeFileSync(path.join(options.dir, PLAYER_MANIFEST), JSON.stringify(manifest, null, 1))
         },

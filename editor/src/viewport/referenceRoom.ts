@@ -1,5 +1,5 @@
 import {
-    BoxGeometry, DirectLight, LitMaterial, MeshRenderer, Object3D, PlaneGeometry, SphereGeometry, Texture, Vector3,
+    BoxGeometry, DirectLight, isSrgbFormat, LitMaterial, MeshRenderer, Object3D, PlaneGeometry, SphereGeometry, Texture, Vector3,
 } from '@orillusion/core';
 import { blobToDataUrl } from '../core/images';
 import type { CameraState, EnvironmentDoc } from '../core/types';
@@ -99,7 +99,7 @@ export class ReferenceRoom {
             if (!this.active || this.root !== root) return;
             if (tex) {
                 mat.baseMap = tex;
-                mat.setDefine('USE_SRGB_ALBEDO', (tex as any).format === 'rgba8unorm-srgb');
+                mat.setDefine('USE_SRGB_ALBEDO', isSrgbFormat(tex.format));
                 // One tile covers `tile` meters of the 1 m faces.
                 const k = 1 / Math.max(0.01, s.tile);
                 applyUVTransform(mat, [k, k], [0, 0]);

@@ -3,12 +3,15 @@
 // player-manifest.json by editor/vite.config.js) renamed to index.html,
 // plus game.json with the scene and a media/ folder with its assets.
 
-import { getAssetBlob } from '../core/assets';
+import { formatBytes, getAssetBlob } from '../core/assets';
 import { sceneModelsNeeded } from '../core/behavior/format';
+import type { DerivedRecord } from '../core/derived';
 import { usedAssetIds } from '../core/persistence';
+import { assetRoles } from '../core/refs';
 import { usesPhysics } from '../play/physics';
-import type { AssetMeta, CameraState, SceneDoc } from '../core/types';
+import type { AssetMeta, CameraState, SceneDoc, TextureRole } from '../core/types';
 import { GAME_FILE, PLAYER_MANIFEST, type GameFile, type PlayerManifest } from './gameFile';
+import { decodersFor, gltfExtensions } from './modelInfo';
 import type { ZipEntry } from '../core/zip';
 
 export interface BuildOptions {
@@ -25,6 +28,28 @@ export interface BuiltGame {
     /** Total size in bytes. */
     size: number;
     warnings: string[];
+}
+
+/** Compressed copies of textures for a build (derive/derivedAssets.ts in the editor). */
+export interface BuildTextures {
+    /** The copy of a texture for a role, made now if missing; null ships the file itself. */
+    ensure(meta: AssetMeta, role: TextureRole, signal?: AbortSignal): Promise<DerivedRecord | null>;
+}
+
+/** What the player needs besides its core files. */
+interface PlayerUses {
+    ai: boolean;
+    physics: boolean;
+    ktx2: boolean;
+    draco: boolean;
+    meshopt: boolean;
+}
+
+const TEXTURE_ROLES: readonly string[] = ['color', 'normal', 'data'];
+
+/** The file of a texture's compressed copy for a role, next to where its file goes. */
+export function derivedPath(asset: AssetMeta, role: TextureRole): string {
+    return assetPath(asset).replace(/\.[a-z0-9]+$/, '') + `.${role}.ktx2`;
 }
 
 function sizeOf(data: ZipEntry['data']): number {
@@ -50,8 +75,8 @@ export function assetPath(asset: AssetMeta): string {
     return `media/${asset.id}${stem ? '-' + stem : ''}${ext}`;
 }
 
-/** The player app of this editor: the files every game gets (the AI and physics files only when it uses them). */
-async function playerFiles(title: string, uses: { ai: boolean; physics: boolean }): Promise<ZipEntry[]> {
+/** The player app of this editor: the files every game gets (the AI, physics and decoder files only when it uses them). */
+async function playerFiles(title: string, uses: PlayerUses): Promise<ZipEntry[]> {
     const manifestUrl = new URL(PLAYER_MANIFEST, document.baseURI);
     let res: Response;
     try {
@@ -68,7 +93,8 @@ async function playerFiles(title: string, uses: { ai: boolean; physics: boolean 
     const manifest = (await res.json()) as PlayerManifest;
     if (!manifest?.html || !Array.isArray(manifest.files)) throw new Error(`${PLAYER_MANIFEST} is not valid.`);
     const root = new URL(manifest.base ?? '', manifestUrl);
-    const skip = new Set([...(uses.ai ? [] : manifest.ai ?? []), ...(uses.physics ? [] : manifest.physics ?? [])]);
+    const skip = new Set<string>();
+    for (const group of ['ai', 'physics', 'ktx2', 'draco', 'meshopt'] as const) if (!uses[group]) for (const f of manifest[group] ?? []) skip.add(f);
     const out: ZipEntry[] = [];
     for (const file of manifest.files) {
         if (skip.has(file)) continue;
@@ -109,15 +135,18 @@ export function gameScene(source: SceneDoc, scripts: boolean): SceneDoc {
     return doc;
 }
 
-/** Builds the game files; `log` reports progress. */
-export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text: string) => void = () => {}): Promise<BuiltGame> {
+/**
+ * Builds the game files; `log` reports progress. With `textures`, texture
+ * assets ship as compressed copies (KTX2) for the roles the scene uses
+ * them in, made now when missing; the file itself ships only where a role
+ * has no copy (compression off or failed, or shader code naming it).
+ */
+export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text: string) => void = () => {}, textures?: BuildTextures, signal?: AbortSignal): Promise<BuiltGame> {
     const title = opts.title.trim() || source.name || 'Game';
     const warnings: string[] = [];
     const doc = gameScene(source, opts.scripts);
     const models = sceneModelsNeeded(doc);
     const ai = models.length > 0;
-    log('Collecting the player app...');
-    const files = await playerFiles(title, { ai, physics: usesPhysics(doc) });
     if (ai) {
         log(
             `The agents use ${models.join(', ')}: ` +
@@ -126,19 +155,67 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     }
 
     const paths: Record<string, string> = {};
-    const kept: AssetMeta[] = [];
+    const derived: Record<string, string> = {};
+    const assetFiles: ZipEntry[] = [];
+    const uses: PlayerUses = { ai, physics: usesPhysics(doc), ktx2: false, draco: false, meshopt: false };
+    const roles = assetRoles(doc);
+    let kept = 0;
+    let compressed = 0;
+    let compressedBytes = 0;
+    let originalBytes = 0;
+    const pending = textures ? doc.assets.filter((a) => a.kind === 'texture' && [...(roles.get(a.id) ?? [])].some((r) => TEXTURE_ROLES.includes(r))).length : 0;
+    if (pending) log(`Compressing ${pending} texture${pending === 1 ? '' : 's'} (copies made before are reused)...`);
     for (const asset of doc.assets) {
+        signal?.throwIfAborted();
         const blob = await getAssetBlob(asset.id);
         if (!blob) {
             warnings.push(`"${asset.name}" is not stored in this browser, so the game will miss it.`);
             continue;
         }
+        let needFile = true;
+        if (asset.kind === 'texture' && textures) {
+            const used = roles.get(asset.id) ?? new Set();
+            const textureRoles = [...used].filter((r): r is TextureRole => TEXTURE_ROLES.includes(r));
+            // Shader code may load it any way: keep the file too.
+            let covered = textureRoles.length > 0 && textureRoles.length === used.size;
+            for (const role of textureRoles) {
+                const copy = await textures.ensure(asset, role, signal).catch((e) => {
+                    if (e?.name === 'AbortError') throw e;
+                    return null;
+                });
+                if (!copy) {
+                    covered = false;
+                    continue;
+                }
+                const path = derivedPath(asset, role);
+                derived[`${asset.id}|${role}`] = path;
+                assetFiles.push({ path, data: copy.blob });
+                compressed++;
+                compressedBytes += copy.bytes;
+                uses.ktx2 = true;
+            }
+            if (textureRoles.length) originalBytes += blob.size;
+            needFile = !covered;
+        }
+        if (asset.kind === 'texture' && asset.name.toLowerCase().endsWith('.ktx2')) uses.ktx2 = true;
+        if (asset.kind === 'model') {
+            const need = decodersFor(await gltfExtensions(blob));
+            uses.ktx2 ||= need.ktx2;
+            uses.draco ||= need.draco;
+            uses.meshopt ||= need.meshopt;
+        }
+        if (!needFile) continue;
         const path = assetPath(asset);
         paths[asset.id] = path;
-        kept.push(asset);
-        files.push({ path, data: blob });
+        kept++;
+        assetFiles.push({ path, data: blob });
     }
-    if (kept.length) log(`Added ${kept.length} asset file${kept.length === 1 ? '' : 's'}.`);
+    if (compressed) log(`Compressed textures: ${compressed} cop${compressed === 1 ? 'y' : 'ies'}, ${formatBytes(compressedBytes)} (the files were ${formatBytes(originalBytes)}).`);
+    if (kept) log(`Added ${kept} asset file${kept === 1 ? '' : 's'}.`);
+
+    log('Collecting the player app...');
+    const files = await playerFiles(title, uses);
+    files.push(...assetFiles);
 
     const game: GameFile = {
         format: 'canonical-game',
@@ -147,6 +224,7 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
         scene: doc,
         camera: opts.camera,
         files: paths,
+        ...(compressed ? { derived } : {}),
         builtAt: new Date().toISOString(),
         editor: editorSha() || undefined,
     };

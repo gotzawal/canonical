@@ -18,7 +18,7 @@ import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
     GeometryType, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
-    ShaderKind, Vec3,
+    ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
 import type { RenderGraphController } from './engine/renderGraph';
@@ -34,6 +34,7 @@ import type { RoomSample } from './design/materialSlots';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
+import type { DerivedAssets } from './derive/derivedAssets';
 import { exampleGuard, exampleShowcase } from './examples';
 
 /** What the editor works with; main.ts makes them. */
@@ -51,6 +52,8 @@ export interface EditorDeps {
     /** The models of the agents. */
     models: ModelServices;
     viewport: Viewport;
+    /** Compressed copies of the textures (KTX2) games ship. */
+    derived: DerivedAssets;
 }
 
 /** What the viewport shows: the scene, or the walk camera or the reference room (viewport/walk.ts, referenceRoom.ts). */
@@ -1396,8 +1399,28 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     async importTextureDialog() {
-        const files = await pickFiles('image/*', true);
+        const files = await pickFiles('image/*,.ktx2', true);
         if (files.length) await this.importFiles(files);
+    }
+
+    /**
+     * Sets how a texture asset is compressed for games (mode, largest
+     * size); its copies are made again for the new options.
+     */
+    setTextureCompression(assetId: string, patch: Partial<TextureCompression>) {
+        const meta = this.store.doc.assets.find((a) => a.id === assetId);
+        if (!meta || meta.kind !== 'texture') return;
+        const next: TextureCompression = { ...meta.compress, ...patch };
+        if (next.mode === 'auto' || !next.mode) delete next.mode;
+        if (!next.maxSize) delete next.maxSize;
+        if (JSON.stringify(next) === JSON.stringify(meta.compress ?? {})) return;
+        // The copies are not part of the document, so only the assets change.
+        this.store.commit('Texture Compression', (doc) => {
+            const a = doc.assets.find((x) => x.id === assetId);
+            if (!a) return;
+            if (Object.keys(next).length) a.compress = next;
+            else delete a.compress;
+        }, { design: true });
     }
 
     // ----------------------------------------------------------------- view

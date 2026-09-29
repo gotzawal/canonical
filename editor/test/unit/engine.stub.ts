@@ -16,3 +16,4 @@ export class Transform {
     static LOCAL_ONCHANGE = 'LOCAL_ONCHANGE';
 }
 export const VertexAttributeName = { position: 'position', indices: 'indices' };
+export const isSrgbFormat = (format: unknown) => typeof format === 'string' && format.endsWith('-srgb');

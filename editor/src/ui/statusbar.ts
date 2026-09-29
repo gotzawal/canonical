@@ -36,6 +36,18 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     // What a frame costs: draw calls and the GPU memory the editor asked for (a span: the fps button stays the only button here).
     const cost = h('span', { class: 'status-item muted mono gpu-cost', attrs: { hidden: !editor.runtime.stats } });
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
+    // Textures being compressed for the game in the background (derive/).
+    const compressing = h('span', { class: 'status-item muted compressing', attrs: { hidden: true } });
+    const showCompressing = () => {
+        const n = editor.derived.pending;
+        compressing.hidden = n === 0;
+        compressing.textContent = `Compressing ${n} texture${n === 1 ? '' : 's'}`;
+        compressing.title = store.playing
+            ? 'Texture compression waits while the game plays.'
+            : 'Making the GPU-compressed copies (KTX2) games ship. The view shows each copy once it is made.';
+    };
+    editor.derived.queue.on('change', showCompressing);
+    store.on('playing', showCompressing);
     const b = build();
     const shortSha = b.sha ? b.sha.slice(0, 7) : 'dev';
     const commitUrl = b.repo && b.sha ? `https://github.com/${b.repo}/commit/${b.sha}` : '';
@@ -134,6 +146,6 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
         }
     });
 
-    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, fps, cost, gpu, version, logButton);
+    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, compressing, fps, cost, gpu, version, logButton);
     return h('div', { class: 'status-wrap' }, drawer, bar);
 }

@@ -12,9 +12,11 @@ import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
     AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScriptRef,
-    SlotShading, Vec3,
+    SlotShading, TextureRole, Vec3,
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
+import { MAP_ROLES } from '../core/refs';
+import { openTextureOptions } from './textureOptions';
 import { slotShading, type ModelInfo, type ModelPart, type ModelSlot } from '../engine/modelParts';
 import { schemaOf } from '../core/behavior/format';
 import { formatValue, keyTypeInfo } from '../core/behavior/nodeTypes';
@@ -619,7 +621,7 @@ export class InspectorPanel {
         rows.push(...this.componentRows('material', ['doubleSide']));
 
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
-        const map = this.textureSelect(m.map ?? null, textures, (v) => this.editor.applyTexture(v));
+        const map = this.textureSelect(m.map ?? null, textures, (v) => this.editor.applyTexture(v), 'color');
         rows.push(row('Texture', map.el, 'Base color map'), ...this.componentRows('material', ['tiling', 'offset']));
 
         // PBR extras of the lit material.
@@ -627,7 +629,7 @@ export class InspectorPanel {
         if (pbr) {
             rows.push(h('div', { class: 'group-label', text: 'Maps' }));
             const mapRow = (key: 'normalMap' | 'metalRoughMap' | 'aoMap' | 'emissiveMap', label: string, hint: string) => {
-                const f = this.textureSelect((m[key] as string | null | undefined) ?? null, textures, (v) => set(key, label).commit!(v));
+                const f = this.textureSelect((m[key] as string | null | undefined) ?? null, textures, (v) => set(key, label).commit!(v), MAP_ROLES[key]);
                 maps.push({ set: (md) => f.set((md[key] as string | null | undefined) ?? null) });
                 rows.push(row(label, f.el, hint));
             };
@@ -687,10 +689,26 @@ export class InspectorPanel {
     }
 
     /** Texture asset picker with an import button; `null` means no texture. */
-    private textureSelect(value: string | null, textures: AssetMeta[], onPick: (id: string | null) => void): { el: HTMLElement; set(v: string | null): void } {
-        const select = new SelectField<string>([{ value: '', label: 'None' }, ...textures.map((t) => ({ value: t.id, label: t.name }))], value ?? '', (v) => onPick(v || null));
-        const el = h('div', { class: 'inline' }, select.el, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()));
-        return { el, set: (v) => select.set(v ?? '') };
+    private textureSelect(value: string | null, textures: AssetMeta[], onPick: (id: string | null) => void, role: TextureRole): { el: HTMLElement; set(v: string | null): void } {
+        let current = value;
+        const options = iconButton('sliders', 'Compression for games', (e) => {
+            if (current) openTextureOptions(this.editor, e.currentTarget as HTMLElement, current, role);
+        });
+        options.disabled = !current;
+        const select = new SelectField<string>([{ value: '', label: 'None' }, ...textures.map((t) => ({ value: t.id, label: t.name }))], value ?? '', (v) => {
+            current = v || null;
+            options.disabled = !current;
+            onPick(current);
+        });
+        const el = h('div', { class: 'inline' }, select.el, options, iconButton('upload', 'Import image', () => this.editor.importTextureDialog()));
+        return {
+            el,
+            set: (v) => {
+                current = v;
+                options.disabled = !v;
+                select.set(v ?? '');
+            },
+        };
     }
 
     /** Shader picker with status and edit / new actions. */

@@ -25,7 +25,8 @@ export function sharedEditor(setup?: (page: Page) => Promise<void>, opts: { simp
         page.on('pageerror', (e) => errors.push(e.message));
         await page.addInitScript((edit) => {
             const prefs = JSON.parse(localStorage.getItem('canonical-editor/prefs') || '{}');
-            localStorage.setItem('canonical-editor/prefs', JSON.stringify({ ...prefs, editMode: edit }));
+            // Texture compression runs only where a test asks for it: it is CPU work SwiftShader competes with.
+            localStorage.setItem('canonical-editor/prefs', JSON.stringify({ backgroundCompression: false, ...prefs, editMode: edit }));
         }, !opts.simple);
         await setup?.(page);
         await page.goto('/');

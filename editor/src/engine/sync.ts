@@ -1,12 +1,12 @@
 import {
-    BoxGeometry, Color, CylinderGeometry, DirectLight, GeometryBase, LightBase, LitMaterial, Material, MeshRenderer,
+    BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, isKTX2, LightBase, LitMaterial, Material, MeshRenderer,
     Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer, SkinnedMeshRenderer2,
     SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { AnimationDoc, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
+import type { AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole } from '../core/types';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
@@ -88,6 +88,16 @@ const LIGHT_CLASSES: Record<LightType, new () => LightBase> = {
 let loadToken = 0;
 
 /**
+ * Where compressed copies of texture assets come from (derive/ in the
+ * editor, the game's files in a built game): the copy of a texture for a
+ * role, and that a texture is shown (so its copy can be made).
+ */
+export interface TextureSource {
+    resolve(meta: AssetMeta, role: TextureRole): Promise<Blob | null>;
+    used?(meta: AssetMeta, role: TextureRole): void;
+}
+
+/**
  * Keeps the engine scene in step with the document. Every change is a
  * reconcile: create what is new, re-parent what moved, destroy what was
  * removed and push changed properties to the existing engine objects.
@@ -104,7 +114,16 @@ export class SceneSync extends Emitter<SyncEvents> {
     private envOverride: EnvironmentDoc | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
+    /** Texture assets by `${asset}|${role}`: the texture, once it has data. */
     private textures = new Map<string, Promise<Texture | null>>();
+    /**
+     * The texture of each loaded `${asset}|${role}`. It stays the same
+     * object while its data changes (a replaced file, a compressed copy
+     * made), so everything showing it keeps it and rebinds.
+     */
+    private assetTextures = new Map<string, CompressedTexture2D>();
+    /** Fills of each texture, one after the other. */
+    private fills = new Map<string, Promise<void>>();
     /**
      * Shapes by their document (JSON): objects of the same shape share one
      * geometry (its GPU buffers, and consecutive draws skip binding it
@@ -125,7 +144,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     private materials = new Map<string, SharedMaterial>();
     private materialsChanged = false;
 
-    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager) {
+    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null) {
         super();
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
@@ -229,7 +248,8 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     reloadAsset(id: string) {
         this.prefabs.delete(id);
-        for (const key of Array.from(this.textures.keys())) if (key.startsWith(id + '|')) this.textures.delete(key);
+        // Textures take the new data in place.
+        this.refreshTexture(id);
         for (const entry of Array.from(this.entries.values())) {
             const node = this.store.node(entry.id);
             if (!node) continue;
@@ -359,7 +379,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.particles = null;
         }
         if (!p) return;
-        const texture = p.texture ? this.loadTexture(p.texture) : this.dotTexture();
+        const texture = p.texture ? this.loadTexture(p.texture, 'color') : this.dotTexture();
         void texture.then((tex) => {
             if (entry.particlesToken !== token || this.entries.get(entry.id) !== entry) return;
             try {
@@ -514,7 +534,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (kind === 'shader-missing') mat = errorMaterial(ctx);
                 else mat = createBuiltinMaterial(kind === 'unlit' || kind === 'lambert' ? kind : 'lit', ctx);
             }
-            rec = { key, kind, material: mat, maps: new MaterialMaps(mat, ctx, (id, linear) => this.loadTexture(id, linear)), paramAssets: {}, users: 0 };
+            rec = { key, kind, material: mat, maps: new MaterialMaps(mat, ctx, (id, role) => this.loadTexture(id, role)), paramAssets: {}, users: 0 };
             Reference.getInstance().attached(mat, this.materials);
             this.materials.set(key, rec);
             this.applyMaterial(rec, md);
@@ -644,7 +664,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     state.info = inspectModel(instance, ctx);
                     state.overrides = new ModelOverrides(state.info, {
                         shaders: this.shaders,
-                        loadTexture: (id, linear) => this.loadTexture(id, linear),
+                        loadTexture: (id, role) => this.loadTexture(id, role),
                         dispose: (m) => this.disposeLater(m, true),
                         ctx,
                     });
@@ -818,19 +838,27 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 
     /**
-     * Loads a texture asset. Color textures are decoded from sRGB, data
-     * textures (normal, metallic-roughness, occlusion maps) are `linear`.
+     * The texture of a texture asset for a role: colors are sampled as sRGB,
+     * normal and data maps (metallic-roughness, occlusion) as linear. It
+     * shows the asset's compressed copy for the role when there is one,
+     * else the file itself.
      */
-    loadTexture(assetId: string, linear = false): Promise<Texture | null> {
-        const key = `${assetId}|${linear ? 'linear' : 'srgb'}`;
+    loadTexture(assetId: string, role: TextureRole = 'color'): Promise<Texture | null> {
+        const key = `${assetId}|${role}`;
         let p = this.textures.get(key);
         if (!p) {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
                 if (!meta || meta.kind !== 'texture') return null;
-                const url = await getAssetUrl(meta);
-                if (!url) return null;
-                return (await this.runtime.engine.res.loadTexture(url, undefined, false, linear ? 'linear' : 'srgb')) as Texture;
+                let tex = this.assetTextures.get(key);
+                if (!tex) {
+                    tex = new CompressedTexture2D(this.runtime.engine.context3D, role === 'color' ? 'srgb' : 'linear');
+                    tex.name = meta.name;
+                    // Known before it has data, so a refresh meanwhile runs after this fill.
+                    this.assetTextures.set(key, tex);
+                }
+                await this.fill(key, tex, assetId, role);
+                return tex;
             })().catch((e) => {
                 console.error('[editor] texture load failed', e);
                 this.textures.delete(key);
@@ -839,6 +867,55 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.textures.set(key, p);
         }
         return p;
+    }
+
+    /**
+     * Shows a texture asset's current data again, in place: after its file
+     * was replaced, or when its compressed copy was made or its options
+     * changed. Everything showing the texture keeps it.
+     */
+    refreshTexture(assetId: string, role?: TextureRole) {
+        for (const [key, tex] of this.assetTextures) {
+            const [id, r] = key.split('|') as [string, TextureRole];
+            if (id !== assetId || (role && r !== role)) continue;
+            const done = this.fill(key, tex, assetId, r).then(
+                () => tex,
+                (e) => {
+                    console.error('[editor] texture reload failed', e);
+                    return tex;
+                },
+            );
+            // whenLoaded waits for it.
+            this.textures.set(key, done);
+        }
+    }
+
+    /** Fills a texture with the asset's data for its role; fills of one texture run in order, each with the asset as it is then. */
+    private fill(key: string, tex: CompressedTexture2D, assetId: string, role: TextureRole): Promise<void> {
+        const run = async () => {
+            const meta = this.store.doc.assets.find((a) => a.id === assetId);
+            if (!meta || meta.kind !== 'texture') throw new Error('Texture asset is missing from this project.');
+            const copy = await this.textureSource?.resolve(meta, role).catch(() => null);
+            if (copy) {
+                try {
+                    await tex.loadKTX2(copy);
+                    return;
+                } catch (e) {
+                    console.warn(`[editor] the compressed copy of "${meta.name}" failed, showing the file`, e);
+                }
+            }
+            const url = await getAssetUrl(meta);
+            if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
+            const res = await fetch(url);
+            if (!res.ok && res.status !== 0) throw new Error(`"${meta.name}" failed to load (${res.status}).`);
+            const blob = await res.blob();
+            if (isKTX2(await blob.slice(0, 12).arrayBuffer())) await tex.loadKTX2(blob);
+            else tex.setImage(await decodeImage(blob));
+            this.textureSource?.used?.(meta, role);
+        };
+        const next = (this.fills.get(key) ?? Promise.resolve()).then(run, run);
+        this.fills.set(key, next.catch(() => {}));
+        return next;
     }
 
     /**
@@ -862,6 +939,15 @@ export class SceneSync extends Emitter<SyncEvents> {
         };
         device.queue.onSubmittedWorkDone().then(() => requestAnimationFrame(() => requestAnimationFrame(run)), run);
     }
+}
+
+/** An image file decoded as the engine decodes textures (BitmapTexture2D): colors kept under alpha, at least 32 pixels a side. */
+async function decodeImage(blob: Blob): Promise<ImageBitmap> {
+    const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image', premultiplyAlpha: 'none' });
+    if (bmp.width >= 32 && bmp.height >= 32) return bmp;
+    const out = await createImageBitmap(bmp, { resizeWidth: Math.max(bmp.width, 32), resizeHeight: Math.max(bmp.height, 32), premultiplyAlpha: 'none' });
+    bmp.close();
+    return out;
 }
 
 function errorMaterial(ctx: any): Material {

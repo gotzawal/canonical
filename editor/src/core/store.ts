@@ -61,6 +61,8 @@ export interface Prefs {
     viewportQuality: ViewportQuality;
     /** A graphics quality tier the viewport shows instead of the scene's ('scene': the scene's, high when auto). */
     previewQuality: 'scene' | ViewportQuality;
+    /** Make the compressed copies of textures (KTX2) in the background while editing, not only when building. */
+    backgroundCompression: boolean;
     /**
      * The full editor (hierarchy, inspector, pipeline, code) instead of the
      * simple view, which shows only the scene and the chat with the assistant.
@@ -171,6 +173,7 @@ function defaultPrefs(): Prefs {
         viewportFps: 30,
         viewportQuality: 'low',
         previewQuality: 'scene',
+        backgroundCompression: true,
         editMode: false,
     };
 }
@@ -181,6 +184,7 @@ function loadPrefs(): Prefs {
     if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = 'low';
     if (!['scene', 'low', 'medium', 'high'].includes(prefs.previewQuality)) prefs.previewQuality = 'scene';
     prefs.editMode = prefs.editMode === true;
+    prefs.backgroundCompression = prefs.backgroundCompression !== false;
     return prefs;
 }
 

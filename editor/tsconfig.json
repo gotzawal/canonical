@@ -16,7 +16,8 @@
         "baseUrl": "./",
         "paths": {
             "@orillusion/core": ["../src/index.ts"],
-            "@orillusion/particle": ["../packages/particle/index.ts"]
+            "@orillusion/particle": ["../packages/particle/index.ts"],
+            "basis-encoder": ["../node_modules/ktx2-encoder/dist/basis/basis_encoder"]
         },
         "types": ["vite/client", "@webgpu/types"]
     },
