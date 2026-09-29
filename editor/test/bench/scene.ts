@@ -13,12 +13,14 @@ export interface SyntheticOptions {
     nodes?: number;
     /** Children of a group. */
     fanout?: number;
+    /** Objects showing imported models (whose files are not there: the browser tests leave them out). */
+    models?: boolean;
     seed?: number;
 }
 
 const SHAPES: GeometryType[] = ['box', 'sphere', 'cylinder', 'cone', 'plane', 'torus', 'ramp', 'stairs', 'capsule'];
 
-export function syntheticScene({ nodes = 5000, fanout = 12, seed = 1 }: SyntheticOptions = {}): SceneDoc {
+export function syntheticScene({ nodes = 5000, fanout = 12, models: withModels = true, seed = 1 }: SyntheticOptions = {}): SceneDoc {
     let s = seed >>> 0 || 1;
     const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296);
     const pick = <T>(list: T[]) => list[Math.floor(rnd() * list.length)];
@@ -63,7 +65,7 @@ export function syntheticScene({ nodes = 5000, fanout = 12, seed = 1 }: Syntheti
             if (rnd() < 0.1) m.normalMap = pick(textures).id;
         } else if (r < 0.72) {
             n = makeLightNode(pick(['point', 'spot'] as const), parent);
-        } else if (r < 0.84) {
+        } else if (r < 0.84 && withModels) {
             n = makeNode(`Prop ${i}`, parent);
             n.model = { asset: pick(models).id };
             if (rnd() < 0.5) n.model.materials = { Body: { color: '#886644', roughness: 0.6 } } as any;

@@ -73,6 +73,8 @@ The editor runs entirely in the browser, with nothing to install and no server. 
 
 - Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
 - Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
+- Made for large scenes: an undo step keeps only what it changed (a moved object, not the whole scene), the hierarchy draws only the rows in view, and the panels follow a drag once a frame
+- The viewport draws at most 30 frames per second at half resolution by default; **View > Viewport Frame Rate** and **Viewport Quality** (or a click on the frame rate in the status bar) raise them. Captures for the assistant and the shots are taken at full resolution either way
 - Materials: physically based Lit (normal, metallic-roughness, occlusion and emission maps, clear coat, transmission for glass and water), Unlit, Lambert or a custom shader, with presets, cutout and alpha, additive or multiply blending
 - Lights, sky, exposure, bloom, ambient occlusion, fog and global illumination (DDGI: light bounces between surfaces)
 - Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (the file's material, Unlit, Lambert or a custom shader; color, PBR values, alpha, texture). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
@@ -202,6 +204,7 @@ pnpm install
 pnpm run editor             # dev server at http://localhost:8100
 pnpm run editor:typecheck   # type check the editor
 pnpm run editor:test        # unit tests of the editor's logic (Vitest, in Node)
+pnpm run editor:bench       # benchmarks on a large synthetic scene, checked against their budgets
 pnpm run editor:build       # static site in editor/dist
 xvfb-run -a pnpm run editor:e2e   # browser tests of the build (Playwright)
 ```
@@ -210,7 +213,7 @@ The editor type checks in strict mode. The engine and the particle package, whic
 
 The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.
 
-`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**. `.github/workflows/editor-tests.yml` runs the unit and browser tests.
+`.github/workflows/editor-pages.yml` builds the editor for pull requests to `main` and publishes it to GitHub Pages when `main` is updated. It needs a one-time setting: **Settings > Pages > Build and deployment > Source: GitHub Actions**. `.github/workflows/editor-tests.yml` runs the unit tests, the benchmarks and the browser tests.
 
 | Path | Contents |
 |---|---|
@@ -236,6 +239,8 @@ Check a change with `pnpm run editor:typecheck`, `pnpm run editor:test` and `pnp
 - **Wait for state, not time.** The editor is `window.__editor` (its store, pipeline, camera and so on). It is ready when `.viewport canvas.gpu` is there and `.viewport-loading` is gone. SwiftShader can stop drawing frames for many seconds after a load, and waits that poll on animation frames stop with it. So give `waitForFunction` a `{ polling: 100 }` interval, click with `el.click()` inside `page.evaluate` when Playwright's actionability waits time out, and wait for `!__editor.camera.animating` after camera moves.
 - **Keys.** Shortcuts take digits by their position (`Shift+1` is the back view, not `!`), and letters by position too when the layout types another script (Korean, Cyrillic). For a symbol typed with Shift, press the symbol (`?`), not `Shift+/`.
 - **The assistant without an account.** Put a dummy key in `localStorage['canonical-editor/openrouter-key']`. Then answer `https://openrouter.ai/api/v1/models` and `/api/v1/chat/completions` with `context.route`. A chat reply is a `text/event-stream` body of `data: {"choices":[{"delta":...}]}` lines ending with `data: [DONE]`, so a test can script tool calls step by step.
+- **Change hints.** `store.update(fn, hint)` says what a change touched: `nodes` (objects, with `transform` when they only moved), `env`, `design`, `meta` or `behavior`. Undo keeps only that, and the views and the engine skip what it leaves out, so a hint that leaves out something the change touched makes that part impossible to undo. Development builds and the unit tests check every undo step against a snapshot of the whole document and report such a hint at once. A change without a hint (objects added, removed or re-parented) keeps the whole document.
+- **Performance.** `pnpm run editor:bench` runs the benchmarks in `editor/test/bench` on a synthetic scene of 5,000 objects (`scene.ts`, the size of a large level) and fails when one named "(budget N ms)" takes longer (its 75th percentile), for example committing a change of one object (1 ms) or the store's part of a drag frame (1 ms). In the browser, development builds time every listener of the editor's events and report listeners slower than half a frame and long tasks (over 50 ms) with the listeners that ran in them; `__perf.report()` in the console lists them by time spent. Other builds turn this on with `localStorage['canonical-editor/perf'] = 'true'`.
 - **Logic without a browser.** Modules without the engine, such as the store, `core/refs.ts`, the behavior formats, the script compiler, the room planner and the level check, run in Node: `editor/test/unit` has their Vitest tests. `test/unit/setup.ts` stubs the few globals they touch (`window`, `document`, `localStorage`), and `@orillusion/core` resolves to a stub there. The level check runs on any `LevelScan` (boxes and a ray cast), so tests give it a level made of boxes.
 - **The engine.** `pnpm run test:ci` runs `test/` in Electron with SwiftShader. The same page (`test/?auto` on `pnpm run dev`) also runs in Chromium when `window.electron` is stubbed to collect the results.
 - **Load.** SwiftShader is CPU bound. With several browsers at once, the GPU process can lose its device ("Instance dropped" errors) or time out. Run browser tests one at a time, and rerun a failure on an idle machine before deciding it is not the change.
