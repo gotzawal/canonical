@@ -11,6 +11,8 @@
     --surface: rgba(27, 30, 37, 0.5);
     /* Menus, dialogs, notices and chips over the 3D view: blurred. */
     --surface-float: rgba(28, 32, 40, 0.5);
+    /* Submenus: inside a blurred menu they cannot blur what is behind them, so nearly opaque. */
+    --surface-menu: rgba(27, 30, 38, 0.97);
     --surface-hud: rgba(14, 16, 21, 0.4);
     /* Panels over the 3D view on narrow screens: large, so not blurred. */
     --surface-sheet: rgba(24, 27, 33, 0.96);
@@ -58,6 +60,7 @@
     --glass: none;
     --surface: #1b1e23;
     --surface-float: #20242a;
+    --surface-menu: #20242a;
     --surface-hud: rgba(15, 17, 21, 0.92);
     --surface-sheet: #1b1e23;
     --blur: none;
@@ -133,9 +136,10 @@ a {
 .notice,
 .popover,
 .log-drawer,
-.brief-card,
+.start-card,
 .shot-compare,
 .viewport-notice,
+.ai-status,
 .shot-bar,
 .walk-hud,
 .room-hud {
@@ -148,6 +152,7 @@ a {
 
 /* Chips over the 3D view let more of it through. */
 .viewport-notice,
+.ai-status,
 .shot-bar,
 .walk-hud,
 .room-hud {
@@ -191,12 +196,89 @@ a {
     display: block;
 }
 
+/* The scene's name: a click renames it (main.ts sceneNameField). */
+.scene-name-wrap {
+    display: flex;
+    min-width: 0;
+    max-width: 30vw;
+}
+
 .scene-name {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    padding: 4px 8px;
+    border: 0;
+    border-radius: 7px;
+    background: none;
     color: var(--muted);
-    white-space: nowrap;
+    cursor: text;
+}
+
+.scene-name:hover {
+    background: var(--fill);
+    color: var(--text);
+}
+
+.scene-name-text {
     overflow: hidden;
     text-overflow: ellipsis;
-    max-width: 30vw;
+    white-space: nowrap;
+}
+
+.scene-name.untitled .scene-name-text {
+    color: var(--faint);
+    font-style: italic;
+}
+
+.scene-name-edit {
+    color: var(--faint);
+    opacity: 0;
+}
+
+.scene-name:hover .scene-name-edit,
+.scene-name:focus-visible .scene-name-edit {
+    opacity: 1;
+}
+
+.scene-name-input {
+    width: min(280px, 30vw);
+    padding: 4px 8px;
+    border: 1px solid var(--accent);
+    border-radius: 7px;
+    outline: none;
+    background: var(--inset);
+    color: var(--text-strong);
+    font: inherit;
+    text-align: center;
+}
+
+/* Between the simple view and the full editor. */
+.mode-toggle {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 28px;
+    padding: 0 10px;
+    border: 1px solid var(--border-strong);
+    border-radius: 8px;
+    background: var(--fill);
+    color: var(--text);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    flex: none;
+}
+
+.mode-toggle:hover {
+    border-color: var(--accent);
+}
+
+.mode-toggle[aria-pressed='true'] {
+    border-color: rgba(187, 153, 255, 0.6);
+    background: var(--accent-soft);
+    color: var(--accent-text);
 }
 
 .panel-toggle {
@@ -389,7 +471,8 @@ a {
     color: var(--muted);
 }
 
-.menu-item:hover:not(.disabled) .menu-icon {
+/* Only the item's own parts: a submenu inside a hovered item keeps its colors. */
+.menu-item:hover:not(.disabled) > .menu-icon {
     color: var(--on-accent);
 }
 
@@ -403,7 +486,7 @@ a {
     margin-left: 18px;
 }
 
-.menu-item:hover:not(.disabled) .menu-shortcut {
+.menu-item:hover:not(.disabled) > .menu-shortcut {
     color: rgba(28, 20, 51, 0.72);
 }
 
@@ -463,6 +546,16 @@ a {
     position: fixed;
     z-index: 1001;
     max-height: calc(100vh - 12px);
+    /* The menu around it blurs what is behind it, which makes the menu the
+       backdrop root of what it holds: a blur here would only see the menu,
+       and nothing where the submenu sticks out of it, leaving it as clear as
+       its glass. So it gets a surface of its own and no blur. */
+    background: var(--glass), var(--surface-menu);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    /* It sits inside its item, which turns its text dark while hovered. */
+    color: var(--text);
+    font-weight: normal;
 }
 
 /* Touch keeps a sticky hover: there overlays.ts opens submenus on tap. */
@@ -624,9 +717,15 @@ a {
     flex-direction: column;
     align-items: center;
     justify-content: center;
-    gap: 12px;
+    gap: 14px;
     color: var(--muted);
     background: var(--inset);
+}
+
+.viewport-loading-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 .spinner {
@@ -730,6 +829,16 @@ a {
     padding: 14px 12px;
     color: var(--faint);
     line-height: 1.5;
+}
+
+/* An empty panel with room for the heron over its hint. */
+.empty-hint.roomy {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding-top: 28px;
+    text-align: center;
 }
 
 /* ----------------------------------------------------------------- tree */
@@ -1787,6 +1896,18 @@ kbd {
     word-break: break-word;
 }
 
+/* The heron beside the introduction. */
+.about-intro {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    margin-bottom: 14px;
+}
+
+.about-intro p {
+    margin: 0;
+}
+
 .about dl {
     display: grid;
     grid-template-columns: 90px 1fr;
@@ -1812,6 +1933,12 @@ kbd {
     line-height: 1.6;
 }
 
+/* The heron beside the heading, wondering; the text goes around it. */
+.unsupported-heron {
+    float: right;
+    margin: 20px 0 8px 20px;
+}
+
 .unsupported h1 {
     font-size: 22px;
     margin: 28px 0 8px;
@@ -1819,6 +1946,8 @@ kbd {
 }
 
 .unsupported .reason {
+    /* Beside the heron, not under it. */
+    display: flow-root;
     font-family: var(--mono);
     font-size: 12px;
     color: #ff9c9c;
@@ -1830,6 +1959,15 @@ kbd {
 
 .unsupported li {
     color: var(--muted);
+}
+
+@media (max-width: 480px) {
+    .unsupported-heron {
+        float: none;
+        width: auto;
+        height: 120px;
+        margin: 22px 0 0;
+    }
 }
 
 /* ----------------------------------------------------------- scrollbars */
@@ -3037,19 +3175,35 @@ kbd {
     border-width: 2px;
 }
 
+/* An empty chat: the heron, what it is for, and what to start with. */
 .ai-welcome {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 10px;
     color: var(--muted);
     line-height: 1.5;
+    text-align: center;
+}
+
+.ai-welcome-heron {
+    margin-bottom: 8px;
 }
 
 .ai-welcome h3 {
-    margin: 4px 0 6px;
+    margin: 0 0 6px;
     color: var(--text-strong);
-    font-size: 14px;
+    font-size: 15px;
 }
 
 .ai-welcome p {
     margin: 0 0 10px;
+}
+
+.ai-welcome .ai-suggestions,
+.ai-welcome .ai-welcome-brief {
+    align-self: stretch;
+    text-align: left;
 }
 
 .ai-suggestions {
@@ -3076,6 +3230,7 @@ kbd {
 .ai-onboard-actions {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 6px;
     margin-bottom: 10px;
 }
@@ -3320,7 +3475,7 @@ kbd {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    width: min(340px, calc(100vw - 28px));
+    width: min(360px, calc(100vw - 28px));
     pointer-events: none;
 }
 
@@ -3337,8 +3492,7 @@ kbd {
 .notice {
     pointer-events: auto;
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    gap: 10px;
     padding: 10px 12px 9px;
     border-radius: 12px;
     opacity: 0;
@@ -3346,13 +3500,22 @@ kbd {
     transition: opacity 0.18s, transform 0.18s;
 }
 
+.notice-main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* The assistant's notices: the heron at the side, on the card's bottom edge. */
+.notice.with-heron {
+    padding-left: 6px;
+}
+
 .notice.show {
     opacity: 1;
     transform: none;
-}
-
-.notice.checkpoint {
-    border-color: rgba(187, 153, 255, 0.55);
 }
 
 .notice-head {
@@ -3360,6 +3523,11 @@ kbd {
     align-items: center;
     gap: 8px;
     color: var(--accent);
+}
+
+.notice-heron {
+    align-self: flex-end;
+    margin-bottom: -9px;
 }
 
 .notice-title {
@@ -3539,7 +3707,8 @@ kbd {
     color: var(--text);
 }
 
-.pipeline-num {
+.pipeline-num,
+.step-num {
     display: grid;
     place-items: center;
     width: 18px;
@@ -4157,110 +4326,255 @@ kbd {
     white-space: nowrap;
 }
 
-/* ---------------------------------------------------------- brief screen */
+/* ---------------------------------------------------------- start screen */
 
-.brief-screen {
+.start-screen {
     position: absolute;
     inset: 0;
     z-index: 20;
     display: grid;
     place-items: center;
     padding: 18px;
-    background: rgba(8, 9, 11, 0.2);
+    overflow: auto;
+    background: rgba(8, 9, 11, 0.28);
 }
 
-.brief-card {
-    width: min(720px, 100%);
-    max-height: 100%;
-    overflow: auto;
+.start-card {
+    position: relative;
+    width: min(620px, 100%);
     display: flex;
     flex-direction: column;
+    align-items: center;
     gap: 10px;
-    padding: 16px 18px;
-    border-radius: 16px;
+    padding: 22px 22px 18px;
+    border-radius: 18px;
+    text-align: center;
 }
 
-.brief-card.drop-target {
+.start-card.drop-target {
     border-color: var(--accent);
     box-shadow: 0 0 0 2px var(--accent), 0 24px 60px rgba(0, 0, 0, 0.55);
 }
 
-.brief-head {
+.start-close {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+}
+
+/* The heron beside the question, its feet on the box the answer goes into
+   (over its border: the card's gap and the ground under the feet). */
+.start-head {
+    align-self: stretch;
     display: flex;
     align-items: center;
-    gap: 8px;
-    color: var(--accent);
+    gap: 16px;
+    margin: -6px 0 -19px;
+    padding-left: 4px;
+    text-align: left;
 }
 
-.brief-head h2 {
-    margin: 0;
+.start-heron {
+    position: relative;
+    z-index: 1;
+    align-self: flex-end;
+}
+
+.start-text {
+    flex: 1;
+    min-width: 0;
+    padding: 0 26px 14px 0;
+}
+
+.start-title {
+    margin: 0 0 6px;
     color: var(--text-strong);
-    font-size: 16px;
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: -0.01em;
 }
 
-.brief-intro {
+.start-sub {
     margin: 0;
     color: var(--muted);
     line-height: 1.5;
 }
 
-.brief-text {
+.start-composer {
     width: 100%;
-    min-height: 200px;
-    resize: vertical;
-    padding: 10px 12px;
-    border: 1px solid var(--border);
-    border-radius: 8px;
-    outline: none;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 10px 8px;
+    border: 1px solid var(--border-strong);
+    border-radius: 12px;
     background: var(--inset);
-    color: var(--text);
-    font: 12.5px/1.55 var(--font);
+    text-align: left;
 }
 
-.brief-text:focus {
+.start-composer:focus-within {
     border-color: var(--accent);
 }
 
-.brief-drop {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 10px 12px;
-    border: 1px dashed var(--border-strong);
-    border-radius: 8px;
-    color: var(--muted);
-}
-
-.brief-concepts {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
-    gap: 6px;
-}
-
-.brief-concepts:empty {
-    display: none;
-}
-
-.brief-concept img {
+.start-input {
     width: 100%;
-    aspect-ratio: 16 / 10;
-    object-fit: cover;
-    border-radius: 6px;
-    border: 1px solid var(--border);
-    display: block;
+    min-height: 64px;
+    max-height: 40vh;
+    resize: none;
+    padding: 2px 2px 0;
+    border: 0;
+    outline: none;
+    background: none;
+    color: var(--text);
+    font: 14px/1.5 var(--font);
 }
 
-.brief-actions {
+.start-files {
     display: flex;
     flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 2px;
+}
+
+.start-file {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+}
+
+.start-file.image img {
+    display: block;
+    width: 68px;
+    height: 46px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+}
+
+.start-file.doc {
+    max-width: 220px;
+    height: 28px;
+    padding: 0 26px 0 8px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--fill);
+    color: var(--text);
+}
+
+.start-file.doc span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.start-file-remove {
+    position: absolute;
+    top: -7px;
+    right: -7px;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 1px solid var(--border-strong);
+    border-radius: 50%;
+    background: var(--surface-menu);
+    color: var(--text);
+    cursor: pointer;
+}
+
+.start-file.doc .start-file-remove {
+    top: 4px;
+    right: 4px;
+    border: 0;
+    background: none;
+}
+
+.start-row {
+    display: flex;
     align-items: center;
     gap: 8px;
 }
 
-.brief-actions .btn.primary {
+.start-attach,
+.start-go {
     display: inline-flex;
     align-items: center;
     gap: 6px;
+}
+
+.start-ideas {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 6px;
+    margin-top: 2px;
+}
+
+.start-idea {
+    padding: 5px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--fill);
+    color: var(--muted);
+    font-size: 11.5px;
+    cursor: pointer;
+}
+
+.start-idea:hover {
+    border-color: var(--accent);
+    color: var(--text);
+}
+
+/* Short windows: a smaller heron, none at all when even that does not fit.
+   Narrow ones: the heron over the question. */
+@media (max-height: 700px) {
+    .start-head {
+        margin-bottom: -15px;
+    }
+
+    .start-heron {
+        width: auto;
+        height: 104px;
+    }
+}
+
+@media (max-width: 560px) {
+    .start-head {
+        flex-direction: column;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: -4px;
+        padding: 0;
+        text-align: center;
+    }
+
+    .start-heron {
+        order: -1;
+        align-self: center;
+        width: auto;
+        height: 100px;
+    }
+
+    .start-text {
+        padding: 0;
+    }
+}
+
+@media (max-height: 520px) {
+    .start-heron {
+        display: none;
+    }
+
+    .start-head {
+        margin-bottom: 0;
+    }
+
+    .start-text {
+        padding: 0;
+    }
 }
 
 /* ------------------------------------------------------------ shot view */
@@ -5843,6 +6157,799 @@ input.text.bt-part-id {
     color: var(--danger);
 }
 
+/* ------------------------------------------------------------ simple view */
+
+/* The scene and the chat with the assistant (main.ts applyMode): the
+   hierarchy, the inspector's tabs, the code dock, the pipeline bar and most
+   of the toolbar belong to edit mode. */
+#app.simple .workspace {
+    grid-template-columns: 0 0 minmax(0, 1fr) var(--gutter) var(--right-w);
+}
+
+#app.simple.hide-right .workspace {
+    grid-template-columns: 0 0 minmax(0, 1fr) 0 0;
+}
+
+#app.simple .side.left,
+#app.simple .splitter[data-side='left'],
+#app.simple .side.right > .tabs,
+#app.simple .dock-splitter,
+#app.simple .dock-slot,
+#app.simple .pipeline-bar,
+#app.simple .left-toggle,
+#app.simple .edit-only {
+    display: none !important;
+}
+
+#app:not(.simple) .steps-bar {
+    display: none;
+}
+
+/* The three steps the simple view shows instead of the pipeline bar. */
+.steps-bar {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 36px;
+    padding: 0 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+
+.steps-bar::-webkit-scrollbar {
+    display: none;
+}
+
+.steps {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+}
+
+.steps > li {
+    display: flex;
+    align-items: center;
+}
+
+.steps-sep {
+    color: var(--faint);
+}
+
+.step {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    height: 26px;
+    padding: 0 11px 0 5px;
+    border: 1px solid transparent;
+    border-radius: 13px;
+    background: none;
+    color: var(--faint);
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.step:hover {
+    background: var(--fill);
+    color: var(--text);
+}
+
+.step.done {
+    color: var(--muted);
+}
+
+.step.done .step-num {
+    border-color: transparent;
+    background: rgba(63, 191, 127, 0.18);
+    color: var(--success);
+}
+
+.step.current {
+    border-color: rgba(187, 153, 255, 0.5);
+    background: var(--accent-soft);
+    color: var(--text-strong);
+    font-weight: 600;
+}
+
+.step.current .step-num {
+    border-color: transparent;
+    background: var(--accent);
+    color: var(--on-accent);
+}
+
+.step-sub {
+    color: var(--accent-text);
+    font-weight: 400;
+}
+
+.step-sub::before {
+    content: '·';
+    margin-right: 6px;
+    color: var(--muted);
+}
+
+/* Needs another look: a change reached back into the step after it was done. */
+.step-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--warn);
+}
+
+/* The heron at the side, on the popover's bottom edge. */
+.steps-popover {
+    display: flex;
+    align-items: flex-end;
+    gap: 12px;
+}
+
+.steps-heron {
+    margin: 0 0 -8px -4px;
+}
+
+.steps-popover-body {
+    flex: 1;
+    min-width: 0;
+}
+
+.steps-popover p {
+    margin: 0 0 8px;
+    line-height: 1.5;
+}
+
+/* ------------------------------------------------------------- the heron */
+
+/* Drawn inline (ui/mascot.ts), so its parts move; what moves may draw
+   outside its box (a hop, the question mark). */
+.heron {
+    flex: none;
+    display: block;
+    overflow: visible;
+    user-select: none;
+    pointer-events: none;
+}
+
+/* Parts turn around points in the drawing's own coordinates: the pivots
+   each file names (--neck-top, --neck-base, --hip-back, --hip-front,
+   --shoulder). Several herons on the screen keep out of step
+   (--heron-delay). */
+.heron g {
+    transform-box: view-box;
+}
+
+/* It blinks now and then. */
+.heron .h-eye {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: heron-blink 5.5s var(--heron-delay, 0s) infinite;
+}
+
+@keyframes heron-blink {
+    0%,
+    94%,
+    100% {
+        transform: none;
+    }
+    96% {
+        transform: scaleY(0.1);
+    }
+}
+
+/* Standing, asking or asleep, it breathes: the body and the head, the legs stay. */
+.heron[data-pose='stand'] .h-upper,
+.heron[data-pose='ask'] .h-upper {
+    animation: heron-breathe 4s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.heron[data-pose='rest'] .h-upper {
+    animation: heron-breathe 5s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-breathe {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-4px);
+    }
+}
+
+/* Standing, it looks up once in a while. */
+.heron[data-pose='stand'] .h-head {
+    transform-origin: var(--neck-top);
+    animation: heron-look 8s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-look {
+    0%,
+    40%,
+    78%,
+    100% {
+        transform: none;
+    }
+    48%,
+    68% {
+        transform: rotate(-7deg);
+    }
+}
+
+/* Asking, it tilts its head one way and the other, and its question bobs. */
+.heron[data-pose='ask'] .h-head {
+    transform-origin: var(--neck-top);
+    animation: heron-tilt 3.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.mascot-avatar[data-mood='ask'] .h-head {
+    transform-origin: -8px 18px;
+    animation: heron-tilt 3.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-tilt {
+    0%,
+    100% {
+        transform: none;
+    }
+    25%,
+    42% {
+        transform: rotate(-9deg);
+    }
+    68%,
+    84% {
+        transform: rotate(5deg);
+    }
+}
+
+.heron .h-qmark {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: heron-wonder 1.8s ease-in-out infinite;
+}
+
+.mascot-avatar .h-qmark {
+    animation-name: heron-wonder-small;
+}
+
+@keyframes heron-wonder {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-10px) rotate(8deg);
+    }
+}
+
+@keyframes heron-wonder-small {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-5px) rotate(8deg);
+    }
+}
+
+/* Asleep, its z's float up one after the other. */
+.heron .h-z {
+    animation: heron-snore 3.2s ease-out infinite;
+}
+
+.heron .h-z1 {
+    animation-delay: -1.6s;
+}
+
+@keyframes heron-snore {
+    0% {
+        opacity: 0;
+        transform: translate(-6px, 8px);
+    }
+    25%,
+    65% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+        transform: translate(10px, -18px);
+    }
+}
+
+/* Walking (loading): the legs stride, the body bobs with each step and the
+   neck swings the head forward, as a heron's does. */
+.heron[data-pose='walk'] .h-leg-back {
+    transform-origin: var(--hip-back);
+    animation: heron-stride 0.8s ease-in-out infinite alternate;
+}
+
+.heron[data-pose='walk'] .h-leg-front {
+    transform-origin: var(--hip-front);
+    animation: heron-stride 0.8s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes heron-stride {
+    from {
+        transform: rotate(-10deg);
+    }
+    to {
+        transform: rotate(10deg);
+    }
+}
+
+.heron[data-pose='walk'] .h-upper {
+    animation: heron-step 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes heron-step {
+    from {
+        transform: none;
+    }
+    to {
+        transform: translateY(-5px);
+    }
+}
+
+.heron[data-pose='walk'] .h-neck,
+.heron[data-pose='walk'] .h-head {
+    transform-origin: var(--neck-base);
+    animation: heron-thrust 0.8s ease-in-out infinite;
+}
+
+@keyframes heron-thrust {
+    0%,
+    100% {
+        transform: rotate(-2deg);
+    }
+    50% {
+        transform: rotate(3deg);
+    }
+}
+
+/* At work, it pecks twice and looks, and the ground shows where it hit. */
+.heron[data-pose='peck'] .h-neck,
+.heron[data-pose='peck'] .h-head {
+    transform-origin: var(--neck-base);
+    animation: heron-peck 1.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-peck {
+    0%,
+    52%,
+    100% {
+        transform: none;
+    }
+    12% {
+        transform: rotate(-5deg);
+    }
+    21% {
+        transform: rotate(3deg);
+    }
+    31% {
+        transform: rotate(-3deg);
+    }
+    40% {
+        transform: rotate(3deg);
+    }
+}
+
+.heron .h-scratch {
+    animation: heron-scratch 1.6s var(--heron-delay, 0s) ease-out infinite;
+}
+
+@keyframes heron-scratch {
+    0%,
+    17%,
+    27%,
+    36%,
+    46%,
+    100% {
+        opacity: 0;
+    }
+    21%,
+    40% {
+        opacity: 1;
+    }
+}
+
+/* Done, it hops and flaps its wing; its shadow shrinks while it is up. */
+.heron[data-pose='celebrate'] .h-bird {
+    animation: heron-hop 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-hop {
+    0%,
+    60%,
+    100% {
+        transform: none;
+    }
+    10% {
+        transform: translateY(4px);
+    }
+    26% {
+        transform: translateY(-22px);
+    }
+    42% {
+        transform: none;
+    }
+    48% {
+        transform: translateY(3px);
+    }
+}
+
+.heron[data-pose='celebrate'] .h-shadow {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: heron-hop-shadow 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-hop-shadow {
+    0%,
+    42%,
+    100% {
+        transform: none;
+    }
+    26% {
+        transform: scale(0.7);
+    }
+}
+
+/* Both wings are up; they beat down as it crouches, rise at the top of the
+   hop and settle as it lands. */
+.heron[data-pose='celebrate'] .h-wing {
+    transform-origin: var(--shoulder);
+    animation: heron-flap 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.heron[data-pose='celebrate'] .h-wing-far {
+    transform-origin: var(--shoulder-far);
+}
+
+@keyframes heron-flap {
+    0%,
+    60%,
+    100% {
+        transform: none;
+    }
+    10% {
+        transform: rotate(-7deg);
+    }
+    26% {
+        transform: rotate(6deg);
+    }
+    40% {
+        transform: rotate(-4deg);
+    }
+    50% {
+        transform: rotate(1deg);
+    }
+}
+
+/* The head alone: thinking, its eye turns; pleased, it nods; troubled, it
+   shakes its head; asleep, it breathes. */
+.heron .h-ring {
+    transform-origin: 0 0;
+    animation: heron-spin 1.4s linear infinite;
+}
+
+@keyframes heron-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.mascot-avatar[data-mood='done'] .h-head {
+    animation: heron-nod 2.4s ease-in-out infinite;
+}
+
+@keyframes heron-nod {
+    0%,
+    40%,
+    100% {
+        transform: none;
+    }
+    10%,
+    30% {
+        transform: translateY(-6px);
+    }
+    20% {
+        transform: none;
+    }
+}
+
+.mascot-avatar[data-mood='error'] .h-head {
+    animation: heron-shake 3s ease-in-out infinite;
+}
+
+@keyframes heron-shake {
+    0%,
+    20%,
+    100% {
+        transform: none;
+    }
+    4%,
+    12% {
+        transform: translateX(-4px);
+    }
+    8%,
+    16% {
+        transform: translateX(4px);
+    }
+}
+
+.mascot-avatar[data-mood='sleep'] .h-head {
+    animation: heron-breathe 5s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+/* Thinking, the head in the chat's header and over the view bobs too. */
+.ai-heron[data-mood='think'],
+.ai-status-heron {
+    animation: heron-bob 1.6s ease-in-out infinite;
+}
+
+@keyframes heron-bob {
+    0%,
+    100% {
+        transform: translateY(0) rotate(0);
+    }
+    50% {
+        transform: translateY(-1.5px) rotate(-5deg);
+    }
+}
+
+/* Cards that come and go bring their heron in with a small step up. */
+.ai-next-heron,
+.notice-heron,
+.steps-heron {
+    animation: heron-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+
+@keyframes heron-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.92);
+    }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .heron,
+    .heron * {
+        animation: none !important;
+    }
+}
+
+/* ------------------------------------------------------ assistant status */
+
+/* What the assistant is doing, over the view while it works, with Stop. */
+.ai-status {
+    position: absolute;
+    top: 10px;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: 4;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    max-width: calc(100% - 24px);
+    padding: 4px 5px 4px 10px;
+    border-radius: 999px;
+    color: var(--text);
+}
+
+/* Below the notice of paused scripts and the walk camera's line. */
+.viewport:has(.viewport-notice:not([hidden])) .ai-status,
+.viewport:has(.walk-hud:not([hidden])) .ai-status {
+    top: 56px;
+}
+
+.ai-status-text {
+    min-width: 0;
+    padding: 2px;
+    overflow: hidden;
+    border: 0;
+    background: none;
+    color: var(--text);
+    font: inherit;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    cursor: pointer;
+}
+
+.ai-status-text:hover {
+    color: var(--text-strong);
+}
+
+.ai-status-stop {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    border-radius: 999px;
+}
+
+/* ------------------------------------------------ chat: steps and what next */
+
+.ai-header .ai-heron {
+    margin-right: 2px;
+}
+
+/* The assistant's steps in a row: one line with the latest, open for all. */
+.ai-steps {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--fill);
+    font-size: 11.5px;
+}
+
+.ai-steps > summary {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 5px 9px;
+    color: var(--muted);
+    list-style: none;
+    cursor: pointer;
+}
+
+.ai-steps > summary::-webkit-details-marker {
+    display: none;
+}
+
+.ai-steps > summary .icon {
+    color: var(--success);
+}
+
+.ai-steps-label {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.ai-steps-count {
+    color: var(--faint);
+    white-space: nowrap;
+}
+
+.ai-steps-body {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 6px;
+    border-top: 1px solid var(--border);
+}
+
+/* What the user can say next: whether they like it, or what to change. The
+   heron stands at its side, on its bottom edge. */
+.ai-next {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 10px 10px 6px;
+    border: 1px solid rgba(187, 153, 255, 0.35);
+    border-radius: 10px;
+    background: var(--accent-soft);
+}
+
+.ai-next-heron {
+    align-self: flex-end;
+    margin-bottom: -7px;
+}
+
+.ai-next-body {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+}
+
+.ai-next-head {
+    color: var(--text-strong);
+    font-weight: 600;
+    line-height: 1.45;
+}
+
+.ai-welcome-note {
+    color: var(--accent-text);
+}
+
+.ai-welcome-brief {
+    margin: 0 0 12px;
+    padding: 8px 10px;
+    border-left: 2px solid var(--accent);
+    border-radius: 0 6px 6px 0;
+    background: var(--fill);
+    color: var(--text);
+    white-space: pre-wrap;
+}
+
+/* ---------------------------------------------------------- version history */
+
+.version-list {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.version-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px;
+    border-radius: 8px;
+}
+
+.version-item:hover {
+    background: var(--fill);
+}
+
+.version-thumb {
+    flex: none;
+    width: 64px;
+    height: 40px;
+    object-fit: cover;
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    background: var(--inset);
+}
+
+/* No picture (saved while the view showed something else): the frame stays. */
+.version-thumb.missing {
+    content: url('data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw==');
+}
+
+.version-info {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+}
+
+.version-name {
+    overflow: hidden;
+    color: var(--text);
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.version-item.auto .version-name {
+    color: var(--muted);
+}
+
+.dialog.version-dialog {
+    width: min(560px, 100%);
+}
+
+.version-empty {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 24px 4px;
+    text-align: center;
+}
+
+.version-empty p {
+    max-width: 380px;
+    margin: 0;
+    line-height: 1.5;
+}
+
+.version-history {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.version-history .version-list {
+    max-height: min(56vh, 460px);
+    overflow-y: auto;
+}
+
 /* ================================================================ responsive */
 
 /* Last, so these override the sections above. */
@@ -5861,7 +6968,7 @@ input.text.bt-part-id {
         background: var(--fill-strong);
     }
 
-    .scene-name {
+    .scene-name-wrap {
         display: none;
     }
 
@@ -5940,6 +7047,14 @@ input.text.bt-part-id {
         padding-inline: 6px;
     }
 
+    .mode-toggle {
+        padding: 0 7px;
+    }
+
+    .mode-toggle-label {
+        display: none;
+    }
+
     .statusbar .status-item.muted,
     .statusbar .status-item.mono {
         display: none;
@@ -5962,7 +7077,8 @@ input.text.bt-part-id {
    to the view; its stages and checklist are in the Design tab too. */
 @media (max-height: 500px) {
     /* The slot stays, holding its row of the page grid. */
-    .pipeline-bar {
+    .pipeline-bar,
+    .steps-bar {
         display: none;
     }
 }
@@ -6000,7 +7116,8 @@ input.text.bt-part-id {
         height: 42px;
     }
 
-    .pipeline-chip {
+    .pipeline-chip,
+    .step {
         height: 32px;
     }
 

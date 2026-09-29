@@ -280,7 +280,7 @@ export const codeTools = tools({
         async run({ env, args, ed }) {
             if (!ed.compiler.trusted && ed.store.doc.scripts.length) throw new ToolError(PAUSED_TOOL_ERROR);
             const seconds = Math.min(20, Math.max(0.5, Number(args.seconds) || 3));
-            const res = await ed.player.runFor(seconds);
+            const res = await ed.player.runFor(seconds, env.signal);
             const log = ed.player.agents.log;
             const agents = ed.store.doc.nodes.filter((n) => n.agent?.enabled).length;
             return {

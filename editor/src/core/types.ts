@@ -152,6 +152,9 @@ export interface RenderGraphDoc {
 /** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents), 3 the scene's AI models. */
 export const SCENE_VERSION = 3;
 
+/** The name of a scene nobody has named yet (the assistant names it when it learns what the scene is). */
+export const UNTITLED_SCENE = 'Untitled Scene';
+
 export interface SceneDoc {
     /** The editor's earlier name, as in the other files' format tags, so files open in older and newer versions alike. */
     format: 'canonical-scene';
@@ -514,6 +517,9 @@ export type StageId = 'brief' | 'level' | 'light' | 'material' | 'effects' | 'fi
 /** 'recheck': done before, but an earlier stage was reopened or the brief changed. */
 export type StageStatus = 'todo' | 'active' | 'done' | 'recheck';
 
+/** The three steps the user sees (design/stages.ts STEPS): each is one or more stages. */
+export type StepId = 'layout' | 'look' | 'finish';
+
 /** Stored state of a checklist item (automatic items are computed, see design/stages.ts). */
 export interface CheckItemDoc {
     id: string;
@@ -532,6 +538,12 @@ export interface StageDoc {
     doneAt?: string;
     /** Why the stage needs another look. */
     recheck?: string;
+    /**
+     * What the stage settled, as it was then (the level stage: layoutSignature
+     * when it was completed or its level check last passed). A change after
+     * that marks the stage for a recheck instead of being refused.
+     */
+    signature?: string;
 }
 
 export interface AreaObjectDoc {
@@ -688,6 +700,7 @@ export interface MaterialSlotDoc {
     flat?: boolean;
 }
 
+/** A version of the scene in the version history: the scene without its design section, restorable. */
 export interface SnapshotDoc {
     id: string;
     /** 'data' asset holding the scene JSON. */
@@ -697,6 +710,10 @@ export interface SnapshotDoc {
     at: string;
     /** Assets the snapshot uses, kept in the browser while the snapshot exists. */
     assets: string[];
+    /** A small picture of the scene at the time (a planning image). */
+    thumb?: string | null;
+    /** Saved by itself after a stretch of work; only the latest few are kept. */
+    auto?: boolean;
 }
 
 export interface QuestionDoc {
@@ -711,7 +728,7 @@ export interface QuestionDoc {
 /**
  * How much the user wants to settle themselves: 'quick' lets the assistant
  * decide the details and move on, 'detailed' works them out with the user.
- * Missing until the assistant judged it from the user's words or asked.
+ * Missing means quick (see detailLevel in core/design.ts).
  */
 export type DetailLevel = 'quick' | 'detailed';
 
@@ -731,7 +748,7 @@ export interface DesignDoc {
     id: string;
     brief: {
         text: string;
-        /** The user chose to work without a brief. */
+        /** The start screen was closed without a request (files from older builds: "work without a brief"). */
         skipped?: boolean;
         /** Brief text the current structure was made from. */
         structured?: string;
@@ -751,11 +768,9 @@ export interface DesignDoc {
     stage: StageId;
     stages: Record<StageId, StageDoc>;
     snapshots: SnapshotDoc[];
-    /** Short running context of the scene for the assistant, refreshed at checkpoints. */
+    /** Short running context of the scene for the assistant, refreshed at checkpoints (only the assistant reads and writes it). */
     memo: { text: string; at?: string };
-    /** Placement stays editable in the stages that lock it. */
-    unlocked?: boolean;
-    /** How much of the detail the assistant decides itself. */
+    /** How much of the detail the assistant decides itself (missing: quick). */
     detail?: DetailLevel;
     /** The last level check. */
     levelCheck?: LevelCheckDoc | null;

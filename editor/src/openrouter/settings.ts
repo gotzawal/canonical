@@ -13,8 +13,12 @@ export interface AISettings {
     screenshots: boolean;
     /** Keep a short scene memo up to date at checkpoints (one small extra request). */
     memo: boolean;
-    /** The pipeline stage decides which tools the assistant gets. */
-    stageTools: boolean;
+    /**
+     * The assistant gets only the tools of the current pipeline stage. Off
+     * by default: it does what the user asks in any stage, and work that
+     * changes a finished step marks that step for a recheck.
+     */
+    limitTools: boolean;
     /** The assistant may generate images (paintovers, swatches), which costs credits. */
     allowImages: boolean;
     /** Image generation model (OpenRouter image API). */
@@ -35,7 +39,7 @@ function defaults(): AISettings {
         allowPlay: true,
         screenshots: true,
         memo: true,
-        stageTools: true,
+        limitTools: false,
         allowImages: true,
         imageModel: '',
         cacheLong: false,
@@ -50,7 +54,10 @@ class SettingsStore extends Emitter<{ change: AISettings }> {
     constructor() {
         super();
         try {
-            this.value = { ...defaults(), ...JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}') };
+            const saved = JSON.parse(localStorage.getItem(SETTINGS_KEY) || '{}');
+            // Earlier builds limited the tools by stage by default (stageTools): that is opt-in now.
+            delete saved.stageTools;
+            this.value = { ...defaults(), ...saved };
         } catch { /* ignore */ }
         try {
             this.key = localStorage.getItem(API_KEY) || sessionStorage.getItem(API_KEY) || '';

@@ -2,9 +2,9 @@
 // request (the pipeline state and the scene memo) and used to refresh the
 // memo. Details stay behind the read_design tool.
 
-import { areaName, STAGE_IDS, stageIndex } from '../core/design';
+import { areaName, detailLevel, planStarted, STAGE_IDS, stageIndex } from '../core/design';
 import type { SceneDoc } from '../core/types';
-import { placedObjects, stageDef, stageProgress } from './stages';
+import { layoutChanged, placedObjects, stageDef, stageProgress, stepOf } from './stages';
 
 const clip = (s: string, n: number) => {
     const t = s.replace(/\s+/g, ' ').trim();
@@ -15,23 +15,29 @@ const clip = (s: string, n: number) => {
 export function pipelineSummary(doc: SceneDoc, fps?: number, fpsLimit?: number): string[] {
     const design = doc.design;
     const lines: string[] = [];
+    const quick = detailLevel(design) === 'quick';
+    // Nothing planned yet (the start screen closed, or skipped in older files): the Brief stage limits nothing.
+    if (!planStarted(design)) {
+        lines.push(
+            'Pipeline: not started (no brief yet), so nothing limits your tools: do what the user asks. When they describe a scene or place to build, keep their words as the brief (update_design brief), structure it and build it through the stages; smaller requests you just do.',
+        );
+        lines.push(quick ? 'Detail level: quick (the default): decide the details yourself.' : 'Detail level: detailed: follow the user\'s details exactly and work out what matters with them.');
+        return lines;
+    }
     const def = stageDef(design.stage);
     const st = design.stages[design.stage];
     const prog = stageProgress({ doc, design, fps, fpsLimit }, design.stage);
-    lines.push(`Pipeline stage ${stageIndex(design.stage) + 1}/${STAGE_IDS.length}: ${def.long}${st.status === 'done' ? ' (complete)' : ''}. Checklist ${prog.done}/${prog.total} done.`);
+    lines.push(`Pipeline stage ${stageIndex(design.stage) + 1}/${STAGE_IDS.length}: ${def.long}${st.status === 'done' ? ' (complete)' : ''}, part of the ${stepOf(design.stage).title} step the user sees. Checklist ${prog.done}/${prog.total} done.`);
     if (prog.open.length) lines.push(`Open items: ${prog.open.map((i) => `[${i.id}] ${i.text}${i.detail ? ` (${i.detail})` : ''}`).join('; ')}`);
     if (st.proposal) lines.push(`You proposed completing this stage; waiting for the user to approve.`);
-    if (design.stage === 'brief' && design.brief.skipped) lines.push('The user works without a brief, so this stage does not limit the tools: work on what the user asks for.');
     lines.push(
-        design.detail === 'quick'
+        quick
             ? 'Detail level: quick. The user wants you to decide the details yourself: ask nothing, write your choices into the plan and move through the stages.'
-            : design.detail === 'detailed'
-              ? 'Detail level: detailed. Follow the user\'s details exactly and work out what matters with them (ask_user, with an assumption for each question).'
-              : 'Detail level: not set. Judge it from the user\'s words (set_detail_level); when they leave it open, ask once (ask_detail_level) before any detail question.',
+            : 'Detail level: detailed. Follow the user\'s details exactly and work out what matters with them (ask_user, with an assumption for each question).',
     );
     const others = STAGE_IDS.filter((id) => id !== design.stage && design.stages[id].status !== 'todo').map((id) => `${stageDef(id).title} ${design.stages[id].status}${design.stages[id].recheck ? ` (${clip(design.stages[id].recheck!, 80)})` : ''}`);
     if (others.length) lines.push(`Other stages: ${others.join(', ')}`);
-    if (def.locksPlacement && !design.unlocked) lines.push('Placement is locked in this stage: only lights, cameras and effects may move.');
+    if (layoutChanged(doc, design)) lines.push('The layout (level objects) changed after the Level stage was done, so Layout needs a recheck: run check_level when the change could break the level (a passing check clears the mark).');
     return lines;
 }
 
@@ -39,10 +45,7 @@ export function pipelineSummary(doc: SceneDoc, fps?: number, fpsLimit?: number):
 export function designSummary(doc: SceneDoc): string[] {
     const d = doc.design;
     const lines: string[] = [];
-    if (!d.brief.text.trim() && !d.areas.length) {
-        lines.push(d.brief.skipped ? 'No planning brief (the user works without one).' : 'No planning brief yet.');
-        return lines;
-    }
+    if (!d.brief.text.trim() && !d.areas.length && !d.concepts.length) return lines;
     if (d.brief.text.trim()) {
         const changed = d.brief.structured !== undefined && d.brief.structured !== d.brief.text;
         lines.push(`Brief: ${d.brief.text.length} characters${changed ? ', edited since it was structured' : d.brief.structuredAt ? '' : ', not structured yet'}.`);
@@ -64,7 +67,7 @@ export function designSummary(doc: SceneDoc): string[] {
     const unassigned = d.concepts.filter((c) => !c.area).length;
     const proposed = d.concepts.filter((c) => c.review === 'proposed').length;
     if (d.concepts.length) {
-        lines.push(`Concept images: ${d.concepts.length}${unassigned ? ` (${unassigned} not mapped to an area)` : ''}${proposed ? `, ${proposed} generated ones waiting for the user's review` : ''}.`);
+        lines.push(`Concept images (the user calls them reference images): ${d.concepts.length}${unassigned ? ` (${unassigned} not mapped to an area)` : ''}${proposed ? `, ${proposed} generated ones waiting for the user's review` : ''}.`);
     }
     if (d.shots.length) {
         lines.push(

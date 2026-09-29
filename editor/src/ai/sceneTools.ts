@@ -9,6 +9,7 @@ import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOME
 import { defaults, patch, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
+import { isLevelObject, stageIndex } from '../core/design';
 import { stageDef, type ToolGroup } from '../design/stages';
 import { allowedGroups, hex, node, num, params, r3, rv, shader, ToolError, tools, v3, type Json, type ToolEnv } from './toolUtil';
 
@@ -218,7 +219,7 @@ export const sceneTools = tools({
                 d.nodes = d.nodes.filter((n) => !all.has(n.id));
             });
             store.select(store.selection.filter((id) => !all.has(id)));
-            return { data: { deleted: all.size }, summary: `${all.size} object(s)` };
+            return { data: { deleted: all.size, ...(policy.warnings.size ? { note: [...policy.warnings].join(' ') } : {}) }, summary: `${all.size} object(s)` };
         },
     },
     set_environment: {
@@ -681,39 +682,51 @@ function makeTyped(type: string): NodeDoc {
 const PLACEMENT_FIELDS = ['position', 'rotation', 'scale', 'parent', 'shape', 'size', 'radius', 'radius_top', 'radius_bottom', 'height', 'tube', 'segments', 'steps', 'visible'];
 
 /**
- * What the current stage lets the assistant change: lights in the lighting
- * stage, materials in the materials stage, placement only while it is not
- * locked. Returns an error message, or '' when allowed.
+ * What the current stage lets the assistant change when the AI settings
+ * limit its tools by stage (lights in the lighting stage, materials in the
+ * materials stage); otherwise everything. Returns an error message, or ''
+ * when allowed. Changes that reach back into a finished step are allowed
+ * and get a note: that step is marked for a recheck (see layoutChanged).
  */
 class StagePolicy {
     readonly allowed: Set<ToolGroup>;
     readonly stage: string;
-    private pipeline: ToolEnv['editor']['pipeline'];
+    /** The Level stage is done: a change of the level marks the Layout step for a recheck. */
+    private levelDone: boolean;
     warnings = new Set<string>();
 
     constructor(env: ToolEnv) {
         this.allowed = allowedGroups(env);
-        this.pipeline = env.editor.pipeline;
-        this.stage = stageDef(this.pipeline.design.stage).title;
+        const design = env.editor.pipeline.design;
+        this.stage = stageDef(design.stage).title;
+        this.levelDone = stageIndex(design.stage) > stageIndex('level');
     }
 
     private any(...groups: ToolGroup[]): boolean {
         return groups.some((g) => this.allowed.has(g));
     }
 
-    /** The stage's tools allow moving or deleting `n`, and the placement lock does (Pipeline.placementBlock). */
+    /** The level changes: after the Level stage that is noted, not refused. */
+    private layout(n: { light?: unknown; camera?: unknown; particles?: unknown; player?: unknown }) {
+        if (this.levelDone && isLevelObject(n as NodeDoc)) {
+            this.warnings.add('This changes the level after the Level stage was done: the Layout step is marked for a recheck until check_level passes. Run it before you finish if the change could open gaps or block the route.');
+        }
+    }
+
+    /** The stage's tools allow moving or deleting `n`. */
     private placement(n: NodeDoc, verb: string): string {
         const mover = !!n.light || !!n.camera || !!n.particles || !!n.player;
-        if (!(mover ? this.any('lights', 'objects', 'shots', 'effects') : this.allowed.has('objects'))) return `"${n.name}" cannot be ${verb} in the ${this.stage} stage.`;
-        const why = this.pipeline.placementBlock([n.id]);
-        return why ? `"${n.name}": ${why}` : '';
+        if (!(mover ? this.any('lights', 'objects', 'shots', 'effects') : this.allowed.has('objects'))) return `"${n.name}" cannot be ${verb} while the AI settings limit your tools to the ${this.stage} stage.`;
+        this.layout(n);
+        return '';
     }
 
     create(type: string): string {
-        if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added in the ${this.stage} stage.`;
-        if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added in the ${this.stage} stage.`;
-        if (!this.allowed.has('objects')) return `Objects cannot be placed or changed in the ${this.stage} stage.`;
-        return this.pipeline.placementLocked ? `Placement is locked in the ${this.stage} stage: new objects would change the level. It can be unlocked in the pipeline bar.` : '';
+        if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        if (!this.allowed.has('objects')) return `Objects cannot be placed while the AI settings limit your tools to the ${this.stage} stage.`;
+        this.layout({});
+        return '';
     }
 
     update(n: NodeDoc, spec: Json): string {
@@ -722,14 +735,15 @@ class StagePolicy {
             const err = this.placement(n, 'moved');
             if (err) return err;
         }
-        if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed in the ${this.stage} stage.`;
-        if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed in the ${this.stage} stage.`;
-        if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed in the ${this.stage} stage.`;
-        if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed in the ${this.stage} stage.`;
+        const limited = `while the AI settings limit your tools to the ${this.stage} stage`;
+        if (spec.material !== undefined && !this.any('materials', 'objects')) return `Materials cannot be changed ${limited}.`;
+        if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed ${limited}.`;
+        if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed ${limited}.`;
+        if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed ${limited}.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {
-                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with set_material_slot / assign_material_slot; colors and textures come in the Materials stage.');
+                this.warnings.add('The Level stage is greybox: keep the gray material and name surfaces with set_material_slot / assign_material_slot; colors and textures come in the Materials stage (unless the user asked for them now).');
             }
         }
         return '';

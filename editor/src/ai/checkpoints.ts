@@ -1,9 +1,8 @@
 // Checkpoints: whenever the work has moved on (the assistant finished a
 // request that changed the project, a stage was completed, or a good number
-// of edits were made by hand), the scene memo is refreshed and the user is
-// asked whether to save: yes downloads the project file.
+// of edits were made by hand), the scene memo is refreshed and a version of
+// the scene goes into the version history (a completed stage saves its own).
 
-import { dismiss, notify } from '../core/messages';
 import { stageDef } from '../design/stages';
 import type { Editor } from '../editor';
 import type { Agent, AgentDone } from './agent';
@@ -12,16 +11,12 @@ import type { Agent, AgentDone } from './agent';
 const EDIT_COUNT = 30;
 /** ...once this much time has passed since the last one. */
 const EDIT_INTERVAL = 10 * 60_000;
-/** Save prompts are not repeated more often than this (stage completions always ask). */
-const PROMPT_INTERVAL = 4 * 60_000;
 
 export type CheckpointReason = 'ai' | 'stage' | 'edits';
 
 export class Checkpoints {
     private edits: string[] = [];
     private lastAt = Date.now();
-    private lastPrompt = 0;
-    private memoJob: Promise<boolean> | null = null;
 
     constructor(private editor: Editor, private agent: Agent) {
         const store = editor.store;
@@ -34,56 +29,31 @@ export class Checkpoints {
         store.on('load', () => {
             this.edits = [];
             this.lastAt = Date.now();
-            dismiss('checkpoint');
-        });
-        editor.on('saved', (kind) => {
-            if (kind !== 'project') return;
-            dismiss('checkpoint');
-            this.edits = [];
-            this.lastAt = Date.now();
         });
         agent.on('done', (d) => {
-            if (d.changed && !d.error) this.run('ai', recentFromRequest(d));
+            if (d.changed && !d.error) this.run('ai', recentFromRequest(d), versionName(d.prompt));
         });
         editor.pipeline.on('completed', ({ stage, next }) => {
             this.run('stage', `Completed the ${stageDef(stage).title} stage${next ? ` and moved on to ${stageDef(next).title}` : ' (the last stage)'}.`);
         });
     }
 
-    /** Refreshes the memo and asks to save. */
-    run(reason: CheckpointReason, recent = '') {
+    /** Refreshes the memo and saves a version of the scene (a completed stage saved one already). */
+    run(reason: CheckpointReason, recent = '', name = '') {
         const labels = this.edits.splice(0);
         this.lastAt = Date.now();
         const work = [recent, labels.length ? `Edits by hand: ${summarize(labels)}` : ''].filter(Boolean).join('\n');
-        this.memoJob = this.agent.refreshMemo(work);
-        if (reason !== 'stage' && Date.now() - this.lastPrompt < PROMPT_INTERVAL) return;
-        this.lastPrompt = Date.now();
-        const body =
-            reason === 'ai'
-                ? 'The assistant finished a change. Download the project file (.zip) with everything so far?'
-                : reason === 'stage'
-                  ? `${recent} Download the project file (.zip) with everything so far?`
-                  : `${labels.length} edits since the last checkpoint. Download the project file (.zip) with everything so far?`;
-        notify({
-            kind: 'checkpoint',
-            key: 'checkpoint',
-            icon: 'save',
-            title: 'Save the project?',
-            body,
-            actions: [
-                {
-                    label: 'Save project',
-                    primary: true,
-                    run: async () => {
-                        // The saved file should carry the refreshed memo.
-                        await this.memoJob?.catch(() => false);
-                        await this.editor.saveProjectFile();
-                    },
-                },
-                { label: 'Not now', run: () => {} },
-            ],
-        });
+        void this.agent.refreshMemo(work);
+        if (reason === 'stage') return;
+        void this.editor.pipeline.saveVersion(name || (reason === 'edits' ? `${labels.length} edits by hand` : 'After the assistant\'s work'), true).catch((e) => console.warn('[checkpoint] saving a version failed', e));
     }
+}
+
+/** A version's name from the user's words: "After: a cabin by the lake". */
+function versionName(prompt: string): string {
+    const words = prompt.replace(/\s+/g, ' ').trim();
+    if (!words) return '';
+    return `After: ${words.length > 48 ? words.slice(0, 45) + '...' : words}`;
 }
 
 function recentFromRequest(d: AgentDone): string {

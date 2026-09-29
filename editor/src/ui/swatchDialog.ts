@@ -4,7 +4,7 @@ import { pickFiles } from '../core/persistence';
 import type { MaterialSlotDoc, ParamValue } from '../core/types';
 import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
 import { aiSettings } from '../openrouter/settings';
-import { roomSample, useSwatch, type RoomSample } from '../design/materialSlots';
+import { useSwatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import {
     deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
@@ -166,8 +166,8 @@ class SwatchDialog {
         clear(this.refsEl);
         const d = this.editor.store.doc.design;
         const candidates: { id: string; label: string }[] = [];
-        for (const s of d.shots) if (s.target) candidates.push({ id: s.target, label: `Paintover: ${s.name}` });
-        for (const c of d.concepts) candidates.push({ id: c.asset, label: 'Concept' });
+        for (const s of d.shots) if (s.target) candidates.push({ id: s.target, label: `Painted reference: ${s.name}` });
+        for (const c of d.concepts) candidates.push({ id: c.asset, label: 'Reference image' });
         if (!candidates.length) {
             this.refsEl.appendChild(h('span', { class: 'muted small', text: 'No concepts or paintovers in this project.' }));
             return;
@@ -243,7 +243,6 @@ class SwatchDialog {
                 ? h('span', { class: 'shot-badge ok', text: 'in use' })
                 : button('Use', () => void this.use(s), 'small primary', 'check')
             : null;
-        const preview = iconButton('sun', 'Look at it in the reference room', () => this.preview(s));
         const info = iconButton('info', 'Details and tags', (e) => this.details(e.currentTarget as HTMLElement, s));
         const remove = iconButton('trash', 'Delete from the library', async () => {
             await deleteSwatch(s.id);
@@ -253,7 +252,7 @@ class SwatchDialog {
             'div',
             { class: 'po-tile sw-tile' + (this.fresh.has(s.id) ? ' fresh' : '') + (inUse ? ' target' : '') },
             img,
-            h('div', { class: 'po-tile-bar' }, h('span', { class: 'po-label', text: s.name, title: s.tags.join(', ') }), h('div', { class: 'spacer' }), preview, info, remove),
+            h('div', { class: 'po-tile-bar' }, h('span', { class: 'po-label', text: s.name, title: s.tags.join(', ') }), h('div', { class: 'spacer' }), info, remove),
             h('div', { class: 'po-tile-actions' }, use, h('span', { class: 'muted small', text: `${s.tile} m${s.source === 'generated' ? ' · generated' : ''}` })),
         );
     }
@@ -295,15 +294,6 @@ class SwatchDialog {
         } catch (e: any) {
             toast(e?.message || String(e), 'error');
         }
-    }
-
-    private preview(s: SwatchRecord) {
-        const doc = this.editor.store.doc;
-        const slot = this.slot;
-        const samples: RoomSample[] = [{ name: s.name, texture: s.blob, color: '#ffffff', roughness: s.roughness ?? slot?.roughness ?? 0.8, metallic: s.metallic ?? slot?.metallic ?? 0, tile: s.tile }];
-        if (slot) samples.push({ ...roomSample(doc, slot), name: `${slot.name} (now)` });
-        this.close();
-        this.editor.emit('show-room', samples);
     }
 
     // ------------------------------------------------------------- actions

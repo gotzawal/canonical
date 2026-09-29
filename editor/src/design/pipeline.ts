@@ -1,18 +1,20 @@
-// The pipeline: stage gates, checklists, stage completion (shot captures and
-// a scene snapshot), reopening earlier stages, shots and snapshots. All
-// changes go through the store, so they autosave, undo and save with the
-// scene like any other edit.
+// The pipeline: stages, checklists, stage completion (shot captures and a
+// version of the scene), reopening earlier stages, shots and the version
+// history. Nothing is locked by a stage: work that changes a finished step
+// marks it for a recheck (design/stages.ts layoutChanged). All changes go
+// through the store, so they autosave, undo and save with the scene like any
+// other edit.
 
 import { getAssetBlob, putAsset, putDesignImage } from '../core/assets';
 import { compareImages, type CompareMode, type CompareResult } from '../core/compare';
 import { makeLightNode } from '../core/defaults';
-import { designAssetIds, stageIndex, STAGE_IDS } from '../core/design';
+import { designAssetIds, layoutSignature, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import { confirmDialog, toast } from '../core/messages';
 import type { Store } from '../core/store';
 import type {
-    AssetMeta, CameraState, DesignDoc, NodeDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
+    AssetMeta, CameraState, DesignDoc, SceneDoc, ShotCaptureDoc, ShotDoc, SnapshotDoc, StageId, Vec3,
 } from '../core/types';
 import type { Runtime } from '../engine/runtime';
 import type { ScriptCompiler } from '../play/compiler';
@@ -20,7 +22,7 @@ import type { Player } from '../play/player';
 import type { CameraController } from '../viewport/cameraController';
 import { syncSlots } from './materialSlots';
 import { cameraFov, FRAME_MARGIN, frameFov, frameRect } from './shotCamera';
-import { nextStage, stageDef, stageProgress, type CheckState } from './stages';
+import { layoutChanged, nextStage, stageDef, stageProgress, type CheckState } from './stages';
 
 interface PipelineEvents {
     /** A long operation (captures) started or ended. */
@@ -63,6 +65,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
     private viewFov: number | null = null;
     /** The last progress worked out, for the document version it was worked out for. */
     private progressCache: { version: number; stage: StageId; fps: number; result: ReturnType<typeof stageProgress> } | null = null;
+    /** Whether the layout changed after the Level stage, for the document version it was worked out for. */
+    private layoutCache: { version: number; changed: boolean } | null = null;
 
     constructor(private host: PipelineHost) {
         super();
@@ -96,42 +100,17 @@ export class Pipeline extends Emitter<PipelineEvents> {
         return result;
     }
 
-    // --------------------------------------------------------------- locks
-
-    /** Placement is locked in the current stage (and not unlocked by the user). */
-    get placementLocked(): boolean {
-        return stageDef(this.design.stage).locksPlacement && !this.design.unlocked && this.design.stages[this.design.stage].status !== 'done';
-    }
-
-    /** Nodes that keep their place while placement is locked: all but lights, cameras, effects and the player. */
-    isPinned(node: NodeDoc | undefined): boolean {
-        return !!node && !node.light && !node.camera && !node.particles && !node.player;
-    }
-
     /**
-     * Why the nodes may not be moved or deleted now, or '' when they may:
-     * the lock holds pinned nodes, also those under a light or camera,
-     * which would go with it. The one check for every way of editing.
+     * The level changed after the Level stage was done, so the Layout step
+     * needs a recheck (design/stages.ts layoutChanged). The views ask after
+     * every change: it is worked out once per document version.
      */
-    placementBlock(ids: string[]): string {
-        if (!this.placementLocked) return '';
-        const moved = ids.flatMap((id) => [this.store.node(id), ...this.store.descendants(id)]);
-        if (!moved.some((n) => this.isPinned(n))) return '';
-        return `Placement is locked in the ${stageDef(this.design.stage).title} stage: only lights, cameras and effects move, without objects under them. It can be unlocked in the pipeline bar.`;
-    }
-
-    /** True when the nodes may be moved or deleted; otherwise tells the user why not. */
-    canPlace(ids: string[], quiet = false): boolean {
-        const why = this.placementBlock(ids);
-        if (why && !quiet) toast(why, 'info', 5000);
-        return !why;
-    }
-
-    setUnlocked(v: boolean) {
-        this.store.commit(v ? 'Unlock Placement' : 'Lock Placement', (d) => {
-            if (v) d.design.unlocked = true;
-            else delete d.design.unlocked;
-        }, { design: true });
+    get layoutChanged(): boolean {
+        const c = this.layoutCache;
+        if (c && c.version === this.store.version) return c.changed;
+        const changed = layoutChanged(this.store.doc, this.design);
+        this.layoutCache = { version: this.store.version, changed };
+        return changed;
     }
 
     // ----------------------------------------------------------- key light
@@ -263,10 +242,13 @@ export class Pipeline extends Emitter<PipelineEvents> {
                     console.warn('[pipeline] shot capture failed', shot.name, e);
                 }
             }
-            const { meta: snapMeta, snap } = await this.makeSnapshot(`${def.title} complete`, id);
+            // The version's picture: the first shot as it was captured, or the view.
+            const picture = captures.length ? null : await this.viewPicture(`${def.title} complete`);
+            const { meta: snapMeta, snap } = await this.makeSnapshot(`${def.title} complete`, id, { thumb: captures[0]?.meta.id ?? picture?.id ?? null });
             const next = nextStage(id);
             this.store.commit(`Complete Stage: ${def.title}`, (d) => {
                 d.assets.push(snapMeta);
+                if (picture) d.assets.push(picture);
                 for (const c of captures) addToHistory(d, c.shot, c.meta, { stage: id, at, ...(c.score != null ? { score: c.score, compare: c.compare } : {}) });
                 d.design.snapshots.push(snap);
                 const st = d.design.stages[id];
@@ -278,10 +260,11 @@ export class Pipeline extends Emitter<PipelineEvents> {
                     d.design.brief.structured = d.design.brief.text;
                     d.design.brief.structuredAt ??= at;
                 }
+                // What a later change of the level is measured against (layoutChanged).
+                if (id === 'level') st.signature = layoutSignature(d);
                 if (next) {
                     d.design.stage = next;
                     d.design.stages[next].status = 'active';
-                    delete d.design.unlocked;
                 }
             }, { design: true });
             this.emit('completed', { stage: id, next });
@@ -331,7 +314,6 @@ export class Pipeline extends Emitter<PipelineEvents> {
             dd.stage = id;
             dd.stages[id].status = 'active';
             dd.stages[id].proposal = null;
-            delete dd.unlocked;
             if (target <= stageIndex('level')) for (const s of dd.shots) if (s.target) s.stale = true;
             // Matches judged in the reopened stage and after it are judged again,
             // and so is the final approval.
@@ -350,9 +332,9 @@ export class Pipeline extends Emitter<PipelineEvents> {
         this.emit('busy', v);
     }
 
-    // ----------------------------------------------------------- snapshots
+    // ----------------------------------------------------- version history
 
-    private async makeSnapshot(name: string, stage: StageId | null): Promise<{ meta: AssetMeta; snap: SnapshotDoc }> {
+    private async makeSnapshot(name: string, stage: StageId | null, extra: Pick<SnapshotDoc, 'thumb' | 'auto'> = {}): Promise<{ meta: AssetMeta; snap: SnapshotDoc }> {
         const scene = JSON.parse(JSON.stringify(this.store.doc)) as SceneDoc;
         delete (scene as Partial<SceneDoc>).design;
         scene.assets = scene.assets.filter((a) => a.purpose !== 'design');
@@ -360,29 +342,63 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const at = now();
         const blob = new Blob([JSON.stringify(file)], { type: 'application/json' });
         const meta = await putAsset(blob, `snapshot-${fileStem(name)}-${at.slice(0, 19).replace(/[:T]/g, '-')}.json`, 'data', undefined, { purpose: 'design' });
-        const snap: SnapshotDoc = { id: uid('sn'), asset: meta.id, name, stage, at, assets: scene.assets.map((a) => a.id) };
+        const snap: SnapshotDoc = { id: uid('sn'), asset: meta.id, name, stage, at, assets: scene.assets.map((a) => a.id), ...(extra.thumb ? { thumb: extra.thumb } : {}), ...(extra.auto ? { auto: true } : {}) };
         return { meta, snap };
     }
 
-    async takeSnapshot(name = 'Snapshot'): Promise<SnapshotDoc> {
-        const { meta, snap } = await this.makeSnapshot(name, this.design.stage);
-        this.store.commit('Take Snapshot', (d) => {
+    /**
+     * A small picture of the view as it is, for the version history; null
+     * when the view does not show the scene now (Play, a prefab edited on
+     * its own, the walk camera).
+     */
+    private async viewPicture(name: string): Promise<AssetMeta | null> {
+        if (this.host.blocked() || this.store.playing) return null;
+        const runtime = this.host.runtime;
+        runtime.setGridVisible(false);
+        runtime.gi.setHelpersVisible(false);
+        try {
+            const blob = await runtime.captureFrame({ maxWidth: 360, frames: 2, type: 'image/jpeg', quality: 0.82 });
+            return await putDesignImage(blob, `${fileStem(name)}-version.jpg`);
+        } catch (e) {
+            console.warn('[pipeline] version picture failed', e);
+            return null;
+        } finally {
+            runtime.setGridVisible(this.store.prefs.grid && !this.store.playing);
+            runtime.gi.setHelpersVisible(this.store.prefs.giProbes && !this.store.playing);
+        }
+    }
+
+    /**
+     * Saves a version of the scene in the version history, with a picture of
+     * the view. A version saved by hand is an undo step; one saved by itself
+     * (`auto`, after a stretch of work) is not, and only the latest
+     * KEEP_AUTO_VERSIONS of those stay.
+     */
+    async saveVersion(name = 'Version', auto = false): Promise<SnapshotDoc> {
+        const picture = await this.viewPicture(name);
+        const { meta, snap } = await this.makeSnapshot(name, this.design.stage, { thumb: picture?.id ?? null, auto });
+        const add = (d: SceneDoc) => {
             d.assets.push(meta);
+            if (picture) d.assets.push(picture);
             d.design.snapshots.push(snap);
-        }, { design: true });
+            if (auto) pruneVersions(d);
+        };
+        // A version saved by itself must not become the step Undo takes back instead of the work.
+        if (auto) this.store.patch(add, { design: true });
+        else this.store.commit('Save Version', add, { design: true });
         return snap;
     }
 
-    /** Puts the scene back the way it was in a snapshot (the design section stays). One undo step. */
+    /** Puts the scene back the way it was in a version (the plan stays). One undo step. */
     async restoreSnapshot(id: string, ask = true): Promise<boolean> {
         const snap = this.design.snapshots.find((s) => s.id === id);
         if (!snap) return false;
         const file = await this.readSnapshot(snap);
         if (!file) {
-            toast('This snapshot is not stored in this browser.', 'error');
+            toast('This version is not stored in this browser.', 'error');
             return false;
         }
-        if (ask && !(await confirmDialog('Restore snapshot?', `Put the scene back the way it was at "${snap.name}" (${snap.at.slice(0, 16).replace('T', ' ')})? The design section stays as it is; Undo brings the current scene back.`, 'Restore'))) {
+        if (ask && !(await confirmDialog('Restore this version?', `Put the scene back the way it was at "${snap.name}" (${snap.at.slice(0, 16).replace('T', ' ')})? The plan stays as it is; Undo brings the current scene back.`, 'Restore'))) {
             return false;
         }
         this.host.player.stop();
@@ -393,9 +409,9 @@ export class Pipeline extends Emitter<PipelineEvents> {
         const known = new Set(this.store.doc.scripts.map((x) => x.code));
         if (this.host.compiler.trusted && s.scripts.some((x) => !known.has(x.code))) {
             this.host.compiler.setTrusted(false);
-            toast('The snapshot brings back script code: its scripts are paused until you enable them.', 'info', 6000);
+            toast('The version brings back script code: its scripts are paused until you enable them.', 'info', 6000);
         }
-        this.store.commit(`Restore Snapshot: ${snap.name}`, (d) => {
+        this.store.commit(`Restore Version: ${snap.name}`, (d) => {
             d.environment = s.environment;
             d.scripts = s.scripts;
             d.shaders = s.shaders;
@@ -436,10 +452,10 @@ export class Pipeline extends Emitter<PipelineEvents> {
     }
 
     deleteSnapshot(id: string) {
-        this.store.commit('Delete Snapshot', (d) => {
+        this.store.commit('Delete Version', (d) => {
             const snap = d.design.snapshots.find((s) => s.id === id);
             d.design.snapshots = d.design.snapshots.filter((s) => s.id !== id);
-            if (snap) d.assets = d.assets.filter((a) => a.id !== snap.asset);
+            if (snap) dropUnused(d, [snap.asset, snap.thumb]);
         }, { design: true });
     }
 
@@ -680,6 +696,25 @@ function sameView(a: CameraState, b: CameraState): boolean {
 
 /** Manual captures (by hand or by the assistant) a shot keeps; the captures of stage completions all stay. */
 const KEEP_CAPTURES = 12;
+
+/** Versions saved by themselves that the history keeps; the older ones go, with their files. */
+const KEEP_AUTO_VERSIONS = 8;
+
+/** Keeps the latest KEEP_AUTO_VERSIONS versions saved by themselves (inside a commit). */
+function pruneVersions(d: SceneDoc) {
+    const auto = d.design.snapshots.filter((s) => s.auto);
+    const old = new Set(auto.slice(0, Math.max(0, auto.length - KEEP_AUTO_VERSIONS)));
+    if (!old.size) return;
+    d.design.snapshots = d.design.snapshots.filter((s) => !old.has(s));
+    dropUnused(d, [...old].flatMap((s) => [s.asset, s.thumb]));
+}
+
+/** Removes these files from the project unless the plan still uses them (inside a commit). */
+function dropUnused(d: SceneDoc, ids: (string | null | undefined)[]) {
+    const used = designAssetIds(d.design);
+    const gone = new Set(ids.filter((id): id is string => !!id && !used.has(id)));
+    if (gone.size) d.assets = d.assets.filter((a) => !gone.has(a.id));
+}
 
 /**
  * Adds a capture and its file to a shot's history (inside a commit). Past

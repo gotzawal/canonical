@@ -67,18 +67,20 @@ interface EditorEvents {
     'show-graph': void;
     /** The scene (Ctrl+S) or the whole project was written to a file. */
     saved: 'scene' | 'project';
-    /** Show the Design tab (pipeline, brief, shots). */
+    /** Show the Design tab (pipeline, brief, shots): the full editor. */
     'show-design': void;
+    /** Show the chat with the assistant. */
+    'show-ai': void;
     /** Show the Scene tab (sky, exposure, post effects, GI). */
     'show-scene': void;
-    /** Open the planning brief screen. */
-    'show-brief': void;
     /** A prefab instance is edited on its own (id of its root), or editing ended (null). */
     isolate: string | null;
     /** The viewport's view changed (setView). */
     view: EditorView;
     /** Show material samples in the reference room. */
     'show-room': RoomSample[];
+    /** Take a picture of material samples in the reference room for the assistant (null: the view cannot show it now). */
+    'capture-room': { samples: RoomSample[]; done: (image: string | null) => void };
     /** Apply the edits in progress (code panels): Play or a build starts. */
     'flush-edits': void;
     /** Show a behavior tree (or schema) in the Behavior tab of the dock. */
@@ -149,7 +151,6 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     createPrimitive(type: GeometryType) {
-        if (!this.canAddObjects()) return;
         const node = makeMeshNode(type);
         if (type !== 'plane') {
             const p = this.viewport.spawnPoint();
@@ -169,7 +170,7 @@ export class Editor extends Emitter<EditorEvents> {
         this.insert([node], 'Create ' + node.name);
     }
 
-    /** A particle emitter from a preset (fire, smoke, sparks...), in front of the view. Effects may be added while placement is locked. */
+    /** A particle emitter from a preset (fire, smoke, sparks...), in front of the view. */
     createParticles(preset = 'fire'): string {
         const node = makeNode(this.uniqueName(PARTICLE_PRESETS.find((p) => p.id === preset)?.label ?? 'Particles', null), null);
         node.particles = presetParticles(preset);
@@ -191,7 +192,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Groups the selection under a new empty at the selection's center. */
     groupSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length || !this.pipeline.canPlace(roots)) return;
+        if (!roots.length) return;
         const parent = this.store.node(roots[0])?.parent ?? null;
         const group = makeNode(this.uniqueName('Group', parent), parent);
         // Put the group's origin at the center of what it contains.
@@ -215,15 +216,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     // ------------------------------------------------------------- editing
 
-    /** False (with a message) while the pipeline stage locks placement. */
-    canAddObjects(): boolean {
-        if (!this.pipeline.placementLocked) return true;
-        toast('Placement is locked in this stage: new objects would change the level. Unlock it in the pipeline bar first.', 'info', 4500);
-        return false;
-    }
-
     deleteSelection() {
-        if (!this.pipeline.canPlace(this.store.selection)) return;
         const ids = new Set<string>();
         for (const id of this.store.selection) {
             ids.add(id);
@@ -239,7 +232,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     duplicateSelection() {
         const roots = this.store.selectionRoots();
-        if (!roots.length || !this.pipeline.canPlace(roots)) return;
+        if (!roots.length) return;
         const newRoots: string[] = [];
         this.store.commit('Duplicate', (doc) => {
             for (const rootId of roots) {
@@ -282,7 +275,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     resetTransform(part: 'position' | 'rotation' | 'scale' | 'all' = 'all') {
         const ids = this.store.selection;
-        if (!ids.length || !this.pipeline.canPlace(ids)) return;
+        if (!ids.length) return;
         this.store.commit('Reset Transform', (doc) => {
             for (const n of doc.nodes) {
                 if (!ids.includes(n.id)) continue;
@@ -296,7 +289,6 @@ export class Editor extends Emitter<EditorEvents> {
     /** Drops objects onto the ground (y of their lowest point = 0). */
     dropToGround() {
         const ids = this.store.selectionRoots();
-        if (!this.pipeline.canPlace(ids)) return;
         const moves: { id: string; dy: number }[] = [];
         for (const id of ids) {
             const box = this.picker.bounds(id);
@@ -401,7 +393,7 @@ export class Editor extends Emitter<EditorEvents> {
 
     addModel(assetId: string, at?: Vec3, frame = false) {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
-        if (!meta || !this.canAddObjects()) return;
+        if (!meta) return;
         const spot = at ?? this.viewport.spawnPoint();
         const node = makeNode(this.uniqueName(meta.name.replace(/\.(glb|gltf)$/i, ''), null), null, spot);
         node.position = tidy3(node.position, 3);
@@ -499,7 +491,6 @@ export class Editor extends Emitter<EditorEvents> {
             toast('Select the objects to make a prefab from (prefab instances cannot be nested).', 'info');
             return null;
         }
-        if (!this.pipeline.canPlace(roots)) return null;
         let box: { min: Vec3; max: Vec3 } | null = null;
         for (const id of roots) {
             const b = this.picker.bounds(id);
@@ -539,7 +530,7 @@ export class Editor extends Emitter<EditorEvents> {
     /** Places an instance of a prefab (at the view's ground point by default). */
     placePrefab(prefabId: string, at?: Vec3, rotationY = 0, select = true): string | null {
         const prefab = this.prefab(prefabId);
-        if (!prefab || !this.canAddObjects()) return null;
+        if (!prefab) return null;
         const spot = at ?? this.viewport.spawnPoint();
         const nodes = makeInstance(prefab, tidy3(spot, 3), this.uniqueName(prefab.name, null), rotationY);
         this.insert(nodes, 'Place Prefab', select);
@@ -564,7 +555,6 @@ export class Editor extends Emitter<EditorEvents> {
             toast('This prefab shows its model. Switch it back to the greybox template to edit the template.', 'info', 5000);
             return;
         }
-        if (!this.pipeline.canPlace([rootId])) return;
         this.isolated = rootId;
         this.isolatedShape = this.store.structureVersion;
         this.isolatedKept = new Set(this.store.descendants(rootId).filter((n) => !n.prefabChild).map((n) => n.id));
@@ -754,7 +744,6 @@ export class Editor extends Emitter<EditorEvents> {
 
     /** A character at the spawn point: an NPC (walked by a behavior tree or a script), or the player's. */
     createCharacter(player = false) {
-        if (!this.canAddObjects()) return;
         const node = makeCharacterNode(this.store.doc.design.specs, player);
         const p = this.viewport.spawnPoint();
         node.position = [round(p[0]), round(p[1] + node.character!.height / 2), round(p[2])];
@@ -1273,7 +1262,7 @@ export class Editor extends Emitter<EditorEvents> {
         const count = this.store.doc.scripts.length;
         const choice = await ask(
             'Run the paused scripts?',
-            `This scene has ${count} script${count === 1 ? '' : 's'} from an opened file or snapshot. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
+            `This scene has ${count} script${count === 1 ? '' : 's'} from an opened file or an earlier version. Scripts run JavaScript in this page and can read anything the editor keeps here, including your OpenRouter key. Only enable scripts you trust; you can read them in the code editor first.`,
             [
                 { label: 'Cancel', value: 'cancel' },
                 { label: 'Play Without Scripts', value: 'without' },

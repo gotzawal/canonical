@@ -1,6 +1,7 @@
 // What the assistant's tools are made of (ai/registry.ts lists them): the
 // tool entry, what a tool gets and returns, and argument parsing.
 
+import { planStarted } from '../core/design';
 import { tidy } from '../core/math';
 import { InputError as ToolError } from '../core/schema';
 import type { Store } from '../core/store';
@@ -16,8 +17,8 @@ export interface ToolEnv {
     editor: Editor;
     allowPlay(): boolean;
     screenshots(): boolean;
-    /** The pipeline stage limits the tools. */
-    stageTools(): boolean;
+    /** The pipeline stage limits the tools (an AI setting, off by default). */
+    limitTools(): boolean;
     /** Tools may spend credits on images. */
     allowImages(): boolean;
     /** Aborts long tools (image generation) when the request is stopped. */
@@ -33,8 +34,6 @@ export interface ToolResult {
     images?: string[];
     /** Short line for the chat log. */
     summary?: string;
-    /** Buttons for the user to answer with in the chat (the assistant waits for the answer). */
-    choice?: ToolChoice;
     /** What the user approves in the chat, as in the Design tab. */
     approval?: Approval;
 }
@@ -46,14 +45,6 @@ export interface ToolResult {
  * decided.
  */
 export type Approval = { kind: 'stage'; stage: StageId } | { kind: 'concepts'; assets: string[] };
-
-/** A question with buttons shown in the chat; a button sends its label as the user's answer. */
-export interface ToolChoice {
-    /** What picking an option also sets: 'detail' sets the plan's detail level to the option's value. */
-    kind: 'detail';
-    question: string;
-    options: { value: string; label: string }[];
-}
 
 /** What a tool's handler gets: its arguments, the editor and the request's settings. */
 export interface ToolCall {
@@ -73,8 +64,9 @@ export interface Tool {
     params?: Json;
     required?: string[];
     /**
-     * Pipeline groups that offer it (see design/stages.ts): a tool is offered
-     * when the current stage allows one of them; 'read' is in every stage.
+     * Pipeline groups it belongs to (see design/stages.ts). When the AI
+     * settings limit the tools by stage, it is offered while the current
+     * stage allows one of them; 'read' is in every stage.
      */
     groups: ToolGroup[];
     /** Offered only when the AI settings allow playing, screenshots, or image generation (costs credits). */
@@ -93,12 +85,13 @@ export const definition = (t: Tool): ToolDef => ({
     function: { name: t.name, description: t.description, parameters: { type: 'object', properties: t.params ?? {}, required: t.required ?? [] } },
 });
 
-/** Groups the assistant may use now: the stage's, or all of them when the stage does not limit tools. */
+/** Groups the assistant may use now: all of them, or the stage's when the AI settings limit the tools by stage. */
 export function allowedGroups(env: ToolEnv): Set<ToolGroup> {
-    if (!env.stageTools()) return new Set(ALL_TOOL_GROUPS);
+    if (!env.limitTools()) return new Set(ALL_TOOL_GROUPS);
     const design = env.editor.pipeline.design;
-    // Working without a brief: the pipeline has not started, so the Brief stage limits nothing.
-    if (design.stage === 'brief' && design.brief.skipped) return new Set(ALL_TOOL_GROUPS);
+    // Nothing planned yet (the start screen closed, or skipped in older files):
+    // the pipeline has not started, so the Brief stage limits nothing.
+    if (design.stage === 'brief' && (design.brief.skipped || !planStarted(design))) return new Set(ALL_TOOL_GROUPS);
     return new Set(stageDef(design.stage).tools);
 }
 

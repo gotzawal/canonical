@@ -1,12 +1,13 @@
 // The assistant's tools for the planning pipeline: reading and structuring
-// the design, questions for the user, checklists and stage proposals.
+// the design (and naming the scene), questions for the user, checklists and
+// stage proposals.
 
-import { STAGE_IDS, stageIndex } from '../core/design';
+import { detailLevel, STAGE_IDS, stageIndex } from '../core/design';
 import { uid } from '../core/ids';
 import { Specs } from '../core/model';
 import { patch, toolSchema } from '../core/schema';
-import type { AreaDoc, AreaObjectDoc, DesignDoc, StageId, Vec3 } from '../core/types';
-import { evaluateStage, stageDef } from '../design/stages';
+import { UNTITLED_SCENE, type AreaDoc, type AreaObjectDoc, type DesignDoc, type StageId, type Vec3 } from '../core/types';
+import { evaluateStage, stageDef, stepOf } from '../design/stages';
 import { hex, num, optStr, str, ToolError, tools, v3, type Json, type ToolEnv } from './toolUtil';
 
 const vec3 = { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 };
@@ -29,8 +30,10 @@ export const designTools = tools({
     },
     update_design: {
         groups: ['design'],
-        description: 'Write the structured plan. Areas are matched by id or name and updated; new names add areas; remove: true deletes one. An area\'s objects list replaces the old one (placed flags of the same names are kept). Route, sight lines and area order replace the old ones when given. Effects are matched by id or name. After the brief stage, areas whose objects, bounds or mood change are flagged for rework.',
+        description: 'Write the structured plan, the brief and the scene\'s name. Areas are matched by id or name and updated; new names add areas; remove: true deletes one. An area\'s objects list replaces the old one (placed flags of the same names are kept). Route, sight lines and area order replace the old ones when given. Effects are matched by id or name. After the brief stage, areas whose objects, bounds or mood change are flagged for rework.',
         params: {
+            scene_name: { type: 'string', description: `A short name for the scene (2 to 4 words, in the user's language). Give one when it is still "${UNTITLED_SCENE}"; rename a named scene only when the user asks.` },
+            brief: { type: 'string', description: 'The brief: what the user wants to make, in their words (with what they attached). Set it when the pipeline has not started and the user describes a scene to build; leave it out otherwise.' },
             from_brief: { type: 'boolean', description: 'This structure comes from the current brief (marks the brief as structured).' },
             layout: {
                 type: 'object',
@@ -87,13 +90,17 @@ export const designTools = tools({
         run({ env, args, store }) {
             // Validate on a copy so a bad field changes nothing.
             const draft = JSON.parse(JSON.stringify(store.doc.design)) as DesignDoc;
+            const name = optStr(args.scene_name, 'scene_name', 80)?.replace(/\s+/g, ' ').trim();
             const result = applyDesign(env, draft, args);
+            if (name) result.changed.unshift('scene name');
             store.commit('AI: Update Design', (d) => {
                 d.design = draft;
-            }, { design: true });
+                if (name) d.name = name;
+            }, name ? { design: true, env: true } : { design: true });
             return {
                 data: {
                     ok: true,
+                    ...(name ? { scene_name: name } : {}),
                     updated: result.changed,
                     ...(result.added.length ? { added_areas: result.added } : {}),
                     ...(result.rework.length ? { flagged_for_rework: result.rework } : {}),
@@ -159,7 +166,7 @@ export const designTools = tools({
     },
     set_detail_level: {
         groups: ['design'],
-        description: 'Record how much of the detail the user wants to settle themselves, judged from their words. "quick": short or loose instructions, "you decide", "just make it": decide every detail yourself, ask nothing, write your choices into the plan and move through the stages. "detailed": precise instructions with numbers and specifics, or asking to refine: follow them exactly and work out what matters with the user. The user can change it in the Design tab.',
+        description: 'Record how much of the detail the user wants to settle themselves. The default is "quick": decide every detail yourself, ask nothing, write your choices into the plan and move through the stages. Switch to "detailed" only when the user clearly asks to work the details out together or gives precise instructions with numbers and specifics: then follow them exactly and work out what matters with the user. The user can change it in the Design tab.',
         params: {
             level: { type: 'string', enum: ['quick', 'detailed'] },
             reason: { type: 'string', description: 'What in the user\'s words tells, in a few words.' },
@@ -180,27 +187,6 @@ export const designTools = tools({
                         : 'Follow the user\'s details exactly; ask (ask_user, with assumptions) only about what changes the plan a lot.',
                 },
                 summary: level,
-            };
-        },
-    },
-    ask_detail_level: {
-        groups: ['design'],
-        description: 'When the user\'s words leave open how much detail they want, ask this once before asking about any detail: the chat shows two buttons, one to let you decide and go on, one to refine the details together. Then end your turn with one short line; the answer comes as the next message.',
-        params: {
-            question: { type: 'string', description: 'The question in the user\'s language.' },
-            quick_label: { type: 'string', description: 'Button to let you decide and move on, in the user\'s language.' },
-            detailed_label: { type: 'string', description: 'Button to work out the details together, in the user\'s language.' },
-        },
-        required: ['question'],
-        run({ args }) {
-            const question = str(args.question, 'question', 1000).trim();
-            if (!question) throw new ToolError('question is empty.');
-            const quick = optStr(args.quick_label, 'quick_label', 80)?.trim() || 'Decide yourself and move on';
-            const detailed = optStr(args.detailed_label, 'detailed_label', 80)?.trim() || 'Refine the details with me';
-            return {
-                data: { ok: true, note: 'The user sees the question with two buttons. End your turn now with one short line; the answer comes as the next message.' },
-                choice: { kind: 'detail', question, options: [{ value: 'quick', label: quick }, { value: 'detailed', label: detailed }] },
-                summary: 'asked',
             };
         },
     },
@@ -258,7 +244,7 @@ export const designTools = tools({
     },
     propose_stage_complete: {
         groups: ['design'],
-        description: 'Propose completing the current stage once its checklist is done. The user reviews and approves (in the chat or the Design tab); with the detail level quick and nothing open it completes the stage right away. Completing captures every shot and takes a snapshot.',
+        description: 'Propose completing the current stage once its checklist is done. With the detail level quick (the default) and nothing open, it completes the stage right away; otherwise the user reviews and approves (in the chat or the Design tab). Completing captures every shot and saves a version of the scene.',
         params: {
             summary: { type: 'string', description: 'What was done and what was checked, a few lines.' },
         },
@@ -268,19 +254,24 @@ export const designTools = tools({
             if (!summary) throw new ToolError('summary is empty.');
             const prog = ed.pipeline.progress();
             // The user lets the assistant decide: a finished checklist moves on by itself.
-            if (store.doc.design.detail === 'quick' && !prog.open.length) {
+            if (detailLevel(store.doc.design) === 'quick' && !prog.open.length) {
                 const from = stageDef(store.doc.design.stage);
                 if (await ed.pipeline.complete(true)) {
                     const now = stageDef(store.doc.design.stage);
                     const next = ed.pipeline.progress();
+                    const step = stepOf(from.id);
+                    // The user looks at the result at the end of each step (layout, look, finish).
+                    const stepDone = now.id !== from.id && stepOf(now.id).id !== step.id;
                     return {
                         data: {
                             ok: true,
                             completed: from.title,
                             ...(now.id !== from.id ? { now: now.long, checklist: next.items.map((i) => ({ id: i.id, text: i.text, done: i.done })) } : {}),
-                            note: now.id !== from.id
-                                ? `The user lets you decide the details, so ${from.title} was completed (shots captured, snapshot taken). Go on with ${now.title} if the request covers it; otherwise tell the user what comes next.`
-                                : 'Every stage is complete.',
+                            note: now.id === from.id
+                                ? 'Every stage is complete. End your turn with a short summary of the finished scene.'
+                                : stepDone
+                                  ? `${from.title} was completed (shots captured, a version saved), which finishes the ${step.title} step. End your turn now with a short summary of how it looks, so the user can say whether they like it before ${stepOf(now.id).title}.`
+                                  : `${from.title} was completed (shots captured, a version saved). Go on with ${now.title} when the request is to keep building; after a specific change the user asked for, stop there.`,
                         },
                         summary: `${from.title} complete`,
                     };
@@ -352,6 +343,15 @@ function applyDesign(env: ToolEnv, d: DesignDoc, args: Json): { changed: string[
     const rework: string[] = [];
     const added: string[] = [];
     const structured = stageIndex(d.stage) > 0;
+
+    if (args.brief !== undefined) {
+        const text = str(args.brief, 'brief', 200000).replace(/\r\n?/g, '\n').trim();
+        if (text && text !== d.brief.text) {
+            d.brief.text = text;
+            delete d.brief.skipped;
+            changed.push('brief');
+        }
+    }
 
     if (args.layout !== undefined) {
         const l = args.layout as Json;
@@ -546,7 +546,7 @@ function readDesign(env: ToolEnv, section: string): Json {
     const want = (k: string) => all || section === k;
     const out: Json = {};
     const assetName = (id: string) => doc.assets.find((a) => a.id === id)?.name;
-    if (section === 'brief') out.brief = { text: d.brief.text || '(empty)', structured: !!d.brief.structuredAt && d.brief.structured === d.brief.text, skipped: !!d.brief.skipped };
+    if (section === 'brief') out.brief = { text: d.brief.text || '(empty)', structured: !!d.brief.structuredAt && d.brief.structured === d.brief.text };
     else if (all) out.brief = { characters: d.brief.text.length, structured: !!d.brief.structuredAt && d.brief.structured === d.brief.text, note: 'Read section "brief" for the text.' };
     if (want('layout')) out.layout = d.layout;
     if (want('areas')) {
@@ -595,7 +595,7 @@ function readDesign(env: ToolEnv, section: string): Json {
             ...(id === d.stage || all ? { checklist: evaluateStage(ctx, id).map((i) => ({ id: i.id, text: i.text, done: i.done, automatic: i.auto || undefined, user_only: i.userOnly || undefined, detail: i.detail, note: i.note })) } : {}),
         }));
     }
-    if (want('snapshots')) out.snapshots = d.snapshots.map((s) => ({ id: s.id, name: s.name, stage: s.stage, at: s.at }));
+    if (want('snapshots')) out.versions = d.snapshots.map((s) => ({ id: s.id, name: s.name, stage: s.stage, at: s.at, ...(s.auto ? { auto: true } : {}) }));
     if (want('memo')) out.memo = d.memo;
     if (want('concepts') || want('shots')) out.asset_names = Object.fromEntries([...d.concepts.map((c) => c.asset), ...d.shots.flatMap((s) => [s.target, s.concept]).filter((x): x is string => !!x)].map((id) => [id, assetName(id)]));
     return out;

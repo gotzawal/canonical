@@ -12,9 +12,10 @@ declare global {
  * One editor page for the tests of a file, run in order: SwiftShader takes
  * half a minute to compile the shaders of a page. Every test starts from the
  * new scene the page opened with (`reset`); `errors` collects page errors.
- * `setup` runs before the page loads (routes, init scripts).
+ * `setup` runs before the page loads (routes, init scripts). The page shows
+ * the full editor (edit mode) unless `simple`, with the start screen closed.
  */
-export function sharedEditor(setup?: (page: Page) => Promise<void>): { page: () => Page; errors: string[]; reset: () => Promise<void> } {
+export function sharedEditor(setup?: (page: Page) => Promise<void>, opts: { simple?: boolean } = {}): { page: () => Page; errors: string[]; reset: () => Promise<void> } {
     let page: Page;
     let initial = '';
     const errors: string[] = [];
@@ -22,6 +23,10 @@ export function sharedEditor(setup?: (page: Page) => Promise<void>): { page: () 
     test.beforeAll(async ({ browser }) => {
         page = await browser.newPage();
         page.on('pageerror', (e) => errors.push(e.message));
+        await page.addInitScript((edit) => {
+            const prefs = JSON.parse(localStorage.getItem('canonical-editor/prefs') || '{}');
+            localStorage.setItem('canonical-editor/prefs', JSON.stringify({ ...prefs, editMode: edit }));
+        }, !opts.simple);
         await setup?.(page);
         await page.goto('/');
         // SwiftShader can stop drawing for seconds after a load: poll by time, not by frames.
@@ -31,8 +36,8 @@ export function sharedEditor(setup?: (page: Page) => Promise<void>): { page: () 
             { polling: 100, timeout: 120_000 },
         );
         initial = await page.evaluate(() => {
-            const skip = Array.from(document.querySelectorAll('button')).find((b) => b.textContent === 'Work without a brief');
-            skip?.click();
+            // "Not now": this project does not ask again, also after reset.
+            document.querySelector<HTMLButtonElement>('.start-screen:not([hidden]) .start-close')?.click();
             return JSON.stringify(window.__editor.store.doc);
         });
     });
@@ -70,7 +75,7 @@ export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedC
     const state = { turns: [] as (ScriptedCall[] | string)[], sent: [] as any[] };
     await page.addInitScript(() => {
         localStorage.setItem('canonical-editor/openrouter-key', 'test-key');
-        localStorage.setItem('canonical-editor/ai', JSON.stringify({ model: 'test/model', memo: false, screenshots: false, allowPlay: false, allowImages: false, stageTools: false }));
+        localStorage.setItem('canonical-editor/ai', JSON.stringify({ model: 'test/model', memo: false, screenshots: false, allowPlay: false, allowImages: false, limitTools: false }));
     });
     await page.route('**/api/v1/models', (route) =>
         route.fulfill({

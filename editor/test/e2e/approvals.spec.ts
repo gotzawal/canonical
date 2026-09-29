@@ -1,5 +1,5 @@
-// What the assistant proposes (completing a stage, concept images) is
-// approved in the chat, as in the Design tab, and both show the same.
+// What the assistant proposes (completing a stage, reference images it drew)
+// is approved in the chat, as in the Design tab, and both show the same.
 
 import { expect, test } from '@playwright/test';
 import { scriptedAssistant, sharedEditor, type ScriptedCall } from './editor';
@@ -43,37 +43,41 @@ test('completes the stage the assistant proposes from the chat', async () => {
     const page = editor.page();
     await ask([[{ name: 'propose_stage_complete', args: { summary: 'The areas and the layout are in the plan.' } }]]);
     const card = page.locator('.ai-panel .ai-msg.approval').last();
-    await expect(card).toContainText('The assistant proposes completing Brief');
+    await expect(card).toContainText('Brief is done. Happy with it?');
     await expect(card).toContainText('The areas and the layout are in the plan.');
+    // While the approval waits, the chat offers nothing else.
+    await expect(page.locator('.ai-panel .ai-next')).toBeHidden();
 
-    await click('.ai-panel .ai-msg.approval', 'Complete Brief');
+    await click('.ai-panel .ai-msg.approval', 'Looks good');
     // Checklist items are still open: the same question as in the Design tab.
     await expect(page.locator('.dialog')).toContainText('Complete Brief?');
     await click('.dialog', 'Complete Anyway');
     await expect.poll(() => page.evaluate(() => window.__editor.store.doc.design.stage)).toBe('level');
     expect(await page.evaluate(() => window.__editor.store.doc.design.stages.brief.proposal)).toBeNull();
     await expect(card).toContainText('Brief is complete.');
-    await expect(card.getByRole('button', { name: 'Go on with Level' })).toBeVisible();
+    // Then the user says whether they like it, and the assistant keeps going.
+    await expect(page.locator('.ai-panel .ai-next')).toContainText('Like how it looks?');
+    await expect(page.locator('.ai-panel .ai-next').getByRole('button', { name: 'Looks good, keep going' })).toBeVisible();
 });
 
-test('approves or rejects the concept images the assistant made, from the chat', async () => {
+test('keeps or drops the reference images the assistant drew, from the chat', async () => {
     const page = editor.page();
     await ask([[{ name: 'generate_concept', args: { view: 'overview', count: 2 } }]]);
     const card = page.locator('.ai-panel .ai-msg.approval').last();
-    await expect(card).toContainText('Concept images to review');
+    await expect(card).toContainText('Reference images');
     await expect(card.locator('.ai-approval-tile')).toHaveCount(2);
     const concepts = () => page.evaluate(() => window.__editor.store.doc.design.concepts.map((c) => c.review ?? 'given'));
     expect(await concepts()).toEqual(['proposed', 'proposed']);
 
-    await click('.ai-panel .ai-msg.approval .ai-approval-tile:first-child', 'Approve');
+    await click('.ai-panel .ai-msg.approval .ai-approval-tile:first-child', 'Keep');
     await expect.poll(concepts).toEqual(['approved', 'proposed']);
-    await expect(card.locator('.ai-approval-tile').first()).toContainText('Approved');
+    await expect(card.locator('.ai-approval-tile').first()).toContainText('Kept');
 
     // Decided in the Design tab, the chat shows it too.
     await page.evaluate(() => {
         const ed = window.__editor;
         ed.pipeline.reviewConcepts([ed.store.doc.design.concepts[1].asset], false);
     });
-    await expect(card.locator('.ai-approval-tile').nth(1)).toContainText('Rejected');
+    await expect(card.locator('.ai-approval-tile').nth(1)).toContainText('Dropped');
     expect(await concepts()).toEqual(['approved']);
 });

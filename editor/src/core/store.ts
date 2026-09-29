@@ -7,7 +7,7 @@ import { migrateScene } from './migrate';
 import { Animation, Body, Camera, Character, Environment, Mesh, Model, Params, Particles, Player } from './model';
 import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
-    SCENE_VERSION, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
+    SCENE_VERSION, UNTITLED_SCENE, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
     type SceneDoc, type ScriptDoc, type ScriptRef, type ShaderDoc,
 } from './types';
 
@@ -59,6 +59,11 @@ export interface Prefs {
     viewportFps: ViewportFps;
     /** The viewport's resolution, low by default. Captures (the assistant's, shots) are taken sharp either way. */
     viewportQuality: ViewportQuality;
+    /**
+     * The full editor (hierarchy, inspector, pipeline, code) instead of the
+     * simple view, which shows only the scene and the chat with the assistant.
+     */
+    editMode: boolean;
 }
 
 /**
@@ -163,6 +168,7 @@ function defaultPrefs(): Prefs {
         glass: null,
         viewportFps: 30,
         viewportQuality: 'low',
+        editMode: false,
     };
 }
 
@@ -170,6 +176,7 @@ function loadPrefs(): Prefs {
     const prefs = { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
     if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = 30;
     if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = 'low';
+    prefs.editMode = prefs.editMode === true;
     return prefs;
 }
 
@@ -1061,7 +1068,7 @@ export function sanitize(input: any): SceneDoc {
     return {
         format: 'canonical-scene',
         version: SCENE_VERSION,
-        name: typeof input?.name === 'string' && input.name ? input.name : 'Untitled Scene',
+        name: typeof input?.name === 'string' && input.name ? input.name : UNTITLED_SCENE,
         environment: repair(Environment, input?.environment) ?? defaults(Environment),
         assets: Array.isArray(input?.assets) ? input.assets.filter((a: any) => a && typeof a.id === 'string') : [],
         scripts,

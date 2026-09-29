@@ -3,7 +3,7 @@ import { defaultDesign } from './design';
 import { Camera, Environment, Geometry, GI, Light, Material } from './model';
 import { defaults } from './schema';
 import {
-    SCENE_VERSION, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
+    SCENE_VERSION, UNTITLED_SCENE, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
     type LightDoc, type LightType, type MaterialDoc, type MeshDoc, type NodeDoc, type NodeWith, type RenderGraphDoc, type SceneDoc,
     type Vec3,
 } from './types';
@@ -126,7 +126,7 @@ export function newScene(): SceneDoc {
     return {
         format: 'canonical-scene',
         version: SCENE_VERSION,
-        name: 'Untitled Scene',
+        name: UNTITLED_SCENE,
         environment: defaultEnvironment(),
         assets: [],
         scripts: [],
@@ -148,7 +148,7 @@ export function emptyScene(): SceneDoc {
     return {
         format: 'canonical-scene',
         version: SCENE_VERSION,
-        name: 'Untitled Scene',
+        name: UNTITLED_SCENE,
         environment: defaultEnvironment(),
         assets: [],
         scripts: [],

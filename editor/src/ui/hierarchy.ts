@@ -4,6 +4,7 @@ import type { NodeDoc } from '../core/types';
 import { onChanges, touches, type FrameChanges } from './batch';
 import { clear, h } from './dom';
 import { icon, nodeIcon } from './icons';
+import { mascotPose } from './mascot';
 import { MenuItem, showMenu } from './overlays';
 import { iconButton } from './widgets';
 
@@ -59,6 +60,8 @@ export class HierarchyPanel {
     /** The structure version the rows were made for. */
     private structure = -1;
     private rowHeight = 0;
+    /** The tree's height when it was last measured (see the ResizeObserver). */
+    private treeHeight = -1;
     private painting = 0;
 
     constructor(private editor: Editor, private commands: Commands, private createMenu: () => MenuItem[]) {
@@ -100,7 +103,13 @@ export class HierarchyPanel {
             e.preventDefault();
             if (!onRow(e)) showMenu(this.createMenu(), e.clientX, e.clientY);
         });
-        new ResizeObserver(() => {
+        // Rows fill the width by themselves: only a new height changes which rows are in view.
+        // (A scrollbar coming or going changes only the width; a paint for it, a frame later,
+        // drew again the rows of objects that had just moved.)
+        new ResizeObserver(([entry]) => {
+            const height = entry.contentRect.height;
+            if (height === this.treeHeight) return;
+            this.treeHeight = height;
             this.rowHeight = 0;
             this.schedulePaint();
         }).observe(this.tree);
@@ -182,7 +191,7 @@ export class HierarchyPanel {
             this.drawn.clear();
             this.sizer.style.height = '';
             this.list.style.transform = '';
-            this.list.replaceChildren(h('div', { class: 'empty-hint', text: 'The scene is empty. Use + or the Create menu to add objects.' }));
+            this.list.replaceChildren(h('div', { class: 'empty-hint roomy' }, mascotPose('rest', 132), h('span', { text: 'The scene is empty. Use + or the Create menu to add objects.' })));
             return;
         }
         const height = this.measure();

@@ -5,7 +5,7 @@
 
 import { contactSheet } from '../core/images';
 import type { MaterialSlotDoc } from '../core/types';
-import { assignSlot, slotUsers, upsertSlot, useSwatch, type SlotPatch } from '../design/materialSlots';
+import { assignSlot, roomSample, slotUsers, upsertSlot, useSwatch, type SlotPatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import { generateSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom } from '../design/swatches';
 import { stageDef } from '../design/stages';
@@ -13,6 +13,30 @@ import { MAX_IMAGES } from '../openrouter/images';
 import { allowedGroups, hex, node, num, optStr, r3, str, ToolError, tools, type ToolEnv } from './toolUtil';
 
 export const materialTools = tools({
+    view_materials: {
+        groups: ['materials'],
+        needs: 'screenshots',
+        description: 'Look at material slots (up to 8; all of them by default) in the reference room: their swatches on 1 m cubes at real scale under neutral light, next to an 18% gray ball (left, front) and a chrome ball (left, back), apart from the level\'s lighting. Judge a swatch\'s brightness, color and tiling here before blaming the lights. The user does not see the room; it shows for a moment and the view goes back.',
+        params: {
+            slots: { type: 'array', items: { type: 'string' }, description: 'Slot ids or names, in the order to place them (left to right).' },
+        },
+        async run({ env, args, ed }) {
+            const d = ed.store.doc.design;
+            const refs: unknown[] = Array.isArray(args.slots) && args.slots.length ? args.slots : d.materials.map((m) => m.id);
+            if (!refs.length) throw new ToolError('There are no material slots yet (set_material_slot).');
+            const slots = refs.slice(0, 8).map((r) => findSlot(env, r));
+            const image = await new Promise<string | null>((done) => {
+                if (!ed.has('capture-room')) done(null);
+                else ed.emit('capture-room', { samples: slots.map((m) => roomSample(ed.store.doc, m)), done });
+            });
+            if (!image) throw new ToolError('The view cannot show the reference room now (Play, a prefab edited on its own, or the walk camera). Try again when it is free.');
+            return {
+                data: { ok: true, slots: slots.map((m, i) => ({ place: i + 1, id: m.id, name: m.name, swatch: !!m.swatch, color: m.color, tile_m: m.tile, roughness: m.roughness, metallic: m.metallic })), note: 'The picture is attached in the next message: samples left to right in this order.' },
+                image,
+                summary: slots.map((m) => m.name).join(', '),
+            };
+        },
+    },
     set_material_slot: {
         groups: ['materials', 'design'],
         description: 'Add or change a material slot: a named surface of the level (plaster, cobblestone, oak planks). Objects linked to it (assign_material_slot) render with the world space triplanar shader, so its swatch shows at its real size: tile is the size of one texture tile in meters. One roughness and one metallic value per slot. Mark slots meant as a plain color (painted metal, glass) with flat.',

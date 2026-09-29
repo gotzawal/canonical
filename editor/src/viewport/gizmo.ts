@@ -62,11 +62,9 @@ const LABELS: Record<Exclude<Tool, 'select'>, string> = { translate: 'Move', rot
 export class Gizmo {
     hover: Handle | null = null;
     private drag: Drag | null = null;
-    /** `guard` is asked before a drag starts; false keeps the selection where it is (pipeline placement lock). */
     constructor(
         private store: Store,
         private picker: Picker,
-        private guard: (ids: string[]) => boolean = () => true,
     ) {}
 
     get dragging(): boolean {
@@ -199,7 +197,6 @@ export class Gizmo {
         const L = this.layout();
         if (!L) return false;
         const ids = this.store.selectionRoots();
-        if (!this.guard(ids)) return false;
         const items: DragItem[] = [];
         for (const id of ids) {
             const node = this.store.node(id);

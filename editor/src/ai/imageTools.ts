@@ -2,6 +2,7 @@
 // in the AI settings, choosing a shot's target, and what the image model
 // accepts. Generation costs credits and can be switched off in the settings.
 
+import { detailLevel } from '../core/design';
 import { assetImageDataUrl } from '../core/images';
 import { notify } from '../core/messages';
 import type { ShotDoc } from '../core/types';
@@ -61,7 +62,7 @@ export const imageTools = tools({
                     ...(res.cost != null ? { cost_usd: Number(res.cost.toFixed(4)) } : {}),
                     ...(res.dropped.length ? { options_left_out: res.dropped } : {}),
                     ...(res.errors.length ? { failed_requests: res.errors } : {}),
-                    note: ed.store.doc.design.detail === 'quick'
+                    note: detailLevel(ed.store.doc.design) === 'quick'
                         ? `${images.length ? 'The new paintovers are attached in this order. ' : ''}The user lets you decide: make the one that keeps the blockout's composition best the target (choose_paintover).`
                         : images.length
                           ? 'The new paintovers are attached in this order. Say which one keeps the blockout\'s composition best; the user chooses the target.'
@@ -110,10 +111,10 @@ export const imageTools = tools({
                 notify({
                     kind: 'review',
                     key: 'concept-review',
-                    icon: 'image',
-                    title: `${res.concepts.length} concept image${res.concepts.length === 1 ? '' : 's'} to review`,
-                    body: `${area ? area.name : 'The whole place'}, ${view}. Approve or reject ${res.concepts.length === 1 ? 'it' : 'them'} in the AI tab or the Design tab.`,
-                    actions: [{ label: 'Review', primary: true, run: () => ed.emit('show-design', undefined) }],
+                    mascot: 'ask',
+                    title: `${res.concepts.length} reference image${res.concepts.length === 1 ? '' : 's'} drawn`,
+                    body: `${area ? area.name : 'The whole place'}, ${view}. Keep or drop ${res.concepts.length === 1 ? 'it' : 'them'} in the chat.`,
+                    actions: [{ label: 'Show', primary: true, run: () => ed.emit('show-ai', undefined) }],
                 });
             }
             return {
@@ -125,7 +126,7 @@ export const imageTools = tools({
                     ...(res.cost != null ? { cost_usd: Number(res.cost.toFixed(4)) } : {}),
                     ...(res.dropped.length ? { left_out: res.dropped } : {}),
                     ...(res.errors.length ? { failed_requests: res.errors } : {}),
-                    note: `${images.length ? 'The images are attached in this order. Say in a line or two what they show and whether they fit the plan. ' : ''}They are proposed: the user approves or rejects them (buttons in the chat and the Design tab).${d.detail === 'quick' ? ' The user lets you decide, so go on with them meanwhile.' : ''}`,
+                    note: `${images.length ? 'The images are attached in this order. Say in a line or two what they show and whether they fit the plan. ' : ''}They are proposed: the user keeps or drops them (buttons in the chat and the Design tab).${detailLevel(d) === 'quick' ? ' The user lets you decide, so go on with them meanwhile.' : ''}`,
                 },
                 images,
                 summary: `${res.concepts.length} for ${area?.name ?? 'the whole place'}`,

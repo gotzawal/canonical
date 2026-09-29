@@ -8,7 +8,10 @@ import { Emitter } from './events';
 
 export type ToastKind = 'info' | 'success' | 'error';
 
-export type NoticeKind = 'ai-done' | 'checkpoint' | 'stage' | 'review' | 'model';
+export type NoticeKind = 'ai-done' | 'stage' | 'review' | 'model';
+
+/** How the assistant is doing, as its face shows it (ui/mascot.ts). */
+export type AssistantMood = 'idle' | 'think' | 'ask' | 'done' | 'error' | 'sleep';
 
 export interface NoticeAction {
     label: string;
@@ -21,6 +24,8 @@ export interface NoticeOptions {
     title: string;
     body?: string;
     icon?: string;
+    /** A notice from the assistant shows its face in this mood instead of the icon. */
+    mascot?: AssistantMood;
     actions?: NoticeAction[];
     /** Closes by itself after this many ms; 0 keeps it until answered. */
     timeout?: number;
