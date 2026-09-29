@@ -728,27 +728,6 @@ a {
     gap: 8px;
 }
 
-/* On its way: the heron walks in place while the engine starts. */
-.loading-heron {
-    animation: heron-walk 0.9s ease-in-out infinite;
-}
-
-@keyframes heron-walk {
-    0%,
-    100% {
-        transform: translateY(0);
-    }
-    50% {
-        transform: translateY(-3px);
-    }
-}
-
-@media (prefers-reduced-motion: reduce) {
-    .loading-heron {
-        animation: none;
-    }
-}
-
 .spinner {
     width: 26px;
     height: 26px;
@@ -3496,7 +3475,7 @@ kbd {
     display: flex;
     flex-direction: column;
     gap: 8px;
-    width: min(340px, calc(100vw - 28px));
+    width: min(360px, calc(100vw - 28px));
     pointer-events: none;
 }
 
@@ -3513,13 +3492,25 @@ kbd {
 .notice {
     pointer-events: auto;
     display: flex;
-    flex-direction: column;
-    gap: 6px;
+    gap: 10px;
     padding: 10px 12px 9px;
     border-radius: 12px;
     opacity: 0;
     transform: translateY(-6px);
     transition: opacity 0.18s, transform 0.18s;
+}
+
+.notice-main {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+}
+
+/* The assistant's notices: the heron at the side, on the card's bottom edge. */
+.notice.with-heron {
+    padding-left: 6px;
 }
 
 .notice.show {
@@ -3534,9 +3525,9 @@ kbd {
     color: var(--accent);
 }
 
-/* The assistant's notices show its face, no taller than the icon's row. */
 .notice-heron {
-    margin: -2px 0;
+    align-self: flex-end;
+    margin-bottom: -9px;
 }
 
 .notice-title {
@@ -6312,22 +6303,381 @@ input.text.bt-part-id {
 
 /* ------------------------------------------------------------- the heron */
 
-.mascot-avatar,
-.mascot-pose {
+/* Drawn inline (ui/mascot.ts), so its parts move; what moves may draw
+   outside its box (a hop, the question mark). */
+.heron {
     flex: none;
     display: block;
+    overflow: visible;
     user-select: none;
     pointer-events: none;
 }
 
-/* A pose's element leaves out the empty canvas above the bird (ui/mascot.ts):
-   the picture keeps its shape, standing on the element's bottom. */
-.mascot-pose {
-    object-fit: cover;
-    object-position: 50% 100%;
+/* Parts turn around points in the drawing's own coordinates: the pivots
+   each file names (--neck-top, --neck-base, --hip-back, --hip-front,
+   --shoulder). Several herons on the screen keep out of step
+   (--heron-delay). */
+.heron g {
+    transform-box: view-box;
 }
 
-/* Thinking, the heron bobs its head a little. */
+/* It blinks now and then. */
+.heron .h-eye {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: heron-blink 5.5s var(--heron-delay, 0s) infinite;
+}
+
+@keyframes heron-blink {
+    0%,
+    94%,
+    100% {
+        transform: none;
+    }
+    96% {
+        transform: scaleY(0.1);
+    }
+}
+
+/* Standing, asking or asleep, it breathes: the body and the head, the legs stay. */
+.heron[data-pose='stand'] .h-upper,
+.heron[data-pose='ask'] .h-upper {
+    animation: heron-breathe 4s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.heron[data-pose='rest'] .h-upper {
+    animation: heron-breathe 5s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-breathe {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-4px);
+    }
+}
+
+/* Standing, it looks up once in a while. */
+.heron[data-pose='stand'] .h-head {
+    transform-origin: var(--neck-top);
+    animation: heron-look 8s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-look {
+    0%,
+    40%,
+    78%,
+    100% {
+        transform: none;
+    }
+    48%,
+    68% {
+        transform: rotate(-7deg);
+    }
+}
+
+/* Asking, it tilts its head one way and the other, and its question bobs. */
+.heron[data-pose='ask'] .h-head {
+    transform-origin: var(--neck-top);
+    animation: heron-tilt 3.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+.mascot-avatar[data-mood='ask'] .h-head {
+    transform-origin: -8px 18px;
+    animation: heron-tilt 3.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-tilt {
+    0%,
+    100% {
+        transform: none;
+    }
+    25%,
+    42% {
+        transform: rotate(-9deg);
+    }
+    68%,
+    84% {
+        transform: rotate(5deg);
+    }
+}
+
+.heron .h-qmark {
+    transform-box: fill-box;
+    transform-origin: 50% 100%;
+    animation: heron-wonder 1.8s ease-in-out infinite;
+}
+
+.mascot-avatar .h-qmark {
+    animation-name: heron-wonder-small;
+}
+
+@keyframes heron-wonder {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-10px) rotate(8deg);
+    }
+}
+
+@keyframes heron-wonder-small {
+    0%,
+    100% {
+        transform: none;
+    }
+    50% {
+        transform: translateY(-5px) rotate(8deg);
+    }
+}
+
+/* Asleep, its z's float up one after the other. */
+.heron .h-z {
+    animation: heron-snore 3.2s ease-out infinite;
+}
+
+.heron .h-z1 {
+    animation-delay: -1.6s;
+}
+
+@keyframes heron-snore {
+    0% {
+        opacity: 0;
+        transform: translate(-6px, 8px);
+    }
+    25%,
+    65% {
+        opacity: 1;
+    }
+    100% {
+        opacity: 0;
+        transform: translate(10px, -18px);
+    }
+}
+
+/* Walking (loading): the legs stride, the body bobs with each step and the
+   neck swings the head forward, as a heron's does. */
+.heron[data-pose='walk'] .h-leg-back {
+    transform-origin: var(--hip-back);
+    animation: heron-stride 0.8s ease-in-out infinite alternate;
+}
+
+.heron[data-pose='walk'] .h-leg-front {
+    transform-origin: var(--hip-front);
+    animation: heron-stride 0.8s ease-in-out infinite alternate-reverse;
+}
+
+@keyframes heron-stride {
+    from {
+        transform: rotate(-10deg);
+    }
+    to {
+        transform: rotate(10deg);
+    }
+}
+
+.heron[data-pose='walk'] .h-upper {
+    animation: heron-step 0.4s ease-in-out infinite alternate;
+}
+
+@keyframes heron-step {
+    from {
+        transform: none;
+    }
+    to {
+        transform: translateY(-5px);
+    }
+}
+
+.heron[data-pose='walk'] .h-neck,
+.heron[data-pose='walk'] .h-head {
+    transform-origin: var(--neck-base);
+    animation: heron-thrust 0.8s ease-in-out infinite;
+}
+
+@keyframes heron-thrust {
+    0%,
+    100% {
+        transform: rotate(-2deg);
+    }
+    50% {
+        transform: rotate(3deg);
+    }
+}
+
+/* At work, it pecks twice and looks, and the ground shows where it hit. */
+.heron[data-pose='peck'] .h-neck,
+.heron[data-pose='peck'] .h-head {
+    transform-origin: var(--neck-base);
+    animation: heron-peck 1.6s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-peck {
+    0%,
+    52%,
+    100% {
+        transform: none;
+    }
+    12% {
+        transform: rotate(-5deg);
+    }
+    21% {
+        transform: rotate(3deg);
+    }
+    31% {
+        transform: rotate(-3deg);
+    }
+    40% {
+        transform: rotate(3deg);
+    }
+}
+
+.heron .h-scratch {
+    animation: heron-scratch 1.6s var(--heron-delay, 0s) ease-out infinite;
+}
+
+@keyframes heron-scratch {
+    0%,
+    17%,
+    27%,
+    36%,
+    46%,
+    100% {
+        opacity: 0;
+    }
+    21%,
+    40% {
+        opacity: 1;
+    }
+}
+
+/* Done, it hops and flaps its wing; its shadow shrinks while it is up. */
+.heron[data-pose='celebrate'] .h-bird {
+    animation: heron-hop 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-hop {
+    0%,
+    60%,
+    100% {
+        transform: none;
+    }
+    10% {
+        transform: translateY(4px);
+    }
+    26% {
+        transform: translateY(-22px);
+    }
+    42% {
+        transform: none;
+    }
+    48% {
+        transform: translateY(3px);
+    }
+}
+
+.heron[data-pose='celebrate'] .h-shadow {
+    transform-box: fill-box;
+    transform-origin: center;
+    animation: heron-hop-shadow 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-hop-shadow {
+    0%,
+    42%,
+    100% {
+        transform: none;
+    }
+    26% {
+        transform: scale(0.7);
+    }
+}
+
+.heron[data-pose='celebrate'] .h-wing {
+    transform-origin: var(--shoulder);
+    animation: heron-flap 2.2s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+@keyframes heron-flap {
+    0%,
+    60%,
+    100% {
+        transform: none;
+    }
+    14% {
+        transform: rotate(10deg);
+    }
+    26% {
+        transform: rotate(-14deg);
+    }
+    38% {
+        transform: rotate(8deg);
+    }
+    50% {
+        transform: rotate(-4deg);
+    }
+}
+
+/* The head alone: thinking, its eye turns; pleased, it nods; troubled, it
+   shakes its head; asleep, it breathes. */
+.heron .h-ring {
+    transform-origin: 0 0;
+    animation: heron-spin 1.4s linear infinite;
+}
+
+@keyframes heron-spin {
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+.mascot-avatar[data-mood='done'] .h-head {
+    animation: heron-nod 2.4s ease-in-out infinite;
+}
+
+@keyframes heron-nod {
+    0%,
+    40%,
+    100% {
+        transform: none;
+    }
+    10%,
+    30% {
+        transform: translateY(-6px);
+    }
+    20% {
+        transform: none;
+    }
+}
+
+.mascot-avatar[data-mood='error'] .h-head {
+    animation: heron-shake 3s ease-in-out infinite;
+}
+
+@keyframes heron-shake {
+    0%,
+    20%,
+    100% {
+        transform: none;
+    }
+    4%,
+    12% {
+        transform: translateX(-4px);
+    }
+    8%,
+    16% {
+        transform: translateX(4px);
+    }
+}
+
+.mascot-avatar[data-mood='sleep'] .h-head {
+    animation: heron-breathe 5s var(--heron-delay, 0s) ease-in-out infinite;
+}
+
+/* Thinking, the head in the chat's header and over the view bobs too. */
 .ai-heron[data-mood='think'],
 .ai-status-heron {
     animation: heron-bob 1.6s ease-in-out infinite;
@@ -6343,10 +6693,24 @@ input.text.bt-part-id {
     }
 }
 
+/* Cards that come and go bring their heron in with a small step up. */
+.ai-next-heron,
+.notice-heron,
+.steps-heron {
+    animation: heron-in 0.45s cubic-bezier(0.2, 0.9, 0.3, 1.25) both;
+}
+
+@keyframes heron-in {
+    from {
+        opacity: 0;
+        transform: translateY(10px) scale(0.92);
+    }
+}
+
 @media (prefers-reduced-motion: reduce) {
-    .ai-heron[data-mood='think'],
-    .ai-status-heron {
-        animation: none;
+    .heron,
+    .heron * {
+        animation: none !important;
     }
 }
 

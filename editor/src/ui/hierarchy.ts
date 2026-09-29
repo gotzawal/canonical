@@ -60,6 +60,8 @@ export class HierarchyPanel {
     /** The structure version the rows were made for. */
     private structure = -1;
     private rowHeight = 0;
+    /** The tree's height when it was last measured (see the ResizeObserver). */
+    private treeHeight = -1;
     private painting = 0;
 
     constructor(private editor: Editor, private commands: Commands, private createMenu: () => MenuItem[]) {
@@ -101,7 +103,13 @@ export class HierarchyPanel {
             e.preventDefault();
             if (!onRow(e)) showMenu(this.createMenu(), e.clientX, e.clientY);
         });
-        new ResizeObserver(() => {
+        // Rows fill the width by themselves: only a new height changes which rows are in view.
+        // (A scrollbar coming or going changes only the width; a paint for it, a frame later,
+        // drew again the rows of objects that had just moved.)
+        new ResizeObserver(([entry]) => {
+            const height = entry.contentRect.height;
+            if (height === this.treeHeight) return;
+            this.treeHeight = height;
             this.rowHeight = 0;
             this.schedulePaint();
         }).observe(this.tree);

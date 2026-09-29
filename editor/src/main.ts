@@ -85,7 +85,7 @@ async function main() {
     const loading = h(
         'div',
         { class: 'viewport-loading' },
-        mascotPose('walk', 150, 'loading-heron'),
+        mascotPose('walk', 150),
         h('div', { class: 'viewport-loading-text' }, h('div', { class: 'spinner small' }), h('span', { text: 'Starting WebGPU engine...' })),
     );
     const viewportEl = h('div', { class: 'viewport' }, canvas, loading);

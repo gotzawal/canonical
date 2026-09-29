@@ -9,7 +9,7 @@ import { readLocal, writeLocal } from '../core/local';
 import type { NoticeKind, NoticeOptions } from '../core/messages';
 import { h } from './dom';
 import { icon } from './icons';
-import { mascotAvatar } from './mascot';
+import { MOOD_POSE, mascotPng, mascotPose } from './mascot';
 import { toast } from './overlays';
 
 export const NOTICE_KINDS: { kind: NoticeKind; label: string; hint: string }[] = [
@@ -103,7 +103,8 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
         });
         let closed = false;
         let timer = 0;
-        const card = h('div', { class: 'notice ' + opts.kind, attrs: { role: 'status' } });
+        // The kind as notice-<kind>: plain "stage" is the editor's middle column (styles.css).
+        const card = h('div', { class: `notice notice-${opts.kind}`, attrs: { role: 'status' } });
         const close = () => {
             if (closed) return;
             closed = true;
@@ -121,11 +122,13 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
             });
             actions.appendChild(b);
         }
-        card.append(
+        const main = h(
+            'div',
+            { class: 'notice-main' },
             h(
                 'div',
                 { class: 'notice-head' },
-                opts.mascot ? mascotAvatar(opts.mascot, 20, 'notice-heron') : icon(opts.icon ?? 'info', 16),
+                opts.mascot ? null : icon(opts.icon ?? 'info', 16),
                 title,
                 h('button', { class: 'icon-btn notice-close', title: 'Close', attrs: { type: 'button', 'aria-label': 'Close' }, on: { click: close } }, icon('close', 14)),
             ),
@@ -133,6 +136,11 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
             ...(actions.childElementCount ? [actions] : []),
             mute,
         );
+        // The assistant's notices: the whole heron at the side, in the pose of their mood.
+        if (opts.mascot) {
+            card.classList.add('with-heron');
+            card.append(mascotPose(MOOD_POSE[opts.mascot], 92, 'notice-heron'), main);
+        } else card.append(main);
         // Hovering keeps a timed card open.
         card.addEventListener('pointerenter', () => clearTimeout(timer));
         card.addEventListener('pointerleave', () => {
@@ -145,19 +153,24 @@ class NotificationCenter extends Emitter<{ prefs: NotifyPrefs }> {
         this.system(opts);
     }
 
-    /** A system notification when the page is not in front. */
+    /** A system notification when the page is not in front; the assistant's show the heron's head. */
     private system(opts: NoticeOptions) {
         if (!this.prefs.system || !this.systemSupported || Notification.permission !== 'granted') return;
         if (document.visibilityState === 'visible' && document.hasFocus()) return;
-        try {
-            const n = new Notification(opts.title, { body: opts.body ?? '', tag: opts.key ?? opts.kind, icon: new URL('favicon.svg', document.baseURI).href });
-            n.onclick = () => {
-                window.focus();
-                n.close();
-            };
-        } catch (e) {
-            console.warn('[editor] system notification failed', e);
-        }
+        const show = (image: string) => {
+            try {
+                const n = new Notification(opts.title, { body: opts.body ?? '', tag: opts.key ?? opts.kind, icon: image });
+                n.onclick = () => {
+                    window.focus();
+                    n.close();
+                };
+            } catch (e) {
+                console.warn('[editor] system notification failed', e);
+            }
+        };
+        const logo = new URL('favicon.svg', document.baseURI).href;
+        if (opts.mascot) void mascotPng(opts.mascot).then(show, () => show(logo));
+        else show(logo);
     }
 }
 

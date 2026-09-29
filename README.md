@@ -32,7 +32,7 @@
 
 Morglay is an editor for building interactive 3D for the web, where an AI assistant does the development work with you. You describe what you want; the assistant plans the scene, builds it, writes the scripts and shaders, runs the scene in Play mode to test its work, reads the errors and fixes them, and shows you the result. You say what you like and what to change. Everything it does is ordinary editor work, so you can inspect, change or undo any of it by hand.
 
-The editor opens on the scene and a chat with the assistant, whose face is a heron: the whole bird where there is room (the start screen, an empty chat, the cards that ask you something, loading, empty panels), in a pose that says what is going on, and only its head where space is tight (the chat's header, the status over the view, notices). **Edit mode** (the button in the top bar, `Ctrl+\`) shows the full editor around them: the hierarchy, the inspector, the pipeline bar and the code dock.
+The editor opens on the scene and a chat with the assistant, whose face is a heron: the whole bird where there is room (the start screen, an empty chat, the cards that ask you something, notices, loading, empty panels), in a pose that says what is going on, and only its head where space is tight (the chat's header, the status over the view, the cards of stages). It moves: it blinks, tilts its head when it asks, pecks while it works, walks while the editor loads and hops when every step is done; with reduced motion set in the system it stays still. **Edit mode** (the button in the top bar, `Ctrl+\`) shows the full editor around them: the hierarchy, the inspector, the pipeline bar and the code dock.
 
 The editor runs entirely in the browser, with nothing to install and no server. It is published from this repository to **https://gotzawal.github.io/morglay/** every time `main` is updated.
 
@@ -239,7 +239,7 @@ The build has two pages: the editor (`index.html`) and the game player (`player.
 | `editor/src/core/behavior/` | Behavior formats: node type definitions, edit operations, validation, outlines |
 | `editor/src/play/ai/` | Agents while playing: tree runtime, blackboards, context pool, Ask and Model tasks, scheduler, memory, inference worker and model adapters, speech |
 | `editor/public/` | Favicons and the logo |
-| `editor/src/ui/mascot/` | The heron, the assistant's face: its head in six moods and the whole bird in six poses (stand, ask, rest, walk, peck, celebrate; SVG) |
+| `editor/src/ui/mascot/` | The heron, the assistant's face: its head in six moods and the whole bird in six poses (stand, ask, rest, walk, peck, celebrate; SVG, drawn inline, their parts grouped for the animations in `styles.css`) |
 | `src/` | Orillusion engine core |
 | `packages/` | Orillusion plugins (physics, particles, atmosphere, post effects and more) |
 | `samples/` | Engine samples, served by `pnpm run dev` (they load assets from the `public` submodule: `git submodule update --init`) |

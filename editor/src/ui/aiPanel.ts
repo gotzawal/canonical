@@ -57,7 +57,7 @@ export class AIPanel {
     private attachStrip: HTMLElement;
     private compactBtn: HTMLButtonElement;
     /** The heron in the header: its mood follows the assistant. */
-    private avatar: HTMLImageElement;
+    private avatar: SVGSVGElement;
     /** What to do next, under the last answer (see followUp). */
     private next: HTMLElement;
     /** How the last request ended, while this page shows it. */
