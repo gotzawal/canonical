@@ -50,6 +50,12 @@ jobs:
 
   browser:
     runs-on: ubuntu-latest
+    # Two halves of the spec files, run side by side: SwiftShader draws on the
+    # CPU, and one runner takes over ten minutes for the whole suite.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
     steps:
       - uses: actions/checkout@v4
 
@@ -74,12 +80,12 @@ jobs:
         run: pnpm run editor:build
 
       - name: Browser tests
-        run: xvfb-run -a pnpm run editor:e2e
+        run: xvfb-run -a pnpm run editor:e2e --shard=${{ matrix.shard }}/2
         timeout-minutes: 15
 
       - name: Upload traces
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.shard }}
           path: editor/test-results
