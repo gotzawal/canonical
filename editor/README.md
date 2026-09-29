@@ -68,12 +68,14 @@ The editor opens on the scene and a chat with the assistant, whose face is a her
 
 **Scene editing**
 
-- Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too)
+- Create primitives, lights, cameras and empties, import `.glb` / `.gltf` models and textures (drag and drop onto the viewport works too). Models may be compressed (Draco, meshopt, quantized, KTX2 textures) and textures may be `.ktx2` files
 - Move / rotate / scale with the gizmo (`W` `E` `R`), snapping, undo / redo, multi-select, grouping, hierarchy drag and drop
 - Made for large scenes: an undo step keeps only what it changed (a moved object, not the whole scene), the hierarchy draws only the rows in view, and the panels follow a drag once a frame
 - The viewport draws at most 30 frames per second at half resolution by default; **View > Viewport Frame Rate** and **Viewport Quality** (or a click on the frame rate in the status bar) raise them. Captures for the assistant and the shots are taken at full resolution either way
+- The status bar shows what a frame costs: draw calls and the GPU memory the editor asked for (its tooltip breaks both down). Objects the camera cannot see are not drawn, objects that look the same share their shape and material, and a moving object costs Play only its own work
 - Materials: physically based Lit (normal, metallic-roughness, occlusion and emission maps, clear coat, transmission for glass and water), Unlit, Lambert or a custom shader, with presets, cutout and alpha, additive or multiply blending
-- Lights, sky, exposure, bloom, ambient occlusion, fog and global illumination (DDGI: light bounces between surfaces)
+- Lights, sky, exposure, bloom, ambient occlusion, fog and global illumination (DDGI: light bounces between surfaces). Skies: a fast atmospheric sky, a physical sky with deep sunsets, dusk and optional clouds, or a flat color, each lighting the scene. Fog is linear, exponential or height fog (mist in valleys) with a glow toward the sun; god rays shine through gaps in the sun's shadows, and volumetric fog is sunlit haze. Shadows cover a range around the Sun object, or around the camera for large levels
+- **Graphics Quality** (Scene > Environment): built games pick low, medium or high for the device they run on (phones and weak GPUs low, dedicated GPUs high), or the tier the scene names. Lower tiers use smaller shadow maps and textures, cover less shadow range, leave out ambient occlusion, god rays and realtime GI, and render fewer pixels. **View > Graphics Quality** previews a tier in the editor
 - Edit imported models: every mesh part (visibility, shadows, transform, which material it uses) and every material slot (the file's material, Unlit, Lambert or a custom shader; color, PBR values, alpha, texture). Changes are stored per instance as overrides and the model file is left untouched; clicking a part in the viewport opens it in the Inspector
 
 **AI behavior**
@@ -187,7 +189,9 @@ Each material slot of an imported model keeps the file's material or switches to
 - **Download .zip** gives the folder for any static host: itch.io (as an HTML game), Netlify, Cloudflare Pages or your own server. It has to be served over HTTP; opening `index.html` from disk does not work
 - **GitHub Pages** pushes the game to a branch (`gh-pages` by default, which then holds only the game) of a repository, which it can create, and publishes it at `https://<owner>.github.io/<repository>/`. It needs a [personal access token](https://github.com/settings/tokens/new?scopes=public_repo&description=Morglay) with the `public_repo` scope (`repo` for private repositories, where Pages needs a paid plan), or a fine-grained token with Contents, Pages and Administration (to create repositories) set to Read and write. Deploying again uploads only the files that changed. Before it replaces a branch that holds anything else than a game, or changes an existing Pages setup, it asks
 
-A game whose agents ask or recall also gets ONNX Runtime and the inference worker (about 27 MB) and downloads the models into the player's browser the first time it runs, playing with the defaults meanwhile; other games leave these files out.
+A game whose agents ask or recall also gets ONNX Runtime and the inference worker (about 27 MB) and downloads the models into the player's browser the first time it runs, playing with the defaults meanwhile; other games leave these files out. Likewise the decoders of compressed assets (the KTX2 transcoder, Draco and meshopt) ship only with games whose assets need them.
+
+**Compressed textures.** Games ship each texture as a GPU-compressed copy (KTX2): a smaller download and a quarter to an eighth of the video memory, which is what lets large scenes run on phones. Colors become ETC1S, normal and data maps UASTC, and the player turns them into the format its GPU reads (BC, ETC2 or ASTC). The editor makes the copies in the background while you work (it pauses in Play; the status bar shows how many are left) and shows each one in the view once it is made, so what you see is what games get; a build makes the ones still missing. The button next to a texture in the Inspector sets a texture's compression (Auto, High quality or Off) and largest size, and shows what the copy saves. Copies live in this browser, apart from the project, and are made again when a file or its settings change. **Compress textures** in the build dialog turns this off for a build.
 
 The title, repository and branch are saved with the scene. The token is sent only to `api.github.com`; it is kept for the current tab, or in this browser's storage when "Remember on this device" is on, where scripts you run in the editor could read it. Builds leave out the scripts of an opened scene file until you enable them.
 
@@ -196,7 +200,7 @@ The title, repository and branch are saved with the scene. The token is sent onl
 
 - **Built for modern GPUs.** WebGPU gives it compute shaders and lower CPU overhead than WebGL, and Orillusion uses compute for clustered lighting, global illumination and GPU particles.
 - **High-end rendering.** Physically based materials, real-time shadows, image-based lighting and DDGI global illumination, plus post effects such as bloom, GTAO, screen space reflections, TAA, depth of field and volumetric fog.
-- **A complete toolkit.** glTF / GLB, OBJ and 3D Tiles loading, skeletal and morph target animation, and optional packages for physics (Ammo.js or Rapier), particles and a physically based sky.
+- **A complete toolkit.** glTF / GLB (with Draco, meshopt and KTX2 textures), OBJ and 3D Tiles loading, skeletal and morph target animation, and optional packages for physics (Ammo.js or Rapier), particles and a physically based sky.
 - **Easy to drive from an editor.** A scene is a tree of `Object3D` nodes with components attached, the same model the editor shows, and it is MIT licensed.
 
 The engine source is in `src/` (the core, `@orillusion/core`) and `packages/` (plugins). The editor imports the core straight from `src/`, so every build runs the engine code of the branch being built. For the engine's own API and guides, see the [Orillusion documentation](https://www.orillusion.com/guide/) and the [Orillusion repository](https://github.com/Orillusion/orillusion).
