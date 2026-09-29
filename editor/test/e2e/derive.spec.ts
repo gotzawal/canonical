@@ -367,6 +367,25 @@ test('packs models for games: their textures in KTX2 and their geometry with mes
     // The same picture as in the editor: every quarter in its hue, about as large.
     inGame.forEach((share, i) => expect(Math.abs(share - inEditor[i])).toBeLessThan(0.05));
 
+    // Run in New Tab: the preview plays the copy this browser made.
+    await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+    await page.keyboard.press('Control+b');
+    const popup = page.waitForEvent('popup');
+    await page.locator('.build-dialog').getByRole('button', { name: 'Run in New Tab' }).click();
+    const preview = await popup;
+    try {
+        await preview.waitForFunction(() => !!(window as any).__player, null, { polling: 200, timeout: 150_000 });
+        const previewed = await preview.evaluate(async (node) => {
+            const p = (window as any).__player;
+            await p.sync.whenLoaded();
+            return p.sync.modelInfo(node)?.slots[0]?.material.shader.getTexture('baseMap')?.constructor.name as string;
+        }, node);
+        expect(previewed).toBe('CompressedTexture2D');
+    } finally {
+        await preview.close();
+    }
+    await page.keyboard.press('Escape');
+
     // The Model section offers the options: turned off, games get the file.
     await page.evaluate((id) => window.__editor.store.select([id]), node);
     await page.locator('.inspector section.section', { hasText: 'Sign.glb' }).first().getByRole('button', { name: 'Compression for games' }).click();
