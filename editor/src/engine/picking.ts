@@ -111,7 +111,7 @@ export class Picker {
             const entry = this.sync.entries.get(node.id);
             if (!entry || (ignoreHidden && !entry.visible)) continue;
             for (const r of this.sync.renderersOf(node.id)) {
-                if (!r.enable) continue;
+                if (!r.enable || !mayHit(r, ray, best?.distance ?? Infinity)) continue;
                 const t = this.intersectRenderer(r, ray);
                 if (t !== null && (!best || t < best.distance)) {
                     best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: r };
@@ -133,7 +133,7 @@ export class Picker {
             o.components.forEach((c) => {
                 if (!(c instanceof RenderNode)) return;
                 const r = c as RenderNode;
-                if (!r.enable || !r.geometry) return;
+                if (!r.enable || !r.geometry || !mayHit(r, ray, best?.distance ?? Infinity)) return;
                 const t = this.intersectRenderer(r, ray);
                 if (t !== null && (!best || t < best.distance)) {
                     best = { renderer: r, object: o, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]) };
@@ -149,12 +149,13 @@ export class Picker {
      * Distance along `ray` to the nearest triangle of a renderer, or null.
      * With `normal`, the world normal of the triangle hit is written into it
      * (from the vertex normals where the mesh has them; zero without one).
+     * `inverse` is the inverse of the renderer's world matrix, when the
+     * caller keeps it.
      */
-    intersectRenderer(r: RenderNode, ray: Ray, normal?: Vec3): number | null {
+    intersectRenderer(r: RenderNode, ray: Ray, normal?: Vec3, inverse?: Mat4 | null): number | null {
         const geo = r.geometry;
         if (!geo || !r.object3D) return null;
-        const world = r.object3D.transform.worldMatrix.rawData;
-        const inv = invert(world);
+        const inv = inverse ?? invert(r.object3D.transform.worldMatrix.rawData);
         if (!inv) return null;
         // Local-space ray with an unnormalized direction keeps t comparable
         // to world-space distances along the original ray.
@@ -230,8 +231,8 @@ export class Picker {
             if (!entry || !entry.visible || (skip && skip(node.id))) continue;
             for (const r of this.sync.renderersOf(node.id)) {
                 if (!r.enable) continue;
-                const box = rendererWorldBox(r);
-                if (!box) continue;
+                const box = SCRATCH_BOX;
+                if (!worldBoxInto(r, box)) continue;
                 const near = rayBox(ray, box.min, box.max);
                 if (near === null || near > maxDist || (best && near > best.distance)) continue;
                 const t = this.intersectRenderer(r, ray);
@@ -302,19 +303,45 @@ export class Picker {
 
 /** World axis aligned box of one renderer, or null when it has no usable bounds. */
 export function rendererWorldBox(r: RenderNode): Box | null {
+    const box: Box = { min: [0, 0, 0], max: [0, 0, 0] };
+    return worldBoxInto(r, box) ? box : null;
+}
+
+/**
+ * Writes the world axis aligned box of a renderer into `out` (the box of
+ * its geometry's bounds turned by its world matrix); false when it has no
+ * usable bounds. Allocates nothing: rays and level checks call it a lot.
+ */
+export function worldBoxInto(r: RenderNode, out: Box): boolean {
     const b = r.geometry?.bounds;
-    if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) return null;
+    if (!b || !r.object3D) return false;
+    const lo = b.min, hi = b.max;
+    if (!Number.isFinite(lo.x) || !Number.isFinite(lo.y) || !Number.isFinite(lo.z) || !Number.isFinite(hi.x) || !Number.isFinite(hi.y) || !Number.isFinite(hi.z)) return false;
+    if (lo.x > hi.x || lo.y > hi.y || lo.z > hi.z) return false;
     const m = r.object3D.transform.worldMatrix.rawData;
-    let box: Box | null = null;
-    for (let i = 0; i < 8; i++) {
-        const p = transformPoint(m, [i & 1 ? b.max.x : b.min.x, i & 2 ? b.max.y : b.min.y, i & 4 ? b.max.z : b.min.z]);
-        if (!box) box = { min: [...p] as Vec3, max: [...p] as Vec3 };
-        else {
-            for (let k = 0; k < 3; k++) {
-                if (p[k] < box.min[k]) box.min[k] = p[k];
-                if (p[k] > box.max[k]) box.max[k] = p[k];
-            }
-        }
+    const cx = (lo.x + hi.x) / 2, cy = (lo.y + hi.y) / 2, cz = (lo.z + hi.z) / 2;
+    const ex = (hi.x - lo.x) / 2, ey = (hi.y - lo.y) / 2, ez = (hi.z - lo.z) / 2;
+    for (let k = 0; k < 3; k++) {
+        const c = m[k] * cx + m[4 + k] * cy + m[8 + k] * cz + m[12 + k];
+        const e = Math.abs(m[k]) * ex + Math.abs(m[4 + k]) * ey + Math.abs(m[8 + k]) * ez;
+        out.min[k] = c - e;
+        out.max[k] = c + e;
     }
-    return box;
+    return true;
+}
+
+const SCRATCH_BOX: Box = { min: [0, 0, 0], max: [0, 0, 0] };
+/** Slack around a world box, as intersectRenderer pads the local one. */
+const PAD = 1e-4;
+
+/** False when `ray` misses the renderer's world box, or meets it farther than `within`. */
+function mayHit(r: RenderNode, ray: Ray, within: number): boolean {
+    const box = SCRATCH_BOX;
+    if (!worldBoxInto(r, box)) return true;
+    for (let k = 0; k < 3; k++) {
+        box.min[k] -= PAD;
+        box.max[k] += PAD;
+    }
+    const near = rayBox(ray, box.min, box.max);
+    return near !== null && near <= within;
 }

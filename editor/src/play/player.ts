@@ -247,6 +247,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.spawnedBy.clear();
         this.pendingDestroy = [];
         this.pointerTarget = null;
+        this.characters?.dispose();
         this.characters = null;
         this.animations = null;
         this.controller = null;
@@ -348,7 +349,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         const nodes = this.store.doc.nodes.filter((n) => n.character && this.sync.entries.get(n.id)?.visible && !this.sync.detached.has(n.id));
         if (!nodes.length) return;
         const chars = (this.characters = new Characters(this.picker, this.sync, this.store));
-        const made = nodes.map((n) => chars.add(this.sync.entries.get(n.id)!.obj, n.character!, [n.id, ...this.store.descendants(n.id).map((d) => d.id)], this.picker.bounds(n.id)?.min[1] ?? null));
+        const own = nodes.map((n) => [n.id, ...this.store.descendants(n.id).map((d) => d.id)]);
+        // Every character's own nodes leave the level before the first is placed: the level is collected once.
+        chars.exclude(own.flat());
+        const made = nodes.map((n, i) => chars.add(this.sync.entries.get(n.id)!.obj, n.character!, own[i], this.picker.bounds(n.id)?.min[1] ?? null));
         const players = nodes.filter((n) => n.player);
         if (!players.length) return;
         const cams = this.store.doc.nodes.filter((n) => n.camera);

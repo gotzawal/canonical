@@ -293,7 +293,19 @@ export class Characters {
             for (let n = store.node(id); n; n = n.parent ? store.node(n.parent) : undefined) if (n.body) return n.body.sensor;
             return false;
         };
-        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id) || trigger(id));
+        // It follows the level as scripts and physics move it (only what moved is boxed again).
+        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id) || trigger(id), { track: true });
+    }
+
+    /** Leaves these nodes out of the level (the characters' own): add all of them before the characters, so the level is collected once. */
+    exclude(ids: readonly string[]) {
+        let fresh = false;
+        for (const id of ids) {
+            if (this.own.has(id)) continue;
+            this.own.add(id);
+            fresh = true;
+        }
+        if (fresh) this.rays.invalidate();
     }
 
     /** Ray casts against the level without the characters (for cameras). */
@@ -301,14 +313,19 @@ export class Characters {
 
     /** The character of an object; `nodes`: its node and the nodes under it. */
     add(obj: Object3D, doc: CharacterDoc, nodes: string[], bottom: number | null): Character {
-        for (const id of nodes) this.own.add(id);
-        this.rays.refresh(1);
+        this.exclude(nodes);
         const cast: CastFn = (o, d, max) => {
             const hit = this.rays.cast(o, d, max);
             if (hit && !d[1]) c.bumped.add(hit.id);
             let best: { distance: number; point: Vec3 } | null = hit;
             for (const other of this.list) {
-                const t = other.obj === obj ? null : hitBody(o, d, other, best?.distance ?? max);
+                if (other.obj === obj) continue;
+                // A ray of this length cannot reach a body whose axis is farther away than that (plus its radius).
+                const reach = (best?.distance ?? max) + other.doc.radius;
+                const f = other.feet;
+                const dx = f[0] - o[0], dz = f[2] - o[2];
+                if (dx * dx + dz * dz > reach * reach) continue;
+                const t = hitBody(o, d, other, best?.distance ?? max);
                 if (t !== null) best = { distance: t, point: add(o, scale(normalize(d), t)) };
             }
             return best;
@@ -327,16 +344,23 @@ export class Characters {
         return null;
     }
 
-    /** Destroyed objects take their characters with them. */
+    /** Destroyed objects take their characters with them, and leave the level. */
     remove(gone: Set<Object3D>) {
         for (const c of this.list.filter((x) => gone.has(x.obj))) {
             c.stop();
             this.list.splice(this.list.indexOf(c), 1);
         }
+        this.rays.forget(gone);
     }
 
     update(dt: number) {
-        this.rays.refresh();
+        this.rays.flush();
         for (const c of this.list) c.update(dt);
+    }
+
+    /** Stops following the level (Play stops). */
+    dispose() {
+        for (const c of this.list) c.stop();
+        this.rays.dispose();
     }
 }
