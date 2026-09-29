@@ -63,7 +63,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     ].join(' '),
     light: [
         'Work on the Lighting stage (pass 1). Every surface stays gray, so only the light is judged. Read the mood with read_design.',
-        'Set the sky and time of day, the key light (apply_key_light points it and the sky\'s sun the way the mood says), fill and interior lights (spot lights for pools of light, point lights for lamps), exposure, ambient occlusion and global illumination. Make the shadows cover the play area (set_environment shadow: range, or follow for large levels). Keep the shadow-casting lights within the budget.',
+        'Set the sky (atmospheric, or physical for deep sunsets and clouds over outdoor scenes) and time of day, the key light (apply_key_light points it and the sky\'s sun the way the mood says), fill and interior lights (spot lights for pools of light, point lights for lamps), exposure, ambient occlusion and global illumination. Make the shadows cover the play area (set_environment shadow: range, or follow for large levels). Keep the shadow-casting lights within the budget.',
         'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches; I mark the shots that match (with the detail level quick, you judge them: mark_shot_matching). Tick what is done with update_checklist and propose completing the stage when it matches.',
         'Answer in the language of the brief.',
     ].join(' '),

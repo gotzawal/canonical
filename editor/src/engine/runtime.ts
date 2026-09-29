@@ -3,7 +3,9 @@ import {
     MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, Texture,
     View3D, VolumetricFogPost,
 } from '@orillusion/core';
+import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
 import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
+import { skyParams } from '../core/sky';
 import type { ViewportFps, ViewportQuality } from '../core/store';
 import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
@@ -15,6 +17,8 @@ type PostCtor = new () => PostBase;
 /** The built-in effects in the order they run: fog over ambient occlusion, light shafts over fog, bloom of it all. */
 const BUILTIN_ORDER = ['GTAOPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
 const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
+/** Least time between two bakes of the physical sky with clouds, ms. */
+const CLOUD_BAKE_MS = 250;
 
 /** The viewport's frame rate limits (View > Viewport Frame Rate). */
 export const VIEWPORT_FPS: { value: ViewportFps; label: string }[] = [
@@ -84,12 +88,17 @@ export class Runtime {
     /** When the engine started its update and draw calls this frame. */
     private engineStart = 0;
     private atmosphere: AtmosphericComponent | null = null;
+    /** The physical sky (packages/atmosphere), for sky 'physical'. */
+    private physical: PhysicalSkyComponent | null = null;
     private solidSky: SkyRenderer | null = null;
     private solidSkyTexture: SolidColorSky | null = null;
     private post: PostProcessingComponent;
     private lastEnv = '';
     /** Environment waiting for a sky component to finish starting. */
     private pendingEnv: EnvironmentDoc | null = null;
+    /** When the physical sky with clouds last took new settings, and the ones waiting for their turn. */
+    private cloudBakeAt = 0;
+    private cloudsLater: EnvironmentDoc | null = null;
 
     private constructor(engine: Engine3D, canvas: HTMLCanvasElement, stats: GpuStats | null, quality: QualityLevel) {
         this.engine = engine;
@@ -314,6 +323,11 @@ export class Runtime {
             this.pendingEnv = null;
             this.applyEnvironment(env);
         }
+        if (this.cloudsLater && performance.now() - this.cloudBakeAt >= CLOUD_BAKE_MS) {
+            const env = this.cloudsLater;
+            this.cloudsLater = null;
+            if (!this.applySky(env)) this.cloudsLater = env;
+        }
         this.frames++;
         const now = performance.now();
         if (now - this.fpsTime >= 500) {
@@ -434,23 +448,57 @@ export class Runtime {
      * the engine, so a sky added this frame cannot be swapped out yet.
      */
     private applySky(env: EnvironmentDoc): boolean {
-        if (env.sky === 'atmospheric') {
-            if (this.solidSky) {
-                if (!this.solidSky.geometry) return false;
-                this.scene.removeComponent(SkyRenderer);
-                this.solidSky = null;
-                this.solidSkyTexture = null;
+        const sky = env.sky;
+        // A newer environment replaces any waiting cloudy one.
+        this.cloudsLater = null;
+        // The other skies go first: removing any sky clears the scene's sky, even a newer one.
+        if (sky !== 'atmospheric' && this.atmosphere) {
+            if (!this.atmosphere.geometry) return false;
+            this.scene.removeComponent(AtmosphericComponent);
+            this.atmosphere = null;
+        }
+        if (sky !== 'physical' && this.physical) {
+            if (!this.physical.geometry) return false;
+            this.scene.removeComponent(PhysicalSkyComponent);
+            this.physical = null;
+        }
+        if (sky !== 'color' && this.solidSky) {
+            if (!this.solidSky.geometry) return false;
+            this.scene.removeComponent(SkyRenderer);
+            this.solidSky = null;
+            this.solidSkyTexture = null;
+        }
+        const p = skyParams(env);
+        if (sky === 'atmospheric' || sky === 'physical') {
+            let c: AtmosphericComponent | PhysicalSkyComponent;
+            if (sky === 'physical') {
+                // With clouds a bake takes long: changes (a slider drag) are taken a few times a second, the last one always.
+                const now = performance.now();
+                if (this.physical && (p.enableClouds || this.physical.enableClouds) && now - this.cloudBakeAt < CLOUD_BAKE_MS) {
+                    this.cloudsLater = env;
+                    return true;
+                }
+                this.cloudBakeAt = now;
+                if (!this.physical) {
+                    this.physical = this.scene.addComponent(PhysicalSkyComponent);
+                    // Its own default has clouds; the first bake uses what is set before it starts.
+                    this.physical.enableClouds = false;
+                }
+                this.physical.enableClouds = p.enableClouds;
+                c = this.physical;
+            } else {
+                this.atmosphere ??= this.scene.addComponent(AtmosphericComponent);
+                c = this.atmosphere;
             }
-            if (!this.atmosphere) this.atmosphere = this.scene.addComponent(AtmosphericComponent);
-            this.atmosphere.sunX = env.sunX;
-            this.atmosphere.sunY = env.sunY;
-            this.atmosphere.exposure = env.skyExposure;
+            // Setters re-bake the sky only when a value changes.
+            c.sunX = p.sunX;
+            c.sunY = p.sunY;
+            c.eyePos = p.eyePos;
+            c.sunRadius = p.sunRadius;
+            c.sunBrightness = p.sunBrightness;
+            c.displaySun = p.displaySun;
+            c.exposure = p.exposure;
         } else {
-            if (this.atmosphere) {
-                if (!this.atmosphere.geometry) return false;
-                this.scene.removeComponent(AtmosphericComponent);
-                this.atmosphere = null;
-            }
             const color = hexToColor(env.skyColor);
             if (!this.solidSky) {
                 this.solidSky = this.scene.addComponent(SkyRenderer);

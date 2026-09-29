@@ -70,7 +70,8 @@ fn SkyViewLutPS(pixPos: vec2<f32>, uv: vec2<f32>) -> vec4<f32> {
     // var HViewPos: vec4<f32> = uniformBuffer.skyInvProjMat * vec4<f32>(ClipSpace, 1.0);
     // var m = uniformBuffer.skyInvViewMat;
     // var WorldDir: vec3<f32> = normalize((mat3x3<f32>(m[0].xyz, m[1].xyz, m[2].xyz) * HViewPos.xyz) / HViewPos.w);
-    var WorldPos: vec3<f32> = vec3<f32>(0, Atmosphere.BottomRadius + uniformBuffer.eyePos + 0.01, 0);
+    // eyePos is in meters, the atmosphere in kilometers.
+    var WorldPos: vec3<f32> = vec3<f32>(0, Atmosphere.BottomRadius + uniformBuffer.eyePos / 1000.0 + 0.01, 0);
 
     var viewHeight: f32 = length(WorldPos);
 

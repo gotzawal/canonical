@@ -8,6 +8,7 @@
 import { getAssetBlob, putAsset, putDesignImage } from '../core/assets';
 import { compareImages, type CompareMode, type CompareResult } from '../core/compare';
 import { makeLightNode } from '../core/defaults';
+import { skySunOf } from '../core/sky';
 import { designAssetIds, layoutSignature, stageIndex, STAGE_IDS } from '../core/design';
 import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
@@ -118,7 +119,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /**
      * Points the key light (the first directional light; one is made when
      * there is none) the way the mood describes it, with its color, and
-     * puts the atmospheric sky's sun in the same place. Returns its id.
+     * puts the sky's sun in the same place. Returns its id.
      */
     applyKeyLight(): string {
         const k = this.design.mood.keyLight;
@@ -136,9 +137,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
             sun.rotation = rotation;
             sun.light!.color = k.color;
             id = sun.id;
-            // The sky's sun follows the same rule as a light driving it (AtmosphericComponent).
-            d.environment.sunX = wrap(rotation[1] + 90) / 360;
-            d.environment.sunY = Math.max(0, Math.min(1, rotation[0] / 180 + 0.5));
+            // The sky's sun follows the same rule as a light driving it (the atmospheric and physical skies).
+            Object.assign(d.environment, skySunOf(rotation));
         });
         return id;
     }

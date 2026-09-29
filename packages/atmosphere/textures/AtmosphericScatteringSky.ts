@@ -46,7 +46,11 @@ export class AtmosphericScatteringSkySetting {
     public defaultTexture2DSize: number = 1024;
     /** Tint color applied to the sky. */
     public skyColor: Color = new Color(1, 1, 1, 1);
-    /** Exposure fed to the tonemap / gamma step of the sky kernel. */
+    /**
+     * Linear multiplier on the sky's radiance, baked into the sky texture
+     * and so into the image-based lighting it gives (2 matches core's sky).
+     * The engine tone maps the frame once; the sky stays linear.
+     */
     public hdrExposure: number = 2;
 }
 
@@ -69,7 +73,11 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
     private _cubeSize: number;
     /** The scattering parameters driving this sky's appearance. */
     public readonly setting: AtmosphericScatteringSkySetting;
-    private _internalTexture: AtmosphericTexture;
+    /** The legacy Chapman sky (showV1), made the first time it is shown. */
+    private _internalTexture: AtmosphericTexture | null = null;
+    /** The sky-view LUT is only for inspection (nothing samples it): baked when asked for. */
+    private _skyViewDirty = true;
+    private _ctx?: Context3D;
 
     /**
      * @constructor
@@ -84,11 +92,7 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
         this.setting = setting;
         this.isHDRTexture = true;
         this._cubeSize = setting.defaultTextureCubeSize;
-
-        this._internalTexture = new AtmosphericTexture(setting.defaultTexture2DSize, setting.defaultTexture2DSize * 0.5, AtmosphericScatteringSky_shader.cs, null, ctx);
-        this._internalTexture.isHDRTexture = true;
-        this._internalTexture.updateUniforms(this.setting);
-        this._internalTexture.update();
+        this._ctx = ctx;
 
         this._cloudNoiseTexture = new CloudNoiseTexture2D(64, 64, ctx);
         this._cloudNoiseTexture.updateUniforms(this.setting);
@@ -104,9 +108,7 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
         this._multipleScatteringLut.update();
 
         this._skyViewLut = new SkyViewTexture2D(192, 108, ctx);
-        this._skyViewLut.updateUniforms(this.setting);
         this._skyViewLut.updateTextures(this._transmittanceLut, this._multipleScatteringLut, this._cloudNoiseTexture);
-        this._skyViewLut.update();
 
         this._skyTexture = new SkyTexture2D(setting.defaultTexture2DSize, setting.defaultTexture2DSize * 0.5, ctx);
         this._skyTexture.isHDRTexture = true;
@@ -114,13 +116,25 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
         this._skyTexture.updateTextures(this._transmittanceLut, this._multipleScatteringLut, this._skyViewLut, this._cloudNoiseTexture);
         this._skyTexture.update();
 
-        this.createFromTexture(this._cubeSize, this._skyTexture, ctx);
+        this.createFromTexture(this._cubeSize, this.setting.showV1 ? this.legacySky() : this._skyTexture, ctx);
         return this;
+    }
+
+    /** The legacy Chapman sky, baked with the current setting. */
+    private legacySky(): AtmosphericTexture {
+        if (!this._internalTexture) {
+            const size = this.setting.defaultTexture2DSize;
+            this._internalTexture = new AtmosphericTexture(size, size * 0.5, AtmosphericScatteringSky_shader.cs, null, this._ctx);
+            this._internalTexture.isHDRTexture = true;
+        }
+        this._internalTexture.updateUniforms(this.setting);
+        this._internalTexture.update();
+        return this._internalTexture;
     }
 
     /** Get the underlying panorama 2D texture used to build the sky cube. */
     public get texture2D(): Texture {
-        return this.setting.showV1 ? this._internalTexture : this._skyTexture;
+        return this.setting.showV1 ? this._internalTexture ?? this.legacySky() : this._skyTexture;
     }
 
     /** Transmittance LUT (256x64) — optical depth from a point to the sun. */
@@ -133,8 +147,13 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
         return this._multipleScatteringLut;
     }
 
-    /** Sky-view LUT (192x108) — the low-res distant sky. */
+    /** Sky-view LUT (192x108) — the low-res distant sky, baked when first asked for after a change. */
     public get skyViewLut(): Texture {
+        if (this._skyViewDirty && this._skyViewLut) {
+            this._skyViewDirty = false;
+            this._skyViewLut.updateUniforms(this.setting);
+            this._skyViewLut.update();
+        }
         return this._skyViewLut;
     }
 
@@ -148,23 +167,21 @@ export class AtmosphericScatteringSky extends HDRTextureCube {
      * @returns
      */
     public apply(): this {
+        this._skyViewDirty = true;
         if (this.setting.showV1) {
-            this._internalTexture.updateUniforms(this.setting);
-            this._internalTexture.update();
-            this._faceData.uploadErpTexture(this._internalTexture);
+            this._faceData.uploadErpTexture(this.legacySky());
         } else {
             // Re-bake the whole chain, not just the panorama: the LUTs also
-            // read `enableClouds` through the shared medium sampling, and the
-            // sky-view LUT tracks the sun. They are tiny (256x64, 32x32,
-            // 192x108) next to the 1024x512 ray-march, so always-correct beats
-            // tracking which knob invalidates what. The cloud noise is
-            // setting-independent and is baked once in the constructor.
+            // read `enableClouds` through the shared medium sampling. They
+            // are tiny (256x64, 32x32) next to the 1024x512 ray-march, so
+            // always-correct beats tracking which knob invalidates what. The
+            // cloud noise is setting-independent and is baked once in the
+            // constructor; the sky-view LUT, which the ray march does not
+            // sample, waits until someone looks at it.
             this._transmittanceLut.updateUniforms(this.setting);
             this._transmittanceLut.update();
             this._multipleScatteringLut.updateUniforms(this.setting);
             this._multipleScatteringLut.update();
-            this._skyViewLut.updateUniforms(this.setting);
-            this._skyViewLut.update();
             this._skyTexture.updateUniforms(this.setting);
             this._skyTexture.update();
             this._faceData.uploadErpTexture(this._skyTexture);

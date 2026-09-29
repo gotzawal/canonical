@@ -8,7 +8,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog';
+type Group = 'bloom' | 'ao' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere';
 
 /** Scene-wide settings: sky, exposure, post effects, and editor preferences. */
 export class ScenePanel {
@@ -80,7 +80,14 @@ export class ScenePanel {
         this.body.append(section('scene', 'Scene', 'layers', [row('Name', name.el), ...this.rows(['quality'])]));
 
         // Sky
-        this.body.append(section('sky', 'Environment', 'sun', this.rows(['sky', ...(env.sky === 'atmospheric' ? ['sunX', 'sunY'] : ['skyColor']), 'skyExposure'])));
+        const sunSky = env.sky !== 'color';
+        this.body.append(
+            section('sky', 'Environment', 'sun', [
+                ...this.rows(['sky', ...(sunSky ? ['sunX', 'sunY'] : ['skyColor']), 'skyExposure']),
+                // The sun disc and the air, and the physical sky's clouds.
+                ...(sunSky ? this.rows(['sunSize', 'sunBrightness', 'showSun', 'altitude', ...(env.sky === 'physical' ? ['clouds'] : [])], 'atmosphere') : []),
+            ]),
+        );
 
         // Camera & tone mapping
         const fov = (this.fov = new SliderField({

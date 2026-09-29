@@ -1,7 +1,7 @@
 // Vite config for the browser-only scene editor (editor/).
-// The editor imports the engine straight from ../src (and the particle
-// package from ../packages/particle), so every build ships whatever engine
-// code is on the branch being built.
+// The editor imports the engine straight from ../src (and the particle and
+// atmosphere packages from ../packages), so every build ships whatever
+// engine code is on the branch being built.
 //
 // Two pages are built: the editor (index.html) and the game player
 // (player.html). File > Build & Deploy copies the player's files into every
@@ -46,6 +46,7 @@ function shared() {
             alias: [
                 { find: '@orillusion/core', replacement: here('../src/index.ts') },
                 { find: '@orillusion/particle', replacement: here('../packages/particle/index.ts') },
+                { find: '@orillusion/atmosphere', replacement: here('../packages/atmosphere/index.ts') },
                 // The Basis encoder of ktx2-encoder, which its package exports do not
                 // expose: its module and its WebAssembly (imported with ?url).
                 { find: /^basis-encoder$/, replacement: here('../node_modules/ktx2-encoder/dist/basis/basis_encoder.js') },

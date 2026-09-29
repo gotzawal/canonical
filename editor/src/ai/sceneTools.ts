@@ -77,7 +77,9 @@ export const sceneTools = tools({
                 play_state: ed.player.state,
                 environment: snakeKeys({
                     sky: d.environment.sky,
-                    ...(d.environment.sky === 'color' ? { skyColor: d.environment.skyColor } : { sunX: d.environment.sunX, sunY: d.environment.sunY }),
+                    ...(d.environment.sky === 'color'
+                        ? { skyColor: d.environment.skyColor }
+                        : { sunX: d.environment.sunX, sunY: d.environment.sunY, atmosphere: d.environment.atmosphere }),
                     exposure: d.environment.exposure,
                     quality: d.environment.quality,
                     bloom: d.environment.bloom,
@@ -228,7 +230,7 @@ export const sceneTools = tools({
     },
     set_environment: {
         groups: ['environment'],
-        description: 'Change sky, exposure, shadows, fog and post processing settings. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
+        description: 'Change sky, exposure, shadows, fog and post processing settings. sky: atmospheric (fast, the default), physical (physically based: deeper sunsets and dusk, optional clouds; slower to change) or color; sun_x/sun_y place the sky\'s sun (keep it where the sun light comes from: apply_key_light does), atmosphere sets the sun disc (sun_size, sun_brightness, show_sun), the viewer\'s altitude and the physical sky\'s clouds. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
         params: environmentFields(),
         run({ args, ed, store, doc }) {
             const { scene_name: name, ...rest } = args;
