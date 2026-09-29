@@ -1,3 +1,4 @@
+/// <reference path="./meshoptimizer.d.ts" />
 // https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Vendor/EXT_meshopt_compression
 
 /**
