@@ -131,8 +131,12 @@ export class CodePanel {
         );
 
         const store = editor.store;
-        // Scripts and shaders change without a hint, behavior trees with a behavior hint.
-        const changes = onChanges(store, (hint) => (kind === 'behavior' ? touches(hint, 'behavior') : touches(hint)) && this.onDocChange());
+        // Scripts and shaders change without a hint, behavior trees with a behavior hint. The action
+        // button also follows the post chain (environment) and the selected objects' meshes.
+        const changes = onChanges(store, (hint) => {
+            if (kind === 'behavior' ? touches(hint, 'behavior') : touches(hint)) this.onDocChange();
+            else if (touches(hint, 'nodes', 'env')) this.refreshAction();
+        });
         this.offs.push(
             changes.off,
             store.on('load', () => this.onDocChange()),

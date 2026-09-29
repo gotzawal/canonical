@@ -17,6 +17,13 @@ interface Row {
     open: boolean;
 }
 
+/**
+ * The data type of the tree's own drags. Rows out of view leave the page,
+ * and a dragged row that does can miss its dragend: other drags over the
+ * tree (assets, files) never move objects.
+ */
+const ROW_DRAG = 'application/x-morglay-tree-rows';
+
 /** Rows drawn beyond the visible ones, so scrolling a little shows no gap. */
 const OVERSCAN = 8;
 /** The tree's padding above the first row (styles.css .tree). */
@@ -74,14 +81,14 @@ export class HierarchyPanel {
         this.tree.addEventListener('keydown', (e) => this.onKey(e));
         this.tree.addEventListener('scroll', () => this.schedulePaint());
         this.tree.addEventListener('dragover', (e) => {
-            if (!this.dragIds.length || onRow(e)) return;
+            if (!this.dragging(e) || onRow(e)) return;
             e.preventDefault();
             this.tree.classList.add('drop-root');
         });
         this.tree.addEventListener('dragleave', () => this.tree.classList.remove('drop-root'));
         this.tree.addEventListener('drop', (e) => {
             this.tree.classList.remove('drop-root');
-            if (onRow(e) || !this.dragIds.length) return;
+            if (onRow(e) || !this.dragging(e)) return;
             e.preventDefault();
             editor.moveNodes(this.dragIds, null, null);
             this.dragIds = [];
@@ -410,6 +417,7 @@ export class HierarchyPanel {
             this.dragIds = store.selection.includes(node.id) ? store.selectionRoots() : [node.id];
             e.dataTransfer!.effectAllowed = 'move';
             e.dataTransfer!.setData('text/plain', node.name);
+            e.dataTransfer!.setData(ROW_DRAG, '');
             row.classList.add('dragging');
         });
         row.addEventListener('dragend', () => {
@@ -418,7 +426,7 @@ export class HierarchyPanel {
             this.clearDropMarks();
         });
         row.addEventListener('dragover', (e) => {
-            if (!this.dragIds.length) return;
+            if (!this.dragging(e)) return;
             const zone = this.zone(e, row);
             const invalid = this.dragIds.includes(node.id) || this.dragIds.some((id) => store.isAncestor(id, node.id));
             if (invalid) return;
@@ -429,7 +437,7 @@ export class HierarchyPanel {
         });
         row.addEventListener('dragleave', () => row.classList.remove('drop-before', 'drop-after', 'drop-inside'));
         row.addEventListener('drop', (e) => {
-            if (!this.dragIds.length) return;
+            if (!this.dragging(e)) return;
             e.preventDefault();
             e.stopPropagation();
             const zone = this.zone(e, row);
@@ -448,6 +456,11 @@ export class HierarchyPanel {
             }
         });
         return row;
+    }
+
+    /** A drag of rows of this tree is over it. */
+    private dragging(e: DragEvent): boolean {
+        return this.dragIds.length > 0 && !!e.dataTransfer?.types.includes(ROW_DRAG);
     }
 
     private zone(e: DragEvent, row: HTMLElement): DropZone {

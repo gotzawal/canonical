@@ -4,7 +4,7 @@
 // hint (mergeHints), so a view can still skip what it does not show.
 
 import { listenerSite, timed } from '../core/events';
-import { mergeHints, type ChangeHint, type Store } from '../core/store';
+import { mergeHints, mergeRenames, type ChangeHint, type Store } from '../core/store';
 
 export interface FrameChanges {
     /** Runs a waiting update now, before reading what the view shows. */
@@ -24,17 +24,21 @@ const cancelFrame: (id: number) => void = typeof cancelAnimationFrame === 'funct
 export function onChanges(store: Store, fn: (hint: ChangeHint | undefined) => void): FrameChanges {
     const site = listenerSite();
     let pending: ChangeHint | undefined | null = null;
+    // Behavior items that got new ids, also when the hints they came with merge into "anything".
+    let renamed: ChangeHint['renamed'];
     let frame = 0;
     const run = () => {
         if (frame) cancelFrame(frame);
         frame = 0;
         if (pending === null) return;
-        const hint = pending;
+        const hint = !renamed || pending?.renamed ? pending : { ...pending, renamed };
         pending = null;
+        renamed = undefined;
         timed('change (once a frame)', site, () => fn(hint));
     };
     const off = store.on('change', (hint) => {
         pending = mergeHints(pending, hint);
+        if (hint?.renamed) renamed = mergeRenames(renamed, hint.renamed);
         frame ||= nextFrame(run);
     });
     return {
@@ -44,6 +48,7 @@ export function onChanges(store: Store, fn: (hint: ChangeHint | undefined) => vo
             if (frame) cancelFrame(frame);
             frame = 0;
             pending = null;
+            renamed = undefined;
         },
     };
 }

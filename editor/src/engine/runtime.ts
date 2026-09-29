@@ -48,6 +48,8 @@ export class Runtime {
     /** The viewport's frame rate limit; 0 for none (see setViewport). */
     fpsLimit = 0;
     private quality: ViewportQuality | null = null;
+    /** Follows the screen's pixel ratio (browser zoom, another screen) once the resolution is set. */
+    private watchingRatio = false;
     /** Captures in progress, which draw at full resolution. */
     private sharp = 0;
     private frameListeners = new Set<() => void>();
@@ -121,6 +123,20 @@ export class Runtime {
         this.engine.frameRate = fps > 0 ? fps : 360;
         this.quality = quality;
         this.applyResolution();
+        this.watchRatio();
+    }
+
+    /** Sets the resolution again when the screen's pixel ratio changes (the engine's own resize keeps the ratio it was given). */
+    private watchRatio() {
+        if (this.watchingRatio || typeof matchMedia !== 'function') return;
+        this.watchingRatio = true;
+        const watch = () => {
+            matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`).addEventListener('change', () => {
+                this.applyResolution();
+                watch();
+            }, { once: true });
+        };
+        watch();
     }
 
     /** The frame rate the viewport aims at: its limit, or 60 without one. */

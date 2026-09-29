@@ -76,7 +76,8 @@ export class RenderGraphPanel {
             h('div', { class: 'graph-main' }, this.canvas, this.side),
         );
         editor.graph.on('changed', () => this.refresh());
-        onChanges(editor.store, (hint) => touches(hint, 'env') && this.renderSide());
+        // The post chain is part of the environment; its texture pickers list the assets (a swatch comes with the design).
+        onChanges(editor.store, (hint) => touches(hint, 'env', 'design') && this.renderSide());
         editor.shaders.on('status', () => this.renderSide());
     }
 

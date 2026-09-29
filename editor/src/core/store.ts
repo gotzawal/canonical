@@ -623,7 +623,7 @@ export class Store extends Emitter<StoreEvents> {
             batch: txn.batch,
             selection: txn.selection,
             saved,
-            hint: saved.doc === undefined ? txn.hint ?? undefined : undefined,
+            hint: saved.doc === undefined ? stepHint(txn.hint) : undefined,
             size: sizeOf(saved, txn.selection),
         };
         if (txn.check !== undefined) {
@@ -717,7 +717,7 @@ export class Store extends Emitter<StoreEvents> {
         const step: Step = {
             ...top,
             saved,
-            hint: saved.doc === undefined ? mergeHints(top.hint, hint) : undefined,
+            hint: saved.doc === undefined ? stepHint(mergeHints(top.hint, hint)) : undefined,
             size: sizeOf(saved, top.selection),
         };
         stack[stack.length - 1] = step;
@@ -848,7 +848,7 @@ function union(a: string[], b: string[]): string[] {
 }
 
 /** Renames of `a` followed by those of `b`. */
-function mergeRenames(a: ChangeHint['renamed'], b: ChangeHint['renamed']): ChangeHint['renamed'] {
+export function mergeRenames(a: ChangeHint['renamed'], b: ChangeHint['renamed']): ChangeHint['renamed'] {
     if (!a || !b) return a ?? b;
     const out = new Map<string, Map<string, string>>();
     for (const key of new Set([...a.keys(), ...b.keys()])) {
@@ -871,6 +871,13 @@ function scopeOf(hint: ChangeHint | undefined): Scope | null {
     if (!hint.nodes && !parts.length) return null;
     const nodes = hint.behavior ? [...(hint.nodes ?? []), ...hint.agents!] : hint.nodes ?? [];
     return { nodes, parts, templates: !!hint.behavior };
+}
+
+/** What bringing a step back changes: its hints without the renames, which only hold going forward. */
+function stepHint(hint: ChangeHint | undefined | null): ChangeHint | undefined {
+    if (!hint?.renamed) return hint ?? undefined;
+    const { renamed: _, ...rest } = hint;
+    return rest;
 }
 
 function hintText(hint: ChangeHint | undefined | null): string {

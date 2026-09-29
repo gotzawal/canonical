@@ -56,4 +56,22 @@ describe('views that follow changes once a frame', () => {
         vi.advanceTimersByTime(20);
         expect(calls.length).toBe(2);
     });
+
+    it('keep the new ids of behavior items when the changes of a frame merge into anything', () => {
+        vi.useFakeTimers();
+        const store = new Store({ ...emptyScene(), nodes: [{ ...makeNode('A'), id: 'a' }] });
+        const calls: (ChangeHint | undefined)[] = [];
+        onChanges(store, (hint) => calls.push(hint));
+        const renamed = new Map([['t:tree', new Map([['old', 'new']])]]);
+        store.commit('Behavior', (d) => void d.behaviors.push({ id: 'tree', name: 'Tree' } as any), { behavior: true, agents: [], renamed });
+        store.commit('Move', (d) => (d.nodes[0].position = [1, 0, 0]), { nodes: ['a'], transform: true });
+        vi.advanceTimersByTime(20);
+        expect(calls).toEqual([{ renamed }]);
+
+        // Undo goes back from the new ids: its hint names no renames.
+        store.undo();
+        store.undo();
+        vi.advanceTimersByTime(20);
+        expect(calls[1]?.renamed).toBeUndefined();
+    });
 });
