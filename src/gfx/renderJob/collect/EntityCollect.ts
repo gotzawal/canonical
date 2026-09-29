@@ -108,6 +108,30 @@ export class EntityCollect {
         }
     }
 
+    /**
+     * Opaque renderers go next to those with the same material (and among
+     * them, the same geometry), so consecutive draws share their bindings
+     * and GPUContext skips binding them again. Opaque order does not
+     * change the picture (the depth prepass decides what is in front).
+     */
+    private static insertGrouped(list: RenderNode[], renderNode: RenderNode) {
+        const mat = renderNode.materials?.[0];
+        const geo = renderNode.geometry;
+        let sameMat = -1;
+        if (mat) {
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i].materials?.[0] !== mat) continue;
+                if (sameMat < 0) sameMat = i;
+                if (list[i].geometry === geo) {
+                    list.splice(i + 1, 0, renderNode);
+                    return;
+                }
+            }
+        }
+        if (sameMat >= 0) list.splice(sameMat + 1, 0, renderNode);
+        else list.push(renderNode);
+    }
+
     private sortRenderNode(list: RenderNode[], renderNode: RenderNode) {
         for (let i = list.length - 1; i > 0; i--) {
             const element = list[i];
@@ -152,7 +176,8 @@ export class EntityCollect {
             if (!map.has(root)) {
                 map.set(root, []);
             }
-            map.get(root).push(renderNode);
+            if (isTransparent) map.get(root).push(renderNode);
+            else EntityCollect.insertGrouped(map.get(root), renderNode);
 
             if (root.view?.engine3D?.setting.occlusionQuery.octree) {
                 renderNode.attachSceneOctree(this.getOctree(root));

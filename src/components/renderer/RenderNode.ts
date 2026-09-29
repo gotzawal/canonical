@@ -634,9 +634,23 @@ export class RenderNode extends ComponentBase {
         return this._passInit.get(_rendererType);
     }
 
+    /**
+     * True when this renderer binds state of its own into its material's
+     * passes before it draws (morph targets, skeletons, split textures), so
+     * it needs nodeUpdate every time even when another renderer built the
+     * shared pipeline.
+     */
+    protected get hasPerNodeShaderState(): boolean {
+        return false;
+    }
+
     public nodeUpdate(view: View3D, passType: PassType, renderPassState: RendererPassState, clusterLightingBuffer?: ClusterLightingBuffer) {
         let node = this;
         let envMap = view.scene.envMap;
+        // Whether every pass of this type was built already (by another
+        // renderer sharing the material): this renderer is ready too.
+        let prebuilt = true;
+        let any = false;
 
         for (let j = 0; j < node.materials.length; j++) {
             let material = node.materials[j];
@@ -646,7 +660,9 @@ export class RenderNode extends ComponentBase {
                     const pass = passes[i];
                     const renderShader = pass;
 
+                    any = true;
                     if (renderShader.shaderState.splitTexture) {
+                        prebuilt = false;
                         let splitTexture = RTResourceMap.CreateSplitTexture(view.engine3D.context3D, node.instanceID);
                         renderShader.setTexture("splitTexture_Map", splitTexture);
                     }
@@ -700,6 +716,7 @@ export class RenderNode extends ComponentBase {
                         renderShader.apply(view.engine3D.context3D, node._geometry, renderPassState, () => node.noticeShaderChange());
                         continue;
                     }
+                    prebuilt = false;
 
                     let bdrflutTex = Engine3D.resFor(view.engine3D?.context3D).getTexture(`BRDFLUT`);
                     renderShader.setTexture(`brdflutMap`, bdrflutTex);
@@ -759,6 +776,9 @@ export class RenderNode extends ComponentBase {
                 }
             }
         }
+        // Without this, every renderer after the first on a shared material
+        // got a nodeUpdate before each of its draws, every frame.
+        if (any && prebuilt && !this.hasPerNodeShaderState) this._passInit.set(passType, true);
     }
 
     public beforeDestroy(force?: boolean) {
