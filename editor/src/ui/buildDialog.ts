@@ -182,7 +182,7 @@ export function showBuildDialog(editor: Editor) {
     const compressBox = new CheckboxField(compress, (v) => {
         compress = v;
         saveSettings({ ...loadSettings(), compress });
-    }, 'Compress textures (KTX2)');
+    }, 'Compress textures and models');
 
     const deployBtn = button('Deploy', () => void run(async () => {
         const token = tokenInput.value.trim();

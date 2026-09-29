@@ -1404,12 +1404,12 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     /**
-     * Sets how a texture asset is compressed for games (mode, largest
-     * size); its copies are made again for the new options.
+     * Sets how a texture or model asset is compressed for games (mode,
+     * largest texture size); its copies are made again for the new options.
      */
     setTextureCompression(assetId: string, patch: Partial<TextureCompression>) {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
-        if (!meta || meta.kind !== 'texture') return;
+        if (!meta || (meta.kind !== 'texture' && meta.kind !== 'model')) return;
         const next: TextureCompression = { ...meta.compress, ...patch };
         if (next.mode === 'auto' || !next.mode) delete next.mode;
         if (!next.maxSize) delete next.maxSize;

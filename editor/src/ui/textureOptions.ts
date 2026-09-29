@@ -1,23 +1,32 @@
-// How a texture asset ships in games: compressed (KTX2) or as its file, at
-// what size, and what that saves. Opened from the texture rows of the
-// inspector for the role the row uses the texture in.
+// How a texture or model asset ships in games: as its compressed copy or as
+// its file, with its textures at what size, and what that saves. Opened
+// from the texture rows of the inspector (for the role the row uses the
+// texture in) and from its Model section.
 
 import { formatBytes, getAssetBlob, imageSize } from '../core/assets';
-import { DEFAULT_MAX_SIZE, derivedOptions, MAX_SIZES, shipsAsIs } from '../core/derived';
-import type { TextureCompression, TextureRole } from '../core/types';
+import { DEFAULT_MAX_SIZE, derivedOptions, MAX_SIZES, shipsAsIs, shipsCopy, type DerivedRole } from '../core/derived';
+import type { TextureCompression } from '../core/types';
+import { gltfExtensions } from '../build/modelInfo';
 import { copyBlockBytes, encodedSize, textureMemory } from '../derive/encode';
 import type { Editor } from '../editor';
 import { h } from './dom';
 import { popover } from './overlays';
 import { button, row, SelectField } from './widgets';
 
-const ROLE_TEXT: Record<TextureRole, string> = { color: 'a color map', normal: 'a normal map', data: 'a data map' };
+const ROLE_TEXT: Record<DerivedRole, string> = { color: 'as a color map', normal: 'as a normal map', data: 'as a data map', model: 'for games' };
 
 type Mode = NonNullable<TextureCompression['mode']>;
 
-export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId: string, role: TextureRole) {
+/** What the file tells about itself: an image's size, whether a model is Draco compressed. */
+interface FileFacts {
+    size: { width: number; height: number } | null;
+    draco: boolean;
+}
+
+export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId: string, role: DerivedRole) {
     const body = h('div', { class: 'texture-options' });
-    const sizeCache: { value?: { width: number; height: number } | null } = {};
+    const model = role === 'model';
+    let facts: FileFacts | null = null;
     let offStatus = () => {};
     const close = popover(anchor, body, 'texture-options-popover', () => offStatus());
 
@@ -27,7 +36,7 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
         const mode: Mode = meta.compress?.mode ?? 'auto';
         const modeField = new SelectField<Mode>(
             [
-                { value: 'auto', label: role === 'color' ? 'Auto (ETC1S, smallest)' : 'Auto (UASTC)' },
+                { value: 'auto', label: model ? 'Auto (ETC1S colors, UASTC maps)' : role === 'color' ? 'Auto (ETC1S, smallest)' : 'Auto (UASTC)' },
                 { value: 'high', label: 'High quality (UASTC)' },
                 { value: 'off', label: 'Off (ship the file)' },
             ],
@@ -41,26 +50,37 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
         );
         const status = editor.derived.statusOf(meta, role);
         const opts = derivedOptions(role, meta.compress);
-        if (sizeCache.value === undefined) {
+        if (!facts) {
             const blob = await getAssetBlob(assetId);
-            sizeCache.value = blob ? await imageSize(blob).catch(() => null) : null;
+            facts = {
+                size: blob && !model ? await imageSize(blob).catch(() => null) : null,
+                draco: !!blob && model && !!(await gltfExtensions(blob))?.includes('KHR_draco_mesh_compression'),
+            };
         }
-        const size = sizeCache.value;
+        const { size, draco } = facts;
+        // Compressed already: the file is what games get, whatever the options.
+        const asIs = shipsAsIs(meta) || draco;
         const lines: string[] = [];
         let action: HTMLElement | null = null;
-        const ktx2 = shipsAsIs(meta);
-        if (ktx2) lines.push('A KTX2 file already: games get it as it is.');
+        if (asIs) lines.push(draco ? 'Draco compressed already: games get the file as it is.' : 'A KTX2 file already: games get it as it is.');
         else if (!opts) lines.push('Games get the file itself.');
         else if (status.state === 'ready' && status.copy) {
             const c = status.copy;
-            lines.push(`Ready: ${c.opts.codec.toUpperCase()} ${c.width} x ${c.height}, ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}).`);
-            if (size) lines.push(`GPU memory: ${formatBytes(textureMemory(size.width, size.height))} as the file, ${formatBytes(textureMemory(c.width, c.height, copyBlockBytes(c.opts.codec, c.alpha)))} compressed.`);
+            if (model) {
+                const textures = c.textures ?? 0;
+                lines.push(`Ready: ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}), with ${textures} texture${textures === 1 ? '' : 's'} in KTX2 and packed geometry.`);
+                if (!shipsCopy({ role, bytes: c.bytes, textures }, meta)) lines.push('It saves nothing here, so games get the file.');
+            } else {
+                lines.push(`Ready: ${c.opts.codec.toUpperCase()} ${c.width} x ${c.height}, ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}).`);
+                if (size) lines.push(`GPU memory: ${formatBytes(textureMemory(size.width, size.height))} as the file, ${formatBytes(textureMemory(c.width, c.height, copyBlockBytes(c.opts.codec, c.alpha)))} compressed.`);
+            }
         } else {
             if (status.state === 'queued') lines.push('Waiting to be compressed.');
             else if (status.state === 'encoding') lines.push('Compressing...');
             else if (status.state === 'failed') lines.push(`Compression failed: ${status.error ?? 'unknown error'}. Games get the file.`);
             else lines.push(editor.store.prefs.backgroundCompression ? 'Not compressed yet: it is made in the background, or when you build.' : 'Not compressed yet: it is made when you build.');
-            if (size) {
+            if (model) lines.push('Its textures go to KTX2 (a quarter or less of the GPU memory) and its geometry is packed without loss.');
+            else if (size) {
                 const s = encodedSize(size.width, size.height, opts.maxSize);
                 lines.push(`GPU memory: ${formatBytes(textureMemory(size.width, size.height))} as the file, about ${formatBytes(textureMemory(s.width, s.height, copyBlockBytes(opts.codec, false)))} compressed.`);
             }
@@ -69,12 +89,14 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
             }
         }
         body.replaceChildren(
-            h('div', { class: 'texture-options-title', text: `${meta.name} as ${ROLE_TEXT[role]}` }),
-            ...(ktx2
+            h('div', { class: 'texture-options-title', text: `${meta.name} ${ROLE_TEXT[role]}` }),
+            ...(asIs
                 ? []
                 : [
-                    row('Compression', modeField.el, 'ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'),
-                    row('Max Size', sizeField.el, 'The longer side of the copy, in pixels'),
+                    row('Compression', modeField.el, model
+                        ? 'How its textures are encoded: ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'
+                        : 'ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'),
+                    row(model ? 'Texture Size' : 'Max Size', sizeField.el, model ? 'The longest side of each of its textures, in pixels' : 'The longer side of the copy, in pixels'),
                 ]),
             h('div', { class: 'texture-options-status muted small' }, ...lines.map((text) => h('div', { text }))),
             ...(action ? [action] : []),

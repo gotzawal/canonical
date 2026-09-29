@@ -893,9 +893,14 @@ export class InspectorPanel {
         const state = this.editor.sync.modelState(node.id);
         const info = this.editor.sync.modelInfo(node.id);
         const status = state?.status === 'ready' ? 'Loaded' : state?.status === 'error' ? `Failed: ${state.error}` : 'Loading...';
+        // How games get it: its packed copy (KTX2 textures, meshopt geometry) or the file.
+        const forGames = iconButton('sliders', 'Compression for games', (e) => {
+            if (asset) openTextureOptions(this.editor, e.currentTarget as HTMLElement, asset.id, 'model');
+        });
+        forGames.disabled = !asset;
         const rows: HTMLElement[] = [
             row('File', h('div', { class: 'readonly', text: asset ? asset.name : 'Missing asset' })),
-            row('Size', h('div', { class: 'readonly', text: asset ? formatBytes(asset.size) : '-' })),
+            row('Size', h('div', { class: 'inline' }, h('div', { class: 'readonly', text: asset ? formatBytes(asset.size) : '-' }), forGames)),
             row('Status', h('div', { class: 'readonly' + (state?.status === 'error' ? ' error-text' : ''), text: status })),
         ];
         if (info) {

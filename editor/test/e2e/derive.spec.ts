@@ -366,4 +366,20 @@ test('packs models for games: their textures in KTX2 and their geometry with mes
     expect(shown.format).toMatch(/^(etc2|bc[17]|astc).*-srgb$/);
     // The same picture as in the editor: every quarter in its hue, about as large.
     inGame.forEach((share, i) => expect(Math.abs(share - inEditor[i])).toBeLessThan(0.05));
+
+    // The Model section offers the options: turned off, games get the file.
+    await page.evaluate((id) => window.__editor.store.select([id]), node);
+    await page.locator('.inspector section.section', { hasText: 'Sign.glb' }).first().getByRole('button', { name: 'Compression for games' }).click();
+    const popover = page.locator('.texture-options-popover');
+    await expect(popover).toContainText('Sign.glb for games');
+    await expect(popover).toContainText('with 1 texture in KTX2');
+    await popover.locator('select').first().selectOption('off');
+    await expect(popover).toContainText('Games get the file itself.');
+    await page.keyboard.press('Escape');
+    const off = await page.evaluate(async (asset) => {
+        const ed = window.__editor;
+        const meta = ed.store.doc.assets.find((a) => a.id === asset)!;
+        return { mode: meta.compress?.mode, state: ed.derived.statusOf(meta, 'model').state, copy: await ed.derived.ensure(meta, 'model') };
+    }, asset);
+    expect(off).toEqual({ mode: 'off', state: 'off', copy: null });
 });
