@@ -213,6 +213,8 @@ function neutralEnv(env: EnvironmentDoc): EnvironmentDoc {
         exposure: 1,
         bloom: { ...env.bloom, enable: false },
         fog: { ...env.fog, enable: false },
+        volumetricFog: { ...env.volumetricFog, enable: false },
+        godRays: { ...env.godRays, enable: false },
         gi: { ...env.gi, enable: false },
     };
 }

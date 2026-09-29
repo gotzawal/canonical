@@ -20,6 +20,8 @@ const BUILTIN_POSTS: Record<string, { label: string; toggle?: (e: any, v: boolea
     GTAOPost: { label: 'Ambient Occlusion', toggle: (e, v) => (e.ao.enable = v), get: (e) => e.ao.enable },
     BloomPost: { label: 'Bloom', toggle: (e, v) => (e.bloom.enable = v), get: (e) => e.bloom.enable },
     GlobalFog: { label: 'Fog', toggle: (e, v) => (e.fog.enable = v), get: (e) => e.fog.enable },
+    VolumetricFogPost: { label: 'Volumetric Fog', toggle: (e, v) => (e.volumetricFog.enable = v), get: (e) => e.volumetricFog.enable },
+    GodRayPost: { label: 'God Rays', toggle: (e, v) => (e.godRays.enable = v), get: (e) => e.godRays.enable },
     FXAAPost: { label: 'FXAA (anti-aliasing)', toggle: (e, v) => (e.fxaa = v), get: (e) => e.fxaa },
     TonemapPost: { label: 'Tone Mapping' },
 };

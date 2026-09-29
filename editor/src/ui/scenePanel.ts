@@ -8,7 +8,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'fog' | 'gi';
+type Group = 'bloom' | 'ao' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog';
 
 /** Scene-wide settings: sky, exposure, post effects, and editor preferences. */
 export class ScenePanel {
@@ -17,6 +17,7 @@ export class ScenePanel {
     private syncs: (() => void)[] = [];
     private sky: SkyType | null = null;
     private giOn: boolean | null = null;
+    private fogMode: string | null = null;
     private steps: FieldSteps;
     private fov: SliderField | null = null;
 
@@ -27,7 +28,7 @@ export class ScenePanel {
         onChanges(editor.store, (hint) => {
             if (!touches(hint, 'env')) return;
             const env = editor.store.doc.environment;
-            if (env.sky !== this.sky || env.gi.enable !== this.giOn) this.render();
+            if (env.sky !== this.sky || env.gi.enable !== this.giOn || env.fog.mode !== this.fogMode) this.render();
             else for (const s of this.syncs) s();
         });
         editor.store.on('load', () => this.render());
@@ -69,13 +70,14 @@ export class ScenePanel {
         const env = this.env;
         this.sky = env.sky;
         this.giOn = env.gi.enable;
+        this.fogMode = env.fog.mode;
         const store = this.editor.store;
         const watch = (fn: () => void) => this.syncs.push(fn);
 
         // Scene
         const name = new TextField(store.doc.name, (v) => store.commit('Rename Scene', (doc) => (doc.name = v.trim() || 'Untitled Scene'), { env: true }));
         watch(() => name.set(store.doc.name));
-        this.body.append(section('scene', 'Scene', 'layers', [row('Name', name.el)]));
+        this.body.append(section('scene', 'Scene', 'layers', [row('Name', name.el), ...this.rows(['quality'])]));
 
         // Sky
         this.body.append(section('sky', 'Environment', 'sun', this.rows(['sky', ...(env.sky === 'atmospheric' ? ['sunX', 'sunY'] : ['skyColor']), 'skyExposure'])));
@@ -102,9 +104,14 @@ export class ScenePanel {
                 label('Ambient Occlusion'),
                 ...this.rows(['enable', 'strength', 'distance'], 'ao'),
                 label('Fog'),
-                ...this.rows(['enable', 'color', 'near', 'far', 'intensity'], 'fog'),
+                ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
+                label('Volumetric Fog'),
+                ...this.rows(['enable', 'density', 'scattering', 'anisotropy', 'distance', 'ambient'], 'volumetricFog'),
+                label('God Rays'),
+                ...this.rows(['enable', 'intensity', 'focus'], 'godRays'),
             ]),
         );
+        this.body.append(section('shadows', 'Shadows', 'sun', this.rows(['range', 'softness', 'follow'], 'shadow')));
 
         this.body.append(this.giSection(watch));
 

@@ -153,6 +153,13 @@ export function fieldMeta(s: z.ZodType): FieldMeta {
 }
 
 const snake = (k: string) => k.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
+
+/** An object with its keys (and those of the objects in it) in snake_case, as tool arguments name them. */
+export function snakeKeys(v: unknown): unknown {
+    if (Array.isArray(v)) return v.map(snakeKeys);
+    if (!isObj(v)) return v;
+    return Object.fromEntries(Object.entries(v).map(([k, x]) => [snake(k), snakeKeys(x)]));
+}
 const camel = (k: string) => k.replace(/_(\w)/g, (_, c: string) => c.toUpperCase());
 
 /**

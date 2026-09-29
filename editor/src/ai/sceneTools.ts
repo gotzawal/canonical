@@ -6,7 +6,7 @@ import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLi
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
 import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
-import { defaults, patch, toolSchema } from '../core/schema';
+import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
 import { isLevelObject, stageIndex } from '../core/design';
@@ -75,16 +75,20 @@ export const sceneTools = tools({
                 name: d.name,
                 selection: store.selection,
                 play_state: ed.player.state,
-                environment: {
+                environment: snakeKeys({
                     sky: d.environment.sky,
-                    ...(d.environment.sky === 'color' ? { sky_color: d.environment.skyColor } : { sun_x: d.environment.sunX, sun_y: d.environment.sunY }),
+                    ...(d.environment.sky === 'color' ? { skyColor: d.environment.skyColor } : { sunX: d.environment.sunX, sunY: d.environment.sunY }),
                     exposure: d.environment.exposure,
+                    quality: d.environment.quality,
                     bloom: d.environment.bloom,
                     ao: d.environment.ao,
                     fog: d.environment.fog,
+                    volumetricFog: d.environment.volumetricFog,
+                    godRays: d.environment.godRays,
+                    shadow: d.environment.shadow,
                     fxaa: d.environment.fxaa,
                     gi: d.environment.gi,
-                },
+                }) as Json,
                 prefabs: d.prefabs.map((p) => ({ id: p.id, name: p.name, instances: d.nodes.filter((n) => n.prefab === p.id).length, parts: p.nodes.length, ...(p.useModel ? { model: true } : {}) })),
                 assets: d.assets.map((a) => ({ id: a.id, name: a.name, kind: a.kind })),
                 scripts: d.scripts.map((s) => {
@@ -224,7 +228,7 @@ export const sceneTools = tools({
     },
     set_environment: {
         groups: ['environment'],
-        description: 'Change sky, exposure and post processing settings.',
+        description: 'Change sky, exposure, shadows, fog and post processing settings. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
         params: environmentFields(),
         run({ args, ed, store, doc }) {
             const { scene_name: name, ...rest } = args;

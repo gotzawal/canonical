@@ -1,7 +1,9 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, Engine3D, GTAOPost, GlobalFog, GridObject,
-    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, SkyRenderer, SolidColorSky, Texture, View3D,
+    AtmosphericComponent, BloomPost, Camera3D, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, Texture,
+    View3D, VolumetricFogPost,
 } from '@orillusion/core';
+import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
 import type { ViewportFps, ViewportQuality } from '../core/store';
 import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
@@ -9,6 +11,10 @@ import { GIController, giEngineSetting } from './gi';
 import { installGpuStats, type GpuStats } from './gpuStats';
 
 type PostCtor = new () => PostBase;
+
+/** The built-in effects in the order they run: fog over ambient occlusion, light shafts over fog, bloom of it all. */
+const BUILTIN_ORDER = ['GTAOPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
+const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
 
 /** The viewport's frame rate limits (View > Viewport Frame Rate). */
 export const VIEWPORT_FPS: { value: ViewportFps; label: string }[] = [
@@ -46,6 +52,19 @@ export class Runtime {
     readonly gi: GIController;
     /** Draw calls and GPU memory, counted at the WebGPU API (null when not asked for). */
     readonly stats: GpuStats | null;
+    /**
+     * The quality tier of this device (the editor: high). Its shadow map
+     * sizes were fixed when the engine started; the rest of a tier is
+     * applied with the environment.
+     */
+    readonly deviceQuality: QualityLevel;
+    /** A tier previewed instead of the document's (View > Graphics Quality, ?quality=). */
+    private qualityOverride: QualityLevel | null = null;
+    private qualitySetting: QualitySetting = 'auto';
+    /** Directional shadows: meters covered, and whether around the camera. */
+    private shadowRange = 60;
+    private shadowFollow = false;
+    private lastEnvDoc: EnvironmentDoc | null = null;
 
     fps = 0;
     /** The viewport's frame rate limit; 0 for none (see setViewport). */
@@ -72,10 +91,11 @@ export class Runtime {
     /** Environment waiting for a sky component to finish starting. */
     private pendingEnv: EnvironmentDoc | null = null;
 
-    private constructor(engine: Engine3D, canvas: HTMLCanvasElement, stats: GpuStats | null) {
+    private constructor(engine: Engine3D, canvas: HTMLCanvasElement, stats: GpuStats | null, quality: QualityLevel) {
         this.engine = engine;
         this.canvas = canvas;
         this.stats = stats;
+        this.deviceQuality = quality;
         this.scene = new Scene3D();
         this.scene.name = 'Scene';
 
@@ -99,16 +119,30 @@ export class Runtime {
         this.gi = new GIController(this);
     }
 
-    /** `stats` counts draw calls and GPU memory (the editor's status bar); it has to start before the engine. */
-    static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean } = {}): Promise<Runtime> {
+    /**
+     * `stats` counts draw calls and GPU memory (the editor's status bar); it
+     * has to start before the engine. `quality` is the device's tier (the
+     * editor: high): its shadow map sizes are fixed from here on.
+     */
+    static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean; quality?: QualityLevel } = {}): Promise<Runtime> {
         let runtime: Runtime | null = null;
         const stats = opts.stats === false ? null : installGpuStats();
+        const quality = opts.quality ?? 'high';
+        const tier = QUALITY[quality];
         const engine = await Engine3D.init({
             canvasConfig: { canvas },
             setting: {
                 // The editor does its own ray picking against the document.
                 pick: { enable: false },
-                shadow: { type: 'PCF', shadowBound: 60, shadowSize: 2048 },
+                // The map size has to be the size the shadows are filtered and biased for.
+                shadow: {
+                    type: 'PCF',
+                    shadowBound: 60,
+                    shadowSize: tier.shadowMapSize,
+                    maxShadowMapWidth: tier.shadowMapSize,
+                    maxShadowMapHeight: tier.shadowMapSize,
+                    pointShadowSize: tier.pointShadowSize,
+                },
                 gi: giEngineSetting(),
                 // Imported models keep the node matrices of their files
                 // (unit scale, Z-up to Y-up), as other glTF viewers do.
@@ -117,7 +151,7 @@ export class Runtime {
             beforeRender: () => runtime?.beforeTick(),
             lateRender: () => runtime?.tick(),
         });
-        runtime = new Runtime(engine, canvas, stats);
+        runtime = new Runtime(engine, canvas, stats, quality);
         return runtime;
     }
 
@@ -212,6 +246,7 @@ export class Runtime {
 
     private beforeTick() {
         this.stats?.beginFrame();
+        this.fitShadowLights();
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -237,6 +272,39 @@ export class Runtime {
     /** Forces the next applyEnvironment to push every setting again. */
     invalidateEnvironment() {
         this.lastEnv = '';
+    }
+
+    /** The tier drawn now: the previewed one, else the document's, else the device's. */
+    get qualityLevel(): QualityLevel {
+        return resolveQuality(this.qualitySetting, this.deviceQuality, this.qualityOverride);
+    }
+
+    /** Draws another tier than the document's (null: the document's); shadow map sizes stay the device's. */
+    setQualityOverride(level: QualityLevel | null) {
+        if (this.qualityOverride === level) return;
+        this.qualityOverride = level;
+        this.lastEnv = '';
+        if (this.lastEnvDoc) this.applyEnvironment(this.lastEnvDoc);
+    }
+
+    /**
+     * Directional shadows cover `shadowRange` meters around their light
+     * (or the camera), and as far toward the light as that, so tall
+     * casters do not lose their tops. Lights that start later get it on
+     * the next frame; the setters do nothing when nothing changed.
+     */
+    private fitShadowLights() {
+        const lights = ShadowLightsCollect.directionLightList?.get(this.scene);
+        if (!lights?.length) return;
+        const r = this.shadowRange;
+        for (const l of lights) {
+            if (!(l instanceof DirectLight) || l.enableCSM) continue;
+            l.shadowBoundWidth = r;
+            l.shadowBoundHeight = r;
+            l.shadowBoundNear = -r;
+            l.shadowBoundFar = r;
+            l.shadowFollow = this.shadowFollow;
+        }
     }
 
     private tick() {
@@ -279,9 +347,13 @@ export class Runtime {
     // --------------------------------------------------------- environment
 
     applyEnvironment(env: EnvironmentDoc) {
-        const key = JSON.stringify(env);
+        this.lastEnvDoc = env;
+        this.qualitySetting = env.quality;
+        const level = this.qualityLevel;
+        const key = JSON.stringify(env) + '|' + level;
         if (key === this.lastEnv) return;
         this.lastEnv = key;
+        const tier = QUALITY[level];
 
         const setting = this.engine.setting;
         setting.render.tonemap.exposure = env.exposure;
@@ -301,22 +373,59 @@ export class Runtime {
         const gtao = pp.gtao!;
         gtao.darkFactor = Math.min(1, Math.max(0.01, env.ao.strength));
         gtao.maxDistance = Math.min(50, Math.max(0.1, env.ao.distance));
-        this.togglePost(GTAOPost, env.ao.enable);
+        this.togglePost(GTAOPost, env.ao.enable && tier.ao);
 
         const fog = pp.globalFog!;
-        fog.fogType = 0;
-        fog.fogColor = hexToColor(env.fog.color);
-        // The engine's linear fog ramps from `end` (clear) to `start` (full).
-        fog.end = Math.max(0, env.fog.near);
-        fog.start = Math.max(fog.end + 0.01, env.fog.far);
-        fog.ins = env.fog.intensity;
-        fog.density = 0;
-        this.togglePost(GlobalFog, env.fog.enable);
+        const f = env.fog;
+        fog.fogType = FOG_TYPES[f.mode] ?? 0;
+        fog.fogColor = hexToColor(f.color);
+        // The engine's fog is clear up to `end`; linear fog is full at `start`.
+        fog.end = Math.max(0, f.near);
+        fog.start = Math.max(fog.end + 0.01, f.far);
+        fog.ins = f.intensity;
+        fog.density = f.mode === 'linear' ? 0 : Math.max(0, f.density);
+        fog.fogHeightScale = Math.max(0.001, f.heightFalloff);
+        fog.heightBase = f.height;
+        // The engine's older height term stays off.
+        fog.rayLength = 0;
+        fog.overrideSkyFactor = f.sky;
+        fog.dirHeightLine = sunScatterToLine(f.sunScatter);
+        fog.scatteringExponent = f.sunFocus;
+        this.togglePost(GlobalFog, f.enable);
+
+        const vf = env.volumetricFog;
+        const vol = (pp as any).volumetricFog;
+        if (vol) {
+            vol.density = vf.density;
+            vol.scatteringIntensity = vf.scattering;
+            vol.anisotropy = vf.anisotropy;
+            vol.maxDistance = vf.distance;
+            vol.stepCount = tier.fogSteps;
+            const a = hexToColor(vf.ambient);
+            vol.ambient = { r: a.r, g: a.g, b: a.b };
+        }
+        this.togglePost(VolumetricFogPost, vf.enable && tier.fogSteps > 0);
+
+        const gr = env.godRays;
+        const god = pp.godRay!;
+        god.blendColor = true;
+        god.rayMarchCount = Math.min(20, Math.max(8, tier.godRaySteps));
+        god.scatteringExponent = Math.min(40, Math.max(1, gr.focus));
+        god.intensity = Math.min(5, Math.max(0.01, gr.intensity));
+        this.togglePost(GodRayPost, gr.enable && tier.godRaySteps > 0);
+
+        const shadow = setting.shadow;
+        this.shadowRange = Math.min(env.shadow.range, tier.shadowRangeMax);
+        this.shadowFollow = env.shadow.follow;
+        shadow.shadowBound = this.shadowRange;
+        shadow.pcfKernelScale = env.shadow.softness;
+        shadow.updateFrameRate = tier.shadowEvery;
+        this.fitShadowLights();
 
         const fxaa = this.postList()?.get('FXAAPost');
         if (fxaa) fxaa.enable = env.fxaa;
 
-        this.gi.apply(env.gi);
+        this.gi.apply(tier.giRealtime ? env.gi : { ...env.gi, realtime: false });
     }
 
     /**
@@ -405,10 +514,16 @@ export class Runtime {
         const rank = (name: string, post: PostBase) =>
             post.isFinalPass ? 3 : name === 'FXAAPost' ? 2 : custom.has(name) ? 1 : 0;
         const order = this.customPosts.map((p) => p.constructor.name);
+        // Built-in effects the editor does not know keep their place after those it does.
+        const builtin = (name: string) => {
+            const i = BUILTIN_ORDER.indexOf(name);
+            return i < 0 ? BUILTIN_ORDER.length : i;
+        };
         entries.sort((a, b) => {
             const ra = rank(a[0], a[1]), rb = rank(b[0], b[1]);
             if (ra !== rb) return ra - rb;
             if (ra === 1) return order.indexOf(a[0]) - order.indexOf(b[0]);
+            if (ra === 0) return builtin(a[0]) - builtin(b[0]);
             return 0;
         });
         list.clear();

@@ -12,6 +12,8 @@ import type { CameraState, SceneDoc } from '../core/types';
 import { Picker } from '../engine/picking';
 import { RenderGraphController } from '../engine/renderGraph';
 import { Runtime } from '../engine/runtime';
+import { probeDevice } from '../engine/device';
+import { isQualityLevel, pickQuality, QUALITY, resolveQuality } from '../core/quality';
 import { ShaderManager } from '../engine/shaders';
 import { SceneSync } from '../engine/sync';
 import { ScriptCompiler } from '../play/compiler';
@@ -84,19 +86,27 @@ async function main() {
     title.textContent = name;
     status.textContent = 'Starting WebGPU...';
 
+    const store = new Store(game.doc);
+    if (game.camera) store.camera = { ...store.camera, ...game.camera };
+    // The graphics quality this device gets (?quality=low|medium|high overrides it): shadow maps are sized as the engine starts.
+    const params = new URLSearchParams(location.search);
+    const asked = params.get('quality');
+    const override = isQualityLevel(asked) ? asked : null;
+    const quality = resolveQuality(store.doc.environment.quality, pickQuality(await probeDevice()), override);
+
     let runtime: Runtime;
     try {
         // Draw calls and GPU memory are counted only when asked for (?stats): the counting costs a little on every call.
-        runtime = await Runtime.create(canvas, { stats: new URLSearchParams(location.search).has('stats') });
+        runtime = await Runtime.create(canvas, { stats: params.has('stats'), quality });
     } catch (e: any) {
         console.error(e);
         fail(root, 'WebGPU is required', e?.message || String(e), true);
         return;
     }
     runtime.setGridVisible(false);
-
-    const store = new Store(game.doc);
-    if (game.camera) store.camera = { ...store.camera, ...game.camera };
+    runtime.setQualityOverride(override);
+    // As fast as the display refreshes, at the tier's resolution.
+    runtime.setViewport(0, QUALITY[quality].resolution);
     const shaders = new ShaderManager(runtime, store);
     const sync = new SceneSync(runtime, store, shaders);
     const picker = new Picker(runtime, sync, store);
@@ -132,7 +142,7 @@ async function main() {
     loading.classList.add('done');
     setTimeout(() => loading.remove(), 400);
     canvas.focus({ preventScroll: true });
-    (window as any).__player = { runtime, store, sync, player };
+    (window as any).__player = { runtime, store, sync, player, quality };
 }
 
 /**

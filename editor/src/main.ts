@@ -269,7 +269,11 @@ async function main() {
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
     // The viewport's frame rate limit and resolution (View menu, or the frame rate in the status bar).
     runtime.setViewport(store.prefs.viewportFps, store.prefs.viewportQuality);
-    store.on('prefs', (p) => runtime.setViewport(p.viewportFps, p.viewportQuality));
+    runtime.setQualityOverride(store.prefs.previewQuality === 'scene' ? null : store.prefs.previewQuality);
+    store.on('prefs', (p) => {
+        runtime.setViewport(p.viewportFps, p.viewportQuality);
+        runtime.setQualityOverride(p.previewQuality === 'scene' ? null : p.previewQuality);
+    });
     sync.sync();
     runtime.setGridVisible(store.prefs.grid);
     store.on('selection', (sel) => {

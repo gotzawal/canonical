@@ -28,6 +28,7 @@ export let GlobalFog_shader = /* wgsl */ `
 
         overrideSkyFactor: f32,
         isSkyHDR: f32,
+        // Height fog: the height where the fog is 'density' thick.
         slot0: f32,
         slot1: f32,
     };
@@ -95,27 +96,36 @@ export let GlobalFog_shader = /* wgsl */ `
             }
         }else{
             //for ground
-            var fogFactor = calcFogFactor();
-            if(fogUniform.skyFactor > 0.01 || fogUniform.overrideSkyFactor > 0.01){
-                opColor = blendGroundColor(fogFactor);
-            }else{
-            }
-            
+            let fogFactor = calcFogFactor();
             opColor = mix(texColor.rgb, fogUniform.fogColor.xyz, fogFactor);
-            let sunLight = lightBuffer[0] ;
-            var inScatteringValue = inScatterIng(sunLight.direction, texPosition.xyz, sunLight.lightColor);
-            opColor += inScatteringValue;
+            // The sun lights the fog it shines through: as much as there is fog.
+            let sun = sunLight();
+            opColor += inScatterIng(sun.direction, texPosition.xyz, sun.lightColor) * fogFactor;
         }
 
         textureStore(outTex, fragCoord , vec4<f32>(opColor.xyz, texColor.a));
+    }
+
+    // The first directional light that casts shadows (the sun), else the first light.
+    fn sunLight() -> LightData
+    {
+        if (globalUniform.nDirShadowEnd > globalUniform.nDirShadowStart) {
+            let i = u32(globalUniform.nDirShadowStart);
+            return lightBuffer[u32(globalUniform.shadowLights[i / 4u][i % 4u])];
+        }
+        return lightBuffer[0];
     }
 
     fn calcFogFactor() -> f32 
     {
         var cameraPos = globalUniform.cameraWorldMatrix[3].xyz  ;
         let dis = distance(cameraPos, texPosition.xyz);
-        var heightFactor = computeFog(dis) + cFog(-texPosition.y);
-        return clamp(fogUniform.ins * heightFactor,0.0,1.0);
+        var fog = computeFog(dis);
+        // The legacy height term, only with a ray length.
+        if (fogUniform.rayLength > 0.0) {
+            fog += cFog(-texPosition.y);
+        }
+        return clamp(fogUniform.ins * fog, 0.0, 1.0);
     }
 
         
@@ -135,18 +145,48 @@ export let GlobalFog_shader = /* wgsl */ `
     }
 
 
+    // How fogged a point 'z' meters away is: linear from end (clear) to
+    // start (full); exponential (half fogged every 1 / density meters past
+    // end); exponential squared; or height fog.
     fn computeFog(z:f32) -> f32 
     {
+        let d = max(z - fogUniform.end, 0.0);
         var fog = 0.0;
         if( fogUniform.fogType < 0.5 ){
             fog = (fogUniform.end - z) / (fogUniform.end - fogUniform.start);
         }else if(fogUniform.fogType < 1.5 ){
-            fog = exp2(-fogUniform.density * z);
-        }else if(fogUniform.fogType == 2.5 ){
-            fog = fogUniform.density * z;
-            fog = exp2(-fog * fog);
+            fog = 1.0 - exp2(-fogUniform.density * d);
+        }else if(fogUniform.fogType < 2.5 ){
+            let k = fogUniform.density * d;
+            fog = 1.0 - exp2(-k * k);
+        }else{
+            fog = heightFog(z);
         }
         return max(fog,0.0);
+    }
+
+    // Height fog: 'density' thick at the base height (slot0), thinning by
+    // e^-fogHeightScale for each meter up, integrated along the view ray
+    // past the clear distance (end). Without falloff it is the exponential fog.
+    fn heightFog(dist:f32) -> f32
+    {
+        let cam = globalUniform.cameraWorldMatrix[3].xyz;
+        let t0 = clamp(fogUniform.end, 0.0, dist);
+        let len = dist - t0;
+        if (len <= 0.0) {
+            return 0.0;
+        }
+        let dirY = (texPosition.y - cam.y) / max(dist, 0.0001);
+        let b = max(fogUniform.fogHeightScale, 0.00001);
+        let y0 = cam.y + dirY * t0;
+        // ln(2): the same thickness as the exponential fog at the base height.
+        let base = fogUniform.density * 0.6931472 * exp(clamp(-b * (y0 - fogUniform.slot0), -80.0, 80.0));
+        let k = b * dirY;
+        var optical = base * len;
+        if (abs(k * len) > 0.0001) {
+            optical = base * (1.0 - exp(clamp(-k * len, -80.0, 80.0))) / k;
+        }
+        return 1.0 - exp(-max(optical, 0.0));
     }
 
     fn cFog(y:f32) -> f32 

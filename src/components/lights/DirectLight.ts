@@ -30,6 +30,12 @@ export class DirectLight extends LightBase {
     public csmAutoUpdate: boolean = true;
     /** Optional custom cascade split distribution function. */
     public csmSplitFunction: (near: number, far: number, index: number, max: number) => number;
+    /**
+     * Without CSM, the shadow covers its bounds around the camera instead
+     * of around this light's object (snapped to shadow texels, so edges do
+     * not crawl as the camera moves). For levels larger than the bounds.
+     */
+    public shadowFollow: boolean = false;
     protected _enableCSM: boolean = false;
 
     constructor() {

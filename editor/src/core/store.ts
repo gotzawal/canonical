@@ -59,6 +59,8 @@ export interface Prefs {
     viewportFps: ViewportFps;
     /** The viewport's resolution, low by default. Captures (the assistant's, shots) are taken sharp either way. */
     viewportQuality: ViewportQuality;
+    /** A graphics quality tier the viewport shows instead of the scene's ('scene': the scene's, high when auto). */
+    previewQuality: 'scene' | ViewportQuality;
     /**
      * The full editor (hierarchy, inspector, pipeline, code) instead of the
      * simple view, which shows only the scene and the chat with the assistant.
@@ -168,6 +170,7 @@ function defaultPrefs(): Prefs {
         glass: null,
         viewportFps: 30,
         viewportQuality: 'low',
+        previewQuality: 'scene',
         editMode: false,
     };
 }
@@ -176,6 +179,7 @@ function loadPrefs(): Prefs {
     const prefs = { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
     if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = 30;
     if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = 'low';
+    if (!['scene', 'low', 'medium', 'high'].includes(prefs.previewQuality)) prefs.previewQuality = 'scene';
     prefs.editMode = prefs.editMode === true;
     return prefs;
 }
