@@ -52,6 +52,8 @@ import { ReferenceRoom } from './viewport/referenceRoom';
 import { pipelineOverlay } from './ui/pipelineOverlay';
 import { Gizmo } from './viewport/gizmo';
 import { Viewport } from './viewport/viewport';
+import { DerivedAssets } from './derive/derivedAssets';
+import encoderWasm from 'basis-encoder/wasm?url';
 
 const LAYOUT_KEY = 'canonical-editor/layout';
 
@@ -162,7 +164,16 @@ async function main() {
 
     // Hooks below that use the editor or the commands run later, on input.
     const shaders = new ShaderManager(runtime, store);
-    const sync = new SceneSync(runtime, store, shaders);
+    // Compressed copies of the textures (KTX2), made in the background; the scene shows each once it exists.
+    const derived = new DerivedAssets(
+        store,
+        () => new Worker(new URL('./derive/derive.worker.ts', import.meta.url), { type: 'module', name: 'morglay-texture-encoder' }),
+        new URL(encoderWasm, location.href).href,
+        encoderWorkers(),
+    );
+    const sync = new SceneSync(runtime, store, shaders, derived);
+    derived.onRefresh((asset, role) => sync.refreshTexture(asset, role));
+    derived.onReplaced((asset) => sync.reloadAsset(asset));
     const picker = new Picker(runtime, sync, store);
     const camera = new CameraController(runtime, store, picker);
     const gizmo = new Gizmo(store, picker);
@@ -246,7 +257,7 @@ async function main() {
             wheel: (d) => player.wheelEvent(d),
         },
     });
-    const editor: Editor = new Editor({ store, runtime, sync, picker, camera, autosave, shaders, compiler, player, graph, models, viewport });
+    const editor: Editor = new Editor({ store, runtime, sync, picker, camera, autosave, shaders, compiler, player, graph, models, viewport, derived });
     const commands = new Commands(
         editorCommands(editor, {
             rename: () => {
@@ -269,7 +280,11 @@ async function main() {
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
     // The viewport's frame rate limit and resolution (View menu, or the frame rate in the status bar).
     runtime.setViewport(store.prefs.viewportFps, store.prefs.viewportQuality);
-    store.on('prefs', (p) => runtime.setViewport(p.viewportFps, p.viewportQuality));
+    runtime.setQualityOverride(store.prefs.previewQuality === 'scene' ? null : store.prefs.previewQuality);
+    store.on('prefs', (p) => {
+        runtime.setViewport(p.viewportFps, p.viewportQuality);
+        runtime.setQualityOverride(p.previewQuality === 'scene' ? null : p.previewQuality);
+    });
     sync.sync();
     runtime.setGridVisible(store.prefs.grid);
     store.on('selection', (sel) => {
@@ -740,3 +755,10 @@ function unsupported(app: HTMLElement, reason: string) {
 }
 
 void main();
+
+/** Texture encoders to run at once: two on machines with cores and memory to spare, else one. */
+function encoderWorkers(): number {
+    const cores = navigator.hardwareConcurrency || 2;
+    const memory = (navigator as any).deviceMemory ?? 4;
+    return cores >= 8 && memory >= 8 ? 2 : 1;
+}

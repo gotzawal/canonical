@@ -105,6 +105,39 @@ export interface AssetMeta {
     /** Pixel size of images, when known. */
     width?: number;
     height?: number;
+    /** How the game ships a texture or model (see derive/): compressed copies made in the background. */
+    compress?: TextureCompression;
+    /** Fingerprint of a texture's or model's bytes (assets.ts fingerprint): tells a copy made from another file apart. */
+    hash?: string;
+    /**
+     * The file was compressed in the editor and replaced its original (a
+     * texture by KTX2, a model by its packed GLB): the original's name and
+     * size. Games get the file as it is.
+     */
+    packed?: { from: string; size: number };
+}
+
+/**
+ * What a texture is to the materials using it: colors (sampled as sRGB),
+ * a normal map, or other data (roughness, metalness, occlusion), which
+ * compress differently.
+ */
+export type TextureRole = 'color' | 'normal' | 'data';
+
+/**
+ * Compression of a texture asset, or of a model's textures (its geometry
+ * is packed without loss either way). `auto`: small ETC1S for colors,
+ * UASTC for normal and data maps; `high`: UASTC for every role (larger,
+ * sharper); `off`: the original file. `maxSize` caps the longer side, in
+ * pixels.
+ */
+export interface TextureCompression {
+    mode?: 'auto' | 'high' | 'off';
+    maxSize?: number;
+    /** Models: store normals, tangents and animations with meshopt's lossy filters (on unless false). */
+    quantize?: boolean;
+    /** Models: textures of one flat color become the material's factors (on unless false). */
+    flat?: boolean;
 }
 
 /** A JavaScript behaviour that runs in Play mode (see play/script.ts). */

@@ -12,8 +12,11 @@ import type { CameraState, SceneDoc } from '../core/types';
 import { Picker } from '../engine/picking';
 import { RenderGraphController } from '../engine/renderGraph';
 import { Runtime } from '../engine/runtime';
+import { probeDevice } from '../engine/device';
+import { isQualityLevel, pickQuality, QUALITY, resolveQuality } from '../core/quality';
 import { ShaderManager } from '../engine/shaders';
-import { SceneSync } from '../engine/sync';
+import { SceneSync, type TextureSource } from '../engine/sync';
+import { storedCopy } from '../core/derived';
 import { ScriptCompiler } from '../play/compiler';
 import type { ModelServices } from '../play/ai/services';
 import { loadPhysics, usesPhysics } from '../play/physics';
@@ -29,6 +32,8 @@ interface Game {
     /** False when the editor had the scene's scripts paused (previews only). */
     trusted: boolean;
     preview: boolean;
+    /** Where the compressed copies of textures come from. */
+    textures: TextureSource | null;
 }
 
 async function loadGame(): Promise<Game> {
@@ -39,8 +44,22 @@ async function loadGame(): Promise<Game> {
             data = JSON.parse(localStorage.getItem(PREVIEW_KEY) || 'null');
         } catch { /* reported below */ }
         if (!data?.scene) throw new Error('There is nothing to preview. Start a preview from the editor with File > Build & Deploy > Run.');
-        // Assets come from this browser's IndexedDB, which the editor shares.
-        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true };
+        // Assets come from this browser's IndexedDB, which the editor shares, with the compressed copies it made.
+        const models = new Map<string, Promise<string | null>>();
+        const textures: TextureSource = {
+            resolve: storedCopy,
+            model(meta) {
+                let url = models.get(meta.id);
+                if (!url) {
+                    // The loader tells GLB from glTF by the name's extension.
+                    url = storedCopy(meta, 'model').then((blob) => (blob ? URL.createObjectURL(blob) + '#model.glb' : null));
+                    models.set(meta.id, url);
+                }
+                return url;
+            },
+        };
+        // Without compression the built game gets the files, so the preview shows them too.
+        return { title: data.title, doc: data.scene, camera: data.camera, trusted: data.trusted !== false, preview: true, textures: data.compress === false ? null : textures };
     }
     const url = new URL(GAME_FILE, location.href);
     // Revalidate so a redeployed game is picked up right away.
@@ -55,7 +74,21 @@ async function loadGame(): Promise<Game> {
     if (game?.format !== 'canonical-game' || !game.scene) throw new Error(`${GAME_FILE} is not a Morglay game.`);
     const files = game.files ?? {};
     setAssetResolver((meta) => (files[meta.id] ? new URL(files[meta.id], url).href : null));
-    return { title: game.title, doc: game.scene, camera: game.camera, trusted: true, preview: false };
+    // Compressed copies of textures by asset and role, and of models (the originals may not ship at all).
+    const derived = game.derived ?? {};
+    const textures: TextureSource = {
+        async resolve(meta, role) {
+            const path = derived[`${meta.id}|${role}`];
+            if (!path) return null;
+            const r = await fetch(new URL(path, url));
+            return r.ok ? r.blob() : null;
+        },
+        async model(meta) {
+            const path = derived[`${meta.id}|model`];
+            return path ? new URL(path, url).href : null;
+        },
+    };
+    return { title: game.title, doc: game.scene, camera: game.camera, trusted: true, preview: false, textures };
 }
 
 async function main() {
@@ -84,20 +117,29 @@ async function main() {
     title.textContent = name;
     status.textContent = 'Starting WebGPU...';
 
+    const store = new Store(game.doc);
+    if (game.camera) store.camera = { ...store.camera, ...game.camera };
+    // The graphics quality this device gets (?quality=low|medium|high overrides it): shadow maps are sized as the engine starts.
+    const params = new URLSearchParams(location.search);
+    const asked = params.get('quality');
+    const override = isQualityLevel(asked) ? asked : null;
+    const quality = resolveQuality(store.doc.environment.quality, pickQuality(await probeDevice()), override);
+
     let runtime: Runtime;
     try {
-        runtime = await Runtime.create(canvas);
+        // Draw calls and GPU memory are counted only when asked for (?stats): the counting costs a little on every call.
+        runtime = await Runtime.create(canvas, { stats: params.has('stats'), quality });
     } catch (e: any) {
         console.error(e);
         fail(root, 'WebGPU is required', e?.message || String(e), true);
         return;
     }
     runtime.setGridVisible(false);
-
-    const store = new Store(game.doc);
-    if (game.camera) store.camera = { ...store.camera, ...game.camera };
+    runtime.setQualityOverride(override);
+    // As fast as the display refreshes, at the tier's resolution.
+    runtime.setViewport(0, QUALITY[quality].resolution);
     const shaders = new ShaderManager(runtime, store);
-    const sync = new SceneSync(runtime, store, shaders);
+    const sync = new SceneSync(runtime, store, shaders, game.textures, { textureMaxSize: QUALITY[quality].textureMaxSize });
     const picker = new Picker(runtime, sync, store);
     // The view the game was built from, for scenes without a camera node.
     const view = new CameraController(runtime, store, picker);
@@ -131,7 +173,7 @@ async function main() {
     loading.classList.add('done');
     setTimeout(() => loading.remove(), 400);
     canvas.focus({ preventScroll: true });
-    (window as any).__player = { runtime, store, sync, player };
+    (window as any).__player = { runtime, store, sync, player, quality };
 }
 
 /**

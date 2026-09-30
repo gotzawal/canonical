@@ -1,4 +1,3 @@
-#include 'ColorUtil_frag'
 #include 'AtmosphereUniforms'
 
 @group(0) @binding(0) var<uniform> uniformBuffer: UniformData;
@@ -250,8 +249,8 @@ fn mainImage(uv: vec2<f32>) -> vec4<f32> {
     var sky0: vec4<f32> = ComputeSkyInscattering(setting, eye, V, L);
     var sky = vec3<f32>(sky0.rgb);
 
-    sky = ACESToneMapping(sky.rgb, uniformBuffer.hdrExposure);
-    sky = pow(sky.rgb, vec3<f32>(1.0 / 1.2)); // gamma
+    // Linear, as core's sky emits it (sky * 2 there, the default hdrExposure).
+    sky = sky.rgb * uniformBuffer.hdrExposure;
 
     var fragColor: vec4<f32> = vec4<f32>((sky.rgb), 1.0);
     return fragColor;

@@ -14,9 +14,16 @@ export function viewportMenu(store: Store, flat = false): MenuItem[] {
         action: () => store.setPrefs({ viewportQuality: value }),
     }));
     if (flat) return [...rates, { separator: true }, ...qualities];
+    const tiers: MenuItem[] = (['scene', 'low', 'medium', 'high'] as const).map((value) => ({
+        label: value === 'scene' ? 'As the Scene Sets It' : `${value[0].toUpperCase()}${value.slice(1)}`,
+        checked: () => store.prefs.previewQuality === value,
+        action: () => store.setPrefs({ previewQuality: value }),
+    }));
     return [
         { label: 'Viewport Frame Rate', submenu: rates },
         { label: 'Viewport Quality', submenu: qualities },
+        // What a game looks like on weaker devices (shadow map sizes stay the editor's).
+        { label: 'Graphics Quality', submenu: tiers },
     ];
 }
 

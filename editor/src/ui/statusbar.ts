@@ -1,3 +1,4 @@
+import { formatBytes } from '../core/assets';
 import { clearLogs, logEvents, logs } from '../core/log';
 import type { Editor } from '../editor';
 import { onChanges, touches } from './batch';
@@ -32,7 +33,23 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     });
     store.on('prefs', fpsTitle);
     fpsTitle();
+    // What a frame costs: draw calls and the GPU memory the editor asked for (a span: the fps button stays the only button here).
+    const cost = h('span', { class: 'status-item muted mono gpu-cost', attrs: { hidden: !editor.runtime.stats } });
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
+    // Textures and models being compressed for the game in the background (derive/).
+    const compressing = h('span', { class: 'status-item muted compressing', attrs: { hidden: true } });
+    const showCompressing = () => {
+        const n = editor.derived.pending;
+        const models = editor.derived.pendingModels;
+        const count = (k: number, word: string) => `${k} ${word}${k === 1 ? '' : 's'}`;
+        compressing.hidden = n === 0;
+        compressing.textContent = `Compressing ${[n - models ? count(n - models, 'texture') : '', models ? count(models, 'model') : ''].filter(Boolean).join(' and ')}`;
+        compressing.title = store.playing
+            ? 'Compression waits while the game plays.'
+            : 'Making the compressed copies games ship: GPU-compressed textures (KTX2), and models with those textures and packed geometry. The view shows each texture copy once it is made.';
+    };
+    editor.derived.queue.on('change', showCompressing);
+    store.on('playing', showCompressing);
     const b = build();
     const shortSha = b.sha ? b.sha.slice(0, 7) : 'dev';
     const commitUrl = b.repo && b.sha ? `https://github.com/${b.repo}/commit/${b.sha}` : '';
@@ -102,6 +119,19 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     };
     setInterval(() => {
         fps.textContent = `${editor.runtime.fps.toFixed(0)} fps`;
+        const stats = editor.runtime.stats;
+        if (stats) {
+            // The busiest of the last frames, so a frame that skipped passes does not read as less.
+            const s = stats.snapshot(30);
+            const f = s.peak;
+            const m = s.memory;
+            const count = (n: number) => n.toLocaleString('en-US');
+            cost.textContent = `${count(f.draws)} draws · ${formatBytes(m.stable)}`;
+            cost.title = [
+                `Per frame: ${count(f.draws)} draw calls in ${count(f.renderPasses)} render passes, ${count(f.triangles)} triangles, ${count(f.pipelines + f.bindGroups)} pipeline and bind group changes, ${s.cpu.median.toFixed(1)} ms of CPU for the engine (median).`,
+                `GPU memory the editor asked for (an estimate): ${formatBytes(m.stable)}. Images ${formatBytes(m.textures.image.bytes)} (${m.textures.image.count}), render targets and shadow maps ${formatBytes(m.textures.target.bytes)} (${m.textures.target.count}), other textures ${formatBytes(m.textures.other.bytes)}, buffers ${formatBytes(m.buffers.vertex.bytes + m.buffers.index.bytes + m.buffers.uniform.bytes + m.buffers.storage.bytes + m.buffers.other.bytes)}.`,
+            ].join('\n');
+        }
     }, 500);
 
     const playing = h('span', { class: 'status-item play-indicator', attrs: { hidden: true } });
@@ -118,6 +148,6 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
         }
     });
 
-    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, fps, gpu, version, logButton);
+    const bar = h('footer', { class: 'statusbar' }, selection, playing, saved, compressing, fps, cost, gpu, version, logButton);
     return h('div', { class: 'status-wrap' }, drawer, bar);
 }

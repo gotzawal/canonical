@@ -1,174 +1,107 @@
 //https://github.com/KhronosGroup/glTF/tree/main/extensions/2.0/Khronos/KHR_draco_mesh_compression
 
 import { GLTF_Primitives } from "../GLTFInfo";
-import { FileLoader } from "../../../FileLoader";
 import { GLTFSubParser } from "../GLTFSubParser";
 
+/** Where the Draco decoder comes from: its script, the worker around it and its WebAssembly. */
+export interface DracoDecoderAssets {
+    wrapperJs: string;
+    workerJs: string;
+    wasmUrl: string;
+}
+
+interface Pending {
+    resolve: (result: any) => void;
+    reject: (error: Error) => void;
+}
+
 /**
+ * Meshes packed with Draco, decoded in one worker the page shares. The
+ * decoder ships with the engine (packages/draco) and is fetched the first
+ * time a Draco model loads.
  * @internal
  * @group Loader
  */
 export class KHR_draco_mesh_compression {
-    private static _workerCode: string;
-    private static _workers: Map<any, Worker> = new Map()
+    /** Loads the decoder files; replace it to host them somewhere else. */
+    public static assets: () => Promise<DracoDecoderAssets> = () => import('./_DracoAssets');
+
+    private static _worker: Promise<Worker> | null = null;
+    private static _pending = new Map<number, Pending>();
+    private static _nextId = 1;
+    /** Decoded primitives by bufferView, so primitives that share one decode once. */
+    private static _decoded = new WeakMap<object, Map<string, Promise<any>>>();
+
     public static async apply(parser: GLTFSubParser, primitive: GLTF_Primitives) {
-        if (!primitive.extensions) {
-            return;
-        }
+        const args = primitive.extensions?.['KHR_draco_mesh_compression'];
+        if (!args) return;
 
-        const extensionArgs = primitive.extensions['KHR_draco_mesh_compression'];
-        if (!extensionArgs) {
-            return;
+        const view = parser.gltf.bufferViews[args.bufferView];
+        const layout = JSON.stringify(args.attributes);
+        let byLayout = this._decoded.get(view);
+        if (!byLayout) this._decoded.set(view, (byLayout = new Map()));
+        let decoded = byLayout.get(layout);
+        if (!decoded) {
+            // A copy goes to the worker; the parsed bufferView stays whole.
+            const buffer: ArrayBuffer = parser.parseBufferView(args.bufferView);
+            decoded = this.decode(buffer.slice(0), args.attributes);
+            byLayout.set(layout, decoded);
+            decoded.catch(() => byLayout.delete(layout));
         }
+        return decoded;
+    }
 
-        let worker = this._workers.get(parser.gltf)
-        if (!worker) {
-            worker = new Worker(await this.initDecoder())
-            this._workers.set(parser.gltf, worker)
-        }
+    /** Kept for callers that end a load; the shared worker stays for the next Draco model. */
+    public static unload(_gltf: any) {}
 
-        worker.postMessage({
-            type: 'init',
-            decoderConfig: {
-                // wasmBinary: dracoDecoderWasm
-            },
+    /** Stop the worker; pending decodes fail. The next Draco model starts it again. */
+    public static dispose() {
+        const worker = this._worker;
+        this._worker = null;
+        worker?.then((w) => w.terminate(), () => {});
+        this.failAll(new Error('the Draco decoder was disposed'));
+    }
+
+    private static async decode(buffer: ArrayBuffer, attributes: { [name: string]: number }): Promise<any> {
+        const worker = await this.worker();
+        const id = this._nextId++;
+        return new Promise((resolve, reject) => {
+            this._pending.set(id, { resolve, reject });
+            worker.postMessage({ type: 'decode', id, buffer, attributes }, [buffer]);
         });
-
-        let buffer = parser.parseBufferView(extensionArgs.bufferView);
-        if (!buffer.result) {
-            let result = await new Promise((resolve, reject) => {
-                worker.onmessage = e => {
-                    const msg = e.data;
-                    if (msg.type == 'decode') {
-                        resolve(msg.result);
-                    } else if (msg.type == 'error') {
-                        reject(msg.error);
-                    }
-                };
-                worker.postMessage({
-                    type: 'decoder',
-                    buffer: buffer,
-                    attributes: extensionArgs.attributes
-                }, [buffer]);
-            });
-            buffer.result = result;
-        }
-        return buffer.result;
     }
-    public static unload(gltf: any) {
-        let worker = this._workers.get(gltf)
-        if (worker) {
-            worker.terminate()
-            this._workers.delete(gltf)
-        }
+
+    private static worker(): Promise<Worker> {
+        this._worker ??= (async () => {
+            const { wrapperJs, workerJs, wasmUrl } = await this.assets();
+            const response = await fetch(wasmUrl);
+            if (!response.ok) throw new Error(`the Draco decoder failed to load (${response.status})`);
+            const wasm = await response.arrayBuffer();
+            const url = URL.createObjectURL(new Blob([wrapperJs, '\n', workerJs], { type: 'text/javascript' }));
+            const worker = new Worker(url, { name: 'draco-decoder' });
+            worker.onmessage = (e) => {
+                const msg = e.data;
+                const p = this._pending.get(msg?.id);
+                if (!p) return;
+                this._pending.delete(msg.id);
+                if (msg.type === 'done') p.resolve(msg.result);
+                else p.reject(new Error(msg.message || 'Draco decoding failed'));
+            };
+            worker.onerror = (e) => {
+                e.preventDefault?.();
+                worker.terminate();
+                this._worker = null;
+                this.failAll(new Error(`the Draco decoder stopped: ${e.message || 'worker error'}`));
+            };
+            worker.postMessage({ type: 'init', wasm }, [wasm]);
+            return worker;
+        })();
+        this._worker.catch(() => (this._worker = null));
+        return this._worker;
     }
-    protected static async initDecoder() {
-        if (!this._workerCode) {
-            let dracoDecoderJs = await new FileLoader().loadTxt('https://cdn.orillusion.com/draco_decoder_gltf.js');
-            // let dracoDecoderWasm = await new FileLoader().loadBinData('draco/draco_decoder_gltf.js');
-            const blob = new Blob([dracoDecoderJs['data'], '', `(${dracoDecoderWoeker})()`], { type: 'application/javascript' });
-            this._workerCode = URL.createObjectURL(blob);
-        }
-        return this._workerCode;
+
+    private static failAll(error: Error) {
+        for (const [, p] of this._pending) p.reject(error);
+        this._pending.clear();
     }
-}
-
-function dracoDecoderWoeker() {
-    let decoderConfig;
-    let decoderPending;
-    onmessage = e => {
-        const msg = e.data;
-        switch (msg.type) {
-            case 'init':
-                decoderConfig = msg.decoderConfig;
-                decoderPending = new Promise((resolve, reject) => {
-                    decoderConfig.onModuleLoaded = draco => {
-                        resolve({
-                            draco: draco
-                        });
-                    };
-                    // @ts-ignore
-                    DracoDecoderModule(decoderConfig);
-                });
-                break;
-            case 'decoder':
-                const buffer = msg.buffer;
-                const attributes = msg.attributes;
-                decoderPending.then(module => {
-                    const draco = module.draco;
-                    let decoder = new draco.Decoder();
-                    let decoderBuffer = new draco.DecoderBuffer();
-                    decoderBuffer.Init(new Int8Array(buffer), buffer.byteLength);
-
-                    let status, dracoGeometry;
-
-                    try {
-                        const geometryType = decoder.GetEncodedGeometryType(decoderBuffer);
-                        if (geometryType == draco.TRIANGULAR_MESH) {
-                            dracoGeometry = new draco.Mesh();
-                            status = decoder.DecodeBufferToMesh(decoderBuffer, dracoGeometry);
-                        } /*else if (geometryType == draco.POINT_CLOUD) {
-                                dracoGeometry = new draco.PointCloud();
-                                status = decoder.DecodeBufferToPointCloud(decoderBuffer, dracoGeometry);
-                            } */else {
-                            self.postMessage(new Error('INVALID_GEOMETRY_TYPE:' + geometryType));
-                        }
-
-                        if (!status.ok()) {
-                            self.postMessage(new Error('DracoDecode:' + status.error_msg()));
-                        }
-
-                        let result = {};
-                        for (const attributeName in attributes) {
-                            let attribute = decoder.GetAttributeByUniqueId(dracoGeometry, attributes[attributeName]);
-                            const numComponents = attribute.num_components();
-                            const numPoints = dracoGeometry.num_points();
-                            const numValues = numPoints * numComponents;
-                            const byteLength = numValues * Float32Array.BYTES_PER_ELEMENT;
-                            const dataType = draco.DT_FLOAT32; // getDracoDataType(draco, Float32Array);
-                            const ptr = draco._malloc(byteLength);
-                            decoder.GetAttributeDataArrayForAllPoints(dracoGeometry, attribute, dataType, byteLength, ptr);
-                            const array = new Float32Array(draco.HEAPF32.buffer, ptr, numValues).slice();
-                            draco._free(ptr);
-
-                            result[attributeName] = {
-                                data: array,
-                                numComponents,
-                                normalize: false,
-                            };
-                        }
-
-                        {
-                            const numFaces = dracoGeometry.num_faces();
-                            const numIndices = numFaces * 3;
-                            const byteLength = numIndices * 4;
-                            const ptr = draco._malloc(byteLength);
-                            decoder.GetTrianglesUInt32Array(dracoGeometry, byteLength, ptr);
-                            const index = new Uint32Array(draco.HEAPF32.buffer, ptr, numIndices).slice();
-                            draco._free(ptr);
-                            result['indices'] = {
-                                data: index,
-                                numComponents: 1,
-                                normalize: false,
-                            };
-                        }
-
-                        self.postMessage({
-                            type: 'decode',
-                            result
-                        });
-                    } catch (error) {
-                        self.postMessage({
-                            type: 'error',
-                            error: error.message
-                        });
-                    } finally {
-                        draco.destroy(dracoGeometry);
-                        draco.destroy(decoder);
-                        draco.destroy(decoderBuffer);
-                    }
-                });
-                break;
-        }
-    };
 }

@@ -207,12 +207,15 @@ export class ShadowLightsCollect {
         }
 
         if (pointLightList) {
+            // Point and spot shadows follow the directional ones in
+            // shadowLights; every one of them gets a cube map slot. (Starting
+            // the loop at nPointShadowStart skipped the first lights and left
+            // their slots at light 0, drawn as a point light.)
             nPointShadowStart = nDirShadowEnd;
-            let j = 0;
-            for (let i = nPointShadowStart; i < pointLightList.length; i++) {
+            for (let i = 0; i < pointLightList.length; i++) {
                 const light = pointLightList[i];
-                shadowLights[i] = light.lightData.index;
-                light.lightData.castShadowIndex = j++;
+                shadowLights[nPointShadowStart + i] = light.lightData.index;
+                light.lightData.castShadowIndex = i;
             }
             nPointShadowEnd = nPointShadowStart + pointLightList.length;
         }

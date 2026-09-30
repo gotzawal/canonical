@@ -14,6 +14,8 @@ import { CResizeEvent } from '../../../event/CResizeEvent';
 import { bindCtx, Context3D } from '../../graphics/webGpu/Context3D';
 import { RendererPassState } from '../passRenderer/state/RendererPassState';
 import { EngineSetting } from '../../../setting/EngineSetting';
+import type { Camera3D } from '../../../core/Camera3D';
+import { GlobalBindGroup } from '../../graphics/webGpu/core/bindGroups/GlobalBindGroup';
 /**
  * @internal
  * Base class for post-processing effects
@@ -128,6 +130,24 @@ export class PostBase {
             map.set(binding, upstream);
         }
         return upstream;
+    }
+
+    /** The camera each compute's `globalUniform` was last bound to. */
+    private _cameraBindings: WeakMap<ComputeShader, Camera3D> = new WeakMap();
+
+    /**
+     * Bind `binding` (the camera's global uniforms) on `compute` to the
+     * camera the view renders through now. Binding it once, on the first
+     * frame, kept the first camera's matrices after the view switched
+     * cameras (Play mode, a game's player camera): only the rendering
+     * camera's uniforms are updated each frame. Call it every render().
+     */
+    protected bindCamera(compute: ComputeShader, view: View3D, binding: string = 'globalUniform') {
+        const camera = view.camera;
+        if (!camera || this._cameraBindings.get(compute) === camera) return;
+        this._cameraBindings.set(compute, camera);
+        compute.setUniformBuffer(binding, GlobalBindGroup.getCameraGroup(camera).uniformGPUBuffer);
+        compute.bindGroups[0] = null as any;
     }
 
     public compute(view: View3D) { }

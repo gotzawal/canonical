@@ -23,6 +23,11 @@ export class MeshRenderer extends RenderNode {
     public receiveShadow: boolean;
     public morphData: MorphTargetData;
 
+    /** Morph targets bind this renderer's own data into its passes. */
+    protected get hasPerNodeShaderState(): boolean {
+        return !!this.morphData?.enable;
+    }
+
     constructor() {
         super();
     }

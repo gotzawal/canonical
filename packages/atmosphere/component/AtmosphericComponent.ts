@@ -139,7 +139,7 @@ export class AtmosphericComponent extends SkyRenderer {
         if (this._setting.showV1 != value) { this._setting.showV1 = value; this._onChange = true; }
     }
 
-    /** Exposure fed to the tonemap / gamma step of the sky kernel. */
+    /** Linear multiplier on the sky's radiance, baked into the sky and its lighting (2 matches core's sky). */
     public get hdrExposure() { return this._setting.hdrExposure; }
     public set hdrExposure(value) {
         if (this._setting.hdrExposure != value) { this._setting.hdrExposure = value; this._onChange = true; }
@@ -160,6 +160,8 @@ export class AtmosphericComponent extends SkyRenderer {
     private _ensureSky(ctx?: Context3D) {
         if (this._atmosphericScatteringSky) return;
         this._atmosphericScatteringSky = new AtmosphericScatteringSky(this._pendingSetting, ctx);
+        // The constructor baked the settings made so far: no second bake on the first update.
+        this._onChange = false;
         let scene = this.transform.scene3D;
         this.map = this._atmosphericScatteringSky;
         if (this._useAsEnvMap) {

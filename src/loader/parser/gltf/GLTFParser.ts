@@ -4,6 +4,9 @@ import { ParserBase } from '../ParserBase';
 import { ParserFormat } from '../ParserFormat';
 import { GLTF_Info } from './GLTFInfo';
 import { GLTFSubParser } from './GLTFSubParser';
+import { assertSupportedGltfExtensions, preferredImages } from './GLTFExtensions';
+import { EXT_meshopt_compression } from './extends/EXT_meshopt_compression';
+import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
 
 /**
  * GLTF file Parser
@@ -18,6 +21,7 @@ export class GLTFParser extends ParserBase {
         this._gltf = new GLTF_Info();
         this._gltf = { ...this._gltf, ...obj };
         this._gltf.resources = {};
+        assertSupportedGltfExtensions(this._gltf);
         // load bin & texture together
         await Promise.all([this.load_gltf_bin(), this.load_gltf_textures()])
         //step 0: load bin
@@ -158,7 +162,9 @@ export class GLTFParser extends ParserBase {
             let binArray = []
             for (let i = 0; i < this._gltf.buffers.length; i++) {
                 const element = this._gltf.buffers[i];
-                if (element.uri.substring(0, 5) !== 'data:') {
+                // A buffer without a uri has no file to load, and a meshopt
+                // fallback (the geometry uncompressed) is never read.
+                if (element.uri && element.uri.substring(0, 5) !== 'data:' && !EXT_meshopt_compression.isFallback(element)) {
                     let url = StringUtil.parseUrl(this.baseUrl, element.uri)
                     if (this.loaderFunctions?.onUrl)
                         url = await this.loaderFunctions.onUrl(url)
@@ -173,19 +179,32 @@ export class GLTFParser extends ParserBase {
     }
 
     private async load_gltf_textures() {
-        let gltf = this._gltf;
         if (this._gltf.images) {
+            // The image each texture prefers loads now; the others (fallback
+            // sources) only if it fails, from their URL (GLTFSubParser.parseImage).
+            // A failed image fails its texture, not the model.
+            const preferred = preferredImages(this._gltf);
             let textureArray = []
             for (let i = 0; i < this._gltf.images.length; i++) {
                 const element = this._gltf.images[i];
-                if (element.uri) {
-                    let url = StringUtil.parseUrl(this.baseUrl, element.uri)
-                    if (this.loaderFunctions?.onUrl)
-                        url = await this.loaderFunctions.onUrl(url)
+                if (!element.uri || element.uri.startsWith('data:')) continue;
+                let url = StringUtil.parseUrl(this.baseUrl, element.uri)
+                if (this.loaderFunctions?.onUrl)
+                    url = await this.loaderFunctions.onUrl(url)
+                this._gltf.resources['url:' + i] = url;
+                if (!preferred.has(i)) continue;
+                const failed = (e: any) => console.warn(`glTF image ${i} (${element.uri}) failed to load: ${e?.message ?? e}`);
+                if (isKTX2Image(element)) {
+                    // KTX2 is transcoded per role (color or data) by
+                    // GLTFSubParser.parseTexture; only fetch its bytes here.
+                    textureArray.push(new FileLoader(this.ctx).loadBinData(url, this.loaderFunctions).then(data => {
+                        this._gltf.resources['ktx2:' + i] = data;
+                    }, failed));
+                } else {
                     let promise = new FileLoader(this.ctx).loadAsyncBitmapTexture(url, this.loaderFunctions).then(texture => {
                         texture.name = StringUtil.getURLName(element.uri);
                         this._gltf.resources[texture.name] = texture;
-                    })
+                    }, failed)
                     textureArray.push(promise)
                 }
             }

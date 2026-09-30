@@ -63,7 +63,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
     ].join(' '),
     light: [
         'Work on the Lighting stage (pass 1). Every surface stays gray, so only the light is judged. Read the mood with read_design.',
-        'Set the sky and time of day, the key light (apply_key_light points it the way the mood says), fill and interior lights, exposure and global illumination. Keep the shadow-casting lights within the budget.',
+        'Set the sky (atmospheric, or physical for deep sunsets and clouds over outdoor scenes) and time of day, the key light (apply_key_light points it and the sky\'s sun the way the mood says), fill and interior lights (spot lights for pools of light, point lights for lamps), exposure, ambient occlusion and global illumination. Make the shadows cover the play area (set_environment shadow: range, or follow for large levels). Keep the shadow-casting lights within the budget.',
         'Compare every shot with its paintover in grayscale (compare_shot) and adjust until the value structure matches; I mark the shots that match (with the detail level quick, you judge them: mark_shot_matching). Tick what is done with update_checklist and propose completing the stage when it matches.',
         'Answer in the language of the brief.',
     ].join(' '),
@@ -74,7 +74,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
         'Answer in the language of the brief.',
     ].join(' '),
     effects: [
-        'Work on the Effects stage. Add the effects the plan lists (read_design, section effects): particles (add_particles from a preset, then tune it) and post effects such as fog and bloom (set_environment) and a vignette (add_vignette).',
+        'Work on the Effects stage. Add the effects the plan lists (read_design, section effects): particles (add_particles from a preset, then tune it) and post effects with set_environment: fog (height fog for valleys and mist), volumetric fog, god rays through the sun\'s shadows, bloom; and a vignette (add_vignette).',
         'Mark each effect done with update_design as you finish it, compare the shots again (also in grayscale, so the value structure holds) and keep the frame rate within the budget.',
         'Answer in the language of the brief.',
     ].join(' '),

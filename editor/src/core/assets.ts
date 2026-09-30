@@ -35,8 +35,19 @@ export function setAssetResolver(fn: ((meta: AssetMeta) => string | null) | null
 export function kindOf(file: { name: string; type: string }): AssetKind | null {
     const name = file.name.toLowerCase();
     if (name.endsWith('.glb') || name.endsWith('.gltf')) return 'model';
-    if (/\.(png|jpe?g|webp|gif|bmp|avif)$/.test(name) || file.type.startsWith('image/')) return 'texture';
+    if (/\.(png|jpe?g|webp|gif|bmp|avif|ktx2)$/.test(name) || file.type.startsWith('image/')) return 'texture';
     return null;
+}
+
+/** A short fingerprint of a file's bytes (SHA-256), where the browser can make one (secure pages). */
+export async function fingerprint(blob: Blob): Promise<string | undefined> {
+    if (typeof crypto === 'undefined' || !crypto.subtle) return undefined;
+    try {
+        const digest = new Uint8Array(await crypto.subtle.digest('SHA-256', await blob.arrayBuffer()));
+        return Array.from(digest.subarray(0, 12), (b) => b.toString(16).padStart(2, '0')).join('');
+    } catch {
+        return undefined;
+    }
 }
 
 /**
@@ -45,6 +56,11 @@ export function kindOf(file: { name: string; type: string }): AssetKind | null {
  */
 export async function putAsset(blob: Blob, name: string, kind: AssetKind, id = uid('a'), extra: Partial<AssetMeta> = {}): Promise<AssetMeta> {
     const meta: AssetMeta = { ...extra, id, name, kind, mime: blob.type || guessMime(name), size: blob.size };
+    // Textures and models get a fingerprint: a compressed copy made from other bytes under this id is stale (core/derived.ts).
+    if (kind === 'texture' || kind === 'model') {
+        const hash = await fingerprint(blob);
+        if (hash) meta.hash = hash;
+    }
     const record: AssetRecord = { ...meta, blob };
     memory.set(id, record);
     forgetUrl(id);
@@ -143,6 +159,7 @@ function guessMime(name: string): string {
     if (n.endsWith('.png')) return 'image/png';
     if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
     if (n.endsWith('.webp')) return 'image/webp';
+    if (n.endsWith('.ktx2')) return 'image/ktx2';
     if (n.endsWith('.json')) return 'application/json';
     return 'application/octet-stream';
 }

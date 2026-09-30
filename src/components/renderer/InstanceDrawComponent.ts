@@ -22,6 +22,11 @@ export class InstanceDrawComponent extends RenderNode {
     private _keyBufferGroup: Map<string, StorageGPUBuffer>;
     private _keyIdsGroup: Map<string, number[]>;
 
+    /** Its instances are bound into its passes. */
+    protected get hasPerNodeShaderState(): boolean {
+        return true;
+    }
+
     constructor() {
         super();
     }

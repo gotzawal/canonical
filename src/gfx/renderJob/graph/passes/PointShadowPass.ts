@@ -51,7 +51,8 @@ export class PointShadowPass extends RenderGraphPass {
 
     public cubeArrayTexture!: DepthCubeArrayTexture;
     public colorTexture!: VirtualTexture;
-    public readonly shadowSize: number = 1024;
+    /** Size of each cube face, from setting.shadow.pointShadowSize when the pass is set up. */
+    public shadowSize: number = 1024;
     public shadowPassCount: number = 0;
 
     protected readonly _passType: PassType = PassType.POINT_SHADOW;
@@ -60,6 +61,8 @@ export class PointShadowPass extends RenderGraphPass {
 
     public setup(b: RenderGraphBuilder): void {
         const ctx = b.context3D;
+        // 8 lights x 6 faces: 192 MiB at 1024, 48 MiB at 512.
+        this.shadowSize = Math.max(64, ctx.engine?.setting.shadow.pointShadowSize || 1024);
         this.cubeArrayTexture = new DepthCubeArrayTexture(this.shadowSize, this.shadowSize, 8, ctx);
         this.colorTexture = new VirtualTexture(this.shadowSize, this.shadowSize, GPUTextureFormat.bgra8unorm, false, undefined, 1, 0, 1, ctx);
         Reference.getInstance().attached(this.cubeArrayTexture, this);

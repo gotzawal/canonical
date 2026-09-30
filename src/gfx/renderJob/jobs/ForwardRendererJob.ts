@@ -45,7 +45,8 @@ export class ForwardRendererJob extends RendererJob {
         const setting = view.engine3D.setting;
         const giEnabled = !!setting.gi.enable;
         const useOIT = !!(setting.render as any).useOIT;
-        const useGPUCull = !!(setting.render as any).gpuCull;
+        // Its indirect draws carry a firstInstance, which needs indirect-first-instance.
+        const useGPUCull = !!(setting.render as any).gpuCull && !!view.engine3D.context3D?.hasFeature('indirect-first-instance');
         const useDecals = !!(setting.render as any).decals;
 
         // Cluster lighting — runs first so downstream passes can

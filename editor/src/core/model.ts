@@ -335,13 +335,26 @@ export const GI = group({
 }).overwrite((g) => ({ ...g, counts: clampGIGrid(g.counts) }));
 export type GIDoc = z.output<typeof GI>;
 
+export const SKY_TYPES = ['atmospheric', 'physical', 'color'] as const;
+
 export const Environment = z.object({
-    sky: oneOf(['atmospheric', 'color'], 'atmospheric', { labels: { atmospheric: 'Atmospheric', color: 'Solid Color' } }),
+    sky: oneOf(SKY_TYPES, 'atmospheric', {
+        labels: { atmospheric: 'Atmospheric', physical: 'Physical Sky', color: 'Solid Color' },
+        description: 'atmospheric: a fast sky with a sun; physical: a physically based sky (light scattered many times, deep sunsets, optional clouds; each change takes longer to redraw); color: one flat color. The sky also lights the scene.',
+    }),
     skyColor: color('#3a4250'),
-    /** Atmospheric sun azimuth and elevation, 0..1. */
-    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Atmospheric sun azimuth 0..1.' }),
-    sunY: unit(0.6, { title: 'Sun Height', step: 0.005, precision: 3, description: 'Atmospheric sun elevation 0..1.' }),
+    /** Sky sun azimuth and elevation, 0..1. */
+    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light.' }),
+    sunY: unit(0.6, { title: 'Sun Height', step: 0.005, precision: 3, description: 'Sky sun elevation 0..1: 0.5 on the horizon, 1 straight up.' }),
     skyExposure: num(1, 0, 4, { step: 0.01, slider: true }),
+    /** The sun and air of the atmospheric and physical skies. */
+    atmosphere: group({
+        sunSize: num(1, 0.1, 5, { step: 0.01, slider: true, description: 'Size of the sun disc: 1 is about 3.6 degrees across.' }),
+        sunBrightness: num(1, 0, 10, { step: 0.01, slider: true, description: 'Brightness of the sun disc (not of the light).' }),
+        showSun: bool(true, { title: 'Show Sun', description: 'Draw the sun disc.' }),
+        altitude: num(1500, 0, 10000, { step: 10, precision: 0, description: 'Height of the viewer in the air, meters: higher sees a darker, clearer sky.' }),
+        clouds: bool(false, { description: 'Physical sky only: a cloud layer 3-5 km up. The clouds do not move, and each sky change takes much longer to redraw with them.' }),
+    }),
     /** Tonemap exposure. */
     exposure: num(1, 0, 4, { step: 0.01, slider: true }),
     fxaa: bool(true, { title: 'Anti-aliasing', description: 'FXAA.' }),
@@ -349,10 +362,48 @@ export const Environment = z.object({
     ao: group({ enable: enabled(), strength: num(1, 0.01, 1, { step: 0.01, slider: true }), distance: num(1, 0.1, 10, { step: 0.05, slider: true }) }),
     fog: group({
         enable: enabled(),
+        mode: oneOf(['linear', 'exponential', 'height'], 'linear', {
+            labels: { linear: 'Linear', exponential: 'Exponential', height: 'Height' },
+            description: 'linear: from clear at Start to full at End; exponential: thickens with distance past Start; height: thick low down and thinning upward (valleys, mist over water).',
+        }),
         color: color('#aab4be'),
-        near: num(5, 0, Infinity, { title: 'Start', step: 0.1 }),
-        far: num(80, 0.1, Infinity, { title: 'End', step: 0.5 }),
+        near: num(5, 0, Infinity, { title: 'Start', step: 0.1, description: 'No fog closer than this, meters.' }),
+        far: num(80, 0.1, Infinity, { title: 'End', step: 0.5, description: 'Linear fog: full fog from this distance, meters.' }),
+        density: num(0.02, 0, 1, { step: 0.001, precision: 3, description: 'Exponential and height fog: half the view is fogged every 1 / density meters past Start (0.02: 50 m).' }),
+        height: num(0, -1000, 1000, { title: 'Base Height', step: 0.1, description: 'Height fog: the height where the fog has its density.' }),
+        heightFalloff: num(0.1, 0.001, 2, { step: 0.005, precision: 3, description: 'Height fog: how fast it thins upward, per meter (0.1 halves about every 7 m).' }),
         intensity: unit(1, { title: 'Amount' }),
+        sky: unit(0.8, { title: 'Sky Fog', description: 'How much the sky takes the fog color.' }),
+        sunScatter: unit(1, { title: 'Sun Glow', description: 'The fog glows looking toward the sun.' }),
+        sunFocus: num(2.7, 1, 40, { title: 'Sun Glow Focus', step: 0.1, slider: true, description: 'Higher keeps the glow closer around the sun.' }),
+    }),
+    /** Directional shadows. */
+    shadow: group({
+        range: num(60, 5, 1000, { step: 1, precision: 0, description: 'Meters the directional shadows cover: around the directional light object, or around the camera with Follow Camera. A larger range covers more with blurrier shadows.' }),
+        softness: num(1, 0.25, 4, { step: 0.05, slider: true, description: 'Width of the blur at shadow edges, in shadow texels.' }),
+        follow: bool(false, { title: 'Follow Camera', description: 'Shadows cover their range around the camera instead of around the light object: for levels larger than the range.' }),
+    }),
+    godRays: group({
+        enable: enabled({ description: 'Light shafts: the sun (the first directional light that casts shadows) shining through gaps between shadows.' }),
+        intensity: num(0.5, 0.01, 5, { step: 0.01, slider: true }),
+        focus: num(5, 1, 40, { step: 0.5, slider: true, description: 'Higher keeps the shafts closer to the direction of the sun.' }),
+    }),
+    volumetricFog: group({
+        enable: enabled({ description: 'Fog lit by the sun that thickens with distance, brighter looking toward the sun (no shafts).' }),
+        density: num(0.02, 0, 0.5, { step: 0.001, precision: 3, description: 'Thickness per meter.' }),
+        scattering: num(1, 0, 5, { step: 0.05, slider: true, description: 'How bright the sun makes the fog.' }),
+        anisotropy: num(0.6, -0.95, 0.95, { step: 0.01, slider: true, description: 'Positive: brightest looking toward the sun; negative: looking away from it.' }),
+        distance: num(60, 1, 1000, { step: 1, description: 'Farthest distance, meters; the sky gets this much fog.' }),
+        ambient: color('#272738', { description: 'Color of the fog away from the sun.' }),
+    }),
+    /**
+     * Graphics quality of built games. The editor shows the tier the scene
+     * names (high for auto) unless View > Graphics Quality picks another.
+     */
+    quality: oneOf(['auto', 'low', 'medium', 'high'], 'auto', {
+        title: 'Graphics Quality',
+        labels: { auto: 'Auto (per device)', low: 'Low', medium: 'Medium', high: 'High' },
+        description: 'Built games: auto picks low on phones and weak GPUs, medium on integrated GPUs, high on dedicated ones; another value holds every device at that tier, and the editor shows it too. Lower tiers use smaller shadow maps, cover less shadow range, skip ambient occlusion and god rays, and render at a lower resolution.',
     }),
     gi: GI,
 });

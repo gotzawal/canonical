@@ -234,7 +234,9 @@ export class ShadowPass extends RenderGraphPass {
         // Pass-side layer mask + shadow-camera's own cullingMask filter
         // which renderers cast into this shadow map. Default
         // layerMask=All keeps the old "every node casts shadow" path.
-        const layered = this.collectLayered(view, shadowCamera);
+        // Casters outside the shadow camera's sides cannot reach the map;
+        // those between the light and its near plane still can.
+        const layered = this.collectLayered(view, shadowCamera, 'shadow');
         const command = gpu.beginCommandEncoder();
         const encoder = gpu.beginRenderPass(command, state);
 
@@ -304,11 +306,39 @@ export class ShadowPass extends RenderGraphPass {
     }
 
     protected _poseShadowCamera(dirLight: DirectLight, viewCamera: Camera3D, direction: Vector3, shadowCamera: Camera3D, _extents: number, _lookAt: Vector3): void {
-        this._shadowPos.copy(dirLight.transform.worldPosition);
+        if (dirLight.shadowFollow) {
+            this._followCamera(dirLight, viewCamera, direction);
+        } else {
+            this._shadowPos.copy(dirLight.transform.worldPosition);
+        }
         this._shadowCameraTarget.copy(direction).normalize(viewCamera.far);
         Vector3.add(this._shadowCameraTarget, this._shadowPos, this._shadowCameraTarget);
         shadowCamera.transform.lookAt(this._shadowPos, this._shadowCameraTarget);
         shadowCamera.orthoOffCenter(shadowCamera.left, shadowCamera.right, shadowCamera.bottom, shadowCamera.top, shadowCamera.near, shadowCamera.far);
+    }
+
+    /**
+     * Puts the shadow's center (into _shadowPos) a quarter of its width in
+     * front of the view camera, snapped to shadow texels in the light's
+     * plane so the map's grid does not slide under the scene.
+     */
+    protected _followCamera(dirLight: DirectLight, viewCamera: Camera3D, direction: Vector3): void {
+        const width = Math.max(dirLight.shadowBoundWidth || 1, dirLight.shadowBoundHeight || 1);
+        const m = viewCamera.transform.worldMatrix.rawData;
+        const center = this._shadowPos;
+        center.set(m[12] + m[8] * width * 0.25, m[13] + m[9] * width * 0.25, m[14] + m[10] * width * 0.25);
+        const forward = Vector3.HELP_3.copy(direction).normalize();
+        const refUp = Math.abs(forward.y) < 0.99 ? Vector3.UP : Vector3.FORWARD;
+        const right = Vector3.cross(refUp, forward, Vector3.HELP_4).normalize();
+        const up = Vector3.cross(forward, right, Vector3.HELP_5).normalize();
+        const texel = width / Math.max(1, dirLight.shadowMapWidth || 1);
+        const cx = Math.round(Vector3.dot(center, right) / texel) * texel;
+        const cy = Math.round(Vector3.dot(center, up) / texel) * texel;
+        const cz = Vector3.dot(center, forward);
+        center.set(0, 0, 0);
+        Vector3.addScaledVector(center, right, cx, center);
+        Vector3.addScaledVector(center, up, cy, center);
+        Vector3.addScaledVector(center, forward, cz, center);
     }
 
     /** One-shot diagnostic: probes the first shadow VirtualTexture

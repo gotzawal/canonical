@@ -114,7 +114,7 @@ export class PreDepthPass extends RenderGraphPass {
         this._passState = passState;
         passState.camera3D = camera;
 
-        const layered = this.collectLayered(view);
+        const layered = this.collectLayered(view, camera, 'frustum');
         const opBundles = buildOpBundles(view, camera, this._passType, passState);
 
         if (opBundles.length > 0) encoder.executeBundles(opBundles);

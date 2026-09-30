@@ -12,13 +12,21 @@ export type GlobalFogSetting = {
     enable: boolean;
     /**
      * type of fog:
-     * 0: linear exponent 2: squar exponent
+     * 0: linear from `end` (clear) to `start` (full);
+     * 1: exponential, `density` per meter past `end`;
+     * 2: exponential squared, likewise;
+     * 3: height fog: `density` at `heightBase`, thinning upward by
+     *    `fogHeightScale` per meter, past `end`.
      */
     fogType: number;
     /**
-     * Setting the Influence of Height on Fog
+     * Height fog: how fast the fog thins upward, per meter (e^-scale for each meter up).
      */
     fogHeightScale: number;
+    /**
+     * Height fog: the height where the fog is `density` thick.
+     */
+    heightBase?: number;
     /**
      * If the distance between the object and the camera is set as distance, the fog concentration will be linear interpolation between start and end
      */
@@ -53,6 +61,7 @@ export type GlobalFogSetting = {
     fogColor: Color,
 
     falloff: number,
+    /** Length of the legacy height term's ray; 0 turns that term off. */
     rayLength: number,
     scatteringExponent: number,
     dirHeightLine: number

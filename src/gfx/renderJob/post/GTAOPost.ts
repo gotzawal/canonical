@@ -202,10 +202,8 @@ export class GTAOPost extends PostBase {
 
             this.rendererPassState = WebGPUDescriptorCreator.createRendererPassState(view.engine3D.context3D, this.rtFrame, null);
             this.rendererPassState.label = "GTAO";
-
-            let globalUniform = GlobalBindGroup.getCameraGroup(view.camera);
-            this.gtaoCompute.setUniformBuffer('globalUniform', globalUniform.uniformGPUBuffer);
         }
+        this.bindCamera(this.gtaoCompute, view);
         this.bindUpstream(this.gtaoCompute, 'inTex');
         let cfg = this.setting.render.postProcessing.gtao;
 

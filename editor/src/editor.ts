@@ -1,7 +1,8 @@
 import { applyBehaviorOps, writeBehaviorChanges, type OpsMode, type OpsResult } from './core/behavior/ops';
 import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { makeCharacterNode } from './core/character';
-import { kindOf, putAsset } from './core/assets';
+import { formatBytes, kindOf, putAsset } from './core/assets';
+import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
@@ -18,7 +19,7 @@ import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
     GeometryType, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
-    ShaderKind, Vec3,
+    ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
 import type { RenderGraphController } from './engine/renderGraph';
@@ -34,6 +35,7 @@ import type { RoomSample } from './design/materialSlots';
 import { Pipeline } from './design/pipeline';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
+import type { DerivedAssets } from './derive/derivedAssets';
 import { exampleGuard, exampleShowcase } from './examples';
 
 /** What the editor works with; main.ts makes them. */
@@ -51,6 +53,8 @@ export interface EditorDeps {
     /** The models of the agents. */
     models: ModelServices;
     viewport: Viewport;
+    /** Compressed copies of the textures (KTX2) games ship. */
+    derived: DerivedAssets;
 }
 
 /** What the viewport shows: the scene, or the walk camera or the reference room (viewport/walk.ts, referenceRoom.ts). */
@@ -389,6 +393,22 @@ export class Editor extends Emitter<EditorEvents> {
             this.addModel(meta.id, at, true);
         });
         toast(`Imported ${file.name}`, 'success');
+        this.compressImported(meta.id);
+    }
+
+    /** With Prefs.compressImports, an imported file is compressed and replaces its original once that is done (the view shows the file meanwhile). */
+    private compressImported(assetId: string) {
+        if (!this.store.prefs.compressImports) return;
+        void this.derived.packFile(assetId).then((packed) => {
+            if (packed?.packed) toast(`Compressed ${packed.packed.from}: ${formatBytes(packed.packed.size)} to ${formatBytes(packed.size)}.`, 'info');
+        });
+    }
+
+    /** Compresses the files of these assets (every texture and model when none are given) and keeps only the compressed files. */
+    async compressFiles(ids?: string[]): Promise<number> {
+        const list = (ids ?? this.store.doc.assets.filter((a) => a.kind === 'texture' || a.kind === 'model').map((a) => a.id));
+        const done = await Promise.all(list.map((id) => this.derived.packFile(id)));
+        return done.filter(Boolean).length;
     }
 
     addModel(assetId: string, at?: Vec3, frame = false) {
@@ -434,6 +454,7 @@ export class Editor extends Emitter<EditorEvents> {
             for (const n of doc.nodes) if (targets.includes(n.id) && n.mesh) n.mesh.material.map = meta.id;
         });
         toast(targets.length ? `Applied ${file.name} to ${targets.length} object(s)` : `Imported ${file.name}. Assign it from the Material section.`, 'success');
+        this.compressImported(meta.id);
     }
 
     applyTexture(assetId: string | null, ids = this.store.selection) {
@@ -681,9 +702,15 @@ export class Editor extends Emitter<EditorEvents> {
             delete p.modelOffset;
             regenerate(doc, p.id);
         });
-        if (existed) this.sync.reloadAsset(meta.id);
+        if (existed) {
+            this.sync.reloadAsset(meta.id);
+            // Copies of the file it replaced are of no use any more.
+            void deleteDerivedOf([meta.id]);
+            this.derived.forget(meta.id);
+        }
         this.settlePrefabModel(prefab.id);
         toast(`${prefab.name} now shows ${picked.name}.`, 'success');
+        this.compressImported(meta.id);
     }
 
     /** Once the model of a prefab has loaded, moves it so its bottom center sits on the pivot. */
@@ -1396,8 +1423,31 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     async importTextureDialog() {
-        const files = await pickFiles('image/*', true);
+        const files = await pickFiles('image/*,.ktx2', true);
         if (files.length) await this.importFiles(files);
+    }
+
+    /**
+     * Sets how a texture or model asset is compressed for games (mode,
+     * largest texture size); its copies are made again for the new options.
+     */
+    setTextureCompression(assetId: string, patch: Partial<TextureCompression>) {
+        const meta = this.store.doc.assets.find((a) => a.id === assetId);
+        if (!meta || (meta.kind !== 'texture' && meta.kind !== 'model')) return;
+        const next: TextureCompression = { ...meta.compress, ...patch };
+        if (next.mode === 'auto' || !next.mode) delete next.mode;
+        if (!next.maxSize) delete next.maxSize;
+        // On unless turned off.
+        if (next.quantize !== false) delete next.quantize;
+        if (next.flat !== false) delete next.flat;
+        if (JSON.stringify(next) === JSON.stringify(meta.compress ?? {})) return;
+        // The copies are not part of the document, so only the assets change.
+        this.store.commit('Texture Compression', (doc) => {
+            const a = doc.assets.find((x) => x.id === assetId);
+            if (!a) return;
+            if (Object.keys(next).length) a.compress = next;
+            else delete a.compress;
+        }, { design: true });
     }
 
     // ----------------------------------------------------------------- view

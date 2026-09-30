@@ -80,9 +80,6 @@ export class VolumetricFogPost extends PostBase {
         this._compute.setSamplerTexture('gBufferTexture', rtFrame.getCompressGBufferTexture());
         this._compute.setSamplerTexture('inTex', this.getLastRenderTexture());
         this._compute.setStorageTexture('outTex', this._outTex);
-
-        const cameraGroup = GlobalBindGroup.getCameraGroup(view.camera);
-        this._compute.setUniformBuffer('globalUniform', cameraGroup.uniformGPUBuffer);
     }
 
     private _uploadSettings() {
@@ -108,6 +105,7 @@ export class VolumetricFogPost extends PostBase {
             this.rendererPassState = WebGPUDescriptorCreator.createRendererPassState(view.engine3D.context3D, this._rtFrame, null);
             this.rendererPassState.label = 'VolumetricFog';
         }
+        this.bindCamera(this._compute, view);
         this.bindUpstream(this._compute, 'inTex');
         this._uploadSettings();
         this._boundCtx!.gpuContext.computeCommand(command, [this._compute]);

@@ -23,13 +23,15 @@ interface DeploySettings {
     create: boolean;
     /** Keep the token in localStorage (otherwise only while this tab is open). */
     remember: boolean;
+    /** Ship textures and models as compressed copies, made when missing. */
+    compress: boolean;
 }
 
 /** The token for this tab when it is not remembered. */
 let sessionToken = '';
 
 function loadSettings(): DeploySettings {
-    return { create: true, remember: false, ...readLocal<Partial<DeploySettings>>(DEPLOY_KEY, {}) };
+    return { create: true, remember: false, compress: true, ...readLocal<Partial<DeploySettings>>(DEPLOY_KEY, {}) };
 }
 
 function saveSettings(s: DeploySettings) {
@@ -60,6 +62,7 @@ export function openPreview(editor: Editor, title: string): boolean {
         scene: gameScene(store.doc, true),
         camera: store.camera,
         trusted: editor.compiler.trusted,
+        compress: loadSettings().compress,
     };
     try {
         localStorage.setItem(PREVIEW_KEY, JSON.stringify(data));
@@ -176,6 +179,11 @@ export function showBuildDialog(editor: Editor) {
     branchInput.addEventListener('keydown', (e) => e.stopPropagation());
     let create = settings.create;
     const createBox = new CheckboxField(create, (v) => (create = v), 'Create the repository if it does not exist');
+    let compress = settings.compress;
+    const compressBox = new CheckboxField(compress, (v) => {
+        compress = v;
+        saveSettings({ ...loadSettings(), compress });
+    }, 'Compress textures and models');
 
     const deployBtn = button('Deploy', () => void run(async () => {
         const token = tokenInput.value.trim();
@@ -183,7 +191,7 @@ export function showBuildDialog(editor: Editor) {
         const repo = repoInput.value.trim() || slug(title());
         const branch = branchInput.value.trim() || 'gh-pages';
         saveToken(token, remember);
-        saveSettings({ create, remember });
+        saveSettings({ create, remember, compress });
         // The scene remembers where it was deployed (see saveBuildDoc), so its next deploy goes there too.
         if (!repoInput.value.trim()) repoInput.value = repo;
         const game = await build();
@@ -271,7 +279,7 @@ export function showBuildDialog(editor: Editor) {
         logEl.replaceChildren();
         result.hidden = true;
         if (import.meta.env.DEV) log('The dev server builds the player app first; the first build takes a while.');
-        const game = await buildGame(store.doc, { title: title(), camera: store.camera, scripts: editor.compiler.trusted }, (t) => log(t));
+        const game = await buildGame(store.doc, { title: title(), camera: store.camera, scripts: editor.compiler.trusted }, (t) => log(t), compress ? editor.derived : undefined);
         for (const w of game.warnings) log(w, 'error');
         log(`Built "${game.title}": ${game.files.length} files, ${formatBytes(game.size)}.`);
         return game;
@@ -281,6 +289,7 @@ export function showBuildDialog(editor: Editor) {
         'div',
         { class: 'build-dialog' },
         row('Title', titleInput, 'Shown as the page title of the game'),
+        row('Compress', compressBox.el, 'Ships each texture as a GPU-compressed copy (a quarter or less of the video memory, usually a smaller download) and each model with such textures and packed geometry. Copies are made in the background while you edit; a build makes the missing ones, which takes a few seconds a texture.'),
         summary,
         notes,
         h('h3', null, icon('play', 14), h('span', { text: 'Test' })),

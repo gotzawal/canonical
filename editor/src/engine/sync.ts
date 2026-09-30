@@ -1,12 +1,13 @@
 import {
-    BoxGeometry, Color, CylinderGeometry, DirectLight, GeometryBase, LightBase, LitMaterial, Material, MeshRenderer,
-    Object3D, PlaneGeometry, PointLight, RenderNode, RendererMask, SphereGeometry, SpotLight, Texture, TorusGeometry,
-    UnLitMaterial,
+    BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, isKTX2, LightBase, LitMaterial, Material, MeshRenderer,
+    Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer, SkinnedMeshRenderer2,
+    SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { AnimationDoc, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc } from '../core/types';
+import type { AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole } from '../core/types';
+import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
@@ -46,13 +47,12 @@ export interface Entry {
     mesh: MeshRenderer | null;
     geometry: GeometryBase | null;
     geometryKey: string;
-    material: Material | null;
+    /** The material it shows, shared with the objects whose materials are the same. */
+    material: SharedMaterial | null;
     /** 'lit', 'unlit', 'lambert', 'shader:<id>:<version>' or 'shader-missing'. */
     materialKind: string;
+    /** Its material's key among the shared materials. */
     materialKey: string;
-    /** Texture assets shown in the material's maps. */
-    maps: MaterialMaps | null;
-    paramAssets: Record<string, string>;
     light: LightBase | null;
     lightType: LightType | null;
     lightKey: string;
@@ -61,6 +61,18 @@ export interface Entry {
     particlesKey: string;
     /** Increases with every rebuild, so a late texture load does not build an outdated emitter. */
     particlesToken: number;
+}
+
+/** An engine material and the objects showing it (see SceneSync.materials). */
+interface SharedMaterial {
+    key: string;
+    kind: string;
+    material: Material;
+    /** Texture assets shown in the material's maps. */
+    maps: MaterialMaps;
+    paramAssets: Record<string, string>;
+    /** Objects showing it. */
+    users: number;
 }
 
 interface SyncEvents {
@@ -75,6 +87,19 @@ const LIGHT_CLASSES: Record<LightType, new () => LightBase> = {
 };
 
 let loadToken = 0;
+
+/**
+ * Where compressed copies of assets come from (derive/ in the editor, the
+ * game's files in a built game): the copy of a texture for a role, that a
+ * texture or model is shown from its file (so its copy can be made), and
+ * the URL of a model's copy (games only: the editor shows model files).
+ */
+export interface TextureSource {
+    resolve(meta: AssetMeta, role: TextureRole): Promise<Blob | null>;
+    used?(meta: AssetMeta, role: DerivedRole): void;
+    /** A URL ending in .glb, or null to load the file. */
+    model?(meta: AssetMeta): Promise<string | null>;
+}
 
 /**
  * Keeps the engine scene in step with the document. Every change is a
@@ -93,10 +118,42 @@ export class SceneSync extends Emitter<SyncEvents> {
     private envOverride: EnvironmentDoc | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
+    /** Texture assets by `${asset}|${role}`: the texture, once it has data. */
     private textures = new Map<string, Promise<Texture | null>>();
+    /**
+     * The texture of each loaded `${asset}|${role}`. It stays the same
+     * object while its data changes (a replaced file, a compressed copy
+     * made), so everything showing it keeps it and rebinds.
+     */
+    private assetTextures = new Map<string, CompressedTexture2D>();
+    /** Fills of each texture, one after the other. */
+    private fills = new Map<string, Promise<void>>();
+    /**
+     * Shapes by their document (JSON): objects of the same shape share one
+     * geometry (its GPU buffers, and consecutive draws skip binding it
+     * again). The map holds a reference of its own, so the engine never
+     * frees a shape here; sweepGeometries frees those no object shows.
+     */
+    private geometries = new Map<string, GeometryBase>();
+    private geometriesChanged = false;
+    /**
+     * Materials by their document (their kind and fields): objects whose
+     * materials are the same (material slots, repeated props) share one,
+     * so they draw with the same bindings and a change is applied once. A
+     * material only one object shows changes in place when that object's
+     * material changes; a shared one never does, the object gets another.
+     * Objects with scripts or a behavior tree keep one of their own (their
+     * code may change it). Like the shapes, the map holds a reference.
+     */
+    private materials = new Map<string, SharedMaterial>();
+    private materialsChanged = false;
 
-    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager) {
+    /** Textures load at most this large (the longer side): games on a low quality tier skip the top mips. */
+    private readonly textureMaxSize: number;
+
+    constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null, opts: { textureMaxSize?: number } = {}) {
         super();
+        this.textureMaxSize = opts.textureMaxSize ?? Infinity;
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
@@ -121,7 +178,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                 if (hint.transform) this.applyTransform(entry, node);
                 else this.apply(node);
             }
-            if (!hint.transform) this.updateVisibility(hint.nodes);
+            if (!hint.transform) {
+                this.updateVisibility(hint.nodes);
+                this.sweep();
+            }
             return;
         }
         const alive = new Set<string>();
@@ -137,6 +197,38 @@ export class SceneSync extends Emitter<SyncEvents> {
         }
         for (const node of doc.nodes) this.apply(node);
         this.updateVisibility();
+        this.sweep();
+    }
+
+    /** Frees the shapes and materials no object shows any more. */
+    private sweep() {
+        this.sweepGeometries();
+        this.sweepMaterials();
+    }
+
+    /** The shared geometry of a shape. */
+    private geometryFor(key: string, doc: GeometryDoc): GeometryBase {
+        let g = this.geometries.get(key);
+        if (!g) {
+            g = buildGeometry(doc);
+            this.geometries.set(key, g);
+            Reference.getInstance().attached(g, this.geometries);
+        }
+        return g;
+    }
+
+    /** Frees the shapes no object shows any more, once the GPU is done with them. */
+    private sweepGeometries() {
+        if (!this.geometriesChanged) return;
+        this.geometriesChanged = false;
+        const ref = Reference.getInstance();
+        for (const [key, g] of Array.from(this.geometries)) {
+            // Only the map's own reference is left.
+            if (ref.getReferenceCount(g) > 1) continue;
+            this.geometries.delete(key);
+            ref.detached(g, this.geometries);
+            this.disposeLater(g);
+        }
     }
 
     /**
@@ -145,6 +237,15 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     rebuild() {
         for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        // Scripts had engine access to the shared shapes too: build them again.
+        for (const g of this.geometries.values()) {
+            Reference.getInstance().detached(g, this.geometries);
+            if (!Reference.getInstance().hasReference(g)) this.disposeLater(g);
+        }
+        this.geometries.clear();
+        // And materials (the objects let go of them above).
+        for (const rec of this.materials.values()) this.dropMaterial(rec);
+        this.materials.clear();
         this.sync();
     }
 
@@ -155,7 +256,8 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     reloadAsset(id: string) {
         this.prefabs.delete(id);
-        for (const key of Array.from(this.textures.keys())) if (key.startsWith(id + '|')) this.textures.delete(key);
+        // Textures take the new data in place.
+        this.refreshTexture(id);
         for (const entry of Array.from(this.entries.values())) {
             const node = this.store.node(entry.id);
             if (!node) continue;
@@ -163,7 +265,13 @@ export class SceneSync extends Emitter<SyncEvents> {
                 this.dropModel(entry);
                 entry.model = null;
             }
-            if (node.mesh && JSON.stringify(node.mesh.material).includes(id)) entry.materialKind = '';
+            if (node.mesh && JSON.stringify(node.mesh.material).includes(id)) entry.materialKey = '';
+        }
+        // Materials showing it are made again; their objects move to the new ones.
+        for (const [key, rec] of Array.from(this.materials)) {
+            if (!key.includes(id)) continue;
+            this.materials.delete(key);
+            if (!rec.users) this.dropMaterial(rec);
         }
         this.sync();
     }
@@ -220,8 +328,6 @@ export class SceneSync extends Emitter<SyncEvents> {
             material: null,
             materialKind: '',
             materialKey: '',
-            maps: null,
-            paramAssets: {},
             light: null,
             lightType: null,
             lightKey: '',
@@ -245,6 +351,9 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private destroy(entry: Entry) {
         this.entries.delete(entry.id);
+        if (entry.geometry) this.geometriesChanged = true;
+        if (entry.material) this.releaseMaterial(entry.material);
+        entry.material = null;
         if (entry.model) {
             entry.model.token = -1;
             entry.model.overrides?.dispose();
@@ -278,7 +387,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.particles = null;
         }
         if (!p) return;
-        const texture = p.texture ? this.loadTexture(p.texture) : this.dotTexture();
+        const texture = p.texture ? this.loadTexture(p.texture, 'color') : this.dotTexture();
         void texture.then((tex) => {
             if (entry.particlesToken !== token || this.entries.get(entry.id) !== entry) return;
             try {
@@ -342,15 +451,15 @@ export class SceneSync extends Emitter<SyncEvents> {
     private applyMesh(entry: Entry, mesh: MeshDoc | undefined) {
         if (!mesh) {
             if (entry.mesh) {
+                if (entry.geometry) this.geometriesChanged = true;
                 entry.obj.removeComponent(MeshRenderer);
+                if (entry.material) this.releaseMaterial(entry.material);
                 entry.mesh = null;
                 entry.geometry = null;
                 entry.material = null;
                 entry.materialKind = '';
                 entry.geometryKey = '';
                 entry.materialKey = '';
-                entry.maps = null;
-                entry.paramAssets = {};
             }
             return;
         }
@@ -364,44 +473,38 @@ export class SceneSync extends Emitter<SyncEvents> {
 
         const geometryKey = JSON.stringify(mesh.geometry);
         if (geometryKey !== entry.geometryKey) {
-            const old = entry.geometry;
-            entry.geometry = buildGeometry(mesh.geometry);
+            // The renderer lets go of the old shape; the sweep frees it if nothing else shows it.
+            if (entry.geometry) this.geometriesChanged = true;
+            entry.geometry = this.geometryFor(geometryKey, mesh.geometry);
             mr.geometry = entry.geometry;
             entry.geometryKey = geometryKey;
-            if (old) this.disposeLater(old);
         }
 
         const kind = this.materialKind(entry, mesh.material);
-        if (!entry.material || entry.materialKind !== kind) {
-            const old = entry.material;
-            const ctx = this.runtime.engine.context3D;
-            let mat: Material | null = null;
-            let shaderId: string | null = null;
-            if (kind.startsWith('shader:')) {
-                shaderId = mesh.material.shader!;
-                mat = this.shaders.createMaterial(shaderId);
+        const key = this.materialKeyOf(entry, kind, mesh.material);
+        if (key !== entry.materialKey || !entry.material) {
+            const cur = entry.material;
+            if (cur && cur.users === 1 && cur.kind === kind && !this.materials.has(key) && this.materials.get(cur.key) === cur) {
+                // Only this object shows it: change it in place (a drag in the inspector).
+                this.materials.delete(cur.key);
+                cur.key = key;
+                this.materials.set(key, cur);
+                this.applyMaterial(cur, mesh.material);
+            } else {
+                const next = this.acquireMaterial(key, kind, mesh.material);
+                // Vertex shaders that move vertices cannot use the depth prepass,
+                // which draws the undisplaced mesh, and can draw outside the
+                // shape's bounds, so the camera's frustum does not cull them.
+                const moves = kind.startsWith('shader:') && this.shaders.movesVertices(mesh.material.shader!);
+                if (moves) mr.addRendererMask(RendererMask.IgnoreDepthPass);
+                else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
+                mr.frustumCulled = !moves;
+                mr.material = next.material;
+                entry.material = next;
+                if (cur) this.releaseMaterial(cur);
             }
-            if (!mat) {
-                if (kind === 'shader-missing') mat = errorMaterial(ctx);
-                else mat = createBuiltinMaterial(kind === 'unlit' || kind === 'lambert' ? kind : 'lit', ctx);
-            }
-            entry.material = mat;
-            entry.maps = new MaterialMaps(mat, ctx, (id, linear) => this.loadTexture(id, linear));
             entry.materialKind = kind;
-            entry.materialKey = '';
-            entry.paramAssets = {};
-            // Vertex shaders that move vertices cannot use the depth prepass,
-            // which draws the undisplaced mesh.
-            if (shaderId && this.shaders.movesVertices(shaderId)) mr.addRendererMask(RendererMask.IgnoreDepthPass);
-            else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
-            mr.material = mat;
-            if (old) this.disposeLater(old);
-        }
-
-        const materialKey = JSON.stringify(mesh.material);
-        if (materialKey !== entry.materialKey) {
-            this.applyMaterial(entry, mesh.material);
-            entry.materialKey = materialKey;
+            entry.materialKey = key;
         }
         mr.castShadow = mesh.castShadow;
         mr.receiveShadow = mesh.receiveShadow;
@@ -417,9 +520,66 @@ export class SceneSync extends Emitter<SyncEvents> {
         return 'shader-missing';
     }
 
-    private applyMaterial(entry: Entry, md: MaterialDoc) {
-        const mat = entry.material!;
-        const kind = entry.materialKind;
+    /**
+     * The key of an object's material among the shared ones: its kind and
+     * fields (not the slot it is linked to, which looks the same), and for
+     * an object with scripts or a behavior tree, the object itself.
+     */
+    private materialKeyOf(entry: Entry, kind: string, md: MaterialDoc): string {
+        const node = this.store.node(entry.id);
+        const own = !!node && (!!node.scripts?.length || !!node.agent);
+        const { slot: _slot, ...look } = md;
+        return `${kind}|${JSON.stringify(look)}${own ? `#${entry.id}` : ''}`;
+    }
+
+    /** The shared material of a key, made (and filled in from `md`) when no object shows it yet. */
+    private acquireMaterial(key: string, kind: string, md: MaterialDoc): SharedMaterial {
+        let rec = this.materials.get(key);
+        if (!rec) {
+            const ctx = this.runtime.engine.context3D;
+            let mat: Material | null = kind.startsWith('shader:') ? this.shaders.createMaterial(md.shader!) : null;
+            if (!mat) {
+                if (kind === 'shader-missing') mat = errorMaterial(ctx);
+                else mat = createBuiltinMaterial(kind === 'unlit' || kind === 'lambert' ? kind : 'lit', ctx);
+            }
+            rec = { key, kind, material: mat, maps: new MaterialMaps(mat, ctx, (id, role) => this.loadTexture(id, role)), paramAssets: {}, users: 0 };
+            Reference.getInstance().attached(mat, this.materials);
+            this.materials.set(key, rec);
+            this.applyMaterial(rec, md);
+        }
+        rec.users++;
+        return rec;
+    }
+
+    /** An object stops showing a material; the sweep frees it once none does. */
+    private releaseMaterial(rec: SharedMaterial) {
+        rec.users--;
+        this.materialsChanged = true;
+        // Made again for a reloaded asset: nobody can get it any more.
+        if (rec.users <= 0 && this.materials.get(rec.key) !== rec) this.dropMaterial(rec);
+    }
+
+    private sweepMaterials() {
+        if (!this.materialsChanged) return;
+        this.materialsChanged = false;
+        for (const [key, rec] of Array.from(this.materials)) {
+            if (rec.users > 0) continue;
+            this.materials.delete(key);
+            this.dropMaterial(rec);
+        }
+    }
+
+    /** Frees a material once the GPU is done with it, unless something else still shows it. */
+    private dropMaterial(rec: SharedMaterial) {
+        const ref = Reference.getInstance();
+        if (!ref.hasReference(rec.material)) return;
+        ref.detached(rec.material, this.materials);
+        if (!ref.hasReference(rec.material)) this.disposeLater(rec.material);
+    }
+
+    private applyMaterial(rec: SharedMaterial, md: MaterialDoc) {
+        const mat = rec.material;
+        const kind = rec.kind;
         if (kind === 'shader-missing') return;
         const opacity = clamp01(md.opacity);
         mat.baseColor = hexToColor(md.color, opacity);
@@ -433,10 +593,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             sh.setUniformFloat('emissiveIntensity', Math.max(0, md.emissiveIntensity));
             const assets = applyProps(sh, this.shaders.props(md.shader!), md.params ?? {}, this.runtime.engine.context3D);
             for (const { name, asset } of assets) {
-                if (entry.paramAssets[name] === asset) continue;
-                entry.paramAssets[name] = asset;
+                if (rec.paramAssets[name] === asset) continue;
+                rec.paramAssets[name] = asset;
                 this.loadTexture(asset).then((tex) => {
-                    if (tex && entry.material === mat && entry.paramAssets[name] === asset) sh.setTexture(name, tex);
+                    if (tex && rec.paramAssets[name] === asset) sh.setTexture(name, tex);
                 });
             }
         }
@@ -444,8 +604,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         applyAlpha(mat, engineAlpha(md.alphaMode, opacity), clamp01(md.alphaCutoff ?? 0.5));
         applyUVTransform(mat, md.tiling, md.offset);
 
-        const maps = entry.maps!;
-        for (const map of mat instanceof LitMaterial ? PBR_MAPS : [BASE_MAP]) maps.set(map, md[map.key] ?? null);
+        for (const map of mat instanceof LitMaterial ? PBR_MAPS : [BASE_MAP]) rec.maps.set(map, md[map.key] ?? null);
     }
 
     private applyLight(entry: Entry, light: LightDoc | undefined) {
@@ -513,7 +672,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     state.info = inspectModel(instance, ctx);
                     state.overrides = new ModelOverrides(state.info, {
                         shaders: this.shaders,
-                        loadTexture: (id, linear) => this.loadTexture(id, linear),
+                        loadTexture: (id, role) => this.loadTexture(id, role),
                         dispose: (m) => this.disposeLater(m, true),
                         ctx,
                     });
@@ -668,10 +827,29 @@ export class SceneSync extends Emitter<SyncEvents> {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
                 if (!meta) throw new Error('Model asset is missing from this project.');
-                const url = await getAssetUrl(meta);
-                if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
-                const prefab = await this.runtime.engine.res.loadGltf(url);
+                const res = this.runtime.engine.res;
+                let prefab: Object3D | null = null;
+                const copy = await this.textureSource?.model?.(meta).catch(() => null);
+                if (copy) {
+                    try {
+                        prefab = await res.loadGltf(copy);
+                    } catch (e) {
+                        console.warn(`[editor] the compressed copy of "${meta.name}" failed, loading the file`, e);
+                    }
+                }
+                if (!prefab) {
+                    const url = await getAssetUrl(meta);
+                    if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
+                    prefab = await res.loadGltf(url);
+                    this.textureSource?.used?.(meta, 'model');
+                }
                 normalizeModelMaterials(prefab, this.runtime.engine.context3D);
+                // Parts whose bounds hold what they draw are culled when out of view (their copies inherit it).
+                prefab.traverse((o: Object3D) => {
+                    o.components.forEach((c) => {
+                        if (c instanceof MeshRenderer) c.frustumCulled = !(c instanceof SkinnedMeshRenderer || c instanceof SkinnedMeshRenderer2) && !c.morphData?.enable;
+                    });
+                });
                 return prefab;
             })();
             p.catch(() => this.prefabs.delete(assetId));
@@ -681,19 +859,28 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 
     /**
-     * Loads a texture asset. Color textures are decoded from sRGB, data
-     * textures (normal, metallic-roughness, occlusion maps) are `linear`.
+     * The texture of a texture asset for a role: colors are sampled as sRGB,
+     * normal and data maps (metallic-roughness, occlusion) as linear. It
+     * shows the asset's compressed copy for the role when there is one,
+     * else the file itself.
      */
-    loadTexture(assetId: string, linear = false): Promise<Texture | null> {
-        const key = `${assetId}|${linear ? 'linear' : 'srgb'}`;
+    loadTexture(assetId: string, role: TextureRole = 'color'): Promise<Texture | null> {
+        const key = `${assetId}|${role}`;
         let p = this.textures.get(key);
         if (!p) {
             p = (async () => {
                 const meta = this.store.doc.assets.find((a) => a.id === assetId);
                 if (!meta || meta.kind !== 'texture') return null;
-                const url = await getAssetUrl(meta);
-                if (!url) return null;
-                return (await this.runtime.engine.res.loadTexture(url, undefined, false, linear ? 'linear' : 'srgb')) as Texture;
+                let tex = this.assetTextures.get(key);
+                if (!tex) {
+                    tex = new CompressedTexture2D(this.runtime.engine.context3D, role === 'color' ? 'srgb' : 'linear');
+                    tex.name = meta.name;
+                    tex.maxSize = this.textureMaxSize;
+                    // Known before it has data, so a refresh meanwhile runs after this fill.
+                    this.assetTextures.set(key, tex);
+                }
+                await this.fill(key, tex, assetId, role);
+                return tex;
             })().catch((e) => {
                 console.error('[editor] texture load failed', e);
                 this.textures.delete(key);
@@ -702,6 +889,58 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.textures.set(key, p);
         }
         return p;
+    }
+
+    /**
+     * Shows a texture asset's current data again, in place: after its file
+     * was replaced, or when its compressed copy was made or its options
+     * changed. Everything showing the texture keeps it.
+     */
+    refreshTexture(assetId: string, role?: TextureRole) {
+        for (const [key, tex] of this.assetTextures) {
+            const [id, r] = key.split('|') as [string, TextureRole];
+            if (id !== assetId || (role && r !== role)) continue;
+            const done: Promise<Texture | null> = this.fill(key, tex, assetId, r).then(
+                () => tex,
+                (e) => {
+                    console.error('[editor] texture reload failed', e);
+                    // Never filled: nothing may bind it (a texture without data has no view).
+                    if (tex.textureDescriptor) return tex;
+                    if (this.textures.get(key) === done) this.textures.delete(key);
+                    return null;
+                },
+            );
+            // whenLoaded waits for it.
+            this.textures.set(key, done);
+        }
+    }
+
+    /** Fills a texture with the asset's data for its role; fills of one texture run in order, each with the asset as it is then. */
+    private fill(key: string, tex: CompressedTexture2D, assetId: string, role: TextureRole): Promise<void> {
+        const run = async () => {
+            const meta = this.store.doc.assets.find((a) => a.id === assetId);
+            if (!meta || meta.kind !== 'texture') throw new Error('Texture asset is missing from this project.');
+            const copy = await this.textureSource?.resolve(meta, role).catch(() => null);
+            if (copy) {
+                try {
+                    await tex.loadKTX2(copy);
+                    return;
+                } catch (e) {
+                    console.warn(`[editor] the compressed copy of "${meta.name}" failed, showing the file`, e);
+                }
+            }
+            const url = await getAssetUrl(meta);
+            if (!url) throw new Error(`"${meta.name}" is not stored in this browser.`);
+            const res = await fetch(url);
+            if (!res.ok && res.status !== 0) throw new Error(`"${meta.name}" failed to load (${res.status}).`);
+            const blob = await res.blob();
+            if (isKTX2(await blob.slice(0, 12).arrayBuffer())) await tex.loadKTX2(blob);
+            else tex.setImage(await decodeImage(blob, this.textureMaxSize));
+            this.textureSource?.used?.(meta, role);
+        };
+        const next = (this.fills.get(key) ?? Promise.resolve()).then(run, run);
+        this.fills.set(key, next.catch(() => {}));
+        return next;
     }
 
     /**
@@ -727,11 +966,49 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 }
 
+/**
+ * An image file decoded as the engine decodes textures (BitmapTexture2D):
+ * colors kept under alpha, at least 32 pixels a side, and here at most
+ * `maxSize` on the longer side.
+ */
+async function decodeImage(blob: Blob, maxSize = Infinity): Promise<ImageBitmap> {
+    const bmp = await createImageBitmap(blob, { imageOrientation: 'from-image', premultiplyAlpha: 'none' });
+    const k = Math.min(1, maxSize / Math.max(bmp.width, bmp.height));
+    const width = Math.max(32, Math.round(bmp.width * k));
+    const height = Math.max(32, Math.round(bmp.height * k));
+    if (width === bmp.width && height === bmp.height) return bmp;
+    const out = await createImageBitmap(bmp, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high', premultiplyAlpha: 'none' });
+    bmp.close();
+    return out;
+}
+
 function errorMaterial(ctx: any): Material {
     // The classic "shader missing" magenta.
     const mat = new UnLitMaterial(ctx);
     mat.baseColor = new Color(1, 0, 1, 1);
     return mat;
+}
+
+/**
+ * One draw for a shape made of several contiguous index ranges (a
+ * cylinder's side and caps): the editor shows it with one material, so
+ * drawing the parts apart only costs draw calls, in every pass.
+ */
+function oneRange(g: GeometryBase): GeometryBase {
+    const subs = g.subGeometries;
+    if (subs.length < 2) return g;
+    let start = Infinity, end = 0, total = 0;
+    for (const s of subs) {
+        const d = s.lodLevels[0];
+        if (!d) return g;
+        start = Math.min(start, d.indexStart);
+        end = Math.max(end, d.indexStart + d.indexCount);
+        total += d.indexCount;
+    }
+    if (end - start !== total) return g;
+    subs.length = 0;
+    g.addSubGeometry({ indexStart: start, indexCount: total, vertexStart: 0, vertexCount: 0, firstStart: 0, index: 0, topology: 0 });
+    return g;
 }
 
 function nonZero(v: number): number {
@@ -753,7 +1030,7 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
         case 'plane':
             return new PlaneGeometry(pos(g.width), pos(g.height));
         case 'cylinder':
-            return new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1);
+            return oneRange(new CylinderGeometry(Math.max(0, g.radiusTop), Math.max(0, g.radiusBottom), pos(g.height), seg(g.segments), 1));
         case 'cone':
             return new ConeGeometry(pos(g.radius), pos(g.height), seg(g.segments));
         case 'torus':

@@ -2,7 +2,7 @@ import {
     AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
-import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, Vec3 } from '../core/types';
+import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, TextureRole, Vec3 } from '../core/types';
 import { colorToHex, hexToColor } from './color';
 import { applyAlpha, applyUVTransform, createBuiltinMaterial, EngineAlpha, engineAlpha, MaterialMaps, BASE_MAP } from './materials';
 import { applyProps, MODEL_MAPS, type ShaderManager } from './shaders';
@@ -52,7 +52,8 @@ export interface ModelPart {
     skinned: boolean;
     vertices: number;
     triangles: number;
-    base: { position: Vec3; rotation: Vec3; scale: Vec3; castShadow: boolean; receiveShadow: boolean };
+    /** `frustumCulled`: whether the loaded renderer takes part in culling (not skinned or morphed). */
+    base: { position: Vec3; rotation: Vec3; scale: Vec3; castShadow: boolean; receiveShadow: boolean; frustumCulled: boolean };
 }
 
 export interface ModelSlot {
@@ -233,6 +234,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
                         scale: [target.scaleX, target.scaleY, target.scaleZ],
                         castShadow: r.castShadow,
                         receiveShadow: (r as any).receiveShadow ?? true,
+                        frustumCulled: r.frustumCulled,
                     },
                 };
                 parts.push(part);
@@ -272,7 +274,7 @@ interface OverrideMaterial {
 
 export interface OverrideDeps {
     shaders: ShaderManager;
-    loadTexture(assetId: string, linear?: boolean): Promise<Texture | null>;
+    loadTexture(assetId: string, role?: TextureRole): Promise<Texture | null>;
     dispose(mat: Material): void;
     ctx: any;
 }
@@ -348,6 +350,9 @@ export class ModelOverrides {
                 mat = this.mats.get(key)!.material;
             }
             if (part.renderer.materials[0] !== mat) part.renderer.materials = [mat];
+            // A shader that moves vertices can draw outside the part's bounds: it is never culled.
+            const moves = !!mo?.shader && this.deps.shaders.isValid(mo.shader) && this.deps.shaders.movesVertices(mo.shader);
+            part.renderer.frustumCulled = part.base.frustumCulled && !moves;
 
             part.renderer.castShadow = po.castShadow ?? part.base.castShadow;
             (part.renderer as any).receiveShadow = po.receiveShadow ?? part.base.receiveShadow;
@@ -424,7 +429,7 @@ export class ModelOverrides {
                 material = cloneMaterial(source, ctx);
             }
             material.name = source.name;
-            om = { material, structure, maps: new MaterialMaps(material, ctx, (id, linear) => this.deps.loadTexture(id, linear)), paramAssets: {} };
+            om = { material, structure, maps: new MaterialMaps(material, ctx, (id, role) => this.deps.loadTexture(id, role)), paramAssets: {} };
             this.mats.set(key, om);
         }
         const mat = om.material;

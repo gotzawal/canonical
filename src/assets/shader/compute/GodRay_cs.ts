@@ -61,9 +61,18 @@ export let GodRay_cs: string = /*wgsl*/ `
     const PI = 3.1415926 ;
 
     const csmCount:i32 = ${CSM.Cascades} ;
+    // The first directional light that casts shadows (the sun), else the first light.
+    fn sunLight() -> LightData {
+      if (globalUniform.nDirShadowEnd > globalUniform.nDirShadowStart) {
+        let i = u32(globalUniform.nDirShadowStart);
+        return lightBuffer[u32(globalUniform.shadowLights[i / 4u][i % 4u])];
+      }
+      return lightBuffer[0];
+    }
+
     fn directShadowMaping(P:vec3<f32>, N:vec3<f32>, shadowBias: f32)  {
       let enableCSM:bool = globalUniform.enableCSM > 0.5;
-      var light = lightBuffer[0];
+      var light = directLight;
       var visibility = 1.0;
       var shadowIndex = i32(light.castShadow);
       if (shadowIndex >= 0 ) {
@@ -128,7 +137,7 @@ export let GodRay_cs: string = /*wgsl*/ `
 
       var oc = textureLoad(inTex, fragCoord, 0);
       var outColor = oc.xyz;
-      directLight = lightBuffer[0] ;
+      directLight = sunLight();
       if(directLight.castShadow >= 0){
         let index = fragCoord.x + fragCoord.y * i32(texSize.x);
         var historyData = historyGodRayData[index];

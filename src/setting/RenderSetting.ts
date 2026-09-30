@@ -35,6 +35,10 @@ export type RenderSetting = {
      *  coexists). Flip this on AND open the integration in `drawNodes`
      *  to get the 5-20× perf win. */
     gpuCull?: boolean;
+    /** CPU frustum culling: passes that cull leave out renderers with
+     *  `frustumCulled` set whose world bounds their camera cannot see.
+     *  Default true; renderers opt in one by one. */
+    frustumCulling?: boolean;
     /** Per-instance MSAA sample count for the main color pass.
      *  0 disables MSAA (default). Valid non-zero values: 2 | 4 | 8
      *  depending on device support. Enabling MSAA unlocks

@@ -19,6 +19,7 @@ import { Probe } from '../passRenderer/ddgi/Probe';
 import { RendererMask } from '../passRenderer/state/RendererMask';
 import { CollectInfo } from './CollectInfo';
 import { EntityBatchCollect } from './EntityBatchCollect';
+import { FrustumCullMode, inCullPlanes, loadCullPlanes } from './FrustumCull';
 import { RenderShaderCollect } from './RenderShaderCollect';
 
 /**
@@ -107,6 +108,30 @@ export class EntityCollect {
         }
     }
 
+    /**
+     * Opaque renderers go next to those with the same material (and among
+     * them, the same geometry), so consecutive draws share their bindings
+     * and GPUContext skips binding them again. Opaque order does not
+     * change the picture (the depth prepass decides what is in front).
+     */
+    private static insertGrouped(list: RenderNode[], renderNode: RenderNode) {
+        const mat = renderNode.materials?.[0];
+        const geo = renderNode.geometry;
+        let sameMat = -1;
+        if (mat) {
+            for (let i = list.length - 1; i >= 0; i--) {
+                if (list[i].materials?.[0] !== mat) continue;
+                if (sameMat < 0) sameMat = i;
+                if (list[i].geometry === geo) {
+                    list.splice(i + 1, 0, renderNode);
+                    return;
+                }
+            }
+        }
+        if (sameMat >= 0) list.splice(sameMat + 1, 0, renderNode);
+        else list.push(renderNode);
+    }
+
     private sortRenderNode(list: RenderNode[], renderNode: RenderNode) {
         for (let i = list.length - 1; i > 0; i--) {
             const element = list[i];
@@ -151,7 +176,8 @@ export class EntityCollect {
             if (!map.has(root)) {
                 map.set(root, []);
             }
-            map.get(root).push(renderNode);
+            if (isTransparent) map.get(root).push(renderNode);
+            else EntityCollect.insertGrouped(map.get(root), renderNode);
 
             if (root.view?.engine3D?.setting.occlusionQuery.octree) {
                 renderNode.attachSceneOctree(this.getOctree(root));
@@ -422,12 +448,15 @@ export class EntityCollect {
      *                    {@link RenderGraphPass.layerMask}.
      * @param cullingMask Camera-side culling mask, defaults to
      *                    {@link VisibleLayer.All}.
+     * @param cull        Leave out renderers (with `frustumCulled`) the
+     *                    camera cannot see; see {@link FrustumCullMode}.
      */
     public getLayerLists(
         scene: Scene3D,
         camera: Camera3D,
         layerMask: number,
         cullingMask: number = VisibleLayer.All,
+        cull: FrustumCullMode = 'none',
     ): { opaque: RenderNode[]; transparent: RenderNode[] } {
         const mask = (layerMask & cullingMask) >>> 0;
         if (mask === 0) {
@@ -439,15 +468,22 @@ export class EntityCollect {
         const info = this.getRenderNodes(scene, camera);
         const opIn = info.opaqueList;
         const trIn = info.transparentList;
+        const engine = scene.view?.engine3D;
+        const planes = camera && cull !== 'none' && engine?.setting.render.frustumCulling !== false ? loadCullPlanes(camera, cull) : 0;
+        const frame = engine?.frameCount ?? Time.frame;
         const opOut: RenderNode[] = [];
         for (let i = 0, n = opIn.length; i < n; i++) {
             const node = opIn[i];
-            if (EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) opOut.push(node);
+            if (!EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) continue;
+            if (planes && !inCullPlanes(node, planes, frame)) continue;
+            opOut.push(node);
         }
         const trOut: RenderNode[] = [];
         for (let i = 0, n = trIn.length; i < n; i++) {
             const node = trIn[i];
-            if (EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) trOut.push(node);
+            if (!EntityCollect.matchesLayer(node.visibleLayer, mask, VisibleLayer.All)) continue;
+            if (planes && !inCullPlanes(node, planes, frame)) continue;
+            trOut.push(node);
         }
         return { opaque: opOut, transparent: trOut };
     }

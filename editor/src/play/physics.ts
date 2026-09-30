@@ -13,8 +13,9 @@ import { Quaternion, VertexAttributeName, type Object3D, type RenderNode } from 
 import { compose, decompose, DEG, invert, mul, normalize, quatFromEuler, transformPoint, type Mat4, type Quat, type Vec3 } from '../core/math';
 import { Body } from '../core/model';
 import type { Store } from '../core/store';
-import type { BodyDoc, BodyType, GeometryDoc, SceneDoc } from '../core/types';
+import type { BodyDoc, BodyType, GeometryDoc, NodeDoc, SceneDoc } from '../core/types';
 import type { SceneSync } from '../engine/sync';
+import { TransformWatch } from '../engine/transformWatch';
 import type { Character } from './character';
 
 export type Rapier = typeof RAPIER;
@@ -242,6 +243,9 @@ export class Physics implements PhysicsApi {
     private owners = new Map<number, Item>();
     /** Node id -> the body its meshes belong to (what characters run into). */
     private nodes = new Map<string, Item>();
+    /** The bodies of objects that moved (scripts, physics, a moved parent); only they are followed. */
+    private moves = new TransformWatch<Item>();
+    private chars: Item[] = [];
 
     constructor(private R: Rapier, private host: PhysicsHost) {
         this.world = new R.World({ x: 0, y: -GRAVITY, z: 0 });
@@ -254,10 +258,15 @@ export class Physics implements PhysicsApi {
         };
         // Hidden objects are out of the game, but a trigger is usually an unseen volume.
         const shown = store.doc.nodes.filter((n) => (sync.entries.get(n.id)?.visible || n.body?.sensor) && !sync.detached.has(n.id));
+        const held = new Map<string, NodeDoc[]>();
+        for (const m of shown) {
+            const h = holder(m.id);
+            if (h) held.set(h.id, [...(held.get(h.id) ?? []), m]);
+        }
         for (const n of shown) {
             const owner = holder(n.id);
             if ((owner && owner !== n) || n.character) continue;
-            const parts = n.body ? shown.filter((m) => holder(m.id) === n) : [n];
+            const parts = n.body ? (held.get(n.id) ?? []) : [n];
             const obj = sync.entries.get(n.id)!.obj;
             if (this.add(obj, n.body ?? null, parts.flatMap((m) => sync.renderersOf(m.id)), n.mesh?.geometry)) for (const m of parts) this.nodes.set(m.id, this.items.get(obj)!);
             else if (n.body) console.warn(`[physics] ${n.name} has nothing to collide with.`);
@@ -305,6 +314,8 @@ export class Physics implements PhysicsApi {
         const collider = this.world.createCollider(desc.setActiveEvents(this.R.ActiveEvents.COLLISION_EVENTS), it.body);
         this.items.set(it.obj, it);
         this.owners.set(collider.handle, it);
+        if (it.character) this.chars.push(it);
+        else this.moves.watch(it.obj, it);
     }
 
     /** Destroyed objects take their bodies with them. */
@@ -312,6 +323,9 @@ export class Physics implements PhysicsApi {
         for (const it of Array.from(this.items.values())) {
             if (!gone.has(it.obj)) continue;
             this.items.delete(it.obj);
+            this.moves.unwatch(it.obj);
+            this.moves.moved.delete(it);
+            if (it.character) this.chars.splice(this.chars.indexOf(it), 1);
             for (let i = 0; i < it.body.numColliders(); i++) this.owners.delete(it.body.collider(i).handle);
             this.world.removeRigidBody(it.body);
         }
@@ -320,7 +334,10 @@ export class Physics implements PhysicsApi {
 
     step(dt: number) {
         if (dt <= 0) return;
-        for (const it of this.items.values()) this.follow(it);
+        // Characters every frame; the rest when their objects moved (by scripts; physics moving them is noticed too, and changes nothing).
+        for (const it of this.chars) this.follow(it);
+        for (const it of this.moves.moved) this.follow(it);
+        this.moves.moved.clear();
         const n = Math.min(MAX_STEPS, Math.ceil(dt * 60 - 1e-6));
         this.world.timestep = dt / n;
         const heard: [Object3D, string, Object3D][] = [];
@@ -446,6 +463,8 @@ export class Physics implements PhysicsApi {
     }
 
     dispose() {
+        this.moves.clear();
+        this.chars = [];
         this.queue.free();
         this.world.free();
         this.items.clear();

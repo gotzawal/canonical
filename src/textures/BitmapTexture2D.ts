@@ -4,6 +4,7 @@ import { LoaderFunctions } from '../loader/LoaderFunctions';
 import { StringUtil } from '../util/StringUtil';
 import { Texture } from '../gfx/graphics/webGpu/core/texture/Texture';
 import { Context3D, bindCtx } from '../gfx/graphics/webGpu/Context3D';
+import { isKTX2, KTX2_MAGIC } from './ktx2/KTX2Container';
 
 /**
  * Color-space hint for image-backed textures. `'srgb'` selects the
@@ -134,24 +135,19 @@ export class BitmapTexture2D extends Texture {
             this.format = this._ldrFormat;
             this.generate(imageBitmap);
         } else {
-            return new Promise((succ, fial) => {
-                fetch(url, {
-                    headers: Object.assign({
-                        'Accept': 'image/avif,image/webp,*/*'
-                    }, loaderFunctions?.headers)
-                }).then((r) => {
-                    // const img = await r.blob();
-                    // await this.loadFromBlob(img);
-                    LoaderBase.read(url, r, loaderFunctions).then((chunks) => {
-                        let img = new Blob([chunks as BlobPart], { type: 'image/jpeg' });
-                        chunks = null;
-                        this.loadFromBlob(img).then(() => {
-                            succ(true);
-                        });
-                    });
-
-                })
-            })
+            // A failed fetch or decode rejects, so callers can fall back
+            // instead of waiting forever.
+            const r = await fetch(url, {
+                headers: Object.assign({
+                    'Accept': 'image/avif,image/webp,*/*'
+                }, loaderFunctions?.headers)
+            });
+            // Status 0 is a file:// or opaque answer, which has no status to check.
+            if (!r.ok && r.status !== 0) throw new Error(`${url} failed to load (${r.status})`);
+            let chunks = await LoaderBase.read(url, r, loaderFunctions);
+            let img = new Blob([chunks as BlobPart], { type: 'image/jpeg' });
+            chunks = null;
+            await this.loadFromBlob(img);
 
         }
         return true;
@@ -165,6 +161,9 @@ export class BitmapTexture2D extends Texture {
     */
     public async loadFromBlob(imgData: Blob) {
         this.imageData = imgData;
+        if (isKTX2(await imgData.slice(0, KTX2_MAGIC.length).arrayBuffer())) {
+            throw new Error(`${this.name || 'texture'} is a KTX2 file: load it as a CompressedTexture2D`);
+        }
         let imageBitmap = await createImageBitmap(imgData, { imageOrientation: this.flipY ? 'flipY' : 'from-image', premultiplyAlpha: 'none' });
         if (imageBitmap.width < 32 || imageBitmap.height < 32) {
             let width = Math.max(imageBitmap.width, 32);

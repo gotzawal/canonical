@@ -1,6 +1,8 @@
 import { add, DEG, normalize, scale } from '../core/math';
 import type { Vec3 } from '../core/types';
 import type { Editor } from '../editor';
+import { LevelRays } from '../engine/levelRays';
+import { keyNames } from '../play/input';
 import { CharacterMotor } from '../play/motor';
 import { h } from '../ui/dom';
 import { toast } from '../ui/overlays';
@@ -32,9 +34,11 @@ export class WalkController {
     private hud: HTMLElement;
     private hudText: HTMLElement;
     private start: Vec3 = [0, 0, 0];
+    /** The level while walking: only what moves is boxed again, not every object for every ray. */
+    private rays: LevelRays | null = null;
 
     constructor(private editor: Editor, private overlay: HTMLCanvasElement, viewportEl: HTMLElement) {
-        this.motor = new CharacterMotor((origin, dir, maxDist) => editor.picker.raycast(origin, dir, maxDist), this.body(), [0, 0, 0]);
+        this.motor = new CharacterMotor((origin, dir, maxDist) => (this.rays ? this.rays.cast(origin, dir, maxDist) : editor.picker.raycast(origin, dir, maxDist)), this.body(), [0, 0, 0]);
         this.hudText = h('span');
         this.hud = h('div', { class: 'walk-hud', attrs: { hidden: true } }, this.hudText);
         viewportEl.appendChild(this.hud);
@@ -65,6 +69,7 @@ export class WalkController {
         // or ceiling over it, facing the way the view faces. A target below every surface
         // starts on the one above it.
         const target = cam.target;
+        this.rays = new LevelRays(ed.picker, ed.sync, ed.store, undefined, { track: true });
         this.motor.body = this.body();
         const ground = this.motor.groundAt([target[0], target[1] + this.specs.stepHeight, target[2]], 200) ?? this.motor.groundAt([target[0], target[1] + 50, target[2]], 200);
         this.motor.feet = [target[0], ground ?? 0, target[2]];
@@ -99,6 +104,8 @@ export class WalkController {
         this.active = false;
         this.off?.();
         this.off = null;
+        this.rays?.dispose();
+        this.rays = null;
         for (const [t, type, fn, capture] of this.listeners) t.removeEventListener(type, fn, capture);
         this.listeners = [];
         if (document.pointerLockElement === this.overlay) document.exitPointerLock();
@@ -112,7 +119,8 @@ export class WalkController {
     }
 
     private key(e: KeyboardEvent, down: boolean) {
-        const k = e.key.toLowerCase();
+        // By where the key is (WASD with any input language: a Korean layout types "ㅈ" for W).
+        const k = keyNames(e).map((n) => (n === 'space' ? ' ' : n)).find((n) => KEYS.has(n) || n === 'escape') ?? '';
         if (k === 'escape' && down) {
             e.preventDefault();
             e.stopPropagation();

@@ -104,7 +104,7 @@ export class TransparentOITPass extends RenderGraphPass {
         const passState = this._rendererPassState!;
         passState.camera3D = camera;
 
-        const transparents = this.collectLayered(view).transparent;
+        const transparents = this.collectLayered(view, camera, 'frustum').transparent;
         // Don't early-return when there are no weighted materials. The
         // companion TransparentResolvePass runs unconditionally and
         // composites OIT_ACCUM / OIT_REVEAL onto the colour buffer

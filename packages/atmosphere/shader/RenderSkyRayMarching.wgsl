@@ -1,7 +1,6 @@
 #include 'AtmosphereEarth'
 #include 'AtmosphericScatteringIntegration'
 #include 'AtmosphereUniforms'
-#include 'ColorUtil_frag'
 
 @group(0) @binding(0) var<uniform> uniformBuffer: UniformData;
 @group(0) @binding(1) var outTexture: texture_storage_2d<rgba16float, write>;
@@ -22,7 +21,9 @@ var<private> texSize: vec2<f32>;
 var<private> PI: f32 = 3.1415926535897932384626433832795;
 var<private> PI_2: f32 = 0.0;
 var<private> EPSILON: f32 = 0.0000001;
-var<private> IS_HDR_SKY = false;
+// Measured against the legacy (V1, and core's) sky at the default sun: the
+// mean brightness of the upper sky matches within a few percent.
+const V2_SCALE: f32 = 0.33;
 
 @compute @workgroup_size(8, 8, 1)
 fn CsMain(@builtin(global_invocation_id) ThreadId: vec3<u32>) {
@@ -60,7 +61,10 @@ fn mainImage(uv: vec2<f32>, pixPos: vec2<f32>) -> vec4<f32> {
     const MieRayPhase = true;
     var result: SingleScatteringResult = IntegrateScatteredLuminance(pixPos, WorldPos, WorldDir, SunDir, Atmosphere, ground, SampleCountIni, DepthBufferValue, VariableSampleCount, MieRayPhase, defaultTMaxMax, texSize);
 
-    var L: vec3<f32> = result.L;
+    // The integration is for a sun of unit illuminance: sunRadiance scales it
+    // as it scales the legacy kernel's in-scattering, and V2_SCALE brings the
+    // two kernels to about the same brightness at the same settings.
+    var L: vec3<f32> = result.L * uniformBuffer.sunRadiance * V2_SCALE;
 
     // The ray march only integrates in-scattering, so the sun disc itself has
     // to be added on top. `result.Transmittance` is the extinction the view ray
@@ -70,17 +74,10 @@ fn mainImage(uv: vec2<f32>, pixPos: vec2<f32>) -> vec4<f32> {
         L += GetSunDisc(WorldPos, WorldDir, SunDir, Atmosphere) * result.Transmittance;
     }
 
-    // for HDR lighting
-    var sky: vec3<f32>;
-    if (IS_HDR_SKY) {
-      sky = LinearToGammaSpace(L) * uniformBuffer.hdrExposure;
-    } else {
-      // for LDR lighting
-      sky = ACESToneMapping(L.rgb, uniformBuffer.hdrExposure);
-      sky = pow(sky.rgb, vec3<f32>(1.0/1.2)); // gamma
-    }
-
-    return vec4<f32>(sky, 1.0);
+    // Linear radiance, as the engine's sky and image-based lighting read it;
+    // the engine tone maps the frame once (baking ACES here tone mapped the
+    // sky twice and flattened its lighting).
+    return vec4<f32>(L * uniformBuffer.hdrExposure, 1.0);
 }
 
 /**

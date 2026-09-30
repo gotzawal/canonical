@@ -9,6 +9,11 @@ export default defineConfig(option => ({
         hmr: false // open this line if no auto hot-reload required
     },
     publicDir: option.command === 'build' ? false : 'public',
+    // The editor (editor/) is its own app with its own Vite config and
+    // aliases: the dependency scan of the engine's pages leaves it out.
+    optimizeDeps: {
+        entries: ['**/*.html', '!editor/**', '!node_modules/**', '!dist/**'],
+    },
     resolve: {
         alias: {
             '@orillusion/core': resolve(__dirname, './src/index.ts'),

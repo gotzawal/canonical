@@ -24,6 +24,11 @@ export class SkinnedMeshRenderer2 extends MeshRenderer {
     protected mSkeletonAnimation: AnimatorComponent;
     protected mJointIndexTableBuffer: StorageGPUBuffer;
 
+    /** Its skeleton is bound into its passes. */
+    protected get hasPerNodeShaderState(): boolean {
+        return true;
+    }
+
     constructor() {
         super();
         this.addRendererMask(RendererMask.SkinnedMesh);

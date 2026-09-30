@@ -126,7 +126,7 @@ export class TransparentDualDepthPeelingPass extends RenderGraphPass {
         const passState = this._rendererPassState!;
         passState.camera3D = camera;
 
-        const transparents = this.collectLayered(view).transparent;
+        const transparents = this.collectLayered(view, camera, 'frustum').transparent;
 
         // Always open/close the pass so the clear loadOp zeroes _DDPFront
         // and resets depth to 1.0 even on frames where no depth-peel

@@ -376,7 +376,10 @@ export class RenderShaderPass extends ShaderPassBase {
     public setTexture(name: string, texture: Texture) {
         if (texture && this.textures[name] != texture) {
             const prev = this.textures[name];
-            if (prev) {
+            // Both are kept per pass, not per slot: a texture another slot
+            // still shows (one ORM map for roughness and occlusion) stays
+            // referenced, and rebinds when its data changes in place.
+            if (prev && !Object.keys(this.textures).some((slot) => slot !== name && this.textures[slot] === prev)) {
                 prev.unBindStateChange(this);
                 Reference.getInstance().detached(prev, this);
             }
@@ -1058,7 +1061,8 @@ export class RenderShaderPass extends ShaderPassBase {
                 topology: shaderState.topology,
                 cullMode: shaderState.cullMode,
                 frontFace: shaderState.frontFace,
-                unclippedDepth: shaderState.unclippedDepth,
+                // Needs depth-clip-control, which some phones lack: there depth is clipped.
+                unclippedDepth: shaderState.unclippedDepth && !!this._boundCtx?.hasFeature('depth-clip-control'),
             },
             vertex: undefined,
         };

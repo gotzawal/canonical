@@ -51,7 +51,7 @@ export class TransmissionOpaquePass extends RenderGraphPass {
     public execute(ctx: RenderGraphPassContext): void {
         const state = ctx.get<TransparentDrawContext>(TRANSPARENT_DRAW_CTX);
         const cluster = ctx.graph.getPass<ClusterLightingPass>('ClusterLightingPass')?.clusterLightingBuffer;
-        const layered = this.collectLayered(ctx.view);
+        const layered = this.collectLayered(ctx.view, undefined, 'frustum');
         drawTransmissionContinuation(ctx.view, cluster, state, layered.opaque);
     }
 }

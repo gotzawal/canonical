@@ -2,6 +2,7 @@ import { defaultMemory } from './behavior/format';
 import { defaultDesign } from './design';
 import { Camera, Environment, Geometry, GI, Light, Material } from './model';
 import { defaults } from './schema';
+import { skySunOf } from './sky';
 import {
     SCENE_VERSION, UNTITLED_SCENE, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
     type LightDoc, type LightType, type MaterialDoc, type MeshDoc, type NodeDoc, type NodeWith, type RenderGraphDoc, type SceneDoc,
@@ -127,7 +128,8 @@ export function newScene(): SceneDoc {
         format: 'canonical-scene',
         version: SCENE_VERSION,
         name: UNTITLED_SCENE,
-        environment: defaultEnvironment(),
+        // The sky's sun where the Sun light comes from: god rays and the fog glow follow the light.
+        environment: { ...defaultEnvironment(), ...skySunOf(sun.rotation) },
         assets: [],
         scripts: [],
         shaders: [],
@@ -149,7 +151,8 @@ export function emptyScene(): SceneDoc {
         format: 'canonical-scene',
         version: SCENE_VERSION,
         name: UNTITLED_SCENE,
-        environment: defaultEnvironment(),
+        // The sky's sun where the Sun light comes from: god rays and the fog glow follow the light.
+        environment: { ...defaultEnvironment(), ...skySunOf(sun.rotation) },
         assets: [],
         scripts: [],
         shaders: [],

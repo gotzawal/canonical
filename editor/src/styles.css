@@ -3824,6 +3824,29 @@ kbd {
     font-weight: 600;
 }
 
+/* Compression of a texture for games (ui/textureOptions.ts). */
+.texture-options {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.texture-options-title {
+    color: var(--text-strong);
+    font-weight: 600;
+    overflow-wrap: anywhere;
+}
+
+.texture-options-status {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.texture-options .btn {
+    align-self: flex-start;
+}
+
 /* ------------------------------------------------------------ checklist */
 
 .checklist {

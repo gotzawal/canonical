@@ -291,7 +291,7 @@ export const designTools = tools({
     },
     apply_key_light: {
         groups: ['lights'],
-        description: 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the atmospheric sky\'s sun there too. Change the mood first with update_design to use another direction.',
+        description: 'Point the key light (the first directional light; made when missing) the way the mood\'s key light comes from (azimuth, elevation) with its color, and put the sky\'s sun there too. Change the mood first with update_design to use another direction.',
         run({ ed, store }) {
             const id = ed.pipeline.applyKeyLight();
             const n = store.node(id);

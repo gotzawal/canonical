@@ -1,6 +1,7 @@
 import { createZip, readZip, type ZipEntry } from './zip';
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
 import { designAssetIds } from './design';
+import { gcDerived } from './derived';
 import { usedIds } from './refs';
 import { sanitize, Store } from './store';
 import type { AssetMeta, CameraState, SceneDoc, SceneFile } from './types';
@@ -277,7 +278,10 @@ export function collectGarbage(doc: SceneDoc) {
     for (const id of designAssetIds(doc.design)) keep.add(id);
     // The scene of another tab uses files this one does not list: clean up only when alone.
     void otherTabsOpen().then((others) => {
-        if (!others) void deleteAssets(keep);
+        if (others) return;
+        void deleteAssets(keep);
+        // Compressed copies of files no longer kept, and those of an older encoder.
+        void gcDerived(keep);
     });
 }
 

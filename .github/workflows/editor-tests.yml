@@ -45,11 +45,36 @@ jobs:
       - name: Unit tests
         run: pnpm run editor:test
 
+      - name: Every browser spec file is in a browser group
+        run: |
+          for f in editor/test/e2e/*.spec.ts; do
+            n=$(basename "$f" .spec.ts)
+            grep -qE "files:.*\b$n\b" .github/workflows/editor-tests.yml || { echo "::error::$f is in no group of the browser job"; exit 1; }
+          done
+
       - name: Benchmarks within their budgets
         run: pnpm run editor:bench
 
   browser:
     runs-on: ubuntu-latest
+    # Four groups of spec files, run side by side: SwiftShader draws on the
+    # CPU, and one machine takes about twenty minutes for the whole suite
+    # (a CI runner about twice that).
+    # The groups are balanced by how long their files take (Playwright's own
+    # --shard splits by test count, which put the slowest files together);
+    # a spec file added later goes into the lightest group.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: 1
+            files: shadows largeScene animation
+          - shard: 2
+            files: perf sky smoke
+          - shard: 3
+            files: environment derive approvals device
+          - shard: 4
+            files: models sharing compressed physics simple assistant
     steps:
       - uses: actions/checkout@v4
 
@@ -74,12 +99,12 @@ jobs:
         run: pnpm run editor:build
 
       - name: Browser tests
-        run: xvfb-run -a pnpm run editor:e2e
-        timeout-minutes: 15
+        run: xvfb-run -a pnpm run editor:e2e $(for f in ${{ matrix.files }}; do printf 'test/e2e/%s.spec.ts ' "$f"; done)
+        timeout-minutes: 20
 
       - name: Upload traces
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: playwright-traces
+          name: playwright-traces-${{ matrix.shard }}
           path: editor/test-results

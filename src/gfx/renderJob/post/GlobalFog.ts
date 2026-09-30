@@ -82,6 +82,7 @@ export class GlobalFog extends PostBase {
 
         fogUniform.setFloat("overrideSkyFactor", globalFog.overrideSkyFactor);
         fogUniform.setFloat("isSkyHDR", 0);
+        fogUniform.setFloat("slot0", globalFog.heightBase ?? 0);
 
         fogUniform.apply();
         this.fogCompute.setUniformBuffer('fogUniform', this.fogUniform);
@@ -232,11 +233,10 @@ export class GlobalFog extends PostBase {
             this._createFogTarget();
             this.createCompute(view);
             this.onResize();
-
-
-            let globalUniform = GlobalBindGroup.getCameraGroup(view.camera);
-            this.fogCompute.setUniformBuffer('globalUniform', globalUniform.uniformGPUBuffer);
         }
+        this.bindCamera(this.fogCompute, view);
+        // Fog goes over what the posts before it made (ambient occlusion), not the raw scene color.
+        this.bindUpstream(this.fogCompute, 'inTex');
 
         let skyTexture = this.getSkyTexture(view);
         if (skyTexture != this._lastSkyTexture) {

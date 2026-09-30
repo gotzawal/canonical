@@ -3,6 +3,8 @@ import { ParserBase } from '../ParserBase';
 import { ParserFormat } from '../ParserFormat';
 import { GLTF_Info } from './GLTFInfo';
 import { GLTFSubParser } from './GLTFSubParser';
+import { assertSupportedGltfExtensions, preferredImages } from './GLTFExtensions';
+import { isKTX2Image } from '../../../textures/ktx2/KTX2Container';
 
 /**
  * @internal
@@ -78,26 +80,17 @@ export class GLBParser extends ParserBase {
         this._gltf = new GLTF_Info();
         this._gltf = { ...this._gltf, ...obj };
         this._gltf.resources = {};
-        for (let i = 0; i < this._gltf.buffers.length; i++) {
-            let buffer = this._gltf.buffers[i];
-            buffer.isParsed = true;
-            buffer.dbuffer = chunks[i + 1].chunkData.buffer;
+        assertSupportedGltfExtensions(this._gltf);
+        // The binary chunk is the data of buffers[0], the one buffer a GLB
+        // stores without a uri. Other buffers are data URIs or meshopt
+        // fallbacks that have no bytes anywhere.
+        const bin = chunks[1];
+        const first = this._gltf.buffers?.[0];
+        if (first && !first.uri && bin) {
+            first.isParsed = true;
+            first.dbuffer = bin.chunkData.buffer;
         }
-
-        if (this._gltf.images) {
-            for (let i = 0; i < this._gltf.images.length; i++) {
-                let image = this._gltf.images[i];
-                image.name = image.name || 'bufferView_' + image.bufferView.toString();
-                const bufferView = this._gltf.bufferViews[image.bufferView];
-                const buffer = this._gltf.buffers[bufferView.buffer];
-                let dataBuffer = new Uint8Array(buffer.dbuffer, bufferView.byteOffset, bufferView.byteLength);
-                let imgData = new Blob([dataBuffer], { type: image.mimeType });
-                let dtexture = new BitmapTexture2D(true, this.ctx);
-                await dtexture.loadFromBlob(imgData);
-                dtexture.name = image.name;
-                this._gltf.resources[image.name] = dtexture;
-            }
-        }
+        await this.preloadImages();
 
         let subParser = new GLTFSubParser(this.ctx);
         let nodes = await subParser.parse(this.initUrl, this._gltf, this._gltf.scene);
@@ -112,24 +105,11 @@ export class GLBParser extends ParserBase {
         this._gltf = new GLTF_Info();
         this._gltf = { ...this._gltf, ...obj };
         this._gltf.resources = {};
+        assertSupportedGltfExtensions(this._gltf);
         let dbuffer = this._gltf.buffers[0];
         dbuffer.isParsed = true;
         dbuffer.dbuffer = bin;
-
-        if (this._gltf.images) {
-            for (let i = 0; i < this._gltf.images.length; i++) {
-                let image = this._gltf.images[i];
-                image.name = image.name || 'bufferView_' + image.bufferView.toString();
-                const bufferView = this._gltf.bufferViews[image.bufferView];
-                const buffer = this._gltf.buffers[bufferView.buffer];
-                let dataBuffer = new Uint8Array(buffer.dbuffer, bufferView.byteOffset, bufferView.byteLength);
-                let imgData = new Blob([dataBuffer], { type: image.mimeType });
-                let dtexture = new BitmapTexture2D(true, this.ctx);
-                await dtexture.loadFromBlob(imgData);
-                dtexture.name = image.name;
-                this._gltf.resources[image.name] = dtexture;
-            }
-        }
+        await this.preloadImages();
 
         let subParser = new GLTFSubParser(this.ctx);
         let nodes = await subParser.parse(this.initUrl, this._gltf, this._gltf.scene);
@@ -138,6 +118,38 @@ export class GLBParser extends ParserBase {
             return nodes.rootNode;
         }
         return null;
+    }
+
+    /**
+     * Decode the images the textures prefer from the binary chunk, keyed by
+     * image index (names may repeat or be missing). KTX2 images, fallback
+     * sources and images that fail here are left to
+     * GLTFSubParser.parseTexture, which decodes or transcodes them when a
+     * texture needs them.
+     */
+    private async preloadImages() {
+        const images = this._gltf.images;
+        if (!images) return;
+        const preferred = preferredImages(this._gltf);
+        for (let i = 0; i < images.length; i++) {
+            const image = images[i];
+            if (image.bufferView === undefined || isKTX2Image(image) || !preferred.has(i)) continue;
+            image.name = image.name || 'bufferView_' + image.bufferView;
+            const view = this._gltf.bufferViews[image.bufferView];
+            const buffer = view && this._gltf.buffers[view.buffer];
+            if (!buffer?.dbuffer) continue;
+            const data = new Uint8Array(buffer.dbuffer, view.byteOffset || 0, view.byteLength);
+            const dtexture = new BitmapTexture2D(true, this.ctx);
+            try {
+                await dtexture.loadFromBlob(new Blob([data], { type: image.mimeType }));
+            } catch (e) {
+                console.warn(`glTF image ${i} failed to decode: ${e?.message ?? e}`);
+                continue;
+            }
+            dtexture.name = image.name;
+            this._gltf.resources['image_' + i] = dtexture;
+            this._gltf.resources[image.name] ??= dtexture;
+        }
     }
 
     public verification(): boolean {

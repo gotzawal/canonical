@@ -1,5 +1,6 @@
-import { BlendMode, Engine3D, LambertMaterial, LitMaterial, Material, Object3D, RenderNode, Texture, UnLitMaterial, Vector4 } from '@orillusion/core';
-import type { AlphaMode, MaterialDoc } from '../core/types';
+import { BlendMode, Engine3D, isSrgbFormat, LambertMaterial, LitMaterial, Material, Object3D, RenderNode, Texture, UnLitMaterial, Vector4 } from '@orillusion/core';
+import { MAP_ROLES } from '../core/refs';
+import type { AlphaMode, MaterialDoc, TextureRole } from '../core/types';
 import { hexToColor } from './color';
 import { setBlended } from './shaders';
 
@@ -114,21 +115,21 @@ export interface MapSlot {
     key: 'map' | 'normalMap' | 'metalRoughMap' | 'aoMap' | 'emissiveMap';
     /** Texture name in the shader. */
     slot: string;
-    /** Data maps are sampled as linear values, color maps as sRGB. */
-    linear: boolean;
+    /** Color maps are sampled as sRGB, normal and data maps as linear values (core/refs.ts MAP_ROLES). */
+    role: TextureRole;
     /** Shader define that turns the map on, if it has one. */
     define?: string;
 }
 
-export const BASE_MAP: MapSlot = { key: 'map', slot: 'baseMap', linear: false };
+export const BASE_MAP: MapSlot = { key: 'map', slot: 'baseMap', role: MAP_ROLES.map };
 
 /** Maps of the lit (PBR) material, base color first. */
 export const PBR_MAPS: MapSlot[] = [
     BASE_MAP,
-    { key: 'normalMap', slot: 'normalMap', linear: true },
-    { key: 'metalRoughMap', slot: 'maskMap', linear: true },
-    { key: 'aoMap', slot: 'aoMap', linear: true, define: 'USE_AOTEX' },
-    { key: 'emissiveMap', slot: 'emissiveMap', linear: false, define: 'USE_EMISSIVEMAP' },
+    { key: 'normalMap', slot: 'normalMap', role: MAP_ROLES.normalMap },
+    { key: 'metalRoughMap', slot: 'maskMap', role: MAP_ROLES.metalRoughMap },
+    { key: 'aoMap', slot: 'aoMap', role: MAP_ROLES.aoMap, define: 'USE_AOTEX' },
+    { key: 'emissiveMap', slot: 'emissiveMap', role: MAP_ROLES.emissiveMap, define: 'USE_EMISSIVEMAP' },
 ];
 
 /**
@@ -196,7 +197,7 @@ export class MaterialMaps {
     constructor(
         private mat: Material,
         private ctx: any,
-        private load: (assetId: string, linear: boolean) => Promise<Texture | null>,
+        private load: (assetId: string, role: TextureRole) => Promise<Texture | null>,
     ) {
         this.baseDefine = !!mat.shader.getDefaultColorShader().defineValue?.['USE_SRGB_ALBEDO'];
     }
@@ -214,10 +215,10 @@ export class MaterialMaps {
             if (map.slot === 'baseMap') mat.setDefine('USE_SRGB_ALBEDO', this.baseDefine);
             return;
         }
-        void this.load(assetId, map.linear).then((tex) => {
+        void this.load(assetId, map.role).then((tex) => {
             if (!tex || this.assets.get(map.slot) !== assetId) return;
             // A texture decoded from sRGB by the GPU skips the shader's own decode.
-            if (map.slot === 'baseMap') mat.setDefine('USE_SRGB_ALBEDO', (tex as any).format === 'rgba8unorm-srgb');
+            if (map.slot === 'baseMap') mat.setDefine('USE_SRGB_ALBEDO', isSrgbFormat(tex.format));
             mat.shader.setTexture(map.slot, tex);
             if (map.define) mat.setDefine(map.define, true);
         });
