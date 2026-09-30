@@ -5,7 +5,7 @@
 // ranges over the same vertices, so switching costs nothing. Sculpting
 // changes a copy of the map; the chunks it touches are written again.
 
-import { BoundingBox, GeometryBase, MeshRenderer, Object3D, Vector3, VertexAttributeName, type Context3D } from '@orillusion/core';
+import { BoundingBox, GeometryBase, MeshRenderer, Object3D, Reference, Vector3, VertexAttributeName, type Context3D } from '@orillusion/core';
 import { getAssetUrl } from '../core/assets';
 import { decodePngRgba, readHeightmap, type Heightmap } from '../core/heightmap';
 import { chunkCounts, chunkMesh, chunkQuads, chunkRegion, refillChunk, TERRAIN_LODS, type TerrainFrame, type TerrainSurface } from '../core/terrain';
@@ -101,6 +101,8 @@ export class TerrainView {
         this.root.name = 'Terrain';
         scene.addChild(this.root);
         this.material = new TerrainMaterial(ctx);
+        // Held here too: the last chunk destroyed would destroy the material its next chunks draw with.
+        Reference.getInstance().attached(this.material.material, this);
     }
 
     get surface(): TerrainSurface {
@@ -230,6 +232,8 @@ export class TerrainView {
         this.clearChunks();
         this.root.removeFromParent();
         this.root.destroy();
+        Reference.getInstance().detached(this.material.material, this);
+        this.material.material.destroy(true);
         this.material.dispose();
     }
 }

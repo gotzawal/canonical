@@ -61,6 +61,8 @@ const LABELS: Record<Exclude<Tool, 'select'>, string> = { translate: 'Move', rot
  */
 export class Gizmo {
     hover: Handle | null = null;
+    /** While true it is neither drawn nor hit (the terrain brush has the pointer). */
+    hidden: () => boolean = () => false;
     private drag: Drag | null = null;
     constructor(
         private store: Store,
@@ -83,7 +85,7 @@ export class Gizmo {
     /** Layout at the object's current transform. */
     private computeLayout(): Layout | null {
         const tool = this.store.prefs.tool;
-        if (tool === 'select') return null;
+        if (tool === 'select' || this.hidden()) return null;
         const node = this.store.primary;
         if (!node) return null;
         const m = this.picker.worldMatrix(node.id);

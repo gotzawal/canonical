@@ -284,6 +284,21 @@ export class TerrainMaterial {
         this.writeInfo();
     }
 
+    /** Writes the part of the paint a stroke changed into the texture shown (all of it when none of its size is shown yet). */
+    updatePaint(paint: { width: number; height: number; data: Uint8Array }, region: { x0: number; z0: number; x1: number; z1: number }) {
+        const tex = this.painted ? this.splat.current : null;
+        if (!tex || tex.width !== paint.width || tex.height !== paint.height) {
+            this.setPaint(paint);
+            return;
+        }
+        const x0 = Math.max(0, region.x0);
+        const z0 = Math.max(0, region.z0);
+        const w = Math.min(paint.width, region.x1) - x0;
+        const h = Math.min(paint.height, region.z1) - z0;
+        if (w <= 0 || h <= 0) return;
+        this.ctx.device.queue.writeTexture({ texture: tex, origin: { x: x0, y: z0 } }, paint.data as BufferSource, { offset: (z0 * paint.width + x0) * 4, bytesPerRow: paint.width * 4 }, { width: w, height: h });
+    }
+
     private writeInfo() {
         this.shader.setUniformVector4('terrainInfo', new Vector4(this.count, this.painted ? 1 : 0, 1, 0));
     }

@@ -1,11 +1,16 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player } from '../core/model';
+import {
+    Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player, Scatter, ScatterSource, Terrain,
+    TerrainLayer,
+} from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
-import { unassignSlot } from '../design/materialSlots';
+import { layerFromSlot, unassignSlot } from '../design/materialSlots';
+import type { BrushTool } from '../design/terrainEdit';
+import type { Heightmap } from '../core/heightmap';
 import { onChanges } from './batch';
 import { formatBytes } from '../core/assets';
 import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
@@ -93,12 +98,45 @@ const COMPONENTS = {
     material: [Material, (n: NodeDoc) => n.mesh?.material],
     mirror: [Mirror, (n: NodeDoc) => n.mirror],
     grass: [Grass, (n: NodeDoc) => n.grass],
+    terrain: [Terrain, (n: NodeDoc) => n.terrain],
+    scatter: [Scatter, (n: NodeDoc) => n.scatter],
     audio: [AudioSource, (n: NodeDoc) => n.audio],
     // Made on the first edit: every model with clips shows the section.
     animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
 } as const;
 
 type Filter = (n: NodeDoc) => boolean;
+/** Finds an object inside a node the rows edit: a component, or an item of a component's list. */
+type Getter = (n: NodeDoc) => Record<string, unknown> | undefined;
+
+const BRUSH_TOOLS: { value: BrushTool; label: string; hint: string }[] = [
+    { value: 'raise', label: 'Raise', hint: 'Raise the ground while held (Shift lowers it)' },
+    { value: 'lower', label: 'Lower', hint: 'Lower the ground while held (Shift raises it)' },
+    { value: 'flatten', label: 'Flatten', hint: 'Level the ground to the height where the stroke starts: building sites, plateaus' },
+    { value: 'smooth', label: 'Smooth', hint: 'Even out bumps' },
+    { value: 'path', label: 'Path', hint: 'Level a walkable way across the stroke, keeping the slope along it' },
+    { value: 'paint', label: 'Paint', hint: 'Paint a layer: it takes over from the others where painted' },
+];
+
+/** Meters with one decimal. */
+const meters = (v: number) => String(Math.round(v * 10) / 10);
+
+/** The lowest and highest sample of each heightmap shown (a sculpt stroke makes a new map). */
+const extremes = new WeakMap<Heightmap, [number, number]>();
+function extremesOf(map: Heightmap): [number, number] {
+    let known = extremes.get(map);
+    if (!known) {
+        let lo = Infinity;
+        let hi = -Infinity;
+        for (const v of map.data) {
+            if (v < lo) lo = v;
+            if (v > hi) hi = v;
+        }
+        known = [lo, hi];
+        extremes.set(map, known);
+    }
+    return known;
+}
 
 /** Property editor for the selected object(s). Edits apply to every selected object that has the property. */
 export class InspectorPanel {
@@ -116,6 +154,8 @@ export class InspectorPanel {
     private partFilter = '';
     /** The object the mesh filter was typed for: another object starts unfiltered. */
     private partFilterFor = '';
+    /** Shows the terrain brush's settings again (while a terrain's section is shown). */
+    private brushSync: (() => void) | null = null;
 
     constructor(private editor: Editor, private showScene: () => void) {
         this.body = h('div', { class: 'panel-body inspector-body' });
@@ -136,6 +176,13 @@ export class InspectorPanel {
         editor.player.on('state', () => {
             if (this.shapeKey() !== this.shape) this.render();
         });
+        editor.on('brush', () => this.brushSync?.());
+        // A terrain's heights and a scatter's copies change without an edit of the object (strokes, loads, placing).
+        const shown = (id: string) => {
+            if (id === store.primary?.id) for (const sync of this.syncs) sync();
+        };
+        editor.sync.on('terrain', shown);
+        editor.sync.on('scatter', shown);
         editor.on('focus-part', ({ node, path }) => {
             if (node !== store.primary?.id || !path) return;
             this.openParts.add(path);
@@ -172,6 +219,9 @@ export class InspectorPanel {
             (n.mirror ? 'mirror' : '-') + (n.instancing ? ':inst' : ''),
             // The ground choices list the objects.
             n.grass ? 'grass:' + this.store.doc.nodes.length : '-',
+            // A layer shows its own maps or follows a slot, from the slots listed.
+            n.terrain ? 'terrain:' + n.terrain.layers.map((l) => l.slot ?? '-').join(',') + ':' + this.store.doc.design.materials.map((m) => m.id + m.name).join(',') : '-',
+            n.scatter ? 'scatter:' + n.scatter.sources.length + ':' + n.scatter.avoid.join(',') + ':' + this.store.doc.nodes.length : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -250,6 +300,7 @@ export class InspectorPanel {
         this.seen = this.versions();
         this.syncs = [];
         this.moves = [];
+        this.brushSync = null;
         const scroll = this.body.scrollTop;
         clear(this.body);
         const node = this.store.primary;
@@ -284,6 +335,8 @@ export class InspectorPanel {
         if (node.body) this.body.append(this.physicsSection());
         if (node.mirror && node.mesh) this.body.append(this.mirrorSection());
         if (node.grass) this.body.append(this.grassSection());
+        if (node.terrain) this.body.append(this.terrainSection());
+        if (node.scatter) this.body.append(this.scatterSection());
         if (node.instancing) this.body.append(this.instancingSection());
         if (node.audio) this.body.append(this.audioSection());
         if (node.model) this.body.append(...this.modelSections(node));
@@ -343,7 +396,16 @@ export class InspectorPanel {
      * stays valid (a range in order, a body no thinner than its radius).
      */
     private componentRows(comp: keyof typeof COMPONENTS, keys: readonly string[], filter?: Filter): HTMLElement[] {
-        const [schema, get, make] = COMPONENTS[comp] as unknown as [z.ZodObject, (n: NodeDoc) => Record<string, unknown> | undefined, (keyof NodeDoc)?];
+        const [schema, get, make] = COMPONENTS[comp] as unknown as [z.ZodObject, Getter, (keyof NodeDoc)?];
+        return this.fieldRows(schema, get, keys, filter, make);
+    }
+
+    /**
+     * Rows for fields of an object `get` finds in each selected node (a
+     * component, or an item of its list), from the object's schema; `make`
+     * names the component made on the first edit where it is missing.
+     */
+    private fieldRows(schema: z.ZodObject, get: Getter, keys: readonly string[], filter?: Filter, make?: keyof NodeDoc): HTMLElement[] {
         const value = (n: NodeDoc) => get(n) ?? (make ? defaults(schema) : undefined);
         const fields = schemaRows(schema, keys, value(this.node)!, (key, label) =>
             this.hooks(label, filter ?? ((n) => !!get(n)), (n, v) => {
@@ -935,6 +997,221 @@ export class InspectorPanel {
             row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
             row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
             ...this.componentRows('grass', ['castShadow']),
+        ], [remove]);
+    }
+
+    private terrainSection(): HTMLElement {
+        const has: Filter = (n) => !!n.terrain;
+        const id = this.node.id;
+        const shape = h('div', { class: 'readonly' });
+        const showShape = () => {
+            const view = this.editor.sync.terrainView(id);
+            if (!view) {
+                shape.textContent = '';
+                return;
+            }
+            const { map, frame: f } = view;
+            const [lo, hi] = extremesOf(map);
+            shape.textContent = `${meters(f.y + lo * f.height)} to ${meters(f.y + hi * f.height)} m`;
+            shape.title = `${map.width} x ${map.height} samples, ${meters(f.sizeX / (map.width - 1))} m apart`;
+        };
+        showShape();
+        this.watch(showShape);
+        const heights = h('div', { class: 'readonly' });
+        this.watch(() => {
+            const file = this.store.doc.assets.find((a) => a.id === this.node.terrain?.heightmap);
+            heights.textContent = file ? file.name : 'None (flat)';
+        });
+        heights.textContent = this.store.doc.assets.find((a) => a.id === this.node.terrain!.heightmap)?.name ?? 'None (flat)';
+        const load = iconButton('upload', 'Import a heightmap (a 16-bit grayscale PNG, or raw 16-bit .r16 / .raw)', () => void this.editor.importHeightmapDialog(id));
+        const remove = iconButton('trash', 'Remove terrain', () => this.hooks<null>('Remove Terrain', has, (n) => delete n.terrain).commit!(null));
+        return section('terrain', 'Terrain', 'terrain', [
+            h('div', { class: 'muted small pad', text: 'Ground from a heightmap over the area around the object, drawn in chunks that get coarser far away. In Play characters and bodies stand on it; grass and scatters grow on it. Choose a brush and drag on it in the view to shape or paint it.' }),
+            row('Ground', shape, 'Lowest and highest ground'),
+            row('Heightmap', h('div', { class: 'inline grow' }, heights, load), 'Each sculpt stroke saves the heights as a new file (one undo step)'),
+            ...this.componentRows('terrain', ['size', 'height', 'detail', 'collide', 'castShadow']),
+            ...this.brushRows(),
+            ...this.terrainLayerRows(),
+        ], [remove]);
+    }
+
+    /** The terrain brush: its tool, size and strength (not part of the document). */
+    private brushRows(): HTMLElement[] {
+        const ed = this.editor;
+        const tools = h('div', { class: 'brush-tools', attrs: { role: 'radiogroup', 'aria-label': 'Brush' } });
+        const buttons = BRUSH_TOOLS.map((t) => {
+            const b = h('button', { class: 'seg-btn', text: t.label, title: t.hint, attrs: { type: 'button', role: 'radio' } });
+            b.addEventListener('click', () => ed.setBrush({ tool: ed.brush.tool === t.value ? null : t.value }));
+            tools.append(b);
+            return { b, value: t.value };
+        });
+        const radius = new SliderField({ value: ed.brush.radius, min: 0.5, max: 100, step: 0.5, precision: 1, input: (v) => ed.setBrush({ radius: v }), commit: (v) => ed.setBrush({ radius: Math.max(0.2, v) }) });
+        const strength = new SliderField({ value: ed.brush.strength, min: 0.05, max: 1, step: 0.05, precision: 2, input: (v) => ed.setBrush({ strength: v }), commit: (v) => ed.setBrush({ strength: Math.min(1, Math.max(0.01, v)) }) });
+        const layers = this.node.terrain!.layers;
+        const layer = new SelectField<string>(layers.map((l, i) => ({ value: String(i), label: `${i + 1}: ${this.layerName(l.slot, l.albedo)}` })), String(ed.brush.layer), (v) => ed.setBrush({ layer: Number(v) }));
+        const layerRow = row('Paint Layer', layer.el, 'The layer the brush paints');
+        const hint = h('div', { class: 'muted small pad' });
+        this.brushSync = () => {
+            const tool = ed.brush.tool;
+            for (const { b, value } of buttons) {
+                b.classList.toggle('on', value === tool);
+                b.setAttribute('aria-checked', String(value === tool));
+            }
+            radius.set(ed.brush.radius);
+            strength.set(ed.brush.strength);
+            if (ed.brush.layer >= layers.length && layers.length) ed.brush.layer = layers.length - 1;
+            layer.set(String(ed.brush.layer));
+            layerRow.hidden = tool !== 'paint';
+            hint.textContent = tool
+                ? `${BRUSH_TOOLS.find((t) => t.value === tool)!.hint}: drag on the terrain in the view. Alt or the right button still turn the view; click the tool again to stop.`
+                : 'Choose a tool, then drag on the terrain in the view to shape or paint it.';
+        };
+        this.brushSync();
+        return [
+            h('div', { class: 'group-label', text: 'Brush' }),
+            tools,
+            row('Radius', radius.el, 'Meters from the middle of the brush to its edge'),
+            row('Strength', strength.el, 'How fast it works'),
+            layerRow,
+            hint,
+        ];
+    }
+
+    /** A layer's name: its slot's, else its color map's. */
+    private layerName(slot: string | null, albedo: string | null): string {
+        const doc = this.store.doc;
+        return (slot && doc.design.materials.find((m) => m.id === slot)?.name) || (albedo && doc.assets.find((a) => a.id === albedo)?.name) || 'Plain';
+    }
+
+    /** A terrain's layers: each a material slot (or its own maps) and where it shows. */
+    private terrainLayerRows(): HTMLElement[] {
+        const t = this.node.terrain!;
+        const slots = this.store.doc.design.materials;
+        const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
+        const out: HTMLElement[] = [h('div', { class: 'group-label', text: 'Layers' })];
+        if (!t.layers.length) out.push(h('div', { class: 'muted small pad', text: 'No layers: the ground is plain gray. Add one for its surface (the first covers everything).' }));
+        t.layers.forEach((l, i) => {
+            const get = (n: NodeDoc) => n.terrain?.layers[i];
+            const has: Filter = (n) => !!get(n);
+            const slot = new SelectField<string>([{ value: '', label: 'Own maps' }, ...slots.map((m) => ({ value: m.id, label: m.name }))], l.slot ?? '', (v) =>
+                this.hooks<string>('Layer Material', has, (n, x) => {
+                    const layer = get(n)!;
+                    const found = x ? this.store.doc.design.materials.find((m) => m.id === x) : undefined;
+                    if (found) layerFromSlot(layer, found);
+                    else layer.slot = null;
+                }).commit!(v));
+            this.watch(() => {
+                const cur = get(this.node);
+                if (cur) slot.set(cur.slot ?? '');
+            });
+            const up = i > 0
+                ? iconButton('arrowUp', 'Move before the layer above (drawn under it)', () => this.hooks<null>('Move Layer', has, (n) => {
+                    const list = n.terrain!.layers;
+                    [list[i - 1], list[i]] = [list[i], list[i - 1]];
+                }).commit!(null))
+                : null;
+            const drop = iconButton('trash', 'Remove layer', () => this.hooks<null>('Remove Layer', has, (n) => void n.terrain!.layers.splice(i, 1)).commit!(null));
+            out.push(h('div', { class: 'terrain-layer-head' }, h('span', { text: i === 0 ? `Layer 1: everywhere` : `Layer ${i + 1}` }), up, drop));
+            out.push(row('Material', slot.el, 'A material slot: the layer shows its swatch at its tile size and follows it'));
+            if (!l.slot) {
+                const map = (key: 'albedo' | 'normal', label: string) => {
+                    const f = new SelectField<string>([{ value: '', label: 'None' }, ...textures.map((a) => ({ value: a.id, label: a.name }))], l[key] ?? '', (v) =>
+                        this.hooks<string | null>(label, has, (n, x) => (get(n)![key] = x)).commit!(v || null));
+                    this.watch(() => {
+                        const cur = get(this.node);
+                        if (cur) f.set(cur[key] ?? '');
+                    });
+                    return f;
+                };
+                out.push(row('Color Map', map('albedo', 'Layer Color Map').el), row('Normal Map', map('normal', 'Layer Normal Map').el));
+                out.push(...this.fieldRows(TerrainLayer, get as Getter, ['tile', 'color', 'roughness']));
+            }
+            if (i > 0) out.push(...this.fieldRows(TerrainLayer, get as Getter, ['height', 'slope', 'heightBlend', 'slopeBlend', 'onlyPainted']));
+        });
+        if (t.layers.length < 4) {
+            out.push(h('div', { class: 'design-actions' }, button('Add Layer', () => this.hooks<null>('Add Layer', (n) => !!n.terrain && n.terrain.layers.length < 4, (n) => {
+                const layer = defaults(TerrainLayer);
+                // A later layer starts on the steep slopes, where rock goes.
+                if (n.terrain!.layers.length) layer.slope = [35, 90];
+                const first = this.store.doc.design.materials[0];
+                if (first) layerFromSlot(layer, first);
+                n.terrain!.layers.push(layer);
+            }).commit!(null), 'small', 'plus')));
+        }
+        return out;
+    }
+
+    private scatterSection(): HTMLElement {
+        const has: Filter = (n) => !!n.scatter;
+        const s = this.node.scatter!;
+        const self = this.node.id;
+        const doc = this.store.doc;
+        const placed = h('div', { class: 'readonly' });
+        const showPlaced = () => {
+            const cur = this.node.scatter;
+            if (!cur) return;
+            const copies = this.editor.sync.scatterPlacements(self).length;
+            const solids = this.editor.sync.scatterSolids().find((x) => x.id === self)?.solids.length ?? 0;
+            placed.textContent = !cur.sources.some((x) => x.model) ? 'Add a model to place' : `${copies} of ${cur.count}${solids ? `, ${solids} solid` : ''}`;
+        };
+        showPlaced();
+        this.watch(showPlaced);
+        const models = doc.assets.filter((a) => a.kind === 'model');
+        const sources: HTMLElement[] = [];
+        s.sources.forEach((src, i) => {
+            const get = (n: NodeDoc) => n.scatter?.sources[i];
+            const hasSource: Filter = (n) => !!get(n);
+            const model = new SelectField<string>([{ value: '', label: 'None' }, ...models.map((a) => ({ value: a.id, label: a.name }))], src.model ?? '', (v) =>
+                this.hooks<string | null>('Scatter Model', hasSource, (n, x) => (get(n)!.model = x)).commit!(v || null));
+            this.watch(() => {
+                const cur = get(this.node);
+                if (cur) model.set(cur.model ?? '');
+            });
+            const drop = iconButton('trash', 'Remove this model', () => this.hooks<null>('Remove Scatter Model', hasSource, (n) => void n.scatter!.sources.splice(i, 1)).commit!(null));
+            sources.push(row(`Model ${i + 1}`, h('div', { class: 'inline grow' }, model.el, drop), 'A model to place: a tree, rock or bush (a set of pieces side by side gives each copy one piece)'));
+            sources.push(...this.fieldRows(ScatterSource, get as Getter, ['weight', 'scale', 'solid']));
+        });
+        if (s.sources.length < 8) {
+            sources.push(h('div', { class: 'design-actions' }, button('Add Model', () => this.hooks<null>('Add Scatter Model', (n) => !!n.scatter && n.scatter.sources.length < 8, (n) => {
+                n.scatter!.sources.push({ ...defaults(ScatterSource), model: models.find((a) => !n.scatter!.sources.some((x) => x.model === a.id))?.id ?? models[0]?.id ?? null });
+            }).commit!(null), 'small', 'plus')));
+        }
+        // What copies stand on, and what they keep clear of: objects with a mesh, a model, a terrain or children.
+        const solid = doc.nodes.filter((n) => (n.id !== self || n.terrain) && !n.prefabChild && (n.mesh || n.model || n.terrain || this.store.children(n.id).length));
+        const ground = new SelectField<string>([{ value: '', label: 'None (flat)' }, ...solid.map((n) => ({ value: n.id, label: n.name }))], s.ground ?? '', (v) =>
+            this.hooks<string | null>('Scatter Ground', has, (n, x) => (n.scatter!.ground = x)).commit!(v || null));
+        this.watch(() => this.node.scatter && ground.set(this.node.scatter.ground ?? ''));
+        const avoided = h('div', { class: 'chips' });
+        for (const aid of s.avoid) {
+            const name = this.store.node(aid)?.name ?? aid;
+            avoided.append(h('button', {
+                class: 'chip',
+                text: `${name} ×`,
+                title: `Stop keeping clear of ${name}`,
+                attrs: { type: 'button' },
+                on: { click: () => this.hooks<null>('Scatter Avoid', has, (n) => (n.scatter!.avoid = n.scatter!.avoid.filter((x) => x !== aid))).commit!(null) },
+            }));
+        }
+        const addAvoid = new SelectField<string>([{ value: '', label: 'Keep clear of...' }, ...solid.filter((n) => n.id !== self && !n.terrain && !s.avoid.includes(n.id)).map((n) => ({ value: n.id, label: n.name }))], '', (v) => {
+            if (v) this.hooks<string>('Scatter Avoid', has, (n, x) => void (n.scatter!.avoid.includes(x) || n.scatter!.avoid.push(x))).commit!(v);
+        });
+        const reseed = button('Reseed', () => this.hooks<number>('Reseed Scatter', has, (n, x) => (n.scatter!.seed = x)).commit!(Math.floor(Math.random() * 999999)), 'small', 'refresh');
+        reseed.title = 'Place the copies anew';
+        const bake = button('Make Objects', () => {
+            if (!this.editor.bakeScatter(self)) toast('The scatter has no copies yet (or its models are still loading).', 'info');
+        }, 'small', 'layers');
+        bake.title = 'Turn the copies into objects of their own under an instanced group, to edit one by one (the scatter goes)';
+        const remove = iconButton('trash', 'Remove scatter', () => this.hooks<null>('Remove Scatter', has, (n) => delete n.scatter).commit!(null));
+        return section('scatter', 'Scatter', 'scatter', [
+            h('div', { class: 'muted small pad', text: 'Copies of models spread over the area around the object by rules, drawn instanced by parts of the area. Only the rules are saved: the copies are placed again from them whenever they, the ground or what to avoid change.' }),
+            row('Placed', placed, 'Copies placed of those asked, and how many stop characters in Play'),
+            ...sources,
+            ...this.componentRows('scatter', ['size', 'count', 'spacing', 'seed']),
+            row('Ground', ground.el, 'What the copies stand on: a terrain, a floor or a group of them'),
+            ...this.componentRows('scatter', ['height', 'slope']),
+            row('Avoid', h('div', {}, avoided, addAvoid.el), 'Objects whose ground area stays clear: buildings, paths, the play area'),
+            ...this.componentRows('scatter', ['margin', 'align', 'sink', 'distance', 'castShadow']),
+            h('div', { class: 'design-actions' }, reseed, bake),
         ], [remove]);
     }
 
@@ -1596,6 +1873,24 @@ export class InspectorPanel {
         if (!node.grass && !node.light && !node.camera) {
             // On a mesh or a model, the grass grows on it and covers it.
             items.push({ label: 'Grass', icon: 'grass', action: () => this.hooks<null>('Add Grass', (n) => !n.grass, (n) => (n.grass = this.editor.grassFor(n))).commit!(null) });
+        }
+        if (!node.terrain && !node.mesh && !node.model && !node.light && !node.camera && !node.particles) {
+            items.push({ label: 'Terrain (flat)', icon: 'terrain', action: () => this.hooks<null>('Add Terrain', (n) => !n.terrain && !n.mesh && !n.model, (n) => (n.terrain = defaults(Terrain))).commit!(null) });
+        }
+        if (!node.scatter && !node.mesh && !node.model && !node.light && !node.camera) {
+            // On a terrain the copies stand on it, all over it.
+            items.push({
+                label: 'Scatter',
+                icon: 'scatter',
+                action: () => this.hooks<null>('Add Scatter', (n) => !n.scatter && !n.mesh && !n.model, (n) => {
+                    const scatter = defaults(Scatter);
+                    if (n.terrain) {
+                        scatter.ground = n.id;
+                        scatter.size = [n.terrain.size[0], n.terrain.size[1]];
+                    }
+                    n.scatter = scatter;
+                }).commit!(null),
+            });
         }
         if (!node.audio && !node.light && !node.camera) {
             const first = this.store.doc.assets.find((a) => a.kind === 'audio')?.id ?? null;

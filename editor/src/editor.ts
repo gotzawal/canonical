@@ -7,12 +7,13 @@ import { download as downloadFile, kindOfUrl, librarySource, urlFileName, type L
 import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
+import { covers } from './core/terrain';
 import {
     defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
-import { AudioSource, Grass, Mirror } from './core/model';
+import { AudioSource, Grass, Mirror, Scatter, ScatterSource } from './core/model';
 import { defaults } from './core/schema';
 import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
@@ -36,7 +37,7 @@ import type { CameraController } from './viewport/cameraController';
 import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
 import { useSwatch, type RoomSample } from './design/materialSlots';
-import { newTerrain, TerrainStroke, type NewTerrain } from './design/terrainEdit';
+import { importHeightmap, newTerrain, TerrainStroke, type BrushSettings, type NewTerrain } from './design/terrainEdit';
 import { librarySwatch, type SwatchRecord } from './design/swatches';
 import { Pipeline } from './design/pipeline';
 import { isHdr, measureScene } from './engine/measure';
@@ -123,6 +124,8 @@ interface EditorEvents {
     'flush-edits': void;
     /** Show a behavior tree (or schema) in the Behavior tab of the dock. */
     'show-behavior': { tree?: string; schema?: string; node?: string };
+    /** The terrain brush changed (its tool, size, strength or layer). */
+    brush: BrushSettings;
 }
 
 // The dependencies are the editor's own fields (editor.store, editor.viewport...).
@@ -143,6 +146,8 @@ export class Editor extends Emitter<EditorEvents> {
     /** The document's structure version the isolation was made for. */
     private isolatedShape = -1;
     view: EditorView = 'scene';
+    /** The terrain brush: while it has a tool, dragging on the selected terrain in the view sculpts or paints it. */
+    readonly brush: BrushSettings = { tool: null, radius: 6, strength: 0.5, layer: 0 };
 
     constructor(deps: EditorDeps) {
         super();
@@ -282,6 +287,42 @@ export class Editor extends Emitter<EditorEvents> {
     /** Starts a sculpting or painting stroke on a terrain (see TerrainStroke). */
     terrainStroke(id: string): TerrainStroke {
         return new TerrainStroke(this.store, this.sync, id);
+    }
+
+    /** Changes the terrain brush (the tool, its size, strength or painted layer). */
+    setBrush(patch: Partial<BrushSettings>) {
+        Object.assign(this.brush, patch);
+        this.emit('brush', this.brush);
+    }
+
+    /** Puts a heightmap file the user picks on a terrain. */
+    async importHeightmapDialog(id: string) {
+        const [file] = await pickFiles('.png,.r16,.raw', false);
+        if (!file) return;
+        try {
+            await importHeightmap(this.store, id, file);
+        } catch (e) {
+            toast((e as Error)?.message || String(e), 'error');
+        }
+    }
+
+    /**
+     * A scatter from the Create menu: of the models of the selected objects,
+     * over the selected terrain or the one where new objects go (all of it),
+     * else over 30 meters around that point. Returns its id.
+     */
+    newScatter(): string {
+        const selected = this.store.selection.map((id) => this.store.node(id)).filter((n): n is NodeDoc => !!n);
+        const at = this.viewport.spawnPoint();
+        const land = selected.find((n) => n.terrain) ?? this.store.node(this.sync.terrains().find((t) => covers(t.surface, at[0], at[2]))?.id ?? '');
+        const scatter = defaults(Scatter);
+        const models = [...new Set(selected.map((n) => n.model?.asset).filter((a): a is string => !!a))].slice(0, 8);
+        scatter.sources = models.map((model) => ({ ...defaults(ScatterSource), model }));
+        if (land?.terrain) {
+            scatter.ground = land.id;
+            scatter.size = [land.terrain.size[0], land.terrain.size[1]];
+        }
+        return this.createScatter(scatter, { at: land?.terrain ? land.position : at });
     }
 
     /**

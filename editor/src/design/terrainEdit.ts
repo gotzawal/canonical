@@ -5,7 +5,7 @@
 // file a stroke replaced leaves the project's list (undo brings it back).
 
 import { putAsset } from '../core/assets';
-import { encodePngHeightmap, encodePngRgba, type Heightmap } from '../core/heightmap';
+import { encodePngHeightmap, encodePngRgba, readHeightmap, type Heightmap } from '../core/heightmap';
 import { Terrain } from '../core/model';
 import { uses } from '../core/refs';
 import { defaults } from '../core/schema';
@@ -92,6 +92,29 @@ function swapIn(store: Store, id: string, field: 'heightmap' | 'splatmap', meta:
     });
 }
 
+/**
+ * Puts a heightmap file (a 16-bit grayscale PNG, or raw 16-bit samples
+ * from another tool) on a terrain, in one undo step. Throws when the file
+ * is no heightmap.
+ */
+export async function importHeightmap(store: Store, id: string, file: File) {
+    const map = await readHeightmap(file, file.name);
+    const meta = await putAsset(file, file.name, 'data', undefined, { width: map.width, height: map.height });
+    rememberHeightmap(meta.id, map);
+    swapIn(store, id, 'heightmap', meta, 'Import Heightmap');
+}
+
+/** What the viewport's terrain brush does while one is chosen: sculpt, or paint a layer. */
+export type BrushTool = SculptOp | 'paint';
+
+/** The terrain brush: its tool (null: off, the view selects and moves as usual), meters from its middle to its edge, 0..1 strength, and the layer it paints. */
+export interface BrushSettings {
+    tool: BrushTool | null;
+    radius: number;
+    strength: number;
+    layer: number;
+}
+
 /** A brush stroke in world meters: the points it passes (x, z), how wide and how strong. */
 export interface WorldStroke {
     points: [number, number][];
@@ -161,8 +184,8 @@ export class TerrainStroke {
         const p = this.paint;
         // The paint covers the terrain edge to edge, a texel's middle at each (i + 0.5).
         const points = stroke.points.map(([x, z]): [number, number] => [((x - f.x) / f.sizeX + 0.5) * p.width - 0.5, ((z - f.z) / f.sizeZ + 0.5) * p.height - 0.5]);
-        paintSplat(p, layer, { points, radius: stroke.radius * Math.max(p.width / f.sizeX, p.height / f.sizeZ), strength: stroke.strength });
-        view.material.setPaint(p);
+        const region = paintSplat(p, layer, { points, radius: stroke.radius * Math.max(p.width / f.sizeX, p.height / f.sizeZ), strength: stroke.strength });
+        view.material.updatePaint(p, region);
         return true;
     }
 

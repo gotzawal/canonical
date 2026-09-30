@@ -3063,6 +3063,38 @@ kbd {
     font-weight: 600;
 }
 
+/* The terrain brush's tools (inspector): three a row, the chosen one lit. */
+.brush-tools {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--inset);
+}
+
+.brush-tools .seg-btn {
+    min-width: 0;
+    padding: 0 4px;
+}
+
+/* A terrain layer's title, with its move and remove buttons. */
+.terrain-layer-head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 8px;
+    color: var(--text-strong);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.terrain-layer-head > span {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Token usage of a project (ui/usageDialog.ts). */
 .dialog.usage-modal {
     width: min(920px, 100%);

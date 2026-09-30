@@ -49,6 +49,7 @@ import { applyTheme } from './ui/theme';
 import { toolbar } from './ui/toolbar';
 import { button } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
+import { TerrainBrush } from './viewport/terrainBrush';
 import { WalkController } from './viewport/walk';
 import { ReferenceRoom } from './viewport/referenceRoom';
 import { pipelineOverlay } from './ui/pipelineOverlay';
@@ -291,6 +292,9 @@ async function main() {
     new WalkController(editor, viewport.overlay, viewportEl);
     new ReferenceRoom(editor, viewportEl);
     overlayDrawers.push(pipelineOverlay(editor));
+    const terrainBrush = new TerrainBrush(editor, viewport.overlay, viewportEl);
+    overlayDrawers.push((ctx) => terrainBrush.draw(ctx));
+    gizmo.hidden = () => terrainBrush.active;
 
     store.on('change', (hint) => sync.sync(hint));
     store.on('prefs', (p) => runtime.setGridVisible(p.grid && !store.playing));
