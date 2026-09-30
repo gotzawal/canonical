@@ -912,8 +912,8 @@ export class InspectorPanel {
         const has: Filter = (n) => !!n.grass;
         const g = this.node.grass!;
         const self = this.node.id;
-        // What the blades can stand on: objects with a mesh, a model or children.
-        const grounds = this.store.doc.nodes.filter((n) => n.id !== self && !n.prefabChild && (n.mesh || n.model || this.store.children(n.id).length));
+        // What the blades can stand on: objects with a mesh, a model, a terrain or children.
+        const grounds = this.store.doc.nodes.filter((n) => (n.id !== self || n.terrain) && !n.prefabChild && (n.mesh || n.model || n.terrain || this.store.children(n.id).length));
         const ground = new SelectField<string>([{ value: '', label: 'None (flat)' }, ...grounds.map((n) => ({ value: n.id, label: n.name }))], g.ground ?? '', (v) =>
             this.hooks<string | null>('Grass Ground', has, (n, x) => (n.grass!.ground = x)).commit!(v || null));
         const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');

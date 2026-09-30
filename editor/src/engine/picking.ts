@@ -3,6 +3,7 @@ import {
     Mat4, Ray, add, invert, mul, normalize, rayBox, rayTriangle, sub, transform4, transformDir, transformPoint,
 } from '../core/math';
 import type { Store } from '../core/store';
+import { rayTerrain } from '../core/terrain';
 import type { Vec3 } from '../core/types';
 import type { Runtime } from './runtime';
 import type { SceneSync } from './sync';
@@ -20,7 +21,7 @@ export interface Hit {
     id: string;
     distance: number;
     point: Vec3;
-    /** The renderer that was hit (a part of a model, or the node's mesh). */
+    /** The renderer that was hit (a part of a model, or the node's mesh; a chunk of a terrain). */
     renderer: RenderNode;
 }
 
@@ -117,6 +118,22 @@ export class Picker {
                     best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: r };
                 }
             }
+        }
+        return this.terrainHit(ray, best?.distance ?? Infinity) ?? best;
+    }
+
+    /**
+     * The nearest terrain a ray meets within `maxDist`: from its heightmap,
+     * whatever detail its chunks draw.
+     */
+    terrainHit(ray: Ray, maxDist: number, skip?: (id: string) => boolean): Hit | null {
+        let best: Hit | null = null;
+        for (const t of this.sync.terrains()) {
+            if (skip?.(t.id)) continue;
+            const d = rayTerrain(t.surface, ray.origin, ray.dir, Math.min(maxDist, best?.distance ?? Infinity, 1e5));
+            const renderer = this.sync.terrainView(t.id)?.renderers[0];
+            if (d === null || !renderer) continue;
+            best = { id: t.id, distance: d, point: add(ray.origin, [ray.dir[0] * d, ray.dir[1] * d, ray.dir[2] * d]), renderer };
         }
         return best;
     }
@@ -241,7 +258,7 @@ export class Picker {
                 }
             }
         }
-        return best;
+        return this.terrainHit(ray, Math.min(maxDist, best?.distance ?? Infinity), skip) ?? best;
     }
 
     // -------------------------------------------------------------- bounds
@@ -251,7 +268,22 @@ export class Picker {
         const ids = [id];
         if (deep) for (const n of this.store.descendants(id)) ids.push(n.id);
         let box: Box | null = null;
+        const grow = (p: Vec3) => {
+            if (!box) box = { min: [...p] as Vec3, max: [...p] as Vec3 };
+            else {
+                for (let k = 0; k < 3; k++) {
+                    if (p[k] < box.min[k]) box.min[k] = p[k];
+                    if (p[k] > box.max[k]) box.max[k] = p[k];
+                }
+            }
+        };
         for (const nid of ids) {
+            // A terrain spans its size, from its object's height to its top.
+            const f = this.sync.terrainView(nid)?.frame;
+            if (f) {
+                grow([f.x - f.sizeX / 2, f.y, f.z - f.sizeZ / 2]);
+                grow([f.x + f.sizeX / 2, f.y + f.height, f.z + f.sizeZ / 2]);
+            }
             for (const r of this.sync.renderersOf(nid)) {
                 const b = r.geometry?.bounds;
                 if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) continue;

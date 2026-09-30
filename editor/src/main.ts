@@ -251,7 +251,7 @@ async function main() {
             const asset = store.doc.assets.find((a) => a.id === ref);
             if (asset?.kind === 'model') editor.addModel(ref, point);
             else if (asset?.kind === 'audio') store.select(editor.addSound(ref, hitId ? [hitId] : [], hitId ? undefined : point));
-            else if (asset) editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
+            else if (asset?.kind === 'texture') editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
         },
         onPickPart: (id, renderer) => {
             const path = renderer ? sync.modelInfo(id)?.pathOf(renderer) ?? null : null;

@@ -141,6 +141,11 @@ export class FakeSync extends Emitter<{ model: string }> {
         return r.enable;
     }
 
+    /** No terrains in these levels. */
+    terrains(): [] {
+        return [];
+    }
+
     asSync(): SceneSync {
         return this as unknown as SceneSync;
     }

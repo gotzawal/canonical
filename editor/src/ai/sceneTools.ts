@@ -666,7 +666,7 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         const g = patch(Grass, n.grass ?? defaults(Grass), fields, 'grass', hex);
         if (ground !== undefined) {
             g.ground = resolveParent(doc, ground, batch, 'grass.ground');
-            if (g.ground === n.id && !n.mesh && !n.model) throw new ToolError('grass.ground: the object itself has no mesh to stand on.');
+            if (g.ground === n.id && !n.mesh && !n.model && !n.terrain) throw new ToolError('grass.ground: the object itself has no mesh to stand on.');
         }
         if (texture !== undefined) g.texture = textureId(doc, texture, 'grass.texture');
         if (windMap !== undefined) g.windMap = textureId(doc, windMap, 'grass.wind_map');

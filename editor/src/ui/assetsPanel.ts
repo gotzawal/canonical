@@ -117,6 +117,15 @@ export class AssetsPanel {
             );
         }
         for (const a of assets) {
+            if (a.kind === 'data') {
+                // A terrain's heights or paint: the terrain shows and changes it (Inspector, sculpting).
+                this.list.appendChild(
+                    this.item(a.id, 'image', a.name, formatBytes(a.size), '', 'Terrain data: its heights or painted layers', () => {}, [
+                        { label: 'Remove from Project', icon: 'trash', action: () => this.editor.removeAsset(a.id) },
+                    ]),
+                );
+                continue;
+            }
             const packable = (a.kind === 'texture' || a.kind === 'model') && !shipsAsIs(a);
             const size = this.editor.derived.isPacking(a.id) ? 'compressing' : a.packed ? `${formatBytes(a.size)} packed` : formatBytes(a.size);
             const sound = a.kind === 'audio';
@@ -190,7 +199,7 @@ export class AssetsPanel {
         if (!asset) return;
         if (asset.kind === 'model') this.editor.addModel(id, undefined, true);
         else if (asset.kind === 'audio') this.editor.store.select(this.editor.addSound(id, this.editor.store.selection));
-        else this.editor.applyTexture(id);
+        else if (asset.kind === 'texture') this.editor.applyTexture(id);
     }
 }
 

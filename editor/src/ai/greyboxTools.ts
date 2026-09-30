@@ -355,7 +355,8 @@ export function resolvePlace(env: ToolEnv, ref: unknown, what: string): { point:
 function eyeAt(env: ToolEnv, p: Vec3): Vec3 {
     const ed = env.editor;
     ed.picker.update();
-    const top = Math.max(p[1] + 2, 60);
+    // From above the level, terrains included.
+    const top = Math.max(p[1] + 2, 60, ...ed.sync.terrains().map((t) => t.surface.frame.y + t.surface.frame.height + 2));
     const hit = ed.picker.raycast([p[0], top, p[2]], [0, -1, 0], top + 60);
     const ground = hit ? hit.point[1] : 0;
     return [p[0], ground + ed.store.doc.design.specs.eyeHeight, p[2]];

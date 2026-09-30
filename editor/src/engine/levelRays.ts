@@ -5,6 +5,7 @@
 import type { Object3D, RenderNode } from '@orillusion/core';
 import { add, invert, normalize, rayBox, scale, type Mat4, type Ray, type RayHit } from '../core/math';
 import type { ChangeHint, Store } from '../core/store';
+import { groundNormal, rayTerrain } from '../core/terrain';
 import type { Vec3 } from '../core/types';
 import { worldBoxInto, type Box, type Picker } from './picking';
 import type { SceneSync } from './sync';
@@ -258,7 +259,7 @@ export class LevelRays {
         if ((x1 - x0 + 1) * (z1 - z0 + 1) > 256) {
             // A long ray: every item.
             for (let i = 0; i < this.items.length; i++) test(i);
-            return best;
+            return this.terrainHit(origin, d, maxDist, best, ignore);
         }
         const t = ++this.tick;
         for (const i of this.huge) {
@@ -277,6 +278,18 @@ export class LevelRays {
                 }
             }
         }
-        return best;
+        return this.terrainHit(origin, d, maxDist, best, ignore);
     };
+
+    /** The hit, or a terrain one meets first (from its heightmap; terrains that do not collide are left out). */
+    private terrainHit(origin: Vec3, d: Vec3, maxDist: number, best: RayHit | null, ignore?: (id: string) => boolean): RayHit | null {
+        for (const t of this.sync.terrains()) {
+            if (!t.collide || ignore?.(t.id)) continue;
+            const hit = rayTerrain(t.surface, origin, d, Math.min(maxDist, best?.distance ?? Infinity));
+            if (hit === null || hit < 0) continue;
+            const point = add(origin, scale(d, hit));
+            best = { distance: hit, point, id: t.id, normal: groundNormal(t.surface, point[0], point[2]) };
+        }
+        return best;
+    }
 }

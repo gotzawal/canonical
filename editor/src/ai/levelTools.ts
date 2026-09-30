@@ -206,8 +206,10 @@ export const levelTools = tools({
             const own = new Set(existing ? [existing.id, ...store.descendants(existing.id).map((n) => n.id)] : []);
             ed.picker.update();
             const p = where.point;
-            // Down from a little above the point (an object's middle, not over its roof) to what is under it.
-            const hit = ed.picker.raycast([p[0], p[1] + 0.6, p[2]], [0, -1, 0], 60, (id) => own.has(id));
+            // Down from a little above the point (an object's middle, not over its roof) to what is under it; a point under a terrain starts on it.
+            const land = ed.sync.terrainHeightAt(p[0], p[2]);
+            const start = Math.max(p[1], land ?? -Infinity) + 0.6;
+            const hit = ed.picker.raycast([p[0], start, p[2]], [0, -1, 0], 60, (id) => own.has(id));
             const feet: Vec3 = [p[0], hit ? hit.point[1] : p[1], p[2]];
             let facing: number | undefined;
             if (args.facing !== undefined) {

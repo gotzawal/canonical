@@ -36,6 +36,7 @@ import type { CameraController } from './viewport/cameraController';
 import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
 import { useSwatch, type RoomSample } from './design/materialSlots';
+import { newTerrain, TerrainStroke, type NewTerrain } from './design/terrainEdit';
 import { librarySwatch, type SwatchRecord } from './design/swatches';
 import { Pipeline } from './design/pipeline';
 import { isHdr, measureScene } from './engine/measure';
@@ -254,10 +255,32 @@ export class Editor extends Emitter<EditorEvents> {
         return id;
     }
 
+    /**
+     * A terrain of a shape (an island, hills, mountains, plains or flat
+     * ground) with a new heightmap, centered where new objects go (or at
+     * `at`). An island's coast lies at `waterLevel`. Returns its id.
+     */
+    async createTerrain(o: NewTerrain & { at?: Vec3; name?: string } = { shape: 'island' }): Promise<string> {
+        const name = this.uniqueName(o.name ?? 'Terrain', null);
+        const at = o.at ?? this.viewport.spawnPoint();
+        const { node: made, meta } = await newTerrain(o, name, [round(at[0]), round(at[1]), round(at[2])]);
+        const node: NodeDoc = { ...makeNode(name, null), ...made };
+        this.store.transact('Create ' + name, () => {
+            this.store.update((doc) => doc.assets.push(meta));
+            this.insert([node], 'Create ' + name);
+        });
+        return node.id;
+    }
+
+    /** Starts a sculpting or painting stroke on a terrain (see TerrainStroke). */
+    terrainStroke(id: string): TerrainStroke {
+        return new TerrainStroke(this.store, this.sync, id);
+    }
+
     /** Grass for an object (Add Component): on its own meshes and covering them when it has some, else a flat field around it. */
     grassFor(node: NodeDoc): GrassDoc {
         const grass = defaults(Grass);
-        const box = node.mesh || node.model ? this.picker.bounds(node.id) : null;
+        const box = node.mesh || node.model || node.terrain ? this.picker.bounds(node.id) : null;
         if (!box) return grass;
         const size: [number, number] = [round(box.max[0] - box.min[0]), round(box.max[2] - box.min[2])];
         return { ...grass, ground: node.id, size, count: Math.round(Math.min(20000, Math.max(1000, size[0] * size[1] * 20))) };
@@ -375,7 +398,9 @@ export class Editor extends Emitter<EditorEvents> {
         const moves: { id: string; dy: number }[] = [];
         for (const id of ids) {
             const box = this.picker.bounds(id);
-            if (box) moves.push({ id, dy: -box.min[1] });
+            // Onto a terrain under its middle, else to height 0.
+            const land = box && !this.store.node(id)?.terrain ? this.sync.terrainHeightAt((box.min[0] + box.max[0]) / 2, (box.min[2] + box.max[2]) / 2) : null;
+            if (box) moves.push({ id, dy: (land ?? 0) - box.min[1] });
         }
         if (!moves.length) return;
         this.store.commit('Drop to Ground', (doc) => {

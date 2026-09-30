@@ -368,17 +368,20 @@ export class Viewport {
         return [...this.store.camera.target] as Vec3;
     }
 
-    /** Where new objects go: the ground under the view center, else the orbit target. */
+    /** Where new objects go: the terrain or the ground under the view center, else the orbit target (on a terrain there). */
     spawnPoint(): Vec3 {
         const [w, h] = this.runtime.cssSize;
         this.picker.update();
         const ray = this.picker.ray(w / 2, h / 2);
+        const reach = this.store.camera.distance * 4;
+        const land = this.picker.terrainHit(ray, reach);
+        if (land) return land.point;
         if (ray.dir[1] < -1e-4) {
             const t = -ray.origin[1] / ray.dir[1];
-            if (t > 0 && t < this.store.camera.distance * 4) return add(ray.origin, scale(ray.dir, t));
+            if (t > 0 && t < reach) return add(ray.origin, scale(ray.dir, t));
         }
         const target = this.store.camera.target;
-        return [target[0], 0, target[2]];
+        return [target[0], this.sync.terrainHeightAt(target[0], target[2]) ?? 0, target[2]];
     }
 
     frameNodes(ids: string[]) {
@@ -598,7 +601,7 @@ export class Viewport {
             drawCameraIcon(ctx, sp.x, sp.y);
             this.drawFrustum(m, node.camera.fov, selected ? 2.2 : 0.8);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 13 });
-        } else if (!node.mesh && !node.model) {
+        } else if (!node.mesh && !node.model && !node.terrain) {
             ctx.beginPath();
             ctx.moveTo(sp.x - 6, sp.y);
             ctx.lineTo(sp.x, sp.y - 6);

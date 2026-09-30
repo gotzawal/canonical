@@ -7,8 +7,9 @@ import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type {
-    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole,
+    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TerrainDoc, TextureRole,
 } from '../core/types';
+import { covers, groundHeight, type TerrainFrame, type TerrainSurface } from '../core/terrain';
 import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
@@ -17,7 +18,9 @@ import { castGI } from './gi';
 import { setLightShadow } from './shadows';
 import { QUALITY } from '../core/quality';
 import { movesInPlay } from '../core/motion';
-import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, plainBlades } from './grass';
+import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
+import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
+import type { MaterialLayer } from './terrainMaterial';
 import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
     applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
@@ -82,6 +85,25 @@ export interface Entry {
     instancer: InstanceDrawComponent | null;
     /** The instancing group its meshes are drawn in: the nearest object with instancing, itself included; '' for none. */
     group: string;
+    /** Its terrain: chunks, material and what they were made from. */
+    terrain: TerrainState | null;
+}
+
+/** A terrain's engine side (engine/terrain.ts) and what it shows. */
+interface TerrainState {
+    view: TerrainView;
+    /** The map file, size, height and detail its chunks were built from, and the size, height and detail alone. */
+    built: string;
+    shape: string;
+    /** The paint file shown, and the layers (with the size of their arrays). */
+    paint: string;
+    layers: string;
+    /** Increases with every map load, so a late load does not replace a newer one. */
+    token: number;
+    /** The layer textures it watches for refills (a compressed copy replacing a file). */
+    watched: Texture[];
+    /** Changes whenever its heights or place change (grass and scatter on it follow). */
+    version: number;
 }
 
 /** An engine material and the objects showing it (see SceneSync.materials). */
@@ -108,6 +130,8 @@ interface GroupMember {
 interface SyncEvents {
     /** An async model load finished (successfully or not) for a node. */
     model: string;
+    /** A terrain's heights or place changed (its map loaded, it was sculpted or moved). */
+    terrain: string;
 }
 
 const LIGHT_CLASSES: Record<LightType, new () => LightBase> = {
@@ -192,6 +216,9 @@ export class SceneSync extends Emitter<SyncEvents> {
     private instanced = new Set<RenderNode>();
     /** The built-in gusts of grass fields, made once. */
     private gusts: Texture | null = null;
+    /** The terrains, and their map and paint loads still running (whenLoaded waits for them). */
+    private terrainStates = new Set<TerrainState>();
+    private terrainLoads = new Set<Promise<unknown>>();
 
     /** Textures load at most this large (the longer side): games on a low quality tier skip the top mips. */
     private readonly textureMaxSize: number;
@@ -207,6 +234,17 @@ export class SceneSync extends Emitter<SyncEvents> {
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
+        // Terrains draw the detail the camera's distance calls for.
+        runtime.onBeforeFrame(() => this.eachFrame());
+    }
+
+    /** Terrain levels of detail for the camera, once a frame. */
+    private eachFrame() {
+        if (!this.terrainStates.size) return;
+        const eye = this.runtime.activeCamera?.transform.worldPosition;
+        if (!eye) return;
+        const at = [eye.x, eye.y, eye.z];
+        for (const t of this.terrainStates) t.view.update(at);
     }
 
     // ---------------------------------------------------------------- sync
@@ -230,8 +268,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                 const node = this.store.node(id);
                 const entry = this.entries.get(id);
                 if (!node || !entry) continue;
-                if (hint.transform) this.applyTransform(entry, node);
-                else {
+                if (hint.transform) {
+                    this.applyTransform(entry, node);
+                    if (entry.terrain) this.placeTerrain(entry, node);
+                } else {
                     this.apply(node);
                     if (entry.group) this.dirtyGroups.add(entry.group);
                 }
@@ -433,6 +473,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             grassPlaced: '',
             instancer: null,
             group: '',
+            terrain: null,
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -475,6 +516,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.instancer) this.dirtyGroups.add(entry.id);
         entry.grass?.remove((res) => this.disposeLater(res));
         entry.grass = null;
+        if (entry.terrain) this.dropTerrain(entry);
         entry.obj.removeFromParent();
         entry.obj.destroy();
     }
@@ -494,6 +536,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyMirror(entry, node);
         this.applyGrass(entry, node.grass);
         this.applyInstancing(entry, node.instancing);
+        this.applyTerrain(entry, node);
     }
 
     /** Emitters are built again when their settings change (the simulator bakes its particles). */
@@ -941,13 +984,19 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (!doc) continue;
             if (ids && !ids.some((id) => id === entry.id || (!!doc.ground && this.isUnder(id, doc.ground)))) continue;
             const ground = doc.ground ? this.groundRenderers(doc.ground) : null;
+            const lands = doc.ground ? this.groundTerrains(doc.ground) : [];
             const m = entry.obj.transform.worldMatrix.rawData;
-            const key = JSON.stringify([doc.size, doc.count, doc.ground, Array.from(m, (v) => +v.toFixed(4)), ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))])]);
+            const key = JSON.stringify([
+                doc.size, doc.count, doc.ground, Array.from(m, (v) => +v.toFixed(4)),
+                ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))]),
+                lands.map((l) => [l.id, l.version]),
+            ]);
             if (key === entry.grassPlaced) continue;
             entry.grassPlaced = key;
             const frame = fieldFrame(m);
-            const grid = ground ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
-            entry.grass!.place(doc, frame, grid, hashString(entry.id));
+            const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
+            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : doc.ground ? new LayeredGround(null, []) : null;
+            entry.grass!.place(doc, frame, surface, hashString(entry.id));
         }
     }
 
@@ -955,6 +1004,12 @@ export class SceneSync extends Emitter<SyncEvents> {
     private isUnder(id: string, ancestor: string): boolean {
         for (let n = this.store.node(id); n; n = n.parent ? this.store.node(n.parent) : undefined) if (n.id === ancestor) return true;
         return false;
+    }
+
+    /** The shown terrains of a ground object and of the objects under it. */
+    groundTerrains(id: string): { id: string; surface: TerrainSurface; version: number }[] {
+        const ids = new Set([id, ...this.store.descendants(id).map((n) => n.id)]);
+        return this.terrains().filter((t) => ids.has(t.id));
     }
 
     /** The shown meshes of a ground object and of the objects under it (not skinned ones, which move). */
@@ -965,6 +1020,213 @@ export class SceneSync extends Emitter<SyncEvents> {
             for (const r of this.renderersOf(nid)) if (!(r instanceof SkinnedMeshRenderer) && !(r instanceof SkinnedMeshRenderer2)) out.push(r);
         }
         return out;
+    }
+
+    // -------------------------------------------------------------- terrain
+
+    /** Where a terrain lies: its object's world position (it does not turn or scale), its size and height. */
+    private terrainFrame(entry: Entry, doc: TerrainDoc): TerrainFrame {
+        const m = entry.obj.transform.worldMatrix.rawData;
+        return { x: m[12], y: m[13], z: m[14], sizeX: Math.max(0.1, doc.size[0]), sizeZ: Math.max(0.1, doc.size[1]), height: doc.height };
+    }
+
+    /** Makes, rebuilds (a new map, size, height or detail) or updates a terrain. */
+    private applyTerrain(entry: Entry, node: NodeDoc) {
+        const doc = node.terrain;
+        if (!doc) {
+            if (entry.terrain) this.dropTerrain(entry);
+            return;
+        }
+        let t = entry.terrain;
+        if (!t) {
+            const view = new TerrainView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
+            view.material.setAnisotropy(QUALITY[this.runtime.qualityLevel].anisotropy);
+            t = entry.terrain = { view, built: '', shape: '', paint: '', layers: '', token: 0, watched: [], version: 0 };
+            this.terrainStates.add(t);
+            view.setVisible(entry.visible);
+        }
+        const state = t;
+        state.view.setShadows(doc.castShadow);
+        const built = JSON.stringify([doc.heightmap, doc.size, doc.height, doc.detail]);
+        if (built !== state.built) {
+            state.built = built;
+            const token = ++state.token;
+            const meta = doc.heightmap ? this.store.doc.assets.find((a) => a.id === doc.heightmap) : undefined;
+            const load = (meta ? heightmapOf(meta) : Promise.resolve(flatMap())).catch((e) => {
+                console.warn(`[editor] the heightmap of "${node.name}" could not be read`, e);
+                return flatMap();
+            });
+            const shape = JSON.stringify([doc.size, doc.height, doc.detail]);
+            const done = load.then((map) => {
+                if (state.token !== token || entry.terrain !== state) return;
+                const now = this.store.node(entry.id)?.terrain ?? doc;
+                // A stroke saved the heights the chunks show already: nothing to build.
+                if (map === state.view.map && shape === state.shape) {
+                    this.placeTerrain(entry, this.store.node(entry.id) ?? node);
+                    return;
+                }
+                state.shape = shape;
+                state.view.build(map, this.terrainFrame(entry, now), now.detail);
+                state.view.setShadows(now.castShadow);
+                state.view.setVisible(entry.visible);
+                this.terrainMoved(entry);
+            });
+            this.terrainLoads.add(done);
+            void done.finally(() => this.terrainLoads.delete(done));
+        } else this.placeTerrain(entry, node);
+        this.applyTerrainPaint(entry, state, doc);
+        this.applyTerrainLayers(entry, state, doc);
+    }
+
+    /** Moves a terrain with its object (its chunks stay as they are). */
+    private placeTerrain(entry: Entry, node: NodeDoc) {
+        const t = entry.terrain;
+        if (!t || !node.terrain) return;
+        const frame = this.terrainFrame(entry, node.terrain);
+        const f = t.view.frame;
+        if (frame.x === f.x && frame.y === f.y && frame.z === f.z) return;
+        t.view.place(frame);
+        this.terrainMoved(entry);
+    }
+
+    /** After a terrain's heights or place changed: what stands on it follows. */
+    private terrainMoved(entry: Entry) {
+        if (entry.terrain) entry.terrain.version++;
+        this.runtime.gi.invalidate();
+        this.placeGrass();
+        this.emit('terrain', entry.id);
+    }
+
+    /**
+     * The heights of a terrain changed in place (a sculpt stroke): its
+     * chunks in the region are written again; `live` (while the stroke
+     * goes on) leaves what stands on it until the stroke ends.
+     */
+    terrainEdited(id: string, region: { x0: number; z0: number; x1: number; z1: number }, live = false) {
+        const entry = this.entries.get(id);
+        if (!entry?.terrain) return;
+        entry.terrain.view.refresh(region);
+        if (!live) this.terrainMoved(entry);
+    }
+
+    /** Shows a terrain's saved paint again (a paint stroke was cancelled). */
+    reloadTerrainPaint(id: string) {
+        const entry = this.entries.get(id);
+        const doc = this.store.node(id)?.terrain;
+        if (!entry?.terrain || !doc) return;
+        entry.terrain.paint = '\u0000';
+        this.applyTerrainPaint(entry, entry.terrain, doc);
+    }
+
+    private applyTerrainPaint(entry: Entry, t: TerrainState, doc: TerrainDoc) {
+        const key = doc.splatmap ?? '';
+        if (key === t.paint) return;
+        t.paint = key;
+        const meta = doc.splatmap ? this.store.doc.assets.find((a) => a.id === doc.splatmap) : undefined;
+        if (!meta) {
+            t.view.material.setPaint(null);
+            return;
+        }
+        const done = paintOf(meta).then(
+            (paint) => {
+                if (entry.terrain === t && t.paint === key) t.view.material.setPaint(paint);
+            },
+            (e) => console.warn('[editor] the terrain paint could not be read', e),
+        );
+        this.terrainLoads.add(done);
+        void done.finally(() => this.terrainLoads.delete(done));
+    }
+
+    /** The side of a terrain's layer arrays: its largest swatch, 256 to 1024 (and what the quality tier loads). */
+    private layerArraySize(doc: TerrainDoc): number {
+        let side = 256;
+        for (const l of doc.layers) {
+            const meta = l.albedo ? this.store.doc.assets.find((a) => a.id === l.albedo) : undefined;
+            side = Math.max(side, meta?.width ?? 0, meta?.height ?? 0);
+        }
+        const cap = Math.min(1024, Number.isFinite(this.textureMaxSize) ? this.textureMaxSize : 1024);
+        return 2 ** Math.round(Math.log2(Math.min(cap, side)));
+    }
+
+    private applyTerrainLayers(entry: Entry, t: TerrainState, doc: TerrainDoc) {
+        const size = this.layerArraySize(doc);
+        const key = JSON.stringify([doc.layers, size]);
+        if (key === t.layers) return;
+        t.layers = key;
+        const layers = doc.layers.length ? doc.layers : [];
+        void Promise.all(layers.map((l) => Promise.all([l.albedo ? this.loadTexture(l.albedo, 'color') : null, l.normal ? this.loadTexture(l.normal, 'normal') : null]))).then((maps) => {
+            if (entry.terrain !== t || t.layers !== key) return;
+            for (const tex of t.watched) tex.unBindStateChange(t);
+            t.watched = [];
+            const list: MaterialLayer[] = layers.map((l, i) => ({
+                albedo: maps[i][0],
+                normal: maps[i][1],
+                tile: l.tile,
+                color: l.color,
+                roughness: l.roughness,
+                height: l.height,
+                slope: l.slope,
+                heightBlend: l.heightBlend,
+                slopeBlend: l.slopeBlend,
+                onlyPainted: l.onlyPainted,
+            }));
+            t.view.setLayers(list, size);
+            // A refilled texture (its compressed copy arrived) is drawn into the arrays again.
+            let queued = false;
+            const refill = () => {
+                if (queued) return;
+                queued = true;
+                queueMicrotask(() => {
+                    queued = false;
+                    if (entry.terrain === t && t.layers === key) t.view.material.rebuildArrays(list, size);
+                });
+            };
+            for (const [a, n] of maps) {
+                for (const tex of [a, n]) {
+                    if (!tex) continue;
+                    tex.bindStateChange(refill, t);
+                    t.watched.push(tex);
+                }
+            }
+        });
+    }
+
+    private dropTerrain(entry: Entry) {
+        const t = entry.terrain!;
+        t.token++;
+        for (const tex of t.watched) tex.unBindStateChange(t);
+        t.view.dispose();
+        this.terrainStates.delete(t);
+        entry.terrain = null;
+        this.placeGrass();
+        this.emit('terrain', entry.id);
+    }
+
+    /** The terrains shown, with their heights (flat while their map loads): for rays, ground, physics and navigation. */
+    terrains(): { id: string; surface: TerrainSurface; collide: boolean; version: number }[] {
+        const out: { id: string; surface: TerrainSurface; collide: boolean; version: number }[] = [];
+        for (const t of this.terrainStates) {
+            const e = this.entries.get(t.view.id);
+            if (!e || !e.visible || this.detached.has(e.id)) continue;
+            out.push({ id: e.id, surface: t.view.surface, collide: this.store.node(e.id)?.terrain?.collide !== false, version: t.version });
+        }
+        return out;
+    }
+
+    /** The highest terrain ground at world x, z (shown terrains only), or null where none lies. */
+    terrainHeightAt(x: number, z: number): number | null {
+        let best: number | null = null;
+        for (const t of this.terrains()) {
+            if (!covers(t.surface, x, z)) continue;
+            const y = groundHeight(t.surface, x, z);
+            if (best === null || y > best) best = y;
+        }
+        return best;
+    }
+
+    /** A terrain's engine side, for sculpting it live. */
+    terrainView(id: string): TerrainView | null {
+        return this.entries.get(id)?.terrain?.view ?? null;
     }
 
     // ------------------------------------------------------------ instancing
@@ -1182,6 +1444,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.particles) entry.particles.enable = visible;
         if (entry.mirror) entry.mirror.enable = visible;
         entry.grass?.setVisible(visible);
+        entry.terrain?.view.setVisible(visible);
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);
@@ -1198,7 +1461,7 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** Resolves once every model and texture requested so far has loaded or failed. */
     async whenLoaded(): Promise<void> {
-        const all = () => [...this.prefabs.values(), ...Array.from(this.groupPrefabs.values(), (g) => g.prefab), ...this.textures.values()];
+        const all = () => [...this.prefabs.values(), ...Array.from(this.groupPrefabs.values(), (g) => g.prefab), ...this.textures.values(), ...this.terrainLoads];
         for (;;) {
             const pending = all();
             await Promise.allSettled(pending);

@@ -502,27 +502,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         state.useLight = lit;
         for (const [k, v] of Object.entries(materialDefines(valid.lighting))) shader.setDefine(k, v);
 
-        shader.setUniformFloat('shadowBias', 0.00035);
-        shader.setUniformColor('baseColor', new Color(1, 1, 1, 1));
-        shader.setUniformColor('emissiveColor', new Color(0, 0, 0, 1));
-        shader.setUniformVector4('materialF0', new Vector4(0.04, 0.04, 0.04, 1));
-        shader.setUniformColor('specularColor', new Color(1, 1, 1, 1));
-        for (const [k, v] of Object.entries({
-            envIntensity: 1, normalScale: 1, roughness: 0.5, metallic: 0, ao: 1, roughness_min: 0, roughness_max: 1,
-            metallic_min: 0, metallic_max: 1, emissiveIntensity: 1, alphaCutoff: 0, ior: 1.5, clearcoatWeight: 0,
-            clearcoatFactor: 0, clearcoatRoughnessFactor: 0, clearcoatIor: 1.5, transmissionFactor: 0,
-            thicknessFactor: 0, attenuationDistance: 1e20, transmissionAlphaMode: 0,
-        })) {
-            shader.setUniformFloat(k, v);
-        }
-        shader.setUniformColor('clearcoatColor', new Color(1, 1, 1, 1));
-        shader.setUniformColor('attenuationColor', new Color(1, 1, 1, 1));
-        for (const k of ['baseMapOffsetSize', 'normalMapOffsetSize', 'emissiveMapOffsetSize', 'roughnessMapOffsetSize', 'metallicMapOffsetSize', 'aoMapOffsetSize']) {
-            shader.setUniformVector4(k, new Vector4(0, 0, 1, 1));
-        }
-        shader.setTexture('baseMap', res.whiteTexture);
-        shader.setTexture('normalMap', res.normalTexture);
-        shader.setTexture('maskMap', res.maskTexture);
+        setEngineDefaults(shader, ctx);
         // A Mirror component on the object binds its reflection here (and knows the material by it).
         if (valid.usesMirror) {
             this.noMirror ??= res.createTexture(32, 32, 0, 0, 0, 0, 'morglay-no-mirror');
@@ -547,6 +527,55 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         Object.defineProperty(Cls, 'name', { value: clsName });
         return new Cls(valid.name, valid.props, valid.version);
     }
+}
+
+/** Sets the engine's material uniforms (ENGINE_FIELDS) and maps of a new lit material shader to their defaults. */
+export function setEngineDefaults(shader: Shader, ctx: any) {
+    const res = Engine3D.resFor(ctx);
+    shader.setUniformFloat('shadowBias', 0.00035);
+    shader.setUniformColor('baseColor', new Color(1, 1, 1, 1));
+    shader.setUniformColor('emissiveColor', new Color(0, 0, 0, 1));
+    shader.setUniformVector4('materialF0', new Vector4(0.04, 0.04, 0.04, 1));
+    shader.setUniformColor('specularColor', new Color(1, 1, 1, 1));
+    for (const [k, v] of Object.entries({
+        envIntensity: 1, normalScale: 1, roughness: 0.5, metallic: 0, ao: 1, roughness_min: 0, roughness_max: 1,
+        metallic_min: 0, metallic_max: 1, emissiveIntensity: 1, alphaCutoff: 0, ior: 1.5, clearcoatWeight: 0,
+        clearcoatFactor: 0, clearcoatRoughnessFactor: 0, clearcoatIor: 1.5, transmissionFactor: 0,
+        thicknessFactor: 0, attenuationDistance: 1e20, transmissionAlphaMode: 0,
+    })) {
+        shader.setUniformFloat(k, v);
+    }
+    shader.setUniformColor('clearcoatColor', new Color(1, 1, 1, 1));
+    shader.setUniformColor('attenuationColor', new Color(1, 1, 1, 1));
+    for (const k of ['baseMapOffsetSize', 'normalMapOffsetSize', 'emissiveMapOffsetSize', 'roughnessMapOffsetSize', 'metallicMapOffsetSize', 'aoMapOffsetSize']) {
+        shader.setUniformVector4(k, new Vector4(0, 0, 1, 1));
+    }
+    shader.setTexture('baseMap', res.whiteTexture);
+    shader.setTexture('normalMap', res.normalTexture);
+    shader.setTexture('maskMap', res.maskTexture);
+}
+
+/**
+ * The full source of a lit material shader the editor writes itself (the
+ * terrain's): the engine's includes and uniform struct with `fields`
+ * after its own, `bindings`, and `body`, which defines frag().
+ */
+export function litMaterialSource(fields: string, bindings: string, body: string): string {
+    return [
+        '#include "Common_vert"',
+        '#include "Common_frag"',
+        '#include "BxDF_frag"',
+        '#include "PhysicMaterialUniform_frag"',
+        'struct MaterialUniform {',
+        ENGINE_FIELDS,
+        fields,
+        '};',
+        '@group(1) @binding(auto) var baseMapSampler: sampler;',
+        '@group(1) @binding(auto) var baseMap: texture_2d<f32>;',
+        bindings,
+        'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
+        body,
+    ].join('\n');
 }
 
 /**
