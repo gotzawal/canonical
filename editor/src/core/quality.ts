@@ -19,6 +19,8 @@ export interface QualityTier {
     shadowRangeMax: number;
     /** Shadows are drawn again every this many frames. */
     shadowEvery: number;
+    /** The sun may draw cascaded shadows (four maps); without, a scene asking for them gets one map around the camera. */
+    cascades: boolean;
     /** Canvas resolution of games (Runtime VIEWPORT_QUALITY). */
     resolution: QualityLevel;
     /** Global illumination may capture every frame (its realtime option). */
@@ -29,14 +31,16 @@ export interface QualityTier {
     fogSteps: number;
     /** Samples of the god rays (8 to 20); 0 turns them off. */
     godRaySteps: number;
+    /** Screen space reflections are traced at this share of the resolution; 0 turns them off. */
+    ssrScale: number;
     /** Games load textures at most this large (the longer side, pixels): larger ones skip their top mips. */
     textureMaxSize: number;
 }
 
 export const QUALITY: Record<QualityLevel, QualityTier> = {
-    low: { shadowMapSize: 1024, pointShadowSize: 256, shadowRangeMax: 80, shadowEvery: 2, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, textureMaxSize: 1024 },
-    medium: { shadowMapSize: 1024, pointShadowSize: 512, shadowRangeMax: 200, shadowEvery: 1, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, textureMaxSize: 2048 },
-    high: { shadowMapSize: 2048, pointShadowSize: 1024, shadowRangeMax: Infinity, shadowEvery: 1, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, textureMaxSize: Infinity },
+    low: { shadowMapSize: 1024, pointShadowSize: 256, shadowRangeMax: 80, shadowEvery: 2, cascades: false, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, ssrScale: 0, textureMaxSize: 1024 },
+    medium: { shadowMapSize: 1024, pointShadowSize: 512, shadowRangeMax: 200, shadowEvery: 1, cascades: true, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, ssrScale: 0.5, textureMaxSize: 2048 },
+    high: { shadowMapSize: 2048, pointShadowSize: 1024, shadowRangeMax: Infinity, shadowEvery: 1, cascades: true, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, ssrScale: 1, textureMaxSize: Infinity },
 };
 
 export const isQualityLevel = (v: unknown): v is QualityLevel => QUALITY_LEVELS.includes(v as QualityLevel);

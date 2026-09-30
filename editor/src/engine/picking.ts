@@ -111,7 +111,7 @@ export class Picker {
             const entry = this.sync.entries.get(node.id);
             if (!entry || (ignoreHidden && !entry.visible)) continue;
             for (const r of this.sync.renderersOf(node.id)) {
-                if (!r.enable || !mayHit(r, ray, best?.distance ?? Infinity)) continue;
+                if (!this.sync.shown(r) || !mayHit(r, ray, best?.distance ?? Infinity)) continue;
                 const t = this.intersectRenderer(r, ray);
                 if (t !== null && (!best || t < best.distance)) {
                     best = { id: node.id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: r };
@@ -133,7 +133,7 @@ export class Picker {
             o.components.forEach((c) => {
                 if (!(c instanceof RenderNode)) return;
                 const r = c as RenderNode;
-                if (!r.enable || !r.geometry || !mayHit(r, ray, best?.distance ?? Infinity)) return;
+                if (!this.sync.shown(r) || !r.geometry || !mayHit(r, ray, best?.distance ?? Infinity)) return;
                 const t = this.intersectRenderer(r, ray);
                 if (t !== null && (!best || t < best.distance)) {
                     best = { renderer: r, object: o, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]) };
@@ -230,7 +230,7 @@ export class Picker {
             const entry = this.sync.entries.get(node.id);
             if (!entry || !entry.visible || (skip && skip(node.id))) continue;
             for (const r of this.sync.renderersOf(node.id)) {
-                if (!r.enable) continue;
+                if (!this.sync.shown(r)) continue;
                 const box = SCRATCH_BOX;
                 if (!worldBoxInto(r, box)) continue;
                 const near = rayBox(ray, box.min, box.max);

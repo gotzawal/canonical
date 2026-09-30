@@ -528,6 +528,23 @@ export class Viewport {
         ctx.restore();
     }
 
+    /** Outline of a grass field's area: meters along the object's turned x and z axes, whatever its scale. */
+    private drawArea(m: ArrayLike<number>, size: [number, number]) {
+        const x = normalize([m[0], m[1], m[2]]), z = normalize([m[8], m[9], m[10]]);
+        const at = (u: number, v: number) => this.picker.project([m[12] + x[0] * u + z[0] * v, m[13] + x[1] * u + z[1] * v, m[14] + x[2] * u + z[2] * v]);
+        const [w, d] = [size[0] / 2, size[1] / 2];
+        const p = [at(-w, -d), at(w, -d), at(w, d), at(-w, d)];
+        const ctx = this.ctx;
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+            const a = p[i], b = p[(i + 1) % 4];
+            if (!a.visible || !b.visible) continue;
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+        }
+        ctx.stroke();
+    }
+
     private strokeBox(corners: Vec3[]) {
         const ctx = this.ctx;
         const p = corners.map((c) => this.picker.project(c));
@@ -589,6 +606,7 @@ export class Viewport {
             ctx.lineTo(sp.x, sp.y + 6);
             ctx.closePath();
             ctx.stroke();
+            if (selected && node.grass) this.drawArea(m, node.grass.size);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 9 });
         } else if (node.model && this.sync.modelState(node.id)?.status !== 'ready') {
             ctx.font = '600 11px Inter, system-ui, sans-serif';

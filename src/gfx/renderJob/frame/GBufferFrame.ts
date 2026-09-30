@@ -139,6 +139,24 @@ export class GBufferFrame extends RTFrame {
     }
 
 
+    /**
+     * Frees a G-buffer made by {@link getGBufferFrame} for a key no pass
+     * uses any more (a destroyed scene capture): its textures, and its
+     * entries in the caches, so a new one under another key does not add
+     * to the memory the old one kept.
+     */
+    public static release(key: string, ctx: Context3D) {
+        const map = GBufferFrame._perContext.get(ctx);
+        const gBuffer = map?.get(key);
+        if (!gBuffer) return;
+        map.delete(key);
+        const targets = RTResourceMap.forContext(ctx).rtTextureMap;
+        const colorName = key + RTResourceConfig.colorBufferTex_NAME;
+        if (gBuffer._colorBufferTex && targets.get(colorName) === gBuffer._colorBufferTex) targets.delete(colorName);
+        for (const rt of gBuffer.renderTargets) rt.destroy(true);
+        gBuffer.depthTexture?.destroy(true);
+    }
+
     /** Create a new GBufferFrame sharing this frame's attachment/descriptor setup. */
     public clone() {
         let gBufferFrame = new GBufferFrame();

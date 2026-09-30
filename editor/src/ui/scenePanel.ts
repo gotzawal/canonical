@@ -8,7 +8,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere';
+type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere';
 
 /** Scene-wide settings: sky, exposure, post effects, and editor preferences. */
 export class ScenePanel {
@@ -110,6 +110,8 @@ export class ScenePanel {
                 ...this.rows(['enable', 'intensity', 'threshold'], 'bloom'),
                 label('Ambient Occlusion'),
                 ...this.rows(['enable', 'strength', 'distance'], 'ao'),
+                label('Screen Space Reflections'),
+                ...this.rows(['enable', 'strength', 'roughness', 'distance'], 'ssr'),
                 label('Fog'),
                 ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
                 label('Volumetric Fog'),
@@ -118,7 +120,7 @@ export class ScenePanel {
                 ...this.rows(['enable', 'intensity', 'focus'], 'godRays'),
             ]),
         );
-        this.body.append(section('shadows', 'Shadows', 'sun', this.rows(['range', 'softness', 'follow'], 'shadow')));
+        this.body.append(section('shadows', 'Shadows', 'sun', this.rows(['range', 'softness', 'follow', 'cascades'], 'shadow')));
 
         this.body.append(this.giSection(watch));
 

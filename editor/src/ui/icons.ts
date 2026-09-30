@@ -11,6 +11,8 @@ const PATHS: Record<string, string> = {
     stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',
     capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
     physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
+    grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
+    mirror: '<ellipse cx="12" cy="10" rx="6" ry="7.5"/><path d="M9.5 8.5 12 6M9.5 12l4.5-4.5M12 17.5V21M8.5 21h7"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
@@ -105,7 +107,7 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; character?: unknown }): string {
+export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; grass?: unknown; character?: unknown }): string {
     if (node.prefab) return 'prefab';
     if (node.character) return 'walk';
     if (node.particles) return 'sparkle';
@@ -116,5 +118,6 @@ export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: 
         const t = node.mesh.geometry.type;
         return t === 'box' ? 'cube' : t;
     }
+    if (node.grass) return 'grass';
     return 'empty';
 }

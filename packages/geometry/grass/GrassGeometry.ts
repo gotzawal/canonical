@@ -1,4 +1,4 @@
-import { BoundingBox, GeometryBase, Transform, Vector3, VertexAttributeName } from "@orillusion/core";
+import { BoundingBox, GeometryBase, Matrix4, Transform, Vector3, VertexAttributeName } from "@orillusion/core";
 
 export class GrassGeometry extends GeometryBase {
     public width: number;
@@ -15,6 +15,17 @@ export class GrassGeometry extends GeometryBase {
         this.segmentH = segmentH;
         this.nodes = [];
         this.buildGrass(count);
+    }
+
+    /**
+     * Also gives back the matrix slots of the blades' transforms, which
+     * belong to no object (Transform.destroy needs one): without this every
+     * rebuilt field keeps its old blades' slots.
+     */
+    public destroy(force?: boolean) {
+        for (const node of this.nodes ?? []) Matrix4.freeIndex(node._worldMatrix);
+        this.nodes = [];
+        super.destroy(force);
     }
 
     private buildGrass(count: number) {

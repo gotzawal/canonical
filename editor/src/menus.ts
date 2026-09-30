@@ -46,6 +46,7 @@ export function createMenu(editor: Editor): MenuItem[] {
             icon: 'sparkle',
             submenu: PARTICLE_PRESETS.map((pr) => ({ label: pr.label, icon: 'sparkle', action: () => void editor.createParticles(pr.id) })),
         },
+        { label: 'Grass', icon: 'grass', action: () => void editor.createGrass() },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },

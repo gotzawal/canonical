@@ -69,6 +69,10 @@ export function refs(doc: SceneDoc): Ref[] {
         }
         const particles = n.particles;
         if (particles?.texture) out.push({ kind: 'asset', id: particles.texture, at: 'object', role: 'color', drop: () => (particles.texture = null) });
+        const grass = n.grass;
+        if (grass?.texture) out.push({ kind: 'asset', id: grass.texture, at: 'object', role: 'color', drop: () => (grass.texture = null) });
+        // Gusts are read as data, texel by texel.
+        if (grass?.windMap) out.push({ kind: 'asset', id: grass.windMap, at: 'object', role: 'data', drop: () => (grass.windMap = null) });
         for (const r of n.scripts ?? []) {
             out.push({
                 kind: 'script',

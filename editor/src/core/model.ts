@@ -286,6 +286,57 @@ export const Animation = z.object({
 });
 export type AnimationDoc = z.output<typeof Animation>;
 
+// --------------------------------------------------- mirrors, grass, instancing
+
+/**
+ * A planar mirror (the engine's MirrorComponent): the object's mesh shows
+ * the scene reflected in the plane through its top, facing its local +Y
+ * (a plane primitive's face, a box's top). With a built-in material the
+ * mesh is a mirror tinted by the material's color; a material shader
+ * reads the reflection with mirrorColor(offset) to make water (waves that
+ * move it, a fresnel term that blends it). The scene is drawn a second
+ * time for it, every frame the camera is in front of it.
+ */
+export const Mirror = z.object({
+    resolution: num(0.5, 0.1, 1, { step: 0.05, slider: true, description: 'Size of the reflection image as a share of the screen\'s: lower is cheaper and softer.' }),
+});
+export type MirrorDoc = z.output<typeof Mirror>;
+
+/**
+ * A field of grass blades (packages/geometry GrassComponent): thousands of
+ * blades in one draw, bent by wind gusts. Each blade stands where a
+ * vertical line through it meets the ground object, so the field follows
+ * any terrain; without a ground it is flat at the object's height. The
+ * area is centered on the object and turns with it.
+ */
+export const Grass = z.object({
+    count: int(4000, 1, 30000, { title: 'Blades', description: 'Number of blades (one draw for all of them; each is a matrix the engine updates, so keep large fields to a few objects).' }),
+    size: vec2([10, 10], { precision: 2, description: 'Area covered [x, z] in meters, centered on the object.' }),
+    ground: z.string().min(1).nullable().catch(null).meta({ description: 'Object (a terrain, a floor or a group of them) the blades stand on, by id; null for a flat field at the object\'s height. Blades outside it or on slopes steeper than 60 degrees are left out.' }),
+    height: num(0.45, 0.02, 5, { step: 0.01, precision: 2, description: 'Blade height in meters (each blade varies around it).' }),
+    width: num(0.06, 0.005, 1, { step: 0.005, precision: 3, description: 'Blade width at its root in meters.' }),
+    bottomColor: color('#28461c', { title: 'Root Color' }),
+    topColor: color('#7cab45', { title: 'Tip Color' }),
+    wind: num(0.6, 0, 3, { step: 0.01, slider: true, description: 'How far gusts bend the blades.' }),
+    windSpeed: num(3, 0, 30, { step: 0.1, description: 'How fast gusts sweep over the field, m/s.' }),
+    windDirection: angle(35, 0, 360, { description: 'Where the wind blows toward, degrees around +Y from +X.' }),
+    texture: asset({ description: 'Blade texture asset id (alpha below 0.3 is cut out), or null for plain blades.' }),
+    windMap: asset({ title: 'Gust Map', description: 'Gust noise texture asset id (its red and green make the gusts, one pixel per meter), or null for built-in noise.' }),
+    castShadow: bool(false, { title: 'Cast Shadows', description: 'Blades cast shadows (costly for many blades); they always receive them.' }),
+});
+export type GrassDoc = z.output<typeof Grass>;
+
+/**
+ * Instanced drawing (the engine's InstanceDrawComponent) for placing many
+ * copies: the meshes of the object and of the objects under it
+ * (primitives, prefab parts, imported models) that share a shape and a
+ * material are drawn together in one draw call. Moving the children costs nothing extra; adding,
+ * removing or restyling them groups them again. Skinned or morphing
+ * meshes, transparent materials and mirrors are drawn on their own.
+ */
+export const Instancing = z.object({});
+export type InstancingDoc = z.output<typeof Instancing>;
+
 // ------------------------------------------------------------------ physics
 
 export const BODY_TYPES = ['dynamic', 'kinematic', 'fixed'] as const;
@@ -360,6 +411,13 @@ export const Environment = z.object({
     fxaa: bool(true, { title: 'Anti-aliasing', description: 'FXAA.' }),
     bloom: group({ enable: enabled(), intensity: num(0.6, 0, 3, { step: 0.01, slider: true }), threshold: num(1, 0, 4, { step: 0.01, slider: true }) }),
     ao: group({ enable: enabled(), strength: num(1, 0.01, 1, { step: 0.01, slider: true }), distance: num(1, 0.1, 10, { step: 0.05, slider: true }) }),
+    /** Screen space reflections. */
+    ssr: group({
+        enable: enabled({ description: 'Screen space reflections: smooth surfaces (polished and wet floors, metal, calm water) reflect what is on screen. Cheap to add, but what is off screen or hidden behind objects is not reflected: a Mirror component reflects everything on flat mirrors and water.' }),
+        strength: unit(0.5, { description: 'How much a perfectly smooth surface reflects (its share is strength squared: 0.5 a quarter, 1 all); rougher surfaces less.' }),
+        roughness: unit(0.3, { title: 'Max Roughness', description: 'Surfaces rougher than this reflect nothing (rough ones get grainy reflections).' }),
+        distance: num(200, 1, 5000, { step: 1, precision: 0, description: 'Reflected points farther from the camera than this fade out, meters.' }),
+    }),
     fog: group({
         enable: enabled(),
         mode: oneOf(['linear', 'exponential', 'height'], 'linear', {
@@ -379,9 +437,10 @@ export const Environment = z.object({
     }),
     /** Directional shadows. */
     shadow: group({
-        range: num(60, 5, 1000, { step: 1, precision: 0, description: 'Meters the directional shadows cover: around the directional light object, or around the camera with Follow Camera. A larger range covers more with blurrier shadows.' }),
+        range: num(60, 5, 1000, { step: 1, precision: 0, description: 'Meters the directional shadows cover: around the directional light object, around the camera with Follow Camera, or from the camera out with Cascades. A larger range covers more with blurrier shadows (with Cascades only the far ones blur).' }),
         softness: num(1, 0.25, 4, { step: 0.05, slider: true, description: 'Width of the blur at shadow edges, in shadow texels.' }),
         follow: bool(false, { title: 'Follow Camera', description: 'Shadows cover their range around the camera instead of around the light object: for levels larger than the range.' }),
+        cascades: bool(false, { description: 'The sun\'s shadows in four cascades from the camera out to Range: sharp up close and coarser far away, instead of one shadow map stretched over the whole range. For large outdoor levels (islands, terrain); the shadows are drawn four times. Replaces Follow Camera.' }),
     }),
     godRays: group({
         enable: enabled({ description: 'Light shafts: the sun (the first directional light that casts shadows) shining through gaps between shadows.' }),

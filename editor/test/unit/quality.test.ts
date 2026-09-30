@@ -49,7 +49,7 @@ describe('environment settings of the graphics upgrade', () => {
     it('default to what scenes looked like before', () => {
         const env = defaults(Environment);
         expect(env.quality).toBe('auto');
-        expect(env.shadow).toEqual({ range: 60, softness: 1, follow: false });
+        expect(env.shadow).toEqual({ range: 60, softness: 1, follow: false, cascades: false });
         expect(env.fog).toMatchObject({ enable: false, mode: 'linear', near: 5, far: 80, intensity: 1, sky: 0.8, sunScatter: 1, sunFocus: 2.7 });
         expect(env.godRays.enable).toBe(false);
         expect(env.volumetricFog.enable).toBe(false);

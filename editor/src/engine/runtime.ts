@@ -1,6 +1,6 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
-    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, Texture,
+    AtmosphericComponent, BloomPost, Camera3D, CSM, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, SSRPost, Texture,
     View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
@@ -14,8 +14,8 @@ import { installGpuStats, type GpuStats } from './gpuStats';
 
 type PostCtor = new () => PostBase;
 
-/** The built-in effects in the order they run: fog over ambient occlusion, light shafts over fog, bloom of it all. */
-const BUILTIN_ORDER = ['GTAOPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
+/** The built-in effects in the order they run: reflections over ambient occlusion, fog over them, light shafts over fog, bloom of it all. */
+const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
 const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
 /** Least time between two bakes of the physical sky with clouds, ms. */
 const CLOUD_BAKE_MS = 250;
@@ -65,9 +65,10 @@ export class Runtime {
     /** A tier previewed instead of the document's (View > Graphics Quality, ?quality=). */
     private qualityOverride: QualityLevel | null = null;
     private qualitySetting: QualitySetting = 'auto';
-    /** Directional shadows: meters covered, and whether around the camera. */
+    /** Directional shadows: meters covered, whether around the camera, and whether the sun's are cascaded. */
     private shadowRange = 60;
     private shadowFollow = false;
+    private shadowCascades = false;
     private lastEnvDoc: EnvironmentDoc | null = null;
 
     fps = 0;
@@ -119,6 +120,8 @@ export class Runtime {
         this.grid.name = 'EditorGrid';
         this.grid.y = 0.002;
         this.scene.addChild(this.grid);
+        // Mirrors leave it out, as they leave each other out.
+        this.grid.traverse((o: Object3D) => o.getComponent(MeshRenderer)?.addMask(MirrorComponent.MIRROR_MASK));
 
         this.view = new View3D();
         this.view.scene = this.scene;
@@ -299,22 +302,46 @@ export class Runtime {
     /**
      * Directional shadows cover `shadowRange` meters around their light
      * (or the camera), and as far toward the light as that, so tall
-     * casters do not lose their tops. Lights that start later get it on
-     * the next frame; the setters do nothing when nothing changed.
+     * casters do not lose their tops. With cascades the sun (the first
+     * directional light that casts shadows) covers the range from the
+     * camera out in cascades instead, while its cascades and the other
+     * lights fit the shadow map's layers. Lights that start later get it
+     * on the next frame; the setters do nothing when nothing changed.
      */
     private fitShadowLights() {
         const lights = ShadowLightsCollect.directionLightList?.get(this.scene);
         if (!lights?.length) return;
         const r = this.shadowRange;
-        for (const l of lights) {
-            if (!(l instanceof DirectLight) || l.enableCSM) continue;
+        const cascaded = this.shadowCascades && lights.length - 1 + CSM.Cascades <= this.engine.setting.shadow.maxShadowMapNum;
+        lights.forEach((l, i) => {
+            if (!(l instanceof DirectLight)) return;
+            const csm = cascaded && i === 0;
+            if (l.enableCSM !== csm) {
+                l.csmSplitFunction = this.cascadeSplit;
+                l.enableCSM = csm;
+            }
+            if (csm) return;
             l.shadowBoundWidth = r;
             l.shadowBoundHeight = r;
             l.shadowBoundNear = -r;
             l.shadowBoundFar = r;
             l.shadowFollow = this.shadowFollow;
-        }
+        });
     }
+
+    /**
+     * Where the sun's cascades end (`index` counts their bounds, 0 at the
+     * camera's near plane): from the camera out to the shadow range,
+     * mostly on a logarithmic scale so the near ones are small and sharp,
+     * partly even so the far ones do not grow too wide.
+     */
+    private cascadeSplit = (near: number, far: number, index: number, bounds: number): number => {
+        if (index <= 0) return near;
+        const from = Math.max(near, 0.1);
+        const end = Math.max(from + 1, Math.min(far, this.shadowRange));
+        const t = index / (bounds - 1);
+        return 0.75 * from * Math.pow(end / from, t) + 0.25 * (from + (end - from) * t);
+    };
 
     private tick() {
         this.stats?.endFrame(performance.now() - this.engineStart);
@@ -389,6 +416,18 @@ export class Runtime {
         gtao.maxDistance = Math.min(50, Math.max(0.1, env.ao.distance));
         this.togglePost(GTAOPost, env.ao.enable && tier.ao);
 
+        const ssr = pp.ssr!;
+        ssr.reflectionRatio = env.ssr.strength;
+        ssr.roughnessThreshold = env.ssr.roughness;
+        ssr.fadeDistanceMax = env.ssr.distance;
+        ssr.fadeDistanceMin = env.ssr.distance * 0.5;
+        if (tier.ssrScale > 0 && ssr.pixelRatio !== tier.ssrScale) {
+            ssr.pixelRatio = tier.ssrScale;
+            // Made at the old size: traced again at the new one.
+            (this.post.getPost(SSRPost as any) as SSRPost | null)?.onResize();
+        }
+        this.togglePost(SSRPost, env.ssr.enable && tier.ssrScale > 0);
+
         const fog = pp.globalFog!;
         const f = env.fog;
         fog.fogType = FOG_TYPES[f.mode] ?? 0;
@@ -430,7 +469,9 @@ export class Runtime {
 
         const shadow = setting.shadow;
         this.shadowRange = Math.min(env.shadow.range, tier.shadowRangeMax);
-        this.shadowFollow = env.shadow.follow;
+        // Cascades cover the range from the camera; a tier without them keeps one map around the camera.
+        this.shadowCascades = env.shadow.cascades && tier.cascades;
+        this.shadowFollow = env.shadow.follow || env.shadow.cascades;
         shadow.shadowBound = this.shadowRange;
         shadow.pcfKernelScale = env.shadow.softness;
         shadow.updateFrameRate = tier.shadowEvery;

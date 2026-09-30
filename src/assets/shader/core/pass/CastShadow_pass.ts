@@ -22,17 +22,24 @@ struct VertexOutput {
     ${SkeletonAnimation_shader.groupBindingAndFunctions(2, 1)}
 #endif
 
+// Instanced draws (InstanceDrawComponent) read each instance's matrix index.
+#include "InstanceUniform"
+
 var<private> worldMatrix: mat4x4<f32>;
 
 @vertex
 fn main(vertex:VertexAttributes) -> VertexOutput {
-    worldMatrix = models.matrix[vertex.index];
+    var modelIndex = u32(vertex.index);
+    #if USE_INSTANCEDRAW
+        modelIndex = u32(instanceDrawID.matrixIDs[vertex.index]);
+    #endif
+    worldMatrix = models.matrix[modelIndex];
     let shadowMatrix: mat4x4<f32> = globalUniform.projMat * globalUniform.viewMat;
     var vertexPosition = vertex.position.xyz;
     var vertexNormal = vertex.normal.xyz;
 
     if (globalUniform.useRTE != 0) {
-        UpdateWorldMatrixToRTE_PrivatePtr(u32(vertex.index), &worldMatrix);
+        UpdateWorldMatrixToRTE_PrivatePtr(modelIndex, &worldMatrix);
     }
 
     #if USE_MORPHTARGETS
@@ -83,16 +90,23 @@ struct VertexOutput {
     ${SkeletonAnimation_shader.groupBindingAndFunctions(2, 1)}
 #endif
 
+// Instanced draws (InstanceDrawComponent) read each instance's matrix index.
+#include "InstanceUniform"
+
 var<private> worldMatrix: mat4x4<f32>;
 
 @vertex
 fn main(vertex:VertexAttributes) -> VertexOutput {
-    worldMatrix = models.matrix[vertex.index];
+    var modelIndex = u32(vertex.index);
+    #if USE_INSTANCEDRAW
+        modelIndex = u32(instanceDrawID.matrixIDs[vertex.index]);
+    #endif
+    worldMatrix = models.matrix[modelIndex];
     let shadowMatrix: mat4x4<f32> = globalUniform.projMat * globalUniform.viewMat;
     var vertexPosition = vertex.position.xyz;
 
     if (globalUniform.useRTE != 0) {
-        UpdateWorldMatrixToRTE_PrivatePtr(u32(vertex.index), &worldMatrix);
+        UpdateWorldMatrixToRTE_PrivatePtr(modelIndex, &worldMatrix);
     }
 
     // Skinning OVERWRITES worldMatrix (glTF 2.0 skinning matrix already

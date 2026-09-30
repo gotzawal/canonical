@@ -84,7 +84,7 @@ export let GrassCastShadowShader = /* wgsl */`
                     let rx = weights.x * weights.w + clamp(speed.y * windPower * pow(weight,materialUniform.curvature),-1.0,1.0)  ;
                     let rz = weights.z * weights.w + clamp(-speed.x * windPower * pow(weight,materialUniform.curvature),-1.0,1.0) ;
 
-                    var rot = buildRotateXYZMat4(rx,0.0,rz,0.0,materialUniform.grassHeight*bios,0.0);
+                    var rot = buildRotateXYZMat4(rx,0.0,rz,0.0,materialUniform.grassHeight*bios*length(localMatrix[1].xyz),0.0);
                     finalMatrix *= rot ;
                 }
             }

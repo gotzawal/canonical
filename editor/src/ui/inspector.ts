@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, Body, Camera, Character, Light, Material, Particles, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, Body, Camera, Character, Grass, Instancing, Light, Material, Mirror, Particles, Player } from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
@@ -88,6 +88,8 @@ const COMPONENTS = {
     player: [Player, (n: NodeDoc) => n.player],
     body: [Body, (n: NodeDoc) => n.body],
     material: [Material, (n: NodeDoc) => n.mesh?.material],
+    mirror: [Mirror, (n: NodeDoc) => n.mirror],
+    grass: [Grass, (n: NodeDoc) => n.grass],
     // Made on the first edit: every model with clips shows the section.
     animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
 } as const;
@@ -162,6 +164,9 @@ export class InspectorPanel {
             n.camera ? 'cam' : '-',
             (n.character ? 'char' : '-') + (n.player ? ':player:' + n.player.view : ''),
             n.body ? 'body:' + n.body.type : '-',
+            (n.mirror ? 'mirror' : '-') + (n.instancing ? ':inst' : ''),
+            // The ground choices list the objects.
+            n.grass ? 'grass:' + this.store.doc.nodes.length : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -272,6 +277,9 @@ export class InspectorPanel {
         if (node.character) this.body.append(this.characterSection());
         if (node.player) this.body.append(this.playerSection());
         if (node.body) this.body.append(this.physicsSection());
+        if (node.mirror && node.mesh) this.body.append(this.mirrorSection());
+        if (node.grass) this.body.append(this.grassSection());
+        if (node.instancing) this.body.append(this.instancingSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         if (node.agent) this.body.append(this.agentSection(node));
@@ -868,6 +876,69 @@ export class InspectorPanel {
         return section('body', 'Physics Body', 'physics', [
             h('div', { class: 'muted small pad', text: 'In Play a dynamic body falls, collides and bounces; a kinematic one follows its object as scripts move it and pushes dynamic bodies; a fixed one stays put. Meshes without a body are fixed too, and characters push dynamic bodies. Scripts use this.body and onCollisionEnter / onTriggerEnter.' }),
             ...this.componentRows('body', ['type', 'shape', ...(dynamic ? ['mass'] : []), 'friction', 'bounce', ...(dynamic ? ['drag', 'angularDrag', 'gravity', 'lockRotation', 'fast'] : []), 'sensor']),
+        ], [remove]);
+    }
+
+    // ------------------------------------------- mirror, grass, instancing
+
+    private mirrorSection(): HTMLElement {
+        const has: Filter = (n) => !!n.mirror;
+        const shader = this.node.mesh?.material.type === 'shader';
+        const remove = iconButton('trash', 'Remove mirror', () => this.hooks<null>('Remove Mirror', has, (n) => delete n.mirror).commit!(null));
+        return section('mirror', 'Mirror', 'mirror', [
+            h('div', {
+                class: 'muted small pad',
+                text: shader
+                    ? 'Its material shader reads the reflection with mirrorColor(offset), as the Water template does (waves that move it, a fresnel term that blends it).'
+                    : 'The mesh shows the scene reflected in the plane through its top (a plane\'s face, a box\'s top), tinted by its material\'s color. For water, give it the Water material shader. The scene is drawn again for it while the camera is in front.',
+            }),
+            ...this.componentRows('mirror', ['resolution']),
+        ], [remove]);
+    }
+
+    private grassSection(): HTMLElement {
+        const has: Filter = (n) => !!n.grass;
+        const g = this.node.grass!;
+        const self = this.node.id;
+        // What the blades can stand on: objects with a mesh, a model or children.
+        const grounds = this.store.doc.nodes.filter((n) => n.id !== self && !n.prefabChild && (n.mesh || n.model || this.store.children(n.id).length));
+        const ground = new SelectField<string>([{ value: '', label: 'None (flat)' }, ...grounds.map((n) => ({ value: n.id, label: n.name }))], g.ground ?? '', (v) =>
+            this.hooks<string | null>('Grass Ground', has, (n, x) => (n.grass!.ground = x)).commit!(v || null));
+        const textures = this.store.doc.assets.filter((a) => a.kind === 'texture');
+        const textureField = (key: 'texture' | 'windMap', none: string, label: string) => {
+            const f = new SelectField<string>([{ value: '', label: none }, ...textures.map((a) => ({ value: a.id, label: a.name }))], g[key] ?? '', (v) =>
+                this.hooks<string | null>(label, has, (n, x) => (n.grass![key] = x)).commit!(v || null));
+            this.watch(() => this.node.grass && f.set(this.node.grass[key] ?? ''));
+            return f;
+        };
+        const blade = textureField('texture', 'Plain', 'Grass Texture');
+        const gusts = textureField('windMap', 'Built-in noise', 'Grass Gusts');
+        this.watch(() => this.node.grass && ground.set(this.node.grass.ground ?? ''));
+        const remove = iconButton('trash', 'Remove grass', () => this.hooks<null>('Remove Grass', has, (n) => delete n.grass).commit!(null));
+        return section('grass', 'Grass', 'grass', [
+            h('div', { class: 'muted small pad', text: 'Blades over the area around the object, all in one draw, bent by gusts of wind. Each stands on the ground object below it, so the field follows any terrain; without a ground it is flat at the object\'s height.' }),
+            ...this.componentRows('grass', ['count', 'size']),
+            row('Ground', ground.el, 'Terrain, floor or a group of them; blades outside it are left out'),
+            ...this.componentRows('grass', ['height', 'width', 'bottomColor', 'topColor', 'wind', 'windSpeed', 'windDirection']),
+            row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
+            row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
+            ...this.componentRows('grass', ['castShadow']),
+        ], [remove]);
+    }
+
+    private instancingSection(): HTMLElement {
+        const has: Filter = (n) => !!n.instancing;
+        const drawn = h('div', { class: 'readonly' });
+        const refresh = () => {
+            const s = this.editor.sync.instancingOf(this.node.id);
+            drawn.textContent = s ? `${s.meshes} mesh${s.meshes === 1 ? '' : 'es'} in ${s.draws} draw call${s.draws === 1 ? '' : 's'}` : '';
+        };
+        refresh();
+        this.watch(refresh);
+        const remove = iconButton('trash', 'Remove instancing', () => this.hooks<null>('Remove Instancing', has, (n) => delete n.instancing).commit!(null));
+        return section('instancing', 'Instancing', 'layers', [
+            h('div', { class: 'muted small pad', text: 'The meshes of this object and of the objects under it that share a shape and a material are drawn together, one draw call each: for many trees, rocks or fence posts. Moving them costs nothing extra; adding, removing or restyling them groups them again. Skinned meshes, transparent materials and mirrors draw on their own.' }),
+            row('Drawn', drawn),
         ], [remove]);
     }
 
@@ -1483,6 +1554,16 @@ export class InspectorPanel {
         }
         if (!node.body && !node.character && !node.light && !node.camera && !node.particles) {
             items.push({ label: 'Physics Body', icon: 'physics', action: () => this.hooks<null>('Add Physics Body', (n) => !n.body && !n.character, (n) => (n.body = defaults(Body))).commit!(null) });
+        }
+        if (node.mesh && !node.mirror) {
+            items.push({ label: 'Mirror', icon: 'mirror', action: () => this.hooks<null>('Add Mirror', (n) => !!n.mesh && !n.mirror, (n) => (n.mirror = defaults(Mirror))).commit!(null) });
+        }
+        if (!node.grass && !node.light && !node.camera) {
+            // On a mesh or a model, the grass grows on it and covers it.
+            items.push({ label: 'Grass', icon: 'grass', action: () => this.hooks<null>('Add Grass', (n) => !n.grass, (n) => (n.grass = this.editor.grassFor(n))).commit!(null) });
+        }
+        if (!node.instancing && !node.light && !node.camera) {
+            items.push({ label: 'Instancing', icon: 'layers', action: () => this.hooks<null>('Add Instancing', (n) => !n.instancing, (n) => (n.instancing = defaults(Instancing))).commit!(null) });
         }
         if (!node.agent) {
             const stopped = () => this.editor.player.state === 'stopped';

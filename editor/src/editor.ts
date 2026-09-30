@@ -10,6 +10,8 @@ import {
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
+import { Grass } from './core/model';
+import { defaults } from './core/schema';
 import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
@@ -18,7 +20,7 @@ import {
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
-    GeometryType, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
+    GeometryType, GrassDoc, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
     ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
@@ -186,6 +188,28 @@ export class Editor extends Emitter<EditorEvents> {
         node.position = [round(p[0]), round(p[1]), round(p[2])];
         this.insert([node], 'Create ' + node.name);
         return node.id;
+    }
+
+    /** A field of grass in front of the view, on the object there (flat where there is none). */
+    createGrass(): string {
+        const node = makeNode(this.uniqueName('Grass', null), null);
+        const [w, h] = this.runtime.cssSize;
+        this.picker.update();
+        const hit = this.picker.pick(w / 2, h / 2);
+        const at = hit && hit.distance < this.store.camera.distance * 4 ? hit.point : this.viewport.spawnPoint();
+        node.grass = { ...defaults(Grass), ground: hit ? hit.id : null };
+        node.position = [round(at[0]), round(at[1]), round(at[2])];
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
+    }
+
+    /** Grass for an object (Add Component): on its own meshes and covering them when it has some, else a flat field around it. */
+    grassFor(node: NodeDoc): GrassDoc {
+        const grass = defaults(Grass);
+        const box = node.mesh || node.model ? this.picker.bounds(node.id) : null;
+        if (!box) return grass;
+        const size: [number, number] = [round(box.max[0] - box.min[0]), round(box.max[2] - box.min[2])];
+        return { ...grass, ground: node.id, size, count: Math.round(Math.min(20000, Math.max(1000, size[0] * size[1] * 20))) };
     }
 
     createEmpty(parent: string | null = null) {

@@ -137,6 +137,10 @@ export class FakeSync extends Emitter<{ model: string }> {
         return this.renderers.get(id) ?? [];
     }
 
+    shown(r: RenderNode): boolean {
+        return r.enable;
+    }
+
     asSync(): SceneSync {
         return this as unknown as SceneSync;
     }

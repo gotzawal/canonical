@@ -47,7 +47,6 @@ export let GrassShader = /* wgsl */`
 
     const DEGREES_TO_RADIANS : f32 = 3.1415926 / 180.0 ;
     const PI : f32 = 3.1415926 ;
-    const LUMEN = 10.764;
 
     @vertex
     fn VertMain( vertex:VertexAttributes ) -> VertexOutput {
@@ -92,7 +91,8 @@ export let GrassShader = /* wgsl */`
                     let rx = weights.x * weights.w + clamp(speed.y * windPower * pow(weight,materialUniform.curvature),-1.0,1.0)  ;
                     let rz = weights.z * weights.w + clamp(-speed.x * windPower * pow(weight,materialUniform.curvature),-1.0,1.0) ;
 
-                    var rot = buildRotateXYZMat4(rx,0.0,rz,0.0,materialUniform.grassHeight*bios,0.0);
+                    // A blade's node scales its height by its Y scale (its X scale widens it).
+                    var rot = buildRotateXYZMat4(rx,0.0,rz,0.0,materialUniform.grassHeight*bios*length(localMatrix[1].xyz),0.0);
                     finalMatrix *= rot ;
                 }
             }
@@ -118,6 +118,16 @@ export let GrassShader = /* wgsl */`
         return ORI_VertexOut ;
     }
 
+    // The sun: the first directional light that casts shadows (whose shadow
+    // is directShadowVisibility[0]), else the first light.
+    fn grassSun() -> LightData {
+        if (globalUniform.nDirShadowEnd > globalUniform.nDirShadowStart) {
+            let i = u32(globalUniform.nDirShadowStart);
+            return lightBuffer[u32(globalUniform.shadowLights[i / 4u][i % 4u])];
+        }
+        return lightBuffer[0];
+    }
+
     fn frag(){
 
         var normal = ORI_VertexVarying.vWorldNormal ;
@@ -132,47 +142,35 @@ export let GrassShader = /* wgsl */`
 
         let color = textureSampleLevel(baseMap,baseMapSampler,uv,0.0) ;
 
-        let discardValue = 0.25 ;
-
         if(color.w < 0.3){
             discard ;
         }
 
-        //generate view directtion
         let viewDir = normalize(globalUniform.CameraPos.xyz - ORI_VertexVarying.vWorldPos.xyz) ;
+        let sun = grassSun() ;
+        let L = -normalize(sun.direction.xyz) ;
+        // Lit as the engine's other surfaces are: the light's color times its intensity, over PI.
+        let lightColor = sun.lightColor.rgb * sun.intensity ;
+        let shadow = directShadowVisibility[0] ;
 
-        //get main light at first lightBuffer
-        let sunLight = lightBuffer[0] ;
-        let sunDir = sunLight.direction.xyz ;
-        // let H = normalize(viewDir.xyz + sunDir); 
-        let R = 2.0 * dot( viewDir , normal ) * normal - viewDir ; 
-        // let NoH = max(dot(normal,H),0.0);
-        let reflectDir = reflect(sunDir, normal);  
-        let NoV = max(dot(normal,viewDir),0.0);
+        // Root to tip, darker near the ground where the blades shade each other.
+        let tip = 1.0 - uv.y ;
+        let albedo = color.rgb * mix(materialUniform.grassBottomColor.rgb, materialUniform.grassTopColor.rgb, tip) ;
+        let occlusion = mix(0.5, 1.0, tip) ;
 
-        // The legacy lighting below is non-energy-conserving and pushes colors well above 1.0,
-        // which the ACES tonemap desaturates (washes out). Scale the light energy down into the
-        // ACES sweet spot (~0..1) so grass stays saturated under the default tonemap.
-        let grassEnergy = 0.65 ;
-        var mainLightColor:vec3<f32> = grassEnergy * sunLight.intensity / LUMEN * sunLight.lightColor.rgb ;
-        let att = clamp(dot(-sunDir,normal) * 0.5 + 0.5 ,0.0,1.0) ;// + materialUniform.translucent ;
+        // Thin blades: light wraps around them, and shines through them seen against the sun.
+        let wrap = clamp(dot(L, normal) * 0.5 + 0.5, 0.0, 1.0) ;
+        let through = pow(clamp(dot(-viewDir, L), 0.0, 1.0), 4.0) * materialUniform.translucent ;
+        let direct = albedo / PI * lightColor * (wrap + through) * shadow * occlusion ;
+        let R = reflect(-L, normal) ;
+        let specular = pow(max(dot(viewDir, R), 0.0), (1.0 - materialUniform.roughness + 0.001) * 200.0) * lightColor * materialUniform.specular * shadow / PI ;
 
-        let grassColor = mix(materialUniform.grassBottomColor,materialUniform.grassTopColor * att * vec4<f32>(mainLightColor,1.0) , 1.0 - uv.y );
+        // Sky light from the rough end of the environment map, as the engine's diffuse IBL.
+        let MAX_REFLECTION_LOD = f32(textureNumLevels(prefilterMap)) ;
+        let irradiance = globalUniform.skyExposure * textureSampleLevel(prefilterMap, prefilterMapSampler, normal, 0.8 * MAX_REFLECTION_LOD).rgb ;
+        let ambient = albedo * irradiance * occlusion / PI ;
 
-        var roughness = materialUniform.roughness ;
-        let MAX_REFLECTION_LOD  = f32(textureNumLevels(prefilterMap)) ;
-        // Keep IBL in linear space so it accumulates with direct lighting; the swapchain does the single linear->sRGB encode on present
-        var irradiance = grassEnergy * globalUniform.skyExposure * textureSampleLevel(prefilterMap, prefilterMapSampler, fragData.N.xyz, 0.8 * (MAX_REFLECTION_LOD) ).rgb;
-        let specular = vec3<f32>( pow(max(dot(viewDir, reflectDir), 0.0), (1.0 - roughness + 0.001) * 200.0 ) ) * mainLightColor * materialUniform.specular;
-
-        var diffuse = color.rgb / PI * grassColor.rgb * directShadowVisibility[0] ;
-        // Match the engine's standard diffuse-IBL normalization (BxDF_frag divides
-        // indirectionDiffuse by PI) — without it this ambient term is ~3.14x hotter
-        // than an equivalent PBR material, which pushes grass into ACES's
-        // highlight-desaturation range now that the sky feeds unclamped linear HDR.
-        var finalColor = diffuse + specular + (irradiance * grassColor.rgb * sunLight.quadratic) / PI;//+ backColor;
-
-        ORI_ShadingInput.BaseColor = vec4<f32>(finalColor.rgb,1.0) ;
+        ORI_ShadingInput.BaseColor = vec4<f32>(direct + specular + ambient, 1.0) ;
         UnLit();
     }
 

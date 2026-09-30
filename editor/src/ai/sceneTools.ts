@@ -5,7 +5,7 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOMETRY_TYPES, Light, Material, MaterialOverride, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player } from '../core/model';
 import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
@@ -54,11 +54,23 @@ const objectFields = {
         ...toolSchema(Body, 'A physics body: in Play a dynamic one falls, collides and bounces; kinematic follows its object (scripts move it) and pushes dynamic bodies; fixed stays put. Meshes without a body are fixed, so the level holds what falls on it. Scripts use this.body and onCollisionEnter / onTriggerEnter. null removes it.'),
         type: ['object', 'null'],
     },
+    mirror: {
+        ...toolSchema(Mirror, 'Makes a mesh a planar mirror: it shows the scene reflected in the plane through its top (a plane\'s face, a box\'s top). With a built-in material it is a mirror tinted by the material color; with a material shader that reads mirrorColor(offset) it is water (write_shader template water). Each mirror draws the scene again: one or two per scene. null removes it.'),
+        type: ['object', 'null'],
+    },
+    grass: {
+        ...toolSchema(Grass, 'A field of grass blades (one draw for thousands) around the object, bent by wind gusts. ground (an object id or name: a terrain, floor or a group of them) is what the blades stand on, so the field follows any terrain; blades outside it or on steep slopes are left out. Without ground the field is flat at the object\'s height. size is in meters in the object\'s turned frame; count is the cost (up to 30000). null removes it.'),
+        type: ['object', 'null'],
+    },
+    instancing: {
+        ...toolSchema(Instancing, 'Instanced drawing for placing many copies (trees, rocks, fence posts, crates): the meshes of this object and of every object under it that share a shape and a material (primitives, prefab instances, the same imported model) draw in one draw call per shape and material. Put the copies under one group with instancing ({}); moving them is free, adding or restyling regroups them. Skinned or animated meshes, transparent materials and mirrors draw on their own. null removes it.'),
+        type: ['object', 'null'],
+    },
     cast_shadow: { type: 'boolean' },
     receive_shadow: { type: 'boolean' },
 };
 const SHAPES = GEOMETRY_TYPES;
-const TYPES = [...SHAPES, 'empty', 'directional_light', 'point_light', 'spot_light', 'camera'];
+const TYPES = [...SHAPES, 'empty', 'grass', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 /** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
 const SCENE_RESULT_CHARS = 28_000;
@@ -84,6 +96,7 @@ export const sceneTools = tools({
                     quality: d.environment.quality,
                     bloom: d.environment.bloom,
                     ao: d.environment.ao,
+                    ssr: d.environment.ssr,
                     fog: d.environment.fog,
                     volumetricFog: d.environment.volumetricFog,
                     godRays: d.environment.godRays,
@@ -135,6 +148,8 @@ export const sceneTools = tools({
             if (box) out.bounds = { min: rv(box.min), max: rv(box.max), size: rv([box.max[0] - box.min[0], box.max[1] - box.min[1], box.max[2] - box.min[2]]) };
             const children = doc().nodes.filter((c) => c.parent === n.id).map((c) => c.id);
             if (children.length) out.children = children;
+            const drawn = ed.sync.instancingOf(n.id);
+            if (drawn) out.instancing = { meshes: drawn.meshes, draw_calls: drawn.draws };
             return { data: out, summary: n.name };
         },
     },
@@ -230,7 +245,7 @@ export const sceneTools = tools({
     },
     set_environment: {
         groups: ['environment'],
-        description: 'Change sky, exposure, shadows, fog and post processing settings. sky: atmospheric (fast, the default), physical (physically based: deeper sunsets and dusk, optional clouds; slower to change) or color; sun_x/sun_y place the sky\'s sun (keep it where the sun light comes from: apply_key_light does), atmosphere sets the sun disc (sun_size, sun_brightness, show_sun), the viewer\'s altitude and the physical sky\'s clouds. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
+        description: 'Change sky, exposure, shadows, fog and post processing settings. sky: atmospheric (fast, the default), physical (physically based: deeper sunsets and dusk, optional clouds; slower to change) or color; sun_x/sun_y place the sky\'s sun (keep it where the sun light comes from: apply_key_light does), atmosphere sets the sun disc (sun_size, sun_brightness, show_sun), the viewer\'s altitude and the physical sky\'s clouds. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range); shadow.cascades splits the sun\'s shadows into four maps from the camera out to the range, sharp up close: turn it on for large outdoor levels (islands, terrain) instead of stretching one map. ssr adds screen space reflections to smooth surfaces (polished floors, wet streets, metal; only what is on screen). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
         params: environmentFields(),
         run({ args, ed, store, doc }) {
             const { scene_name: name, ...rest } = args;
@@ -446,6 +461,7 @@ function nodeType(n: NodeDoc): string {
     if (n.model) return 'model';
     if (n.mesh) return n.mesh.geometry.type;
     if (n.particles) return 'particles';
+    if (n.grass) return 'grass';
     return 'empty';
 }
 
@@ -515,6 +531,12 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         const p = n.particles;
         out.particles = { preset: p.preset, rate: p.rate, life: p.life, size: p.size, shape: p.shape, blend: p.blend, colors: [p.colorStart, p.colorEnd], alive_at_most: Math.min(p.max, Math.ceil(p.rate * p.life[1])) };
     }
+    if (n.mirror) out.mirror = { resolution: n.mirror.resolution };
+    if (n.grass) {
+        const g = n.grass;
+        out.grass = { count: g.count, size: g.size, ground: g.ground, height: g.height, colors: [g.bottomColor, g.topColor], wind: g.wind };
+    }
+    if (n.instancing) out.instancing = true;
     if (n.model) {
         out.model = { asset: n.model.asset, asset_name: doc.assets.find((a) => a.id === n.model!.asset)?.name };
         const o = Object.keys(n.model.materials ?? {}).length + Object.keys(n.model.parts ?? {}).length;
@@ -530,11 +552,11 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     return out;
 }
 
-function resolveParent(doc: SceneDoc, ref: unknown, batch: NodeDoc[]): string | null {
+function resolveParent(doc: SceneDoc, ref: unknown, batch: NodeDoc[], what = 'parent'): string | null {
     if (ref === null || ref === undefined || ref === '') return null;
-    if (typeof ref !== 'string') throw new ToolError('parent must be an object id or name.');
+    if (typeof ref !== 'string') throw new ToolError(`${what} must be an object id or name.`);
     const found = batch.find((n) => n.id === ref || n.name === ref) ?? doc.nodes.find((n) => n.id === ref) ?? doc.nodes.find((n) => n.name === ref);
-    if (!found) throw new ToolError(`Parent "${ref}" does not exist.`);
+    if (!found) throw new ToolError(`${what}: "${ref}" does not exist.`);
     return found.id;
 }
 
@@ -620,6 +642,25 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         n.camera = patch(Camera, n.camera, spec.camera, 'camera');
         if (spec.camera.main) for (const o of doc.nodes) if (o !== n && o.camera) o.camera.main = false;
     }
+    if (spec.mirror === null) delete n.mirror;
+    else if (spec.mirror) {
+        if (!n.mesh) throw new ToolError(`"${n.name}" has no mesh: a mirror is a mesh (a plane, a box) whose top reflects.`);
+        n.mirror = patch(Mirror, n.mirror ?? defaults(Mirror), spec.mirror, 'mirror');
+    }
+    if (spec.grass === null) delete n.grass;
+    else if (spec.grass) {
+        const { ground, texture, wind_map: windMap, ...fields } = spec.grass as Json;
+        const g = patch(Grass, n.grass ?? defaults(Grass), fields, 'grass', hex);
+        if (ground !== undefined) {
+            g.ground = resolveParent(doc, ground, batch, 'grass.ground');
+            if (g.ground === n.id && !n.mesh && !n.model) throw new ToolError('grass.ground: the object itself has no mesh to stand on.');
+        }
+        if (texture !== undefined) g.texture = textureId(doc, texture, 'grass.texture');
+        if (windMap !== undefined) g.windMap = textureId(doc, windMap, 'grass.wind_map');
+        n.grass = g;
+    }
+    if (spec.instancing === null) delete n.instancing;
+    else if (spec.instancing) n.instancing = defaults(Instancing);
 }
 
 function textureId(doc: SceneDoc, v: unknown, what: string): string | null {
@@ -668,6 +709,11 @@ function makeTyped(type: string): NodeDoc {
             return makeMeshNode(type);
         case 'empty':
             return makeNode('Empty');
+        case 'grass': {
+            const n = makeNode('Grass');
+            n.grass = defaults(Grass);
+            return n;
+        }
         case 'directional_light':
             return makeLightNode('directional');
         case 'point_light':
@@ -729,6 +775,7 @@ class StagePolicy {
 
     create(type: string): string {
         if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        if (type === 'grass') return this.any('objects', 'effects') ? '' : `Grass cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         if (!this.allowed.has('objects')) return `Objects cannot be placed while the AI settings limit your tools to the ${this.stage} stage.`;
         this.layout({});
@@ -746,6 +793,8 @@ class StagePolicy {
         if (spec.light !== undefined && !this.any('lights', 'objects')) return `Lights cannot be changed ${limited}.`;
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed ${limited}.`;
         if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed ${limited}.`;
+        if ((spec.mirror !== undefined || spec.grass !== undefined) && !this.any('objects', 'materials', 'effects')) return `Mirrors and grass cannot be changed ${limited}.`;
+        if (spec.instancing !== undefined && !this.allowed.has('objects')) return `Instancing cannot be changed ${limited}.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {

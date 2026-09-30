@@ -3,6 +3,7 @@
 
 import type { ParamValue } from '../core/types';
 import { recentLogs } from '../core/log';
+import { SHADER_TEMPLATES } from '../core/templates';
 import { node, num, params, r3, script, shader, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
 export const codeTools = tools({
@@ -108,23 +109,30 @@ export const codeTools = tools({
     },
     write_shader: {
         groups: ['code', 'materials', 'effects'],
-        description: 'Create a WGSL shader, or replace an existing one (pass id, or an existing name). Waits for the GPU compiler and returns errors with line numbers and the declared properties.',
+        description: 'Create a WGSL shader, or replace an existing one (pass id, or an existing name), from code or a built-in template. Waits for the GPU compiler and returns errors with line numbers and the declared properties.',
         params: {
             name: { type: 'string', description: 'File name, e.g. "Hologram.wgsl".' },
             kind: { type: 'string', enum: ['material', 'post'] },
             lighting: { type: 'string', enum: ['lit', 'unlit'], description: 'Material shaders only.' },
-            code: { type: 'string' },
+            code: { type: 'string', description: 'The shader; may be left out with template.' },
+            template: {
+                type: 'string',
+                enum: SHADER_TEMPLATES.map((t) => t.id),
+                description: `A built-in shader to start from instead of code (its properties are then set on the material): ${SHADER_TEMPLATES.map((t) => `${t.id} (${t.description})`).join('; ')}`,
+            },
             id: { type: 'string' },
         },
-        required: ['name', 'kind', 'code'],
+        required: ['name'],
         async run({ env, args, ed, doc }) {
-            const code = String(args.code ?? '');
-            if (!code.trim()) throw new ToolError('code is empty.');
+            const template = args.template !== undefined ? SHADER_TEMPLATES.find((t) => t.id === args.template) : undefined;
+            if (args.template !== undefined && !template) throw new ToolError(`Unknown template "${args.template}".`);
+            const code = String(args.code ?? template?.code ?? '');
+            if (!code.trim()) throw new ToolError('code is empty (give code or a template).');
             const name = String(args.name ?? 'Shader.wgsl');
             const existing = args.id ? shader(doc(), args.id) : doc().shaders.find((s) => s.name.toLowerCase() === name.toLowerCase() || s.name.toLowerCase() === (name + '.wgsl').toLowerCase());
             // A rewrite keeps the kind and lighting the call leaves out.
-            const kind = args.kind === 'post' || args.kind === 'material' ? args.kind : existing?.kind ?? 'material';
-            const lighting = args.lighting === 'unlit' || args.lighting === 'lit' ? args.lighting : existing?.lighting ?? 'lit';
+            const kind = args.kind === 'post' || args.kind === 'material' ? args.kind : template?.kind ?? existing?.kind ?? 'material';
+            const lighting = args.lighting === 'unlit' || args.lighting === 'lit' ? args.lighting : template?.lighting ?? existing?.lighting ?? 'lit';
             let id: string;
             if (existing) {
                 id = existing.id;

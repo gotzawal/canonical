@@ -5,7 +5,7 @@ import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, 
 import { sanitizeDesign } from './design';
 import { migrateScene } from './migrate';
 import { isMobileDevice } from './quality';
-import { Animation, Body, Camera, Character, Environment, Mesh, Model, Params, Particles, Player } from './model';
+import { Animation, Body, Camera, Character, Environment, Grass, Instancing, Mesh, Mirror, Model, Params, Particles, Player } from './model';
 import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
     SCENE_VERSION, UNTITLED_SCENE, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
@@ -1079,6 +1079,9 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
     set('particles', repair(Particles, node.particles));
     set('body', repair(Body, node.body));
     set('animation', repair(Animation, node.animation));
+    set('mirror', node.mesh ? repair(Mirror, node.mirror) : undefined);
+    set('grass', repair(Grass, node.grass));
+    set('instancing', repair(Instancing, node.instancing));
     // A player controls a character (an older player carried the body itself).
     const character = repair(Character, node.character ?? node.player);
     set('character', character);

@@ -368,6 +368,63 @@ fn frag() {
 `,
     },
     {
+        id: 'water',
+        label: 'Water',
+        description: 'Waves, a fresnel reflection of the sky and, with a Mirror component on the object, of the scene, and the sun\'s glint.',
+        kind: 'material',
+        lighting: 'lit',
+        code: `// Water for a flat surface (a plane). mirrorColor(offset) is the scene a
+// Mirror component on the object reflects, moved by offset (screen units);
+// its alpha is 0 without one, and the sky is reflected instead.
+// @property deepColor color #0b2a36
+// @property shallowColor color #1f5e66
+// @property waveScale float 1 0.05 5
+// @property waveSpeed float 1 0 5
+// @property waveHeight float 0.15 0 1
+// @property distortion float 0.03 0 0.2
+// @property reflectivity float 1 0 1
+
+// Slopes of three waves across the surface.
+fn waveSlope(p: vec2f, t: f32) -> vec2f {
+    let k = materialUniform.waveScale;
+    var s = vec2f(0.8, 0.6) * cos(dot(p, vec2f(0.8, 0.6)) * 1.1 * k + t * 1.2);
+    s += vec2f(-0.5, 0.87) * cos(dot(p, vec2f(-0.5, 0.87)) * 2.3 * k - t * 1.7) * 0.5;
+    s += vec2f(0.28, -0.96) * cos(dot(p, vec2f(0.28, -0.96)) * 4.9 * k + t * 2.3) * 0.25;
+    return s * materialUniform.waveHeight;
+}
+
+fn frag() {
+    let p = ORI_VertexVarying.vWorldPos.xyz;
+    let slope = waveSlope(p.xz, getTime() * materialUniform.waveSpeed);
+    let n = normalize(vec3f(-slope.x, 1.0, -slope.y));
+    let v = normalize(globalUniform.CameraPos.xyz - p);
+    let nv = max(dot(n, v), 0.0);
+    let fresnel = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
+    let r = reflect(-v, n);
+
+    // The mirrored scene where there is one, else the sky.
+    let mirror = mirrorColor(n.xz * materialUniform.distortion);
+    let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, r, 0.0).rgb * globalUniform.skyExposure;
+    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity;
+    let sun = lightBuffer[0];
+    let glint = pow(max(dot(r, -normalize(sun.direction)), 0.0), 600.0) * sun.lightColor.rgb * sun.intensity * 8.0;
+
+    ORI_ShadingInput.BaseColor = vec4f(mix(materialUniform.deepColor.rgb, materialUniform.shallowColor.rgb, sqrt(nv)) * (1.0 - fresnel), 1.0);
+    // Rough, so the lighting adds no reflection of its own over this one.
+    ORI_ShadingInput.Roughness = 1.0;
+    ORI_ShadingInput.Metallic = 0.0;
+    ORI_ShadingInput.Specular = 0.0;
+    ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.Normal = n;
+    useShadow();
+    // Emission is read as gamma-encoded color: encode the linear light.
+    let light = reflection * fresnel + glint * directShadowVisibility[0];
+    ORI_ShadingInput.EmissiveColor = vec4f(pow(max(light, vec3f(0.0)), vec3f(1.0 / 2.4)), 1.0);
+    BxDFShading();
+}
+`,
+    },
+    {
         id: 'vignette',
         label: 'Vignette',
         description: 'Darkens the screen edges (post effect).',

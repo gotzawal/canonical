@@ -79,7 +79,10 @@ export class SSRPost extends PostBase {
         this.setting.render.postProcessing.ssr.enable = false;
     }
 
-    private reflectionRatio: number = 0.5;//sqrt
+    /** Square root of the share of the reflection a perfectly smooth surface shows, unless the setting has one. */
+    private reflectionRatio: number = 0.5;
+    /** The sky's prefilter map the ray tracer samples where rays leave the screen. */
+    private _skyMap: any = null;
 
     public get fadeEdgeRatio() {
         let setting = this.setting.render.postProcessing.ssr;
@@ -161,9 +164,7 @@ export class SSRPost extends PostBase {
 
         this.SSR_RayTraceCompute.setSamplerTexture("gBufferTexture", gBufferTexture);
 
-        const sky = EntityCollect.instance.getSky(this.view?.scene);
-        if (sky instanceof SkyRenderer)
-            this.SSR_RayTraceCompute.setSamplerTexture(`prefilterMap`, sky.map);
+        this.bindSky(this.view);
 
         this.SSR_RayTraceCompute.workerSizeX = Math.ceil(this.isRetTexture.width / 8);
         this.SSR_RayTraceCompute.workerSizeY = Math.ceil(this.isRetTexture.height / 8);
@@ -260,6 +261,10 @@ export class SSRPost extends PostBase {
             this.SSR_RayTraceCompute.setUniformBuffer('standUniform', standUniform.uniformGPUBuffer);
         }
 
+        // The camera the view renders through now (Play switches it) and the current sky.
+        this.bindCamera(this.SSR_RayTraceCompute, view);
+        this.bindCamera(this.SSR_Blend_Compute, view);
+        this.bindSky(view);
         this.bindUpstream(this.SSR_IS_Compute, 'colorMap');
         this.bindUpstream(this.SSR_Blend_Compute, 'colorMap');
 
@@ -271,7 +276,7 @@ export class SSRPost extends PostBase {
 
         this.ssrUniformBuffer.setFloat('mixThreshold', setting.mixThreshold);
         this.ssrUniformBuffer.setFloat('roughnessThreshold', setting.roughnessThreshold);
-        this.ssrUniformBuffer.setFloat('reflectionRatio', this.reflectionRatio);
+        this.ssrUniformBuffer.setFloat('reflectionRatio', setting.reflectionRatio ?? this.reflectionRatio);
         this.ssrUniformBuffer.setFloat('powDotRN', setting.powDotRN);
 
         this.ssrUniformBuffer.setFloat('randomSeedX', Math.random());
@@ -284,7 +289,21 @@ export class SSRPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
     }
 
+    /**
+     * Binds the sky's prefilter map (or the scene's environment map) again
+     * when the sky changed: the one bound first is destroyed with its sky.
+     */
+    private bindSky(view: View3D) {
+        const sky = EntityCollect.instance.getSky(view?.scene);
+        const map = sky instanceof SkyRenderer && sky.map ? sky.map : view?.scene?.envMap;
+        if (!map || map === this._skyMap || !this.SSR_RayTraceCompute) return;
+        this._skyMap = map;
+        this.SSR_RayTraceCompute.setSamplerTexture(`prefilterMap`, map);
+        this.SSR_RayTraceCompute.bindGroups[0] = null as any;
+    }
+
     public onResize(): void {
+        if (!this.finalTexture) return;
         let [w, h] = this._boundCtx!.presentationSize;
 
         let ssrWidth = Math.ceil(w * this.setting.render.postProcessing.ssr.pixelRatio);

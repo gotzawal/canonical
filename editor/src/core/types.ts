@@ -3,14 +3,14 @@
 // is rebuilt from it by engine/sync.ts.
 
 import type { Vec3 } from './math';
-import type { AnimationDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, LightDoc, MeshDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
+import type { AnimationDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, GrassDoc, InstancingDoc, LightDoc, MeshDoc, MirrorDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
 
 export type { Vec3 };
 
 // Components and settings defined by their schemas (core/model.ts).
 export type {
-    AlphaMode, AnimationDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, LightDoc, LightType, MaterialDoc, MaterialOverride,
-    MaterialType, MeshDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
+    AlphaMode, AnimationDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, GrassDoc, InstancingDoc, LightDoc, LightType,
+    MaterialDoc, MaterialOverride, MaterialType, MeshDoc, MirrorDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
 } from './model';
 
 /** Value of a script property or a shader property. Colors are #rrggbb strings, vectors number arrays. */
@@ -51,6 +51,12 @@ export interface NodeDoc {
     body?: BodyDoc;
     /** Skeletal animation of the node's model: its clip, and a character's clip per mode. */
     animation?: AnimationDoc;
+    /** The mesh is a planar mirror: it shows the scene reflected in its plane. */
+    mirror?: MirrorDoc;
+    /** A field of grass blades around the object, standing on its ground object. */
+    grass?: GrassDoc;
+    /** The meshes of the object's children are drawn instanced: one draw per shape and material. */
+    instancing?: InstancingDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
     agent?: AgentDoc;
