@@ -41,8 +41,6 @@ const SpotLightType = 3;
 
 @group(1) @binding(auto) var shadowMapSampler : sampler_comparison;
 @group(1) @binding(auto) var shadowMap : texture_depth_2d_array;
-@group(1) @binding(auto) var pointShadowMapSampler: sampler_comparison;
-@group(1) @binding(auto) var pointShadowMap: texture_depth_cube_array ;
 
 @group(2) @binding(0)
 var<storage,read> lightBuffer: array<LightData>;
@@ -52,7 +50,6 @@ var<storage, read> models : Uniforms;
 
 struct ShadowStruct{
  directShadowVisibility:f32,
- pointShadows:array<f32,8>,
 }
 
 var<private> shadowStrut: ShadowStruct ;
@@ -87,8 +84,9 @@ fn directShadowMaping(P:vec3<f32>, N:vec3<f32>, shadowBias: f32)  {
     if (shadowIndex >= 0 ) {
       var shadowMatrix:mat4x4<f32>;
       // A cascaded light has its cascades in consecutive layers from its shadow index.
-      if(light.csmShadowMapIndex >= 0.0 && csmCount > 1){
-        for(var csm:i32 = 0; csm < csmCount; csm ++){
+      let cascades = clamp(i32(light.csmShadowMapNum), 1, csmCount);
+      if(light.csmShadowMapIndex >= 0.0 && cascades > 1){
+        for(var csm:i32 = 0; csm < cascades; csm ++){
           shadowMatrix = globalUniform.shadowMatrix[shadowIndex + csm];
           let csmShadowResult = directShadowMapingIndex(light, shadowMatrix, P, N, shadowIndex + csm, light.shadowBias[csm]);
           if(csmShadowResult.y < 0.5){
@@ -127,29 +125,6 @@ fn directShadowMapingIndex(light:LightData, matrix:mat4x4<f32>, P:vec3<f32>, N:v
   }
   return vec2<f32>(visibility, isOutSideArea);
 }
-
-fn pointShadowMapCompare(shadowBias:f32){
-   for(var i:i32 = i32(0) ; i < i32(8); i = i + 1 )
-   { 
-       var v = 1.0 ;
-       let light = lightBuffer[i] ;
-       if(light.castShadow < 0 ){
-         shadowStrut.pointShadows[i] = v ;
-         continue ;
-       }
-
-       let frgToLight = wPosition - light.position.xyz;
-       var dir:vec3<f32> = normalize(frgToLight)  ;
-
-       var len = length(frgToLight) ;
-       let compareZ = (len - shadowBias) / globalUniform.far;
-       var depth = textureSampleCompareLevel(pointShadowMap,pointShadowMapSampler,dir.xyz,i,compareZ); 
-       if(depth < 0.5){
-          v = 0.0 ; 
-       }
-       shadowStrut.pointShadows[i] = v ;
-   }
-} 
 
 fn directLighting( albedo:vec3<f32> , WP :vec3<f32>, N:vec3<f32> , V:vec3<f32> , light:LightData , shadowBias:f32  ) -> vec3<f32> {
  var L = -normalize(light.direction.xyz) ;
@@ -245,7 +220,6 @@ fn coordFun(fragCoord:vec2<i32>)-> vec4<f32>{
  wNormal = N;
 
  directShadowMaping(wPosition, wNormal, globalUniform.shadowBias);
- pointShadowMapCompare(globalUniform.shadowBias);
 
  var lighting = vec3<f32>(0.0);
  let lightCount = 32 ;

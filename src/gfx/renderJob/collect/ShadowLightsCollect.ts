@@ -177,47 +177,59 @@ export class ShadowLightsCollect {
         this.shadowLights?.delete(scene);
     }
 
+    /** Lights told once that no shadow layer was left for them. */
+    private static _warned = new WeakSet<ILight>();
+
+    /**
+     * Gives the scene's shadow-casting lights their places: directional
+     * lights consecutive layers of the shadow map array (one, or one per
+     * cascade) while `maxShadowMapNum` lasts, point and spot lights (up to 8)
+     * a slot each in the shadow atlas. A light left without one casts no
+     * shadow (castShadowIndex -1) until there is room.
+     */
     public static update(view: View3D) {
 
         let shadowLights = this.shadowLights.get(view.scene);
         let directionLightList = ShadowLightsCollect.directionLightList.get(view.scene);
         let pointLightList = ShadowLightsCollect.pointLightList.get(view.scene);
 
+        let n = 0;
         let nDirShadowStart: number = 0;
         let nDirShadowEnd: number = 0;
         let nPointShadowStart: number = 0;
         let nPointShadowEnd: number = 0;
         shadowLights.fill(0);
         if (directionLightList) {
-            let j = 0;
+            const maxLayers = view.engine3D.setting.shadow.maxShadowMapNum;
+            let layer = 0;
             for (let i = 0; i < directionLightList.length; i++) {
                 const light = directionLightList[i] as DirectLight;
-                shadowLights[i] = light.lightData.index;
-                if (light.enableCSM) {
-                    light.lightData.castShadowIndex = j;
-                    j += light.lightData.csmShadowMapNum;
-                } else {
-                    light.lightData.castShadowIndex = j++;
+                const need = light.enableCSM ? Math.max(1, light.lightData.csmShadowMapNum) : 1;
+                if (layer + need > maxLayers) {
+                    light.lightData.castShadowIndex = -1;
+                    if (!this._warned.has(light)) {
+                        this._warned.add(light);
+                        console.warn(`ShadowLightsCollect: no shadow layer left for ${light.name ?? 'a directional light'} (engine.setting.shadow.maxShadowMapNum is ${maxLayers}).`);
+                    }
+                    continue;
                 }
+                light.lightData.castShadowIndex = layer;
+                layer += need;
+                shadowLights[n++] = light.lightData.index;
             }
-            if (j > view.engine3D.setting.shadow.maxShadowMapNum) {
-                console.error('ShadowLightsCollect: max shadow map num reached, please increase engine.setting.shadow.maxShadowMapNum');
-            }
-            nDirShadowEnd = directionLightList.length;
+            nDirShadowEnd = n;
         }
 
         if (pointLightList) {
             // Point and spot shadows follow the directional ones in
-            // shadowLights; every one of them gets a cube map slot. (Starting
-            // the loop at nPointShadowStart skipped the first lights and left
-            // their slots at light 0, drawn as a point light.)
-            nPointShadowStart = nDirShadowEnd;
+            // shadowLights; every one of them gets a slot in the atlas.
+            nPointShadowStart = n;
             for (let i = 0; i < pointLightList.length; i++) {
                 const light = pointLightList[i];
-                shadowLights[nPointShadowStart + i] = light.lightData.index;
+                shadowLights[n++] = light.lightData.index;
                 light.lightData.castShadowIndex = i;
             }
-            nPointShadowEnd = nPointShadowStart + pointLightList.length;
+            nPointShadowEnd = n;
         }
 
         let cameraGroup = GlobalBindGroup.getAllCameraGroup();

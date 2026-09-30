@@ -10,7 +10,7 @@ import { RenderContext } from '../../passRenderer/RenderContext';
 import { PassType } from '../../passRenderer/state/PassType';
 import { RenderGraphBuilder, RenderGraphPass, RenderGraphPassContext } from '../RenderGraphPass';
 import { ClusterLightingPass } from './ClusterLightingPass';
-import { POINT_SHADOW_CUBE_ARRAY } from './PointShadowPass';
+import { POINT_SHADOW_ATLAS } from './PointShadowPass';
 import { MAIN_SHADOW_MAP } from './ShadowPass';
 import { dependOnIfRegistered, preInitPassPipelines } from './_helpers';
 
@@ -36,7 +36,7 @@ import { dependOnIfRegistered, preInitPassPipelines } from './_helpers';
  * -----
  *
  * Declares read dependencies on {@link MAIN_SHADOW_MAP} and
- * {@link POINT_SHADOW_CUBE_ARRAY} so the validator orders this
+ * {@link POINT_SHADOW_ATLAS} so the validator orders this
  * pass after the shadow producers. The capture's lit shaders
  * sample those textures via {@link GlobalBindGroup}, the same
  * way the main color pass does.
@@ -76,7 +76,7 @@ export class SceneCapturePass extends RenderGraphPass {
         // The validator only checks declared deps, so the read calls
         // are how we tell the topo-sort "we need shadows first".
         b.read(MAIN_SHADOW_MAP);
-        b.read(POINT_SHADOW_CUBE_ARRAY);
+        b.read(POINT_SHADOW_ATLAS);
 
         dependOnIfRegistered(b, 'GPUCullPass');
     }

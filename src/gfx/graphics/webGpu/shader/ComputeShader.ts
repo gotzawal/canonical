@@ -67,6 +67,7 @@ export class ComputeShader extends ShaderPassBase {
         // broke any caller that wanted to re-point an output binding (e.g.
         // when the upstream chain changes and a post needs to rebind).
         this._storageTextureDic.set(name, texture);
+        this._followTexture(texture);
     }
 
     /**
@@ -76,6 +77,17 @@ export class ComputeShader extends ShaderPassBase {
      */
     public setSamplerTexture(name: string, texture: Texture) {
         this._sampleTextureDic.set(name, texture);
+        this._followTexture(texture);
+    }
+
+    /**
+     * Rebuilds the bind groups when a bound texture gets a new GPU texture
+     * (a resized shadow map, say): the old one is destroyed with it.
+     */
+    private _followTexture(texture: Texture) {
+        texture?.bindStateChange?.(() => {
+            for (let i = 0; i < this.bindGroups.length; i++) this.bindGroups[i] = null;
+        }, this);
     }
 
     /**
@@ -306,6 +318,8 @@ export class ComputeShader extends ShaderPassBase {
     /** Stops following canvas resizes and lets go of the pipeline and bind groups. */
     public destroy(force?: boolean) {
         this._offResize?.();
+        for (const tex of this._sampleTextureDic.values()) tex?.unBindStateChange?.(this);
+        for (const tex of this._storageTextureDic.values()) tex?.unBindStateChange?.(this);
         this._computePipeline = null;
         this.bindGroups = [];
         super.destroy(force);

@@ -152,8 +152,10 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
       var baseMap: texture_2d<f32>;
     #endif
 
+    // Point and spot shadows are depth only (PointShadowPass draws the
+    // faces into the shadow atlas, which has no color target): the depth
+    // is the distance from the light over its far distance.
     struct FragmentOutput {
-      @location(auto) o_Target: vec4<f32>,
       @builtin(frag_depth) out_depth: f32
     };
 
@@ -162,18 +164,16 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
         let lightWorldPos = globalUniform.CameraPos;
         var distance = length(worldPos.xyz - lightWorldPos) ;
         distance = distance / globalUniform.far;
-        var fragOut:FragmentOutput; 
 
       #if USE_ALPHACUT
+        // Cut-out texels cast nothing (written, they would be at the light).
         let Albedo = textureSample(baseMap,baseMapSampler,fragUV);
-        if(Albedo.w > 0.5){
-          fragOut = FragmentOutput(vec4<f32>(0.0),distance);
+        if(Albedo.w <= 0.5){
+          discard;
         }
-      #else
-        fragOut = FragmentOutput(vec4<f32>(0.0),distance);
       #endif
-      
-        return fragOut ;
+
+        return FragmentOutput(distance);
     }
 `
 

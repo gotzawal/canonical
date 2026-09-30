@@ -140,7 +140,12 @@ export class PassGenerate {
                     if (useMorphNormals) {
                         castPointShadowPass.setDefine(`USE_MORPHNORMALS`, useMorphNormals);
                     }
-                    castPointShadowPass.shaderState.cullMode = `front`;
+                    // As the directional cast: the faces toward the light
+                    // (both sides for a double-sided material), so one-sided
+                    // geometry casts too. The shadow atlas draws its faces
+                    // with plain cameras (no mirroring), so this is the color
+                    // pass's own culling.
+                    castPointShadowPass.shaderState.cullMode = colorPass.cullMode;
                     const ctxB = this._ctxOf(renderNode);
                     if (ctxB) bindCtx(castPointShadowPass, ctxB);
                     castPointShadowPass.preCompile(renderNode.geometry);

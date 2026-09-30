@@ -40,7 +40,6 @@ export class DDGILightingPass {
         this.computeShader.setSamplerTexture("normalMap", this.worldNormalMap);
         this.computeShader.setSamplerTexture("colorMap", this.colorMap);
         this.computeShader.setSamplerTexture("shadowMap", this.shadowMap);
-        this.computeShader.setSamplerTexture("pointShadowMap", this.pointShadowMap);
         this.computeShader.setSamplerTexture("prefilterMap", Engine3D.resFor(view.engine3D.context3D).defaultSky);
     }
 

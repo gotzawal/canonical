@@ -4,6 +4,7 @@ import { Camera3D } from '../../../../core/Camera3D';
 import { View3D } from '../../../../core/View3D';
 import { Vector3 } from '../../../../math/Vector3';
 import { Depth2DTextureArray } from '../../../../textures/Depth2DTextureArray';
+import { RenderTexture } from '../../../../textures/RenderTexture';
 import { VirtualTexture } from '../../../../textures/VirtualTexture';
 import { Time } from '../../../../util/Time';
 import { Reference } from '../../../../util/Reference';
@@ -18,6 +19,7 @@ import { RTFrame } from '../../frame/RTFrame';
 import { OcclusionSystem } from '../../occlusion/OcclusionSystem';
 import { PassType } from '../../passRenderer/state/PassType';
 import { RendererPassState } from '../../passRenderer/state/RendererPassState';
+import { HASH_START, castsChangingShadow, hashCaster, hashFloats } from '../../passRenderer/shadow/ShadowMaps';
 import { RenderGraphBuilder, RenderGraphPass, RenderGraphPassContext } from '../RenderGraphPass';
 import { buildOpBundles, buildTrBundles, dependOnIfRegistered, preInitPassPipelines } from './_helpers';
 
@@ -32,13 +34,43 @@ import { buildOpBundles, buildTrBundles, dependOnIfRegistered, preInitPassPipeli
 export const MAIN_SHADOW_MAP = '_MainShadowMap';
 
 type ShadowKind = 'all' | 'static' | 'dynamic';
+type Lists = { opaque: RenderNode[]; transparent: RenderNode[] };
 
 /**
- * Directional + cascade shadow map renderer. Owns the shadow array
- * texture and per-slot pass states; the CSM cascade loop and
- * static/dynamic split stay internal to this pass — splitting them
- * into N graph nodes would explode the DAG (4 cascades × 8 lights ×
- * static/dynamic = 64 nodes) without scheduling benefit.
+ * One layer of the shadow map array as a render target: what a pass state
+ * reads of its depth texture (the view follows the array when it is made
+ * again at another size).
+ */
+class ShadowLayerTarget {
+    public readonly name: string;
+    constructor(public readonly array: Depth2DTextureArray, public readonly layer: number) {
+        this.name = `shadowMapArray layer ${layer}`;
+    }
+    public get format(): GPUTextureFormat {
+        return this.array.format;
+    }
+    public get width(): number {
+        return this.array.width;
+    }
+    public get height(): number {
+        return this.array.height;
+    }
+    public getGPUView(): GPUTextureView {
+        return this.array.getLayerView(this.layer);
+    }
+    public getGPUTexture(): GPUTexture {
+        return this.array.getGPUTexture() as GPUTexture;
+    }
+}
+
+/**
+ * Directional + cascade shadow map renderer. Owns the shadow array texture,
+ * sized each frame to the lights that cast (the largest shadowMapSize asked
+ * for, a layer per map and cascade) and drawn into layer by layer. A light's
+ * map is drawn again only when it would change (see LightBase.shadowUpdate):
+ * its camera moved, or a caster in it did. The CSM cascade loop and
+ * static/dynamic split stay internal to this pass — splitting them into N
+ * graph nodes would explode the DAG without scheduling benefit.
  *
  * @group Graph
  */
@@ -47,53 +79,46 @@ export class ShadowPass extends RenderGraphPass {
 
     public depth2DArrayTexture!: Depth2DTextureArray;
     public shadowPassCount: number = 0;
+    /** Maps (a cascade is one) drawn in the last frame, and those kept as they were. */
+    public drawnMaps: number = 0;
+    public keptMaps: number = 0;
 
     protected readonly _passType: PassType = PassType.SHADOW;
-    protected readonly _rendererPassStates: RendererPassState[] = [];
+    /** Per layer: drawing into it from clear, and on top of what it holds. */
+    protected _clearStates: RendererPassState[] = [];
+    protected _loadStates: RendererPassState[] = [];
     protected _activeRendererPassState: RendererPassState | null = null;
 
     // Static-cache infra — allocated lazily when
     // setting.shadow.enableStaticCache is true and first frame hits the
     // static-cache code path.
-    protected _staticCacheReady = false;
     protected _staticDepthTextures: VirtualTexture[] = [];
     protected _staticPassStates: RendererPassState[] = [];
-    protected _dynamicPassStates: RendererPassState[] = [];
     protected _staticDirtyLayers: boolean[] = [];
     protected _forceUpdate = false;
 
-    protected _debugProbeDone = false;
     protected readonly _shadowPos = new Vector3();
     protected readonly _shadowCameraTarget = new Vector3();
 
     public setup(b: RenderGraphBuilder): void {
         const ctx = b.context3D;
-        const shadow = ctx.engine!.setting.shadow;
-        const w = shadow.maxShadowMapWidth;
-        const h = shadow.maxShadowMapHeight;
-        const maxShadowMapNum = shadow.maxShadowMapNum;
-        this.depth2DArrayTexture = new Depth2DTextureArray(w, h, GPUTextureFormat.depth32float, maxShadowMapNum, ctx);
+        // Sized to the shadow-casting lights each frame (_fit); until one
+        // casts, a single texel.
+        this.depth2DArrayTexture = new Depth2DTextureArray(1, 1, GPUTextureFormat.depth32float, 1, ctx);
         Reference.getInstance().attached(this.depth2DArrayTexture, this);
-
-        for (let i = 0; i < maxShadowMapNum; i++) {
-            const rtFrame = new RTFrame([], []);
-            const tex = new VirtualTexture(w, h, GPUTextureFormat.depth32float, false, undefined, 1, 0, 1, ctx);
-            tex.name = `shadowDepthTexture_${i}`;
-            rtFrame.depthTexture = tex;
-            rtFrame.label = 'shadowRender';
-            rtFrame.customSize = true;
-            rtFrame.depthCleanValue = 1;
-            this._rendererPassStates[i] = WebGPUDescriptorCreator.createRendererPassState(ctx, rtFrame);
-        }
 
         b.write(MAIN_SHADOW_MAP, () => this.depth2DArrayTexture);
 
         dependOnIfRegistered(b, 'GPUCullPass');
     }
 
+    /** Draws every light's map again next frame. */
+    public forceUpdate(): void {
+        this._forceUpdate = true;
+    }
+
     /** External API: mark a static-cache layer dirty. */
     public markStaticShadowDirty(shadowIndex: number = -1): void {
-        if (!this._staticCacheReady) return;
         if (shadowIndex < 0) {
             for (let i = 0; i < this._staticDirtyLayers.length; i++) this._staticDirtyLayers[i] = true;
         } else if (shadowIndex < this._staticDirtyLayers.length) {
@@ -103,140 +128,177 @@ export class ShadowPass extends RenderGraphPass {
 
     public execute(ctx: RenderGraphPassContext): void {
         ShadowLightsCollect.update(ctx.view);
+        this._fit(ctx.view);
         this._render(ctx.view, ctx.occlusion);
+    }
+
+    /**
+     * Sizes the array to the lights: as many layers as their maps and
+     * cascades take, at the largest size they ask for (a single texel when
+     * none casts). Making it again loses what it held: every map is drawn.
+     */
+    protected _fit(view: View3D): void {
+        const shadow = view.engine3D.setting.shadow;
+        const lights = ShadowLightsCollect.getDirectShadowLightWhichScene(view.scene) as DirectLight[];
+        let layers = 0;
+        let size = 0;
+        for (const light of lights) {
+            const index = light.lightData.castShadowIndex;
+            if (index < 0) continue;
+            layers = Math.max(layers, index + (light.enableCSM ? Math.max(1, light.lightData.csmShadowMapNum) : 1));
+            size = Math.max(size, light.shadowMapSize || shadow.shadowSize);
+        }
+        size = layers ? Math.max(16, Math.min(Math.round(size), shadow.maxShadowMapWidth, shadow.maxShadowMapHeight)) : 1;
+        layers = Math.max(1, layers);
+        const tex = this.depth2DArrayTexture;
+        if (tex.width !== size || tex.height !== size || tex.numberLayer !== layers) {
+            tex.resize(size, size, layers);
+            this._staticDepthTextures.forEach((t) => t.destroy(true));
+            this._staticDepthTextures = [];
+            this._staticPassStates = [];
+            this._staticDirtyLayers = [];
+            this._forceUpdate = true;
+        }
+        for (let i = this._clearStates.length; i < layers; i++) {
+            this._clearStates[i] = this._layerState(view.engine3D.context3D, i, 'clear');
+            this._loadStates[i] = this._layerState(view.engine3D.context3D, i, 'load');
+        }
+        shadow.mapSizeInUse = size;
+        for (const light of lights) {
+            light.shadowMapWidth = size;
+            light.shadowMapHeight = size;
+        }
+    }
+
+    protected _layerState(ctx: Context3D, layer: number, load: GPULoadOp): RendererPassState {
+        const rtFrame = new RTFrame([], []);
+        rtFrame.depthTexture = new ShadowLayerTarget(this.depth2DArrayTexture, layer) as unknown as RenderTexture;
+        rtFrame.label = load === 'clear' ? 'shadowRender' : 'shadowDynamicAppend';
+        rtFrame.customSize = true;
+        rtFrame.depthCleanValue = 1;
+        rtFrame.depthLoadOp = load;
+        return WebGPUDescriptorCreator.createRendererPassState(ctx, rtFrame);
     }
 
     protected _render(view: View3D, occlusion: OcclusionSystem): void {
         const shadowSetting = view.engine3D.setting.shadow;
+        this.shadowPassCount = 0;
+        this.drawnMaps = 0;
+        this.keptMaps = 0;
         if (!shadowSetting.enable) return;
-        void this._debugProbeShadowMap(view);
 
         const camera = view.camera;
-        const scene = view.scene;
-        this.shadowPassCount = 0;
         if (!shadowSetting.needUpdate) return;
-        if (Time.frame % shadowSetting.updateFrameRate !== 0) return;
+        // A lower graphics tier draws shadows every other frame or so; a
+        // map that must be drawn again (new, resized) still is.
+        const offFrame = Time.frame % Math.max(1, shadowSetting.updateFrameRate) !== 0;
 
-        const shadowLightList = ShadowLightsCollect.getDirectShadowLightWhichScene(scene);
-        let sizeW = shadowSetting.shadowSize;
-        let sizeH = shadowSetting.shadowSize;
-
+        const shadowLightList = ShadowLightsCollect.getDirectShadowLightWhichScene(view.scene);
         for (const light of shadowLightList) {
             const dirLight = light as DirectLight;
             const shadowIndex = dirLight.shadowIndex;
-            this._activeRendererPassState = this._rendererPassStates[shadowIndex];
-            sizeW = this._activeRendererPassState.depthTexture.width;
-            sizeH = this._activeRendererPassState.depthTexture.height;
+            if (shadowIndex < 0 || !dirLight.castShadow) continue;
+            const force = this._forceUpdate || dirLight.needUpdateShadow;
+            // Without autoUpdate, maps are drawn only when asked for (needUpdateShadow).
+            if ((offFrame || shadowSetting.autoUpdate === false) && !force) continue;
+            const mode = dirLight.shadowUpdate;
+            const useStaticCache = shadowSetting.enableStaticCache === true && mode !== 'static';
 
-            // Pre-init pass to ensure shaders compile before first draw.
-            preInitPassPipelines(view, this._passType, this._activeRendererPassState);
+            let cameras: Camera3D[];
+            if (dirLight.enableCSM) {
+                dirLight.updateShadowCameraCSM(view.camera);
+                dirLight.lightData.csmShadowMapIndex = shadowIndex;
+                cameras = dirLight.csmShadowCamera.slice(0, Math.max(1, dirLight.cascadeNum));
+            } else {
+                const extents = camera.getShadowWorldExtents();
+                this._poseShadowCamera(dirLight, camera, dirLight.direction, dirLight.shadowCamera, extents, camera.lookTarget);
+                cameras = [dirLight.shadowCamera];
+            }
 
-            const useStaticCache = shadowSetting.enableStaticCache === true;
-            const autoOrDirty = (dirLight.castShadow && dirLight.needUpdateShadow || this._forceUpdate)
-                || (dirLight.castShadow && shadowSetting.autoUpdate);
-
-            if (useStaticCache && dirLight.castShadow) {
-                this._ensureStaticCache(view.engine3D.context3D, sizeW, sizeH);
-                if (dirLight.needUpdateShadow || this._forceUpdate) {
-                    if (dirLight.enableCSM) {
-                        for (let csm = 0; csm < dirLight.cascadeNum; csm++) {
-                            this._staticDirtyLayers[shadowIndex + csm] = true;
-                        }
-                    } else {
-                        this._staticDirtyLayers[shadowIndex] = true;
-                    }
-                    dirLight.needUpdateShadow = false;
+            for (let c = 0; c < cameras.length; c++) {
+                const shadowCamera = cameras[c];
+                const layer = shadowIndex + c;
+                (shadowCamera as any)._boundCtx ||= view.engine3D.context3D;
+                const lists = this.collectLayered(view, shadowCamera, 'shadow');
+                const sig = mode === 'every_frame' ? NaN : this._signature(shadowCamera, lists, mode === 'static');
+                if (!force && mode !== 'every_frame' && sig === dirLight._shadowSignatures[c]) {
+                    this.keptMaps++;
+                    continue;
                 }
-
-                if (dirLight.enableCSM) {
-                    dirLight.updateShadowCameraCSM(view.camera);
-                    dirLight.lightData.csmShadowMapIndex = shadowIndex;
-                    for (let csm = 0; csm < dirLight.cascadeNum; csm++) {
-                        const layer = shadowIndex + csm;
-                        const shadowCamera = dirLight.csmShadowCamera[csm];
-                        (shadowCamera as any)._boundCtx ||= view.engine3D.context3D;
-                        this._renderLayerSplit(view, shadowCamera, occlusion, layer, sizeW, sizeH);
-                    }
+                dirLight._shadowSignatures[c] = sig;
+                this.drawnMaps++;
+                preInitPassPipelines(view, this._passType, this._clearStates[layer]);
+                if (useStaticCache) {
+                    if (force) this._staticDirtyLayers[layer] = true;
+                    this._renderLayerSplit(view, shadowCamera, occlusion, layer, lists);
                 } else {
-                    const extents = camera.getShadowWorldExtents();
-                    this._poseShadowCamera(dirLight, camera, dirLight.direction, dirLight.shadowCamera, extents, camera.lookTarget);
-                    this._renderLayerSplit(view, dirLight.shadowCamera, occlusion, shadowIndex, sizeW, sizeH);
-                }
-            } else if (autoOrDirty) {
-                dirLight.needUpdateShadow = false;
-                if (dirLight.enableCSM) {
-                    dirLight.updateShadowCameraCSM(view.camera);
-                    dirLight.lightData.csmShadowMapIndex = shadowIndex;
-                    for (let csm = 0; csm < dirLight.cascadeNum; csm++) {
-                        const layer = shadowIndex + csm;
-                        this._activeRendererPassState = this._rendererPassStates[layer];
-                        const shadowCamera = dirLight.csmShadowCamera[csm];
-                        (shadowCamera as any)._boundCtx ||= view.engine3D.context3D;
-                        this._renderShadow(view, shadowCamera, occlusion, this._activeRendererPassState);
-                        this._copyDepthTexture(view, this._activeRendererPassState.depthTexture, this.depth2DArrayTexture, layer, sizeW, sizeH);
-                    }
-                } else {
-                    const extents = camera.getShadowWorldExtents();
-                    this._activeRendererPassState = this._rendererPassStates[shadowIndex];
-                    this._poseShadowCamera(dirLight, camera, dirLight.direction, dirLight.shadowCamera, extents, camera.lookTarget);
-                    this._renderShadow(view, dirLight.shadowCamera, occlusion, this._activeRendererPassState);
-                    this._copyDepthTexture(view, this._activeRendererPassState.depthTexture, this.depth2DArrayTexture, shadowIndex, sizeW, sizeH);
+                    this._renderShadow(view, shadowCamera, occlusion, this._clearStates[layer], lists, mode === 'static' ? 'static' : 'all');
                 }
             }
+            dirLight.needUpdateShadow = false;
         }
 
         this._forceUpdate = false;
     }
 
-    protected _ensureStaticCache(ctx: Context3D, w: number, h: number): void {
-        if (this._staticCacheReady) return;
-        const maxShadowMapNum = ctx.engine!.setting.shadow.maxShadowMapNum;
-        this._staticDirtyLayers = new Array(maxShadowMapNum).fill(true);
-        for (let i = 0; i < maxShadowMapNum; i++) {
-            const staticTex = new VirtualTexture(w, h, GPUTextureFormat.depth32float, false, undefined, 1, 0, 1, ctx);
-            staticTex.name = `shadowStaticCache_${i}`;
-            this._staticDepthTextures[i] = staticTex;
-
-            const rtStatic = new RTFrame([], []);
-            rtStatic.depthTexture = staticTex;
-            rtStatic.label = 'shadowStaticRebuild';
-            rtStatic.customSize = true;
-            rtStatic.depthCleanValue = 1;
-            rtStatic.depthLoadOp = 'clear';
-            this._staticPassStates[i] = WebGPUDescriptorCreator.createRendererPassState(ctx, rtStatic);
-
-            const rtDynamic = new RTFrame([], []);
-            rtDynamic.depthTexture = this._rendererPassStates[i].depthTexture;
-            rtDynamic.label = 'shadowDynamicAppend';
-            rtDynamic.customSize = true;
-            rtDynamic.depthCleanValue = 1;
-            rtDynamic.depthLoadOp = 'load';
-            this._dynamicPassStates[i] = WebGPUDescriptorCreator.createRendererPassState(ctx, rtDynamic);
+    /**
+     * What a map shows: its camera, and where each caster in it is (only
+     * the static ones for a static light). NaN, never equal, while a caster
+     * that changes shape where it stands is in it.
+     */
+    protected _signature(camera: Camera3D, lists: Lists, onlyStatic: boolean): number {
+        let h = hashFloats(HASH_START, camera.pvMatrix.rawData, 16);
+        let n = 0;
+        for (const list of [lists.opaque, lists.transparent]) {
+            for (const node of list) {
+                if (!node.castShadow || !node.enable || !node.transform.enable || node.isDestroyed) continue;
+                if (onlyStatic) {
+                    if (node.shadowCacheMode !== 'static') continue;
+                } else if (castsChangingShadow(node)) {
+                    return NaN;
+                }
+                h = hashCaster(h, node);
+                n++;
+            }
         }
-        this._staticCacheReady = true;
+        return Math.imul(h ^ n, 16777619);
     }
 
-    protected _renderLayerSplit(view: View3D, shadowCamera: Camera3D, occlusion: OcclusionSystem, layer: number, w: number, h: number): void {
+    protected _ensureStaticCache(ctx: Context3D, layer: number): void {
+        if (this._staticDepthTextures[layer]) return;
+        const w = this.depth2DArrayTexture.width;
+        const h = this.depth2DArrayTexture.height;
+        const staticTex = new VirtualTexture(w, h, GPUTextureFormat.depth32float, false, undefined, 1, 0, 1, ctx);
+        staticTex.name = `shadowStaticCache_${layer}`;
+        this._staticDepthTextures[layer] = staticTex;
+        this._staticDirtyLayers[layer] = true;
+
+        const rtStatic = new RTFrame([], []);
+        rtStatic.depthTexture = staticTex;
+        rtStatic.label = 'shadowStaticRebuild';
+        rtStatic.customSize = true;
+        rtStatic.depthCleanValue = 1;
+        rtStatic.depthLoadOp = 'clear';
+        this._staticPassStates[layer] = WebGPUDescriptorCreator.createRendererPassState(ctx, rtStatic);
+    }
+
+    /** Static casters from their cache, then the others on top, into the layer. */
+    protected _renderLayerSplit(view: View3D, shadowCamera: Camera3D, occlusion: OcclusionSystem, layer: number, lists: Lists): void {
+        this._ensureStaticCache(view.engine3D.context3D, layer);
         if (this._staticDirtyLayers[layer]) {
-            this._activeRendererPassState = this._staticPassStates[layer];
-            this._renderShadow(view, shadowCamera, occlusion, this._activeRendererPassState, 'static');
+            this._renderShadow(view, shadowCamera, occlusion, this._staticPassStates[layer], lists, 'static');
             this._staticDirtyLayers[layer] = false;
         }
-        this._copyDepthTexture(view, this._staticDepthTextures[layer], this._rendererPassStates[layer].depthTexture, 0, w, h);
-        this._activeRendererPassState = this._dynamicPassStates[layer];
-        this._renderShadow(view, shadowCamera, occlusion, this._activeRendererPassState, 'dynamic');
-        this._copyDepthTexture(view, this._rendererPassStates[layer].depthTexture, this.depth2DArrayTexture, layer, w, h);
+        const tex = this.depth2DArrayTexture;
+        this._copyDepthTexture(view, this._staticDepthTextures[layer], tex, layer, tex.width, tex.height);
+        this._renderShadow(view, shadowCamera, occlusion, this._loadStates[layer], lists, 'dynamic');
     }
 
-    protected _renderShadow(view: View3D, shadowCamera: Camera3D, occlusion: OcclusionSystem, state: RendererPassState, kind: ShadowKind = 'all'): void {
+    protected _renderShadow(view: View3D, shadowCamera: Camera3D, occlusion: OcclusionSystem, state: RendererPassState, layered: Lists, kind: ShadowKind = 'all'): void {
         (shadowCamera as any)._boundCtx ||= view.engine3D.context3D;
+        this._activeRendererPassState = state;
+        this.shadowPassCount++;
         const gpu = view.engine3D.context3D.gpuContext;
-        // Pass-side layer mask + shadow-camera's own cullingMask filter
-        // which renderers cast into this shadow map. Default
-        // layerMask=All keeps the old "every node casts shadow" path.
-        // Casters outside the shadow camera's sides cannot reach the map;
-        // those between the light and its near plane still can.
-        const layered = this.collectLayered(view, shadowCamera, 'shadow');
         const command = gpu.beginCommandEncoder();
         const encoder = gpu.beginRenderPass(command, state);
 
@@ -339,61 +401,5 @@ export class ShadowPass extends RenderGraphPass {
         Vector3.addScaledVector(center, right, cx, center);
         Vector3.addScaledVector(center, up, cy, center);
         Vector3.addScaledVector(center, forward, cz, center);
-    }
-
-    /** One-shot diagnostic: probes the first shadow VirtualTexture
-     *  after frame 60 to confirm whether the shadow pass actually
-     *  writes anything (or whether the depth attachment stays at its
-     *  clear value). Mac Metal vs Windows Dawn D3D12 sometimes
-     *  diverge here. Remove once the gap is understood. */
-    protected async _debugProbeShadowMap(view: View3D): Promise<void> {
-        if (this._debugProbeDone || Time.frame < 60) return;
-        const ps = this._rendererPassStates[0];
-        const tex: any = ps?.depthTexture;
-        if (!tex) return;
-        this._debugProbeDone = true;
-        try {
-            const ctx = view.engine3D.context3D;
-            const device: GPUDevice = ctx.device;
-            const gpu = ctx.gpuContext;
-            const w = tex.width, h = tex.height;
-            const bytesPerRow = Math.ceil((w * 4) / 256) * 256;
-            const buf = device.createBuffer({
-                size: bytesPerRow * h,
-                usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ,
-            });
-            const cmd = gpu.beginCommandEncoder();
-            cmd.copyTextureToBuffer(
-                { texture: tex.getGPUTexture(), aspect: 'depth-only' },
-                { buffer: buf, bytesPerRow, rowsPerImage: h },
-                { width: w, height: h, depthOrArrayLayers: 1 },
-            );
-            gpu.endCommandEncoder(cmd);
-            await buf.mapAsync(GPUMapMode.READ);
-            const copy = new Float32Array(buf.getMappedRange().slice(0));
-            buf.unmap();
-            buf.destroy();
-            let mn = Infinity, mx = -Infinity, sum = 0, nonOneCount = 0;
-            const stride = bytesPerRow / 4;
-            for (let y = 0; y < h; y++) {
-                for (let x = 0; x < w; x++) {
-                    const d = copy[y * stride + x];
-                    if (d < mn) mn = d;
-                    if (d > mx) mx = d;
-                    sum += d;
-                    if (d < 0.9999) nonOneCount++;
-                }
-            }
-            const total = w * h;
-            const mean = sum / total;
-            // if (import.meta.env.DEV) console.log(
-            //     `[ShadowMapDebug] directional shadow VirtualTexture readback: ` +
-            //     `size=${w}x${h}  min=${mn.toFixed(5)}  max=${mx.toFixed(5)}  ` +
-            //     `mean=${mean.toFixed(5)}  non-1.0-texels=${nonOneCount}/${total} (${(100 * nonOneCount / total).toFixed(2)}%)`,
-            // );
-        } catch (e: any) {
-            console.log('[ShadowMapDebug] readback failed:', e?.message ?? e);
-            this._debugProbeDone = false;
-        }
     }
 }

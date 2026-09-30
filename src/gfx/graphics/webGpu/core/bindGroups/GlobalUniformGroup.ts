@@ -148,67 +148,35 @@ export class GlobalUniformGroup {
         this.csmMatrixRaw.fill(0);
         if (!camera.isShadowCamera) {
             const maxShadowMapNum = this._ctx.engine!.setting.shadow.maxShadowMapNum;
-            let shadowMatrixRawIndex: number = 0;
-            for (let i = 0; i < maxShadowMapNum; i++) {
-                if (i < shadowLightList.length) {
-                    const shadowLight = shadowLightList[i] as DirectLight;
+            // Each light's matrices go at its layers (castShadowIndex on); a
+            // light without layers (none left for it) has none.
+            for (let i = 0; i < shadowLightList.length; i++) {
+                const shadowLight = shadowLightList[i] as DirectLight;
+                const base = shadowLight.lightData.castShadowIndex;
+                if (base < 0) continue;
+                const cascaded = shadowLight.enableCSM && shadowLight.lightData.csmShadowMapIndex >= 0;
+                const count = cascaded ? shadowLight.lightData.csmShadowMapNum : 1;
+                for (let csm = 0; csm < count && base + csm < maxShadowMapNum; csm++) {
+                    const shadowCamera: Camera3D = cascaded ? shadowLight.csmShadowCamera[csm] : shadowLight.shadowCamera;
+                    if (this._ctx.engine!.setting.useRTE) {
+                        let viewMatrix = this.temp_viewMatrix.copy(shadowCamera.transform.worldMatrix);
 
-                    if (shadowLight.enableCSM && shadowLight.lightData.csmShadowMapIndex >= 0) {
-                        for (let csm = 0; csm < shadowLight.lightData.csmShadowMapNum; csm++) {
-                            let shadowCamera: Camera3D = shadowLight.csmShadowCamera[csm];
+                        let rtePos = Vector3.sub(shadowCamera.transform.worldPosition, camera.transform.worldPosition, Vector3.HELP_6);
+                        viewMatrix.rawData[12] = rtePos.x;
+                        viewMatrix.rawData[13] = rtePos.y;
+                        viewMatrix.rawData[14] = rtePos.z;
+                        viewMatrix.invert();
 
-                            if (this._ctx.engine!.setting.useRTE) {
-                                let viewMatrix = this.temp_viewMatrix.copy(shadowCamera.transform.worldMatrix);
-
-                                let rtePos = Vector3.sub(shadowCamera.transform.worldPosition, camera.transform.worldPosition);
-                                viewMatrix.rawData[12] = rtePos.x;
-                                viewMatrix.rawData[13] = rtePos.y;
-                                viewMatrix.rawData[14] = rtePos.z;
-                                viewMatrix.invert();
-
-                                matrixMultiply(shadowCamera.projectionMatrix, viewMatrix, this.temp_pvMatrix);
-                                this.shadowMatrixRaw.set(this.temp_pvMatrix.rawData, shadowMatrixRawIndex * 16);
-                            } else {
-                                this.shadowMatrixRaw.set(shadowCamera.pvMatrix.rawData, shadowMatrixRawIndex * 16);
-                            }
-
-                            // RFC-003: per-cascade bias derived from auto formula or
-                            // user override, scaled by frustum-relative cascade size.
-                            shadowLight.lightData.shadowBias[csm] = ShadowBiasCalculator.resolveDirectShadowBias(shadowLight, csm);
-                            shadowLight.lightData.normalBias[csm] = ShadowBiasCalculator.resolveDirectNormalBias(shadowLight, csm);
-
-                            shadowMatrixRawIndex++;
-                        }
+                        matrixMultiply(shadowCamera.projectionMatrix, viewMatrix, this.temp_pvMatrix);
+                        this.shadowMatrixRaw.set(this.temp_pvMatrix.rawData, (base + csm) * 16);
                     } else {
-                        let shadowCamera = shadowLight.shadowCamera;
-
-                        if (this._ctx.engine!.setting.useRTE) {
-                            let viewMatrix = this.temp_viewMatrix.copy(shadowCamera.transform.worldMatrix);
-
-                            let rtePos = Vector3.sub(shadowCamera.transform.worldPosition, camera.transform.worldPosition, Vector3.HELP_6);
-                            viewMatrix.rawData[12] = rtePos.x;
-                            viewMatrix.rawData[13] = rtePos.y;
-                            viewMatrix.rawData[14] = rtePos.z;
-                            viewMatrix.invert();
-
-                            matrixMultiply(shadowCamera.projectionMatrix, viewMatrix, this.temp_pvMatrix);
-
-                            this.shadowMatrixRaw.set(this.temp_pvMatrix.rawData, shadowMatrixRawIndex * 16);
-                        } else {
-                            this.shadowMatrixRaw.set(shadowCamera.pvMatrix.rawData, shadowMatrixRawIndex * 16);
-                        }
-
-                        // Non-CSM directional light: fill cascade-0 bias slot
-                        // (NDC units). Point/spot are handled in a separate loop
-                        // below since getDirectShadowLightWhichScene only returns
-                        // directional lights.
-                        shadowLight.lightData.shadowBias[0] = ShadowBiasCalculator.resolveDirectShadowBias(shadowLight, 0);
-                        shadowLight.lightData.normalBias[0] = ShadowBiasCalculator.resolveDirectNormalBias(shadowLight, 0);
-                        shadowMatrixRawIndex++;
+                        this.shadowMatrixRaw.set(shadowCamera.pvMatrix.rawData, (base + csm) * 16);
                     }
-                } else if (shadowMatrixRawIndex < maxShadowMapNum) {
-                    this.shadowMatrixRaw.set(camera.transform.worldMatrix.rawData, shadowMatrixRawIndex * 16);
-                    shadowMatrixRawIndex++;
+                    // RFC-003: per-cascade bias derived from auto formula or
+                    // user override, scaled by frustum-relative cascade size
+                    // (cascade 0 for a single map, in NDC units).
+                    shadowLight.lightData.shadowBias[csm] = ShadowBiasCalculator.resolveDirectShadowBias(shadowLight, csm);
+                    shadowLight.lightData.normalBias[csm] = ShadowBiasCalculator.resolveDirectNormalBias(shadowLight, csm);
                 }
             }
 
@@ -222,8 +190,10 @@ export class GlobalUniformGroup {
                 const pmSize = this._ctx.engine!.setting.shadow.pointShadowSize;
                 for (let i = 0; i < pointShadowList.length; i++) {
                     const pLight = pointShadowList[i] as (PointLight | SpotLight);
-                    pLight.lightData.shadowBias[0] = ShadowBiasCalculator.resolvePointShadowBias(pLight, pmSize);
-                    pLight.lightData.normalBias[0] = ShadowBiasCalculator.resolvePointNormalBias(pLight, pmSize);
+                    // Each light's faces are its own size in the shadow atlas.
+                    const faceSize = pLight.shadowMapWidth || pmSize;
+                    pLight.lightData.shadowBias[0] = ShadowBiasCalculator.resolvePointShadowBias(pLight, faceSize);
+                    pLight.lightData.normalBias[0] = ShadowBiasCalculator.resolvePointNormalBias(pLight, faceSize);
                     // Normalization factor for cube shadow depth. User-overridable
                     // via shadowCameraFar on the light; 0 = auto = use range.
                     const sFar = (pLight as any).shadowCameraFar;
@@ -234,7 +204,9 @@ export class GlobalUniformGroup {
 
         this.uniformGPUBuffer.setFloat32Array(`shadowMatrix`, this.shadowMatrixRaw);
 
-        let shadowMapSize = this._ctx.engine!.setting.shadow.shadowSize;
+        // The directional shadow maps' size in use (ShadowPass sizes them to the lights).
+        const shadowSetting = this._ctx.engine!.setting.shadow;
+        let shadowMapSize = shadowSetting.mapSizeInUse || shadowSetting.shadowSize;
         this.uniformGPUBuffer.setFloat32Array(`csmShadowBias`, this.csmShadowBias);
         this.uniformGPUBuffer.setFloat32Array(`csmMatrix`, this.csmMatrixRaw);
         this.uniformGPUBuffer.setFloat32Array(`shadowLights`, this.shadowLights);

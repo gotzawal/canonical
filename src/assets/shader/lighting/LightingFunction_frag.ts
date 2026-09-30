@@ -49,7 +49,7 @@ fn directLighting( light:LightData, iblSpecularResult: vec3f) -> vec3<f32> {
     #if USE_LIGHT
       var L = normalize(light.direction.xyz);
       #if USE_BRDF
-        var shadow = directShadowVisibility[(light.castShadow)];
+        var shadow = select(1.0, directShadowVisibility[max(light.castShadow, 0)], light.castShadow >= 0);
         color = sampleLighting(light, L, iblSpecularResult, light.intensity, shadow);
       #endif 
     #endif 
@@ -138,7 +138,7 @@ fn pointLighting( WP:vec3<f32>, light:LightData , iblSpecularResult : vec3f ) ->
         //     #endif
         // }
 
-        var shadow = pointShadows[i32(light.castShadow)] ;
+        var shadow = select(1.0, pointShadows[max(i32(light.castShadow), 0)], light.castShadow >= 0) ;
 
         #if USE_IES_PROFILE
             atten *= getLightIESProfileAtt(WP,light);
@@ -163,7 +163,7 @@ fn pointAtt( WP:vec3<f32>, light:LightData ) -> f32 {
       var L = dir ;
       atten = 1.0 - smoothstep(0.0,light.range,dist) ;
       atten *= 1.0 / max(light.radius,0.001)  ;
-      var shadow = pointShadows[i32(light.castShadow)] ;
+      var shadow = select(1.0, pointShadows[max(i32(light.castShadow), 0)], light.castShadow >= 0) ;
       #if USE_IES_PROFILE
           atten *= getLightIESProfileAtt(WP,light);
       #endif
@@ -202,7 +202,7 @@ fn spotLighting( WP:vec3<f32>, light:LightData , iblSpecularResult : vec3f) -> v
             atten = 0.0 ;
         }
 
-        var shadow = pointShadows[i32(light.castShadow)] ;
+        var shadow = select(1.0, pointShadows[max(i32(light.castShadow), 0)], light.castShadow >= 0) ;
 
         #if USE_IES_PROFILE
             atten *= getLightIESProfileAtt(WP,light);

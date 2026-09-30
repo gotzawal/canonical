@@ -78,8 +78,9 @@ export let GodRay_cs: string = /*wgsl*/ `
         var shadowMatrix:mat4x4<f32>;
         // A cascaded light has its cascades in consecutive layers from its
         // shadow index, nearest first: the first that holds the point.
-        if(light.csmShadowMapIndex >= 0.0 && csmCount > 1){
-          for(var csm:i32 = 0; csm < csmCount; csm ++){
+        let cascades = clamp(i32(light.csmShadowMapNum), 1, csmCount);
+        if(light.csmShadowMapIndex >= 0.0 && cascades > 1){
+          for(var csm:i32 = 0; csm < cascades; csm ++){
             shadowMatrix = globalUniform.shadowMatrix[shadowIndex + csm];
             let csmShadowResult = directShadowMapingIndex(light, shadowMatrix, P, N, shadowIndex + csm, light.shadowBias[csm]);
             if(csmShadowResult.y < 0.5){

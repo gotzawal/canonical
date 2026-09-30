@@ -18,10 +18,11 @@ export class CastPointShadowMaterialPass extends RenderShaderPass {
         this.shaderState.castShadow = false;
         this.shaderState.acceptShadow = false;
 
-        // Cube shadow map stores BACK-FACE depth (see CastShadowMaterialPass for
-        // full rationale). Mesh thickness is the primary bias; rasterizer slope
+        // The faces toward the light are stored (PassGenerate gives the
+        // pass its color pass's culling), as the directional cast does. The
+        // receiver bias in PointShadow_frag covers acne; rasterizer slope
         // bias is kept tiny as a grazing-angle safety net.
-        this.shaderState.cullMode = GPUCullMode.front;
+        this.shaderState.cullMode = GPUCullMode.back;
         this.shaderState.depthBias = 0;
         this.shaderState.depthBiasSlopeScale = 0.5;
         this.shaderState.depthBiasClamp = 0;

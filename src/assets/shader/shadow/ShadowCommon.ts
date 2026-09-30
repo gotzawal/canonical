@@ -1,4 +1,5 @@
 import { CSM } from "../../../core/csm/CSM";
+import { SHADOW_FACE_WGSL } from "../../../gfx/renderJob/passRenderer/shadow/ShadowMaps";
 
 /**
  * @internal
@@ -10,7 +11,9 @@ export let ShadowCommon: string = /*wgsl*/ `
     @group(1) @binding(auto) var shadowMapSampler: sampler_comparison;
     @group(1) @binding(auto) var shadowMap: texture_depth_2d_array;
     @group(1) @binding(auto) var pointShadowMapSampler: sampler_comparison;
-    @group(1) @binding(auto) var pointShadowMap: texture_depth_cube_array;
+    // Point and spot lights: every face of every light in one atlas, each
+    // light at its own size (LightData.shadowTiles).
+    @group(1) @binding(auto) var pointShadowMap: texture_depth_2d;
     // Non-comparison aliases for the same depth textures — used by PCSS
     // blocker search which needs the raw depth value, not a compared 0/1.
     // See RenderShaderPass sampler resolution (strips 'SamplerRaw' suffix
@@ -24,6 +27,7 @@ export let ShadowCommon: string = /*wgsl*/ `
 
     const dirCount:i32 = 8 ;
     const pointCount:i32 = 8 ;
+    // The most cascades a light has; each has its own count (csmShadowMapNum).
     const csmCount:i32 = ${CSM.Cascades} ;
     var<private> csmLevel:i32 = -1;
 
@@ -49,6 +53,8 @@ export let ShadowCommon: string = /*wgsl*/ `
         vec2<f32>( 0.19984126,  0.78641367),
         vec2<f32>( 0.14383161, -0.14100790),
     );
+
+    ${SHADOW_FACE_WGSL}
 
     fn calcBasicBias(shadowWorldSize:f32, shadowDepthTexSize:f32, near:f32, far:f32) -> f32{
       var bias = shadowWorldSize / shadowDepthTexSize;

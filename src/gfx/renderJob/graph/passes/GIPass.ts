@@ -4,7 +4,7 @@ import { CubeCamera } from '../../../../core/CubeCamera';
 import { View3D } from '../../../../core/View3D';
 import { CEvent } from '../../../../event/CEvent';
 import { Depth2DTextureArray } from '../../../../textures/Depth2DTextureArray';
-import { DepthCubeArrayTexture } from '../../../../textures/DepthCubeArrayTexture';
+import { DepthAtlasTexture } from '../../../../textures/DepthAtlasTexture';
 import { RenderTexture } from '../../../../textures/RenderTexture';
 import { GlobalBindGroup } from '../../../graphics/webGpu/core/bindGroups/GlobalBindGroup';
 import { Texture } from '../../../graphics/webGpu/core/texture/Texture';
@@ -21,7 +21,7 @@ import { Probe } from '../../passRenderer/ddgi/Probe';
 import { PassType } from '../../passRenderer/state/PassType';
 import { RendererPassState } from '../../passRenderer/state/RendererPassState';
 import { RenderGraphBuilder, RenderGraphPass, RenderGraphPassContext } from '../RenderGraphPass';
-import { POINT_SHADOW_CUBE_ARRAY } from './PointShadowPass';
+import { POINT_SHADOW_ATLAS } from './PointShadowPass';
 import { MAIN_SHADOW_MAP } from './ShadowPass';
 
 /**
@@ -124,10 +124,10 @@ export class GIPass extends RenderGraphPass {
         // pool to wire the lighting / bounce / irradiance compute
         // child passes via setInputTextures.
         b.read(MAIN_SHADOW_MAP);
-        b.read(POINT_SHADOW_CUBE_ARRAY);
+        b.read(POINT_SHADOW_ATLAS);
 
         const shadowMap = b.graph.pool.get<Depth2DTextureArray>(MAIN_SHADOW_MAP);
-        const pointShadowMap = b.graph.pool.get<DepthCubeArrayTexture>(POINT_SHADOW_CUBE_ARRAY);
+        const pointShadowMap = b.graph.pool.get<DepthAtlasTexture>(POINT_SHADOW_ATLAS);
         this.setInputTextures(shadowMap, pointShadowMap);
 
         b.write<RenderTexture>(DDGI_IRRADIANCE_MAP, () => this.irradianceColorMap);
@@ -138,7 +138,7 @@ export class GIPass extends RenderGraphPass {
      *  compute child passes. Called from `setup` after the shadow
      *  textures are registered in the pool. Public so cloud-GI / test
      *  harnesses can re-wire if needed. */
-    public setInputTextures(shadowMap: Depth2DTextureArray, pointShadowMap: DepthCubeArrayTexture): void {
+    public setInputTextures(shadowMap: Depth2DTextureArray, pointShadowMap: DepthAtlasTexture): void {
         const ctx = this.irradianceColorMap._boundCtx!;
         if (!this.lightingPass) {
             this.lightingPass = new DDGILightingPass(ctx);

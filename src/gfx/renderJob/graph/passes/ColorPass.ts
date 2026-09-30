@@ -10,7 +10,7 @@ import { buildOpBundles, dependOnIfRegistered } from './_helpers';
 import { ClusterLightingPass, CLUSTER_LIGHTING_BUFFER } from './ClusterLightingPass';
 import { MAIN_COLOR_RT } from './GBufferResourcePass';
 import { MAIN_SHADOW_MAP } from './ShadowPass';
-import { POINT_SHADOW_CUBE_ARRAY } from './PointShadowPass';
+import { POINT_SHADOW_ATLAS } from './PointShadowPass';
 import { REFLECTION_CUBE_MAP } from './ReflectionPass';
 import { DDGI_DEPTH_MAP, DDGI_IRRADIANCE_MAP } from './GIPass';
 import { drawNodesEncoder, TRANSPARENT_DRAW_CTX, TransparentDrawContext } from './_transparentDraw';
@@ -117,7 +117,7 @@ export class ColorPass extends RenderGraphPass {
     protected declareShadingReads(b: RenderGraphBuilder): void {
         b.read(CLUSTER_LIGHTING_BUFFER);
         b.read(MAIN_SHADOW_MAP);
-        b.read(POINT_SHADOW_CUBE_ARRAY);
+        b.read(POINT_SHADOW_ATLAS);
         b.read(REFLECTION_CUBE_MAP);
         if (this._giEnabled) {
             b.read(DDGI_IRRADIANCE_MAP);
