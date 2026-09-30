@@ -128,6 +128,12 @@ class _SetupDraft {
  * @group Graph
  */
 export class RenderGraph {
+    /**
+     * Told around every pass that runs, in order (a profiler times them and
+     * attributes the GPU work they record). Null costs nothing.
+     */
+    public static passHook: { begin(pass: string): void; end(pass: string): void } | null = null;
+
     private readonly _view: View3D;
     private readonly _ctx: Context3D;
     private readonly _pool: RenderGraphResourcePool;
@@ -532,7 +538,15 @@ export class RenderGraph {
             // RenderGraphRenderTarget.beginPass can compare against
             // the per-resource last-use map to derive storeOp='discard'.
             this._currentPassIdx = i;
-            p.execute(ctx);
+            const hook = RenderGraph.passHook;
+            if (hook) {
+                hook.begin(name);
+                try {
+                    p.execute(ctx);
+                } finally {
+                    hook.end(name);
+                }
+            } else p.execute(ctx);
         }
         this._currentPassIdx = -1;
         if (devMode && device) {

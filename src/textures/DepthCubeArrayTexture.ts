@@ -40,6 +40,7 @@ export class DepthCubeArrayTexture extends Texture implements ITexture {
             size: { width: this.width, height: this.height, depthOrArrayLayers: 6 * this.numberLayer },
             dimension: '2d',
             usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+            label: 'pointShadowMapArray',
         }
         this.gpuTexture = this.getGPUTexture();
     }

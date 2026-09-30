@@ -237,7 +237,7 @@ export class LevelRays {
         const normal: Vec3 = [0, 0, 0];
         const test = (i: number) => {
             const it = this.items[i];
-            if (it.dead || !it.r.enable || (ignore && ignore(it.id))) return;
+            if (it.dead || !this.sync.shown(it.r) || (ignore && ignore(it.id))) return;
             if (it.r.geometry !== it.geo) {
                 // A script swapped its shape: box it again now; it is filed again with the next flush.
                 it.geo = it.r.geometry;

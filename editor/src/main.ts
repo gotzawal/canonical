@@ -1,7 +1,7 @@
 import './styles.css';
 import { newScene } from './core/defaults';
 import { readLocal, writeLocal } from './core/local';
-import { captureConsole } from './core/log';
+import { captureConsole, logInfo } from './core/log';
 import { messages } from './core/messages';
 import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
@@ -31,6 +31,8 @@ import { PipelineBar } from './ui/pipelineBar';
 import { StartScreen } from './ui/startScreen';
 import { StepsBar } from './ui/stepsBar';
 import { openVersionHistory } from './ui/versionHistory';
+import { draggedLibraryItem } from './ui/libraryDialog';
+import { NavOverlay } from './viewport/navOverlay';
 import { ShotView } from './ui/shotView';
 import { Dock } from './ui/dock';
 import { h } from './ui/dom';
@@ -233,8 +235,19 @@ async function main() {
                 editor.placePrefab(ref.slice(7), point);
                 return;
             }
+            if (ref.startsWith('library:')) {
+                const item = draggedLibraryItem(ref.slice(8));
+                if (!item) return;
+                // A sound plays from the object it was dropped on, else from a new sound object there.
+                void editor
+                    .addFromLibrary(item, { at: point })
+                    .then(({ asset }) => asset.kind === 'audio' && editor.addSound(asset.id, hitId ? [hitId] : [], hitId ? undefined : point))
+                    .catch((e) => toast(e?.message || String(e), 'error'));
+                return;
+            }
             const asset = store.doc.assets.find((a) => a.id === ref);
             if (asset?.kind === 'model') editor.addModel(ref, point);
+            else if (asset?.kind === 'audio') store.select(editor.addSound(ref, hitId ? [hitId] : [], hitId ? undefined : point));
             else if (asset) editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
         },
         onPickPart: (id, renderer) => {
@@ -395,9 +408,10 @@ async function main() {
     editor.on('ai-prompt', () => showTab('ai'));
     editor.on('show-ai', () => showTab('ai'));
     editor.on('show-design', () => showTab('design', true));
-    editor.on('show-scene', () => {
+    editor.on('show-scene', (key) => {
         showTab('scene', true);
         setPanel('right', true);
+        if (key) scenePanel.reveal(key);
     });
 
     /**
@@ -545,6 +559,11 @@ async function main() {
         // The game view has no editor grid.
         runtime.setGridVisible(!playing && store.prefs.grid);
     });
+    // View > Navigation Mesh: what the characters walk on, in the editor and in Play.
+    const navOverlay = new NavOverlay(runtime, store, sync, (text) => logInfo(text));
+    const updateNavOverlay = () => navOverlay.setVisible(store.prefs.navMesh);
+    store.on('prefs', updateNavOverlay);
+    updateNavOverlay();
     // GI probe spheres are an editor view aid: hidden while playing.
     const updateProbeHelpers = () => runtime.gi.setHelpersVisible(store.prefs.giProbes && !store.playing);
     store.on('prefs', updateProbeHelpers);
@@ -574,6 +593,22 @@ async function main() {
     });
 
     (window as any).__editor = editor;
+    openLinkedScene(editor);
+}
+
+/**
+ * ?open=<link> opens that scene or project (an example hosted anywhere),
+ * asking first when the current scene would be lost. The parameter is
+ * taken off the address, so a reload does not open it again.
+ */
+function openLinkedScene(editor: Editor) {
+    const params = new URLSearchParams(location.search);
+    const link = params.get('open');
+    if (!link) return;
+    params.delete('open');
+    const rest = params.toString();
+    history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash);
+    void editor.openUrl(link);
 }
 
 /**

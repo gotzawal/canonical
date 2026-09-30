@@ -4,7 +4,7 @@ import {
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
-import type { ParamValue, ShaderDoc, ShaderKind } from '../core/types';
+import type { ParamValue, ShaderDoc, ShaderKind, TextureRole } from '../core/types';
 import { hexToColor, normalizeHex } from './color';
 import type { Runtime } from './runtime';
 
@@ -53,6 +53,8 @@ interface CompiledShader {
     version: number;
     /** The code has its own vertex function (it may move vertices). */
     hasVert: boolean;
+    /** The code reads the reflection of a Mirror component (mirrorColor, mirrorUV). */
+    usesMirror: boolean;
 }
 
 interface ShaderEntry {
@@ -71,7 +73,17 @@ interface ShaderEvents {
 }
 
 const USER_BEGIN = 'fn morglay_user_code_begin() {}';
-const TEXTURE_DEFAULTS = ['white', 'black', 'gray', 'normal'] as const;
+/**
+ * Built-in textures a texture property starts as. The default also says how
+ * an asset put in it is read: 'normal' as a normal map, 'data' (white) as
+ * linear values such as roughness and occlusion, the others as colors.
+ */
+const TEXTURE_DEFAULTS = ['white', 'black', 'gray', 'normal', 'data'] as const;
+
+/** How a texture property's asset is read, by the property's default (see TEXTURE_DEFAULTS). */
+export function textureRoleOf(defaultName: unknown): TextureRole {
+    return defaultName === 'normal' ? 'normal' : defaultName === 'data' ? 'data' : 'color';
+}
 
 /** Uniform struct of the engine's PBR material, which the lighting code reads. */
 const ENGINE_FIELDS = `
@@ -110,7 +122,7 @@ const ENGINE_FIELDS = `
 
 const RESERVED = new Set([
     ...ENGINE_FIELDS.split(/[\s,]+/).filter((s) => s.endsWith(':')).map((s) => s.slice(0, -1)),
-    'baseMap', 'shadowBias', 'x', 'y', 'width', 'height',
+    'baseMap', 'mirrorMap', 'shadowBias', 'x', 'y', 'width', 'height',
     'fn', 'let', 'var', 'const', 'struct', 'return', 'if', 'else', 'for', 'loop', 'while', 'true', 'false',
     'f32', 'i32', 'u32', 'bool', 'vec2', 'vec3', 'vec4', 'mat4x4', 'texture', 'sampler', 'discard',
 ]);
@@ -133,6 +145,8 @@ export interface ParsedShader {
     includes: string[];
     hasVert: boolean;
     hasEntry: boolean;
+    /** Material shaders: it reads the reflection of a Mirror component. */
+    usesMirror: boolean;
 }
 
 /** Reads `// @property` declarations and prepares the code for wrapping. */
@@ -210,6 +224,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
         .join('\n');
 
     const hasVert = /\bfn\s+vert\s*\(/.test(body);
+    const usesMirror = kind === 'material' && /\bmirror(Color|UV|Map)\b/.test(body);
     const entry = kind === 'post' ? /\bfn\s+post\s*\(/ : /\bfn\s+frag\s*\(/;
     const hasEntry = entry.test(body);
     if (!hasEntry) {
@@ -220,7 +235,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
             message: kind === 'post' ? 'Missing "fn post(uv: vec2f) -> vec4f".' : 'Missing "fn frag()".',
         });
     }
-    return { props, errors, body, includes, hasVert, hasEntry };
+    return { props, errors, body, includes, hasVert, hasEntry, usesMirror };
 }
 
 function structFields(props: ShaderProperty[]): string {
@@ -237,6 +252,24 @@ function textureBindings(props: ShaderProperty[]): string {
         .map((p) => `@group(1) @binding(auto) var ${p.name}Sampler: sampler;\n@group(1) @binding(auto) var ${p.name}: texture_2d<f32>;`)
         .join('\n');
 }
+
+/**
+ * What material shaders that read a mirror get: the reflection a Mirror
+ * component captures, sampled in screen space as the engine's mirror
+ * does (left and right swapped, as a mirror shows them). Without a
+ * Mirror component it is transparent black.
+ */
+const MIRROR_CODE = [
+    '@group(1) @binding(auto) var mirrorMapSampler: sampler;',
+    '@group(1) @binding(auto) var mirrorMap: texture_2d<f32>;',
+    'fn mirrorUV() -> vec2f {',
+    '    let ndc = ORI_VertexVarying.fragPosition.xy / ORI_VertexVarying.fragPosition.w;',
+    '    return vec2f((1.0 - ndc.x) * 0.5, (1.0 - ndc.y) * 0.5);',
+    '}',
+    'fn mirrorColor(offset: vec2f) -> vec4f {',
+    '    return textureSampleLevel(mirrorMap, mirrorMapSampler, clamp(mirrorUV() + offset, vec2f(0.0), vec2f(1.0)), 0.0);',
+    '}',
+].join('\n');
 
 /** Full shader source as registered in ShaderLib. */
 export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: ParsedShader): string {
@@ -283,6 +316,7 @@ export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: P
         '@group(1) @binding(auto) var baseMapSampler: sampler;',
         '@group(1) @binding(auto) var baseMap: texture_2d<f32>;',
         textureBindings(parsed.props),
+        parsed.usesMirror ? MIRROR_CODE : '',
         'fn getTime() -> f32 { return globalUniform.time * 0.001; }',
         parsed.hasVert ? '' : 'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
         USER_BEGIN,
@@ -305,6 +339,8 @@ let shaderSerial = 0;
  */
 export class ShaderManager extends Emitter<ShaderEvents> {
     private entries = new Map<string, ShaderEntry>();
+    /** What material shaders read as the reflection without a Mirror component: transparent black. */
+    private noMirror: Texture | null = null;
 
     constructor(private runtime: Runtime, private store: Store) {
         super();
@@ -439,7 +475,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         const version = ++shaderSerial;
         const name = `morglay_shader_${id}_${version}`.replace(/[^A-Za-z0-9_]/g, '_');
         ShaderLib.register(name, source);
-        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert };
+        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert, usesMirror: parsed.usesMirror };
         e.status = { state: 'ok', messages, props: parsed.props, version };
         this.emit('compiled', id);
     }
@@ -487,6 +523,11 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         shader.setTexture('baseMap', res.whiteTexture);
         shader.setTexture('normalMap', res.normalTexture);
         shader.setTexture('maskMap', res.maskTexture);
+        // A Mirror component on the object binds its reflection here (and knows the material by it).
+        if (valid.usesMirror) {
+            this.noMirror ??= res.createTexture(32, 32, 0, 0, 0, 0, 'morglay-no-mirror');
+            shader.setTexture('mirrorMap', this.noMirror);
+        }
         applyProps(shader, valid.props, {}, ctx);
 
         const mat = new Material();
@@ -511,8 +552,9 @@ export class ShaderManager extends Emitter<ShaderEvents> {
 /**
  * Writes property values (falling back to their defaults) into a shader.
  * Texture properties may name a built-in texture (white, black, gray,
- * normal) or a texture asset id; asset textures are returned so the caller
- * can load them, and get a white placeholder until then. `fallback`
+ * normal, data) or a texture asset id; asset textures are returned, with
+ * how to read them, so the caller can load them, and get a white (or flat
+ * normal) placeholder until then. `fallback`
  * supplies textures for texture properties without a value (the model's
  * own maps, see MODEL_MAPS).
  */
@@ -522,9 +564,9 @@ export function applyProps(
     values: Record<string, ParamValue>,
     ctx?: any,
     fallback?: (name: string) => Texture | null | undefined,
-): { name: string; asset: string }[] {
+): { name: string; asset: string; role: TextureRole }[] {
     const res = Engine3D.resFor(ctx);
-    const assets: { name: string; asset: string }[] = [];
+    const assets: { name: string; asset: string; role: TextureRole }[] = [];
     for (const p of props) {
         const own = values[p.name];
         if (p.type === 'texture' && (own === undefined || own === '') && fallback) {
@@ -549,8 +591,9 @@ export function applyProps(
             else if (which === 'gray') shader.setTexture(p.name, res.grayTexture);
             else if (which === 'normal') shader.setTexture(p.name, res.normalTexture);
             else {
-                if (!shader.getTexture(p.name)) shader.setTexture(p.name, res.whiteTexture);
-                if (which !== 'white') assets.push({ name: p.name, asset: which });
+                const role = textureRoleOf(p.default);
+                if (!shader.getTexture(p.name)) shader.setTexture(p.name, role === 'normal' ? res.normalTexture : res.whiteTexture);
+                if (which !== 'white' && which !== 'data') assets.push({ name: p.name, asset: which, role });
             }
         }
     }
@@ -594,7 +637,7 @@ export class EditorPost extends PostBase {
     }
 
     /** Called with the texture assets the current values need (none when no param names one); see applyProps. */
-    onTextures: (assets: { name: string; asset: string }[]) => void = () => {};
+    onTextures: (assets: { name: string; asset: string; role: TextureRole }[]) => void = () => {};
 
     setValues(values: Record<string, ParamValue>) {
         this.values = { ...values };

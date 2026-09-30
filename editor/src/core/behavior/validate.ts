@@ -52,8 +52,13 @@ export function questionFormat(key: BlackboardKeyDoc, choices: string): { format
     return { error: `"${key.name}" is a ${key.type} key; Ask writes probability keys (Noul) and enum keys (Choice).` };
 }
 
+/** Conditions or a cooldown can keep the node from running. */
+const gated = (n: BtNodeDoc) => !!n.decorators?.some((d) => d.type === 'condition' || d.type === 'cooldown');
+
 /** False when the node never fails (so later branches of a Selector are never reached). */
 function canFail(n: BtNodeDoc): boolean {
+    const force = n.decorators?.find((d) => d.type === 'force');
+    if (force) return force.result === 'failure';
     if (n.decorators?.length) return true;
     switch (n.type) {
         case 'wait':
@@ -61,13 +66,23 @@ function canFail(n: BtNodeDoc): boolean {
             return false;
         case 'script':
         case 'move_to':
+        case 'look_at':
+        case 'wander':
+        case 'flee':
+        case 'find':
+        case 'play_sound':
+        case 'play_animation':
         case 'ask':
         case 'infer':
             return true;
         case 'selector':
+        case 'random':
             return n.children.length === 0 || n.children.every(canFail);
         case 'sequence':
             return n.children.some(canFail);
+        case 'parallel':
+            if (n.policy === 'first') return !!n.children[0] && canFail(n.children[0]);
+            return n.policy === 'one' ? n.children.length === 0 || n.children.every(canFail) : n.children.some(canFail);
     }
 }
 
@@ -303,16 +318,16 @@ export function validateTree(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc
             checkInfer(ctx, node);
         }
         if (isCompositeDoc(node)) {
-            if (!node.children.length) push(ctx, 'warning', 'empty', `This ${def.label} has no children; it always ${node.type === 'selector' ? 'fails' : 'succeeds'}.`, { node: node.id });
+            if (!node.children.length) push(ctx, 'warning', 'empty', `This ${def.label} has no children; it always ${canFail(node) ? 'fails' : 'succeeds'}.`, { node: node.id });
             if (node.type === 'selector') {
-                const stop = node.children.findIndex((c) => !c.decorators?.length && !canFail(c));
+                const stop = node.children.findIndex((c) => !gated(c) && !canFail(c));
                 if (stop >= 0) {
                     for (const c of node.children.slice(stop + 1)) {
                         push(ctx, 'warning', 'unreachable', `Never reached: the earlier branch "${node.children[stop].id}" has no condition and never fails.`, { node: c.id });
                     }
                 }
                 const last = node.children[node.children.length - 1];
-                if (last && last.decorators?.length) push(ctx, 'warning', 'no-default', `No default branch: the last child "${last.id}" has a condition, so the Selector fails when nothing matches. End it with a branch without conditions.`, { node: node.id });
+                if (last && gated(last)) push(ctx, 'warning', 'no-default', `No default branch: the last child "${last.id}" has a condition, so the Selector fails when nothing matches. End it with a branch without conditions.`, { node: node.id });
             }
         }
     });

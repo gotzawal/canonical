@@ -41,4 +41,9 @@ export type SSRSetting = {
      * SSR color mixing parameter: If the position difference between the current frame and the previous frame exceeds the mixThreshold at a certain pixel position, the current frame will be quickly retained to have more.
      */
     mixThreshold: number;
+    /**
+     * Square root of the share of the reflection a perfectly smooth surface
+     * shows (0.5 when missing: a quarter; 1: all of it).
+     */
+    reflectionRatio?: number;
 };

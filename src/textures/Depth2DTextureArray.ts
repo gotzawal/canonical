@@ -9,6 +9,9 @@ import { Context3D } from '../gfx/graphics/webGpu/Context3D';
  */
 export class Depth2DTextureArray extends Texture implements ITexture {
 
+    /** One render view per layer, made on first use for the current GPU texture. */
+    private _layerViews: GPUTextureView[] = [];
+
     /**
      * @constructor
      * @width texture width (pixel)
@@ -45,7 +48,9 @@ export class Depth2DTextureArray extends Texture implements ITexture {
             format: this.format,
             size: { width: this.width, height: this.height, depthOrArrayLayers: this.numberLayer },
             dimension: '2d',
-            usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+            // Shadow passes draw straight into a layer (getLayerView).
+            usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+            label: 'shadowMapArray',
         }
         this.gpuTexture = this.getGPUTexture();
     }
@@ -76,6 +81,34 @@ export class Depth2DTextureArray extends Texture implements ITexture {
             magFilter: 'linear',
             label: "sampler_comparison"
         });
+    }
+
+    /** A view of one layer, to render that layer's shadow into. */
+    public getLayerView(layer: number): GPUTextureView {
+        let view = this._layerViews[layer];
+        if (!view) {
+            view = (this.getGPUTexture() as GPUTexture).createView({ dimension: '2d', baseArrayLayer: layer, arrayLayerCount: 1, label: `shadowMapArray layer ${layer}` });
+            this._layerViews[layer] = view;
+        }
+        return view;
+    }
+
+    /**
+     * Makes the array this size with this many layers (its contents are
+     * lost); the pipelines that sample it take the new texture.
+     */
+    public resize(width: number, height: number, layers: number): void {
+        if (width === this.width && height === this.height && layers === this.numberLayer) return;
+        this.width = width;
+        this.height = height;
+        this.numberLayer = layers;
+        this._layerViews = [];
+        this.updateGPUTexture();
+        this.internalCreateTexture();
+        this.internalCreateView();
+        this.noticeChange();
+        // noticeChange drops the samplers; these are the ones a depth array takes.
+        this.internalCreateSampler();
     }
 
 }

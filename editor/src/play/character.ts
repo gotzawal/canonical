@@ -40,10 +40,26 @@ interface Goal {
     target: Object3D | Vec3;
     radius: number;
     run: boolean;
+    /** Straight at the target, without the planner. */
+    straight: boolean;
+    /** Corners still to pass on the planned way (the target comes after them). */
+    path: Vec3[];
+    /** Where the target was when the way was planned (null: not planned yet), and when. */
+    plannedTo: Vec3 | null;
+    plannedAt: number;
     best: number;
     since: number;
     done(arrived: boolean): void;
 }
+
+/** Plans a walk around walls: corner points from `from` to `to`, or null when there is no way. */
+export type Planner = (from: Vec3, to: Vec3) => Vec3[] | null;
+
+/** A corner this close counts as passed. */
+const CORNER = 0.3;
+/** The way is planned again when the target moved this far, at most every REPLAN seconds. */
+const MOVED = 1;
+const REPLAN = 0.5;
 
 /** From angle a to angle b, degrees in -180..180. */
 const turn = (a: number, b: number) => ((((b - a) % 360) + 540) % 360) - 180;
@@ -72,6 +88,8 @@ export class Character extends Emitter<CharacterEvents> {
     private goal: Goal | null = null;
     private clock = 0;
     private start: Vec3;
+    /** Plans walks to targets around walls (the level's navigation mesh, once Play has one); null walks straight. */
+    planner: Planner | null = null;
 
     /** `bottom`: the lowest point of the object's meshes (null without meshes: its origin is the feet). */
     constructor(readonly obj: Object3D, readonly doc: CharacterDoc, cast: CastFn, bottom: number | null) {
@@ -117,17 +135,23 @@ export class Character extends Emitter<CharacterEvents> {
     }
 
     /**
-     * Walks to an object (following it) or a point until within `radius`,
-     * straight at it: walls make it slide along or stop. Resolves true on
+     * Walks to an object (following it) or a point until within `radius`:
+     * around walls on the navigation mesh's way when there is one (planned
+     * again as the target moves), else straight at it (`straight: true`
+     * always), walls making it slide along or stop. Resolves true on
      * arrival, false when it got stuck, was stopped or got another target.
      */
-    moveTo(target: Object3D | Vec3, opts: { radius?: number; run?: boolean; signal?: AbortSignal } = {}): Promise<boolean> {
+    moveTo(target: Object3D | Vec3, opts: { radius?: number; run?: boolean; signal?: AbortSignal; straight?: boolean } = {}): Promise<boolean> {
         this.stop();
         return new Promise((resolve) => {
             const goal: Goal = {
                 target,
                 radius: Math.max(0.05, opts.radius ?? 1),
                 run: !!opts.run,
+                straight: !!opts.straight,
+                path: [],
+                plannedTo: null,
+                plannedAt: -Infinity,
                 best: Infinity,
                 since: this.clock,
                 done: (arrived) => {
@@ -176,13 +200,31 @@ export class Character extends Emitter<CharacterEvents> {
                 const w = g.target.transform.worldPosition;
                 to = [w.x, w.y, w.z];
             }
-            const dx = to[0] - feet[0];
-            const dz = to[2] - feet[2];
+            // The way around walls: planned at the start, again when the target moved away from where it leads.
+            const planner = g.straight ? null : this.planner;
+            if (planner && (g.plannedTo === null || (Math.hypot(to[0] - g.plannedTo[0], to[1] - g.plannedTo[1], to[2] - g.plannedTo[2]) > MOVED && this.clock - g.plannedAt > REPLAN))) {
+                const corners = planner([feet[0], feet[1], feet[2]], to);
+                g.plannedTo = to;
+                g.plannedAt = this.clock;
+                // The last corners at the target are the target itself; without a way it walks straight (and gets stuck).
+                g.path = (corners ?? []).filter((c) => Math.hypot(c[0] - to[0], c[2] - to[2]) > g.radius);
+                g.best = Infinity;
+                g.since = this.clock;
+            }
+            while (g.path.length && Math.hypot(g.path[0][0] - feet[0], g.path[0][2] - feet[2]) < CORNER) {
+                g.path.shift();
+                g.best = Infinity;
+                g.since = this.clock;
+            }
+            const aim = g.path[0] ?? to;
+            const dx = aim[0] - feet[0];
+            const dz = aim[2] - feet[2];
             const dist = Math.hypot(dx, dz);
-            if (dist <= g.radius) g.done(true);
-            else {
+            if (!g.path.length && dist <= g.radius) g.done(true);
+            else if (dist > 1e-6) {
                 this.move(dx / dist, dz / dist);
                 run ||= g.run;
+                // Getting closer to the next corner (or the target) is progress.
                 if (dist < g.best - 0.1) {
                     g.best = dist;
                     g.since = this.clock;

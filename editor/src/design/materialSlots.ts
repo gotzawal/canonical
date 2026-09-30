@@ -6,10 +6,10 @@
 
 import { uid } from '../core/ids';
 import { makeMaterialSlot } from '../core/design';
-import { OLD_TRIPLANAR_MARKER, TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
+import { OLD_TRIPLANAR_CODES, OLD_TRIPLANAR_MARKER, TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
 import type { ChangeHint, Store } from '../core/store';
-import type { MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
-import { getSwatch, swatchAsset } from './swatches';
+import type { AssetMeta, MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
+import { getSwatch, swatchAsset, swatchSide, type SwatchMap } from './swatches';
 
 export const TRIPLANAR_NAME = 'Triplanar.wgsl';
 
@@ -20,20 +20,38 @@ export function findTriplanar(doc: SceneDoc): ShaderDoc | undefined {
     return doc.shaders.find((s) => s.kind === 'material' && marked(s.code)) ?? doc.shaders.find((s) => s.name === TRIPLANAR_NAME && s.kind === 'material');
 }
 
-/** The triplanar shader's id, adding the shader to the project when missing (inside a commit). */
+/**
+ * The triplanar shader's id, adding the shader to the project when missing
+ * (inside a commit). A project's copy of an earlier version, unchanged,
+ * becomes the current one (normal and ARM maps, fewer texture reads).
+ */
 export function ensureTriplanar(doc: SceneDoc): string {
     const found = findTriplanar(doc);
-    if (found) return found.id;
+    if (found) {
+        if (found.code !== TRIPLANAR_CODE && OLD_TRIPLANAR_CODES.includes(found.code)) found.code = TRIPLANAR_CODE;
+        return found.id;
+    }
     const shader: ShaderDoc = { id: uid('sh'), name: TRIPLANAR_NAME, kind: 'material', lighting: 'lit', code: TRIPLANAR_CODE };
     doc.shaders.push(shader);
     return shader.id;
 }
 
-/** Rewrites a material to show its slot. */
+/**
+ * Rewrites a material to show its slot: the triplanar shader with the
+ * slot's swatch and maps, or, for a slot without a swatch (empty, or a
+ * plain color), the plain lit material, which reads no texture.
+ */
 export function applySlot(m: MaterialDoc, slot: MaterialSlotDoc, shaderId: string) {
-    m.type = 'shader';
-    m.shader = shaderId;
-    m.params = { ...(m.params ?? {}), albedo: slot.swatch ?? 'white', tile: slot.tile };
+    if (!slot.swatch) {
+        m.type = 'lit';
+        m.shader = null;
+        delete m.params;
+    } else {
+        m.type = 'shader';
+        m.shader = shaderId;
+        const maps = (slot.normal ? 1 : 0) + (slot.arm ? 2 : 0);
+        m.params = { ...(m.params ?? {}), albedo: slot.swatch, normalTex: slot.normal ?? 'normal', armTex: slot.arm ?? 'data', tile: slot.tile, maps };
+    }
     m.color = slot.color;
     m.roughness = slot.roughness;
     m.metallic = slot.metallic;
@@ -195,30 +213,51 @@ function rootOf(doc: SceneDoc, n: NodeDoc): NodeDoc | undefined {
 }
 
 /**
- * Puts a library swatch on a slot: the swatch is copied into the project as
- * a texture (once) and the slot takes its tile size (the texture's real
- * size), roughness and metallic where it has them, and white as its color.
+ * Puts a library swatch on a slot: the swatch's maps (albedo, and normal
+ * and ARM where it has them) are copied into the project as textures
+ * (once), sized for the surface from the first: they compress to its tile
+ * times the design's texel density (Specs.texelDensity), no larger than
+ * they are. The slot takes the tile size (the texture's real size),
+ * roughness and metallic where the swatch has them (with an ARM map they
+ * are factors: 1), and white as its color. Returns the slot and the
+ * textures copied in (to compress).
  */
-export async function useSwatch(store: Store, slotId: string, swatchId: string): Promise<MaterialSlotDoc> {
+export async function useSwatch(store: Store, slotId: string, swatchId: string): Promise<MaterialSlotDoc & { added: string[] }> {
     const rec = await getSwatch(swatchId);
     if (!rec) throw new Error('That swatch is not in the library of this browser.');
-    const { meta, added } = await swatchAsset(store, rec);
+    const side = swatchSide(rec.tile, store.doc.design.specs.texelDensity);
+    const compress = side < rec.size ? { maxSize: side } : undefined;
+    const maps: Partial<Record<SwatchMap, { meta: AssetMeta; added: boolean }>> = {};
+    for (const map of ['albedo', 'normal', 'arm'] as const) {
+        const got = await swatchAsset(store, rec, map, compress);
+        if (got) maps[map] = got;
+    }
+    const albedo = maps.albedo!;
     const hint = slotChangeHint(store, slotId);
     store.commit('Use Swatch', (d) => {
-        if (added && !d.assets.some((a) => a.id === meta.id)) d.assets.push(meta);
+        for (const m of Object.values(maps)) if (m.added && !d.assets.some((a) => a.id === m.meta.id)) d.assets.push(m.meta);
         const slot = d.design.materials.find((s) => s.id === slotId);
         if (!slot) return;
-        slot.swatch = meta.id;
+        slot.swatch = albedo.meta.id;
+        if (maps.normal) slot.normal = maps.normal.meta.id;
+        else delete slot.normal;
+        if (maps.arm) slot.arm = maps.arm.meta.id;
+        else delete slot.arm;
         slot.color = '#ffffff';
         slot.tile = rec.tile;
-        if (rec.roughness !== undefined) slot.roughness = rec.roughness;
-        if (rec.metallic !== undefined) slot.metallic = rec.metallic;
+        if (maps.arm) {
+            slot.roughness = 1;
+            slot.metallic = 1;
+        } else {
+            if (rec.roughness !== undefined) slot.roughness = rec.roughness;
+            if (rec.metallic !== undefined) slot.metallic = rec.metallic;
+        }
         delete slot.flat;
         syncSlots(d, slotId);
     }, hint);
     const slot = store.doc.design.materials.find((s) => s.id === slotId);
     if (!slot) throw new Error('No such material slot.');
-    return slot;
+    return { ...slot, added: Object.values(maps).filter((m) => m.added).map((m) => m.meta.id) };
 }
 
 /** A surface to look at in the reference room (viewport/referenceRoom.ts). */

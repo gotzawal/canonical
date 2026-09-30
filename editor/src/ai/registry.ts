@@ -5,7 +5,7 @@
 // toolUtil.ts): its name, arguments, groups, needs and handler.
 
 import { detailLevel } from '../core/design';
-import { stageDef } from '../design/stages';
+import { stageDef, type ToolGroup } from '../design/stages';
 import { behaviorTools } from './behaviorTools';
 import { codeTools } from './codeTools';
 import { designTools } from './designTools';
@@ -13,13 +13,22 @@ import { effectTools } from './effectTools';
 import { greyboxTools } from './greyboxTools';
 import { imageTools } from './imageTools';
 import { levelTools } from './levelTools';
+import { libraryTools } from './libraryTools';
 import { materialTools } from './materialTools';
+import { reviewTools } from './reviewTools';
 import type { ToolDef } from '../openrouter/client';
 import { sceneTools } from './sceneTools';
 import { allowedGroups, definition, ToolError, type Json, type Tool, type ToolEnv, type ToolResult } from './toolUtil';
 
-export const TOOLS: Tool[] = [...sceneTools, ...codeTools, ...designTools, ...greyboxTools, ...imageTools, ...materialTools, ...effectTools, ...behaviorTools, ...levelTools];
+export const TOOLS: Tool[] = [
+    ...sceneTools, ...codeTools, ...designTools, ...greyboxTools, ...imageTools, ...materialTools, ...effectTools, ...behaviorTools, ...levelTools, ...libraryTools, ...reviewTools,
+];
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
+
+/** What a tool works on, for the usage statistics: its first group (null for an unknown tool). */
+export function toolWork(name: string): ToolGroup | null {
+    return BY_NAME.get(name)?.groups[0] ?? null;
+}
 
 /** Why a tool is not offered now ('' when it is). */
 function unavailable(env: ToolEnv, t: Tool, allowed = allowedGroups(env)): string {

@@ -4,7 +4,7 @@
 // when nothing fits.
 
 import { contactSheet } from '../core/images';
-import type { MaterialSlotDoc } from '../core/types';
+import type { AssetMeta, MaterialSlotDoc } from '../core/types';
 import { assignSlot, roomSample, slotUsers, upsertSlot, useSwatch, type SlotPatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
 import { generateSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom } from '../design/swatches';
@@ -110,7 +110,7 @@ export const materialTools = tools({
     },
     use_swatch: {
         groups: ['materials'],
-        description: 'Put a library swatch on a material slot. The slot takes the swatch\'s tile size (its real size), roughness and metallic where the swatch has them, and white as its color.',
+        description: 'Put a library swatch on a material slot. The slot takes the swatch\'s maps (albedo, and normal and ARM for realistic ones), its tile size (its real size), roughness and metallic where the swatch has them, and white as its color. The textures are sized for the surface (its tile times the design\'s texel density, specs.texel_density) and compressed.',
         params: {
             slot: { type: 'string', description: 'Slot id or name.' },
             swatch: { type: 'string', description: 'Swatch id from search_swatches.' },
@@ -122,6 +122,7 @@ export const materialTools = tools({
             const updated = await useSwatch(ed.store, slot.id, id).catch((e) => {
                 throw new ToolError(e?.message || String(e));
             });
+            for (const asset of updated.added) ed.compressImported(asset);
             return { data: slotSummary(env, updated), summary: `${updated.name}` };
         },
     },
@@ -168,7 +169,7 @@ export const materialTools = tools({
     },
 });
 
-function findSlot(env: ToolEnv, ref: unknown): MaterialSlotDoc {
+export function findSlot(env: ToolEnv, ref: unknown): MaterialSlotDoc {
     const slots = env.editor.store.doc.design.materials;
     const r = typeof ref === 'string' ? ref.trim() : '';
     const slot = slots.find((s) => s.id === r) ?? slots.find((s) => s.name.toLowerCase() === r.toLowerCase());
@@ -176,7 +177,7 @@ function findSlot(env: ToolEnv, ref: unknown): MaterialSlotDoc {
     return slot;
 }
 
-function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
+export function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
     const doc = env.editor.store.doc;
     const meta = s.swatch ? doc.assets.find((a) => a.id === s.swatch) : undefined;
     return {
@@ -187,7 +188,18 @@ function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
         roughness: r3(s.roughness),
         metallic: r3(s.metallic),
         tile: r3(s.tile),
+        ...(s.normal || s.arm ? { maps: [s.normal ? 'normal' : '', s.arm ? 'arm' : ''].filter(Boolean) } : {}),
+        ...(s.arm ? { note: 'Its ARM map gives roughness and metallic per pixel, times these values (1: as scanned).' } : {}),
+        ...(meta ? { texture: textureShip(meta) } : {}),
         ...(s.flat ? { flat: true } : {}),
         objects: slotUsers(doc, s.id).length,
     };
+}
+
+/** How a texture ships: its size, and the size and codec it compresses to (or that it is not compressed). */
+function textureShip(meta: AssetMeta) {
+    const side = Math.max(meta.width ?? 0, meta.height ?? 0);
+    const c = meta.compress;
+    if (c?.mode === 'off') return { pixels: side, compressed: false };
+    return { pixels: side, compressed_to: Math.min(side || Infinity, c?.maxSize || 2048), ...(meta.packed ? { packed: true } : {}) };
 }

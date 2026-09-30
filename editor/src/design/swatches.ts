@@ -14,7 +14,7 @@ import { tx } from '../core/db';
 import { uid } from '../core/ids';
 import { assetImageDataUrl, canvas, canvasBlob } from '../core/images';
 import type { Store } from '../core/store';
-import type { AssetMeta, MaterialSlotDoc, ParamValue } from '../core/types';
+import type { AssetMeta, MaterialSlotDoc, ParamValue, TextureCompression } from '../core/types';
 import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
 import { drawParams, REFERENCE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
 import type { UsageTask } from '../ai/usage';
@@ -24,8 +24,12 @@ export interface SwatchRecord {
     id: string;
     name: string;
     tags: string[];
-    /** Square WebP (or PNG where WebP cannot be written). */
+    /** Square albedo: WebP (or PNG where WebP cannot be written), or a Library material's JPEG. */
     blob: Blob;
+    /** Normal map (OpenGL convention) of the same size, when the swatch has one (a Library material). */
+    normal?: Blob;
+    /** Occlusion, roughness and metallic in R, G and B, when the swatch has them. */
+    arm?: Blob;
     /** Pixels per side. */
     size: number;
     /** Mean color, #rrggbb. */
@@ -34,7 +38,11 @@ export interface SwatchRecord {
     tile: number;
     roughness?: number;
     metallic?: number;
-    source: 'generated' | 'upload';
+    source: 'generated' | 'upload' | 'library';
+    /** The Library item it came from (source 'library'). */
+    library?: string;
+    /** Who made it (a Library material's authors). */
+    author?: string;
     model?: string;
     prompt?: string;
     seed?: number | null;
@@ -323,6 +331,56 @@ export async function importSwatches(files: File[], meta: { tags?: string[]; til
     return out;
 }
 
+/** A Library material, as the swatch it becomes (see core/library.ts). */
+export interface LibraryMaterial {
+    id: string;
+    name: string;
+    tags: string[];
+    url: string;
+    mapUrls?: { normal?: string; arm?: string };
+    tile?: number;
+    pixels?: [number, number];
+    author?: string;
+}
+
+/**
+ * The swatch of a Library material: its color, normal and ARM maps as they
+ * are (made tileable and flat already), its real tile size. Added to the
+ * swatch library once; later calls find it there.
+ */
+export async function librarySwatch(item: LibraryMaterial, fetchBlob: (url: string) => Promise<Blob>): Promise<{ rec: SwatchRecord; added: boolean }> {
+    const found = (await listSwatches()).find((s) => s.library === item.id);
+    if (found) return { rec: found, added: false };
+    const [blob, normal, arm] = await Promise.all([
+        fetchBlob(item.url),
+        item.mapUrls?.normal ? fetchBlob(item.mapUrls.normal) : Promise.resolve(undefined),
+        item.mapUrls?.arm ? fetchBlob(item.mapUrls.arm) : Promise.resolve(undefined),
+    ]);
+    const bmp = await createImageBitmap(blob);
+    const c = canvas(64, 64);
+    const g = c.getContext('2d', { willReadFrequently: true })!;
+    g.drawImage(bmp, 0, 0, 64, 64);
+    const size = item.pixels?.[0] ?? bmp.width;
+    bmp.close();
+    const rec: SwatchRecord = {
+        id: uid('sw'),
+        name: item.name,
+        tags: normalizeTags([...item.tags, ...tagsFrom(item.name)]),
+        blob,
+        ...(normal ? { normal } : {}),
+        ...(arm ? { arm } : {}),
+        size,
+        color: meanColor(g.getImageData(0, 0, 64, 64)),
+        tile: item.tile ?? 2,
+        source: 'library',
+        library: item.id,
+        ...(item.author ? { author: item.author } : {}),
+        created: new Date().toISOString(),
+    };
+    await putSwatch(rec);
+    return { rec, added: true };
+}
+
 /** The instruction for a swatch of a slot. */
 export function swatchPrompt(slot: Pick<MaterialSlotDoc, 'name' | 'description' | 'tile'>, withRefs: boolean): string {
     const what = [slot.name, slot.description].filter((s) => s && s.trim()).join(': ');
@@ -407,26 +465,49 @@ export async function generateSwatches(
     return { swatches, cost: res.cost, errors: res.errors, dropped: [...checked.dropped, ...(refs.length < gen.refs.length ? ['references (the model takes no images)'] : [])] };
 }
 
-/** File name of a swatch copied into a project: it carries the swatch's id (see swatchIdOf). */
-function assetName(rec: SwatchRecord): string {
+export type SwatchMap = 'albedo' | 'normal' | 'arm';
+
+const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
+
+/** File name of a swatch's map copied into a project: it carries the swatch's id and the map (see swatchMapOf). */
+function assetName(rec: SwatchRecord, map: SwatchMap, blob: Blob): string {
     const stem = rec.name.normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'swatch';
-    return `${stem}.${rec.id}.${rec.blob.type === 'image/png' ? 'png' : 'webp'}`;
+    return `${stem}.${rec.id}${map === 'albedo' ? '' : '.' + map}.${EXT[blob.type] ?? 'webp'}`;
 }
 
 /**
- * The project's texture asset of a library swatch, copied in (inside no
- * commit; the caller commits the meta) when missing. The same swatch is
- * copied once, also after it was renamed in the library.
+ * The project's texture asset of a map of a library swatch, copied in
+ * (inside no commit; the caller commits the meta) when missing, with the
+ * compression given. The same swatch is copied once, also after it was
+ * renamed in the library.
  */
-export async function swatchAsset(store: Store, rec: SwatchRecord): Promise<{ meta: AssetMeta; added: boolean }> {
-    const existing = store.doc.assets.find((a) => a.kind === 'texture' && swatchIdOf(a) === rec.id);
+export async function swatchAsset(store: Store, rec: SwatchRecord, map: SwatchMap = 'albedo', compress?: TextureCompression): Promise<{ meta: AssetMeta; added: boolean } | null> {
+    const blob = map === 'albedo' ? rec.blob : rec[map];
+    if (!blob) return null;
+    const existing = store.doc.assets.find((a) => a.kind === 'texture' && swatchMapOf(a)?.id === rec.id && swatchMapOf(a)?.map === map);
     if (existing) return { meta: existing, added: false };
-    const meta = await putAsset(rec.blob, assetName(rec), 'texture', undefined, { width: rec.size, height: rec.size });
+    const meta = await putAsset(blob, assetName(rec, map, blob), 'texture', undefined, { width: rec.size, height: rec.size });
+    if (compress && Object.keys(compress).length) meta.compress = compress;
     return { meta, added: true };
+}
+
+/** The library swatch (and which of its maps) a project texture was copied from, if any; also after it was compressed (.ktx2). */
+export function swatchMapOf(meta: AssetMeta | undefined): { id: string; map: SwatchMap } | null {
+    const m = meta ? /\.(sw_[a-z0-9]+)(?:\.(normal|arm))?\.(webp|png|jpe?g|ktx2)$/i.exec(meta.name) : null;
+    return m ? { id: m[1], map: (m[2]?.toLowerCase() as SwatchMap | undefined) ?? 'albedo' } : null;
 }
 
 /** The library swatch a project texture was copied from, if any. */
 export function swatchIdOf(meta: AssetMeta | undefined): string | null {
-    const m = meta ? /\.(sw_[a-z0-9]+)\.(webp|png)$/i.exec(meta.name) : null;
-    return m ? m[1] : null;
+    return swatchMapOf(meta)?.id ?? null;
+}
+
+/**
+ * The texture size a tiling surface needs, pixels a side: its tile in
+ * meters times the texel density (pixels per meter where the camera comes
+ * closest), to the nearest power of two from 128 to 2048.
+ */
+export function swatchSide(tile: number, density: number): number {
+    const want = Math.max(1, tile * density);
+    return Math.min(2048, Math.max(128, 2 ** Math.round(Math.log2(want))));
 }

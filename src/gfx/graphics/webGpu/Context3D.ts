@@ -167,6 +167,8 @@ export class Context3D extends CEventDispatcher {
             'texture-compression-bc',
             'texture-compression-etc2',
             'texture-compression-astc',
+            // GPU time per pass for profilers (gpuStats in the editor).
+            'timestamp-query',
         ];
         this.device = await this.adapter.requestDevice({
             requiredFeatures: wanted.filter((f) => this.adapter.features.has(f)),

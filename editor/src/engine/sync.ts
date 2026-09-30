@@ -1,22 +1,28 @@
 import {
-    BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, isKTX2, LightBase, LitMaterial, Material, MeshRenderer,
-    Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer, SkinnedMeshRenderer2,
-    SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
+    BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, InstanceDrawComponent, isKTX2, LightBase, LitMaterial, Material,
+    MeshRenderer, MirrorComponent, MirrorMaterial, Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer,
+    SkinnedMeshRenderer2, SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
-import type { AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole } from '../core/types';
+import type {
+    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TextureRole,
+} from '../core/types';
 import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { castGI } from './gi';
+import { setLightShadow } from './shadows';
+import { QUALITY } from '../core/quality';
+import { movesInPlay } from '../core/motion';
+import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, plainBlades } from './grass';
 import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
     applyAlpha, applyPBR, applyUVTransform, BASE_MAP, createBuiltinMaterial, engineAlpha, MaterialMaps, normalizeModelMaterials, PBR_MAPS,
 } from './materials';
-import { inspectModel, ModelInfo, ModelOverrides } from './modelParts';
+import { cloneMaterial, inspectModel, ModelInfo, ModelOverrides } from './modelParts';
 import type { Runtime } from './runtime';
 import { applyProps, type ShaderManager } from './shaders';
 
@@ -33,6 +39,10 @@ interface ModelState {
     key: string;
     /** The clip the editor last played. */
     clip?: string;
+    /** The instancing group whose copy of the file's materials it shows ('' for the file's own). */
+    group: string;
+    /** Lets go of the group's copy it was made from. */
+    release?: () => void;
 }
 
 /** Engine-side state of one document node. */
@@ -61,6 +71,17 @@ export interface Entry {
     particlesKey: string;
     /** Increases with every rebuild, so a late texture load does not build an outdated emitter. */
     particlesToken: number;
+    /** The planar mirror of its mesh. */
+    mirror: MirrorComponent | null;
+    /** Its field of grass (a renderer at the scene root), and the blades and width it was made with. */
+    grass: GrassField | null;
+    grassBuild: string;
+    /** What its blades were last placed for (see placeGrass). */
+    grassPlaced: string;
+    /** Draws the meshes of its instancing group, when it has instancing. */
+    instancer: InstanceDrawComponent | null;
+    /** The instancing group its meshes are drawn in: the nearest object with instancing, itself included; '' for none. */
+    group: string;
 }
 
 /** An engine material and the objects showing it (see SceneSync.materials). */
@@ -73,6 +94,15 @@ interface SharedMaterial {
     paramAssets: Record<string, string>;
     /** Objects showing it. */
     users: number;
+    /** The instancing group it is compiled for ('' for none): its passes draw that group's instances. */
+    group: string;
+}
+
+/** A renderer an instancing group draws, and whose it is (a model's part by its path). */
+interface GroupMember {
+    r: MeshRenderer;
+    id: string;
+    path?: string;
 }
 
 interface SyncEvents {
@@ -147,6 +177,21 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     private materials = new Map<string, SharedMaterial>();
     private materialsChanged = false;
+    /**
+     * An imported model in an instancing group shows a copy of its file's
+     * materials made for the group (by `${group}|${asset}`): the group's
+     * instances share it and draw together, and nothing else does, as the
+     * materials an instancer draws are compiled for it.
+     */
+    private groupPrefabs = new Map<string, { prefab: Promise<Object3D>; users: number }>();
+    /** Instancing groups whose members changed, grouped again at the end of the change (flushGroups). */
+    private dirtyGroups = new Set<string>();
+    /** The renderers each instancing group draws, and the objects (and model parts) they belong to. */
+    private groupMembers = new Map<string, GroupMember[]>();
+    /** Renderers an instancer draws: disabled, but shown. */
+    private instanced = new Set<RenderNode>();
+    /** The built-in gusts of grass fields, made once. */
+    private gusts: Texture | null = null;
 
     /** Textures load at most this large (the longer side): games on a low quality tier skip the top mips. */
     private readonly textureMaxSize: number;
@@ -154,6 +199,11 @@ export class SceneSync extends Emitter<SyncEvents> {
     constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null, opts: { textureMaxSize?: number } = {}) {
         super();
         this.textureMaxSize = opts.textureMaxSize ?? Infinity;
+        // The HDRI sky's image comes from the project's assets.
+        runtime.assetUrl = async (id) => {
+            const meta = this.store.doc.assets.find((a) => a.id === id);
+            return meta ? getAssetUrl(meta) : null;
+        };
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
@@ -170,18 +220,29 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (hint?.env && !hint.nodes) return;
 
         if (hint?.nodes) {
+            // Instancing turned on or off moves everything below into another group: all of it is applied again.
+            if (!hint.transform && hint.nodes.some((id) => !!this.store.node(id)?.instancing !== !!this.entries.get(id)?.instancer)) {
+                this.sync();
+                return;
+            }
             // Only these objects changed; moving them (a gizmo drag) shows or hides nothing.
             for (const id of hint.nodes) {
                 const node = this.store.node(id);
                 const entry = this.entries.get(id);
                 if (!node || !entry) continue;
                 if (hint.transform) this.applyTransform(entry, node);
-                else this.apply(node);
+                else {
+                    this.apply(node);
+                    if (entry.group) this.dirtyGroups.add(entry.group);
+                }
             }
             if (!hint.transform) {
                 this.updateVisibility(hint.nodes);
                 this.sweep();
             }
+            this.placeGrass(hint.nodes);
+            this.flushGroups();
+            if (!hint.transform) this.shadowsChanged();
             return;
         }
         const alive = new Set<string>();
@@ -195,9 +256,35 @@ export class SceneSync extends Emitter<SyncEvents> {
         for (const [id, entry] of Array.from(this.entries)) {
             if (!alive.has(id)) this.destroy(entry);
         }
+        this.assignGroups();
         for (const node of doc.nodes) this.apply(node);
         this.updateVisibility();
+        for (const e of this.entries.values()) if (e.instancer) this.dirtyGroups.add(e.id);
+        this.placeGrass();
+        this.flushGroups();
         this.sweep();
+        this.shadowsChanged();
+    }
+
+    /**
+     * After an edit that is not only a move: marks which renderers stand
+     * still in Play (a light whose shadow redraws for static objects only
+     * draws those), and draws the shadow maps again, as a material may cut
+     * out something else now (moves the shadow passes see themselves).
+     */
+    private shadowsChanged() {
+        const canMove = movesInPlay(this.store.doc);
+        for (const [id, entry] of this.entries) {
+            const mode = canMove(id) ? 'auto' : 'static';
+            for (const r of this.renderersOf(id)) r.shadowCacheMode = mode;
+            if (entry.grass) entry.grass.renderer.shadowCacheMode = mode;
+            // Its copies move without it: a copy that can move makes it change every frame it moves.
+            if (entry.instancer) {
+                const members = this.groupMembers.get(id) ?? [];
+                entry.instancer.shadowCacheMode = canMove(id) || members.some((m) => canMove(m.id)) ? 'dynamic' : 'static';
+            }
+        }
+        this.runtime.redrawShadows();
     }
 
     /** Frees the shapes and materials no object shows any more. */
@@ -237,6 +324,9 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     rebuild() {
         for (const entry of Array.from(this.entries.values())) this.destroy(entry);
+        this.groupMembers.clear();
+        this.instanced.clear();
+        this.dirtyGroups.clear();
         // Scripts had engine access to the shared shapes too: build them again.
         for (const g of this.geometries.values()) {
             Reference.getInstance().detached(g, this.geometries);
@@ -256,6 +346,8 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     reloadAsset(id: string) {
         this.prefabs.delete(id);
+        // Group copies are made again too; the models showing them let go as they reload.
+        for (const key of Array.from(this.groupPrefabs.keys())) if (key.endsWith(`|${id}`)) this.groupPrefabs.delete(key);
         // Textures take the new data in place.
         this.refreshTexture(id);
         for (const entry of Array.from(this.entries.values())) {
@@ -335,6 +427,12 @@ export class SceneSync extends Emitter<SyncEvents> {
             particles: null,
             particlesKey: '',
             particlesToken: 0,
+            mirror: null,
+            grass: null,
+            grassBuild: '',
+            grassPlaced: '',
+            instancer: null,
+            group: '',
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -344,9 +442,23 @@ export class SceneSync extends Emitter<SyncEvents> {
         const entry = this.entries.get(node.id)!;
         if (this.detached.has(node.id)) return;
         if (entry.parent === node.parent && entry.obj.transform.parent) return;
+        // Leaving the scene turns the engine's renderers off for good
+        // (RenderNode.onDisable), and a move takes an object out first.
+        const moved = !!entry.obj.transform.scene3D;
         const parentObj = node.parent ? this.entries.get(node.parent)?.obj : null;
         (parentObj ?? this.runtime.scene).addChild(entry.obj);
         entry.parent = node.parent;
+        if (moved) this.reshow(node.id);
+    }
+
+    /** Turns the renderers of an object and of the objects under it on again as they are shown. */
+    private reshow(id: string) {
+        for (const nid of [id, ...this.store.descendants(id).map((n) => n.id)]) {
+            const e = this.entries.get(nid);
+            if (!e) continue;
+            this.setEnabled(e, e.visible, true);
+            if (e.instancer) e.instancer.enable = true;
+        }
     }
 
     private destroy(entry: Entry) {
@@ -357,7 +469,12 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.model) {
             entry.model.token = -1;
             entry.model.overrides?.dispose();
+            entry.model.release?.();
         }
+        if (entry.group) this.dirtyGroups.add(entry.group);
+        if (entry.instancer) this.dirtyGroups.add(entry.id);
+        entry.grass?.remove((res) => this.disposeLater(res));
+        entry.grass = null;
         entry.obj.removeFromParent();
         entry.obj.destroy();
     }
@@ -374,6 +491,9 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyModel(entry, node.model);
         this.applyAnimation(entry, node.animation);
         this.applyParticles(entry, node.particles);
+        this.applyMirror(entry, node);
+        this.applyGrass(entry, node.grass);
+        this.applyInstancing(entry, node.instancing);
     }
 
     /** Emitters are built again when their settings change (the simulator bakes its particles). */
@@ -484,14 +604,14 @@ export class SceneSync extends Emitter<SyncEvents> {
         const key = this.materialKeyOf(entry, kind, mesh.material);
         if (key !== entry.materialKey || !entry.material) {
             const cur = entry.material;
-            if (cur && cur.users === 1 && cur.kind === kind && !this.materials.has(key) && this.materials.get(cur.key) === cur) {
+            if (cur && cur.users === 1 && cur.kind === kind && cur.group === entry.group && !this.materials.has(key) && this.materials.get(cur.key) === cur) {
                 // Only this object shows it: change it in place (a drag in the inspector).
                 this.materials.delete(cur.key);
                 cur.key = key;
                 this.materials.set(key, cur);
                 this.applyMaterial(cur, mesh.material);
             } else {
-                const next = this.acquireMaterial(key, kind, mesh.material);
+                const next = this.acquireMaterial(key, kind, mesh.material, entry.group);
                 // Vertex shaders that move vertices cannot use the depth prepass,
                 // which draws the undisplaced mesh, and can draw outside the
                 // shape's bounds, so the camera's frustum does not cull them.
@@ -511,7 +631,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 
     private materialKind(entry: Entry, md: MaterialDoc): string {
-        if (md.type !== 'shader') return md.type;
+        // A mirror with a built-in material shows the reflection, tinted by its color.
+        if (md.type !== 'shader') return this.store.node(entry.id)?.mirror ? 'mirror' : md.type;
         const id = md.shader;
         if (id && this.shaders.isValid(id)) return `shader:${id}:${this.shaders.version(id)}`;
         // While a first version compiles, keep the current look, or show a
@@ -522,27 +643,30 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /**
      * The key of an object's material among the shared ones: its kind and
-     * fields (not the slot it is linked to, which looks the same), and for
-     * an object with scripts or a behavior tree, the object itself.
+     * fields (not the slot it is linked to, which looks the same); for an
+     * object with scripts, a behavior tree or a mirror (which binds its
+     * reflection into it), the object itself; and its instancing group,
+     * whose instancer compiles the materials it draws for itself.
      */
     private materialKeyOf(entry: Entry, kind: string, md: MaterialDoc): string {
         const node = this.store.node(entry.id);
-        const own = !!node && (!!node.scripts?.length || !!node.agent);
+        const own = !!node && (!!node.scripts?.length || !!node.agent || !!node.mirror);
         const { slot: _slot, ...look } = md;
-        return `${kind}|${JSON.stringify(look)}${own ? `#${entry.id}` : ''}`;
+        return `${kind}|${JSON.stringify(look)}${own ? `#${entry.id}` : ''}${entry.group ? `@${entry.group}` : ''}`;
     }
 
     /** The shared material of a key, made (and filled in from `md`) when no object shows it yet. */
-    private acquireMaterial(key: string, kind: string, md: MaterialDoc): SharedMaterial {
+    private acquireMaterial(key: string, kind: string, md: MaterialDoc, group: string): SharedMaterial {
         let rec = this.materials.get(key);
         if (!rec) {
             const ctx = this.runtime.engine.context3D;
             let mat: Material | null = kind.startsWith('shader:') ? this.shaders.createMaterial(md.shader!) : null;
             if (!mat) {
                 if (kind === 'shader-missing') mat = errorMaterial(ctx);
+                else if (kind === 'mirror') mat = new MirrorMaterial(ctx);
                 else mat = createBuiltinMaterial(kind === 'unlit' || kind === 'lambert' ? kind : 'lit', ctx);
             }
-            rec = { key, kind, material: mat, maps: new MaterialMaps(mat, ctx, (id, role) => this.loadTexture(id, role)), paramAssets: {}, users: 0 };
+            rec = { key, kind, material: mat, maps: new MaterialMaps(mat, ctx, (id, role) => this.loadTexture(id, role)), paramAssets: {}, users: 0, group };
             Reference.getInstance().attached(mat, this.materials);
             this.materials.set(key, rec);
             this.applyMaterial(rec, md);
@@ -581,6 +705,11 @@ export class SceneSync extends Emitter<SyncEvents> {
         const mat = rec.material;
         const kind = rec.kind;
         if (kind === 'shader-missing') return;
+        if (kind === 'mirror') {
+            mat.baseColor = hexToColor(md.color);
+            mat.doubleSide = !!md.doubleSide;
+            return;
+        }
         const opacity = clamp01(md.opacity);
         mat.baseColor = hexToColor(md.color, opacity);
         if (mat instanceof LitMaterial) {
@@ -592,10 +721,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             sh.setUniformColor('emissiveColor', hexToColor(md.emissive));
             sh.setUniformFloat('emissiveIntensity', Math.max(0, md.emissiveIntensity));
             const assets = applyProps(sh, this.shaders.props(md.shader!), md.params ?? {}, this.runtime.engine.context3D);
-            for (const { name, asset } of assets) {
+            for (const { name, asset, role } of assets) {
                 if (rec.paramAssets[name] === asset) continue;
                 rec.paramAssets[name] = asset;
-                this.loadTexture(asset).then((tex) => {
+                this.loadTexture(asset, role).then((tex) => {
                     if (tex && rec.paramAssets[name] === asset) sh.setTexture(name, tex);
                 });
             }
@@ -632,6 +761,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         l.lightColor = hexToColor(light.color);
         l.intensity = Math.max(0, light.intensity);
         l.castShadow = !!light.castShadow;
+        setLightShadow(l, light.shadow);
         if (l instanceof PointLight || l instanceof SpotLight) {
             l.range = Math.max(0.01, light.range);
             l.radius = Math.max(0, light.radius);
@@ -650,15 +780,17 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
             return;
         }
-        if (entry.model && entry.model.asset === model.asset) {
+        // In an instancing group it shows the group's copy of the file's materials.
+        const group = entry.group;
+        if (entry.model && entry.model.asset === model.asset && entry.model.group === group) {
             this.applyModelOverrides(entry, model);
             return;
         }
         if (entry.model) this.dropModel(entry);
         const token = ++loadToken;
-        const state: ModelState = { asset: model.asset, token, obj: null, status: 'loading', info: null, overrides: null, key: '' };
+        const state: ModelState = { asset: model.asset, token, obj: null, status: 'loading', info: null, overrides: null, key: '', group };
         entry.model = state;
-        this.loadPrefab(model.asset)
+        (group ? this.loadGroupPrefab(model.asset, group, state) : this.loadPrefab(model.asset))
             .then((prefab) => {
                 if (state.token !== token || this.entries.get(entry.id) !== entry) return;
                 const instance = prefab.clone();
@@ -687,6 +819,9 @@ export class SceneSync extends Emitter<SyncEvents> {
                 this.applyAnimation(entry, this.store.node(entry.id)?.animation);
                 this.setEnabled(entry, entry.visible, true);
                 this.runtime.gi.invalidate();
+                // Its group draws it with the others, and a field of grass may stand on it.
+                this.flushGroups();
+                this.placeGrass();
                 this.emit('model', entry.id);
             })
             .catch((err) => {
@@ -729,10 +864,256 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!m) return;
         m.token = -1;
         m.overrides?.dispose();
+        m.release?.();
+        m.release = undefined;
+        if (entry.group) this.dirtyGroups.add(entry.group);
         if (m.obj) {
             m.obj.removeFromParent();
             m.obj.destroy();
         }
+    }
+
+    // --------------------------------------------------------------- mirror
+
+    /** A mesh with a mirror reflects the scene in the plane through its top. */
+    private applyMirror(entry: Entry, node: NodeDoc) {
+        const doc = node.mesh ? node.mirror : undefined;
+        if (!doc) {
+            if (entry.mirror) {
+                entry.obj.removeComponent(MirrorComponent);
+                entry.mirror = null;
+            }
+            return;
+        }
+        if (!entry.mirror) {
+            entry.mirror = entry.obj.addComponent(MirrorComponent);
+            if (!entry.visible) entry.mirror.enable = false;
+        }
+        entry.mirror.resolutionScale = doc.resolution;
+        // The top of its shape: a plane's face, a box's top.
+        entry.mirror.surfaceOffset = shapeTop(node.mesh!.geometry);
+    }
+
+    // ---------------------------------------------------------------- grass
+
+    /** Makes (again, when its blades or their width changed) and updates a field of grass. */
+    private applyGrass(entry: Entry, doc: GrassDoc | undefined) {
+        const build = doc ? JSON.stringify([doc.count, doc.width]) : '';
+        if (entry.grass && build !== entry.grassBuild) {
+            entry.grass.remove((res) => this.disposeLater(res));
+            entry.grass = null;
+        }
+        entry.grassBuild = build;
+        if (!doc) {
+            entry.grassPlaced = '';
+            return;
+        }
+        if (!entry.grass) {
+            entry.grass = new GrassField(this.runtime.scene, doc);
+            entry.grass.setVisible(entry.visible);
+            entry.grassPlaced = '';
+        }
+        const field = entry.grass;
+        field.apply(doc);
+        const ctx = this.runtime.engine.context3D;
+        this.gusts ??= gustTexture(ctx);
+        const blade = doc.texture ? this.loadTexture(doc.texture, 'color') : Promise.resolve(null);
+        const gusts = doc.windMap ? this.loadTexture(doc.windMap, 'data') : Promise.resolve(null);
+        // Plain until its textures are there.
+        if (!field.renderer.grassMaterial.baseMap) field.setTextures(plainBlades(ctx), this.gusts);
+        void Promise.all([blade, gusts]).then(([b, g]) => {
+            if (entry.grass !== field) return;
+            const now = this.store.node(entry.id)?.grass;
+            if (!now || now.texture !== doc.texture || now.windMap !== doc.windMap) return;
+            field.setTextures(b ?? plainBlades(ctx), g ?? this.gusts!);
+        });
+    }
+
+    /**
+     * Places the blades of the fields whose placement changed: their
+     * object moved, their area or ground changed, or their ground moved,
+     * changed or loaded. `ids`: only the objects that changed (a drag),
+     * else every field is looked at.
+     */
+    private placeGrass(ids?: readonly string[]) {
+        for (const entry of this.entries.values()) {
+            const doc = entry.grass ? this.store.node(entry.id)?.grass : undefined;
+            if (!doc) continue;
+            if (ids && !ids.some((id) => id === entry.id || (!!doc.ground && this.isUnder(id, doc.ground)))) continue;
+            const ground = doc.ground ? this.groundRenderers(doc.ground) : null;
+            const m = entry.obj.transform.worldMatrix.rawData;
+            const key = JSON.stringify([doc.size, doc.count, doc.ground, Array.from(m, (v) => +v.toFixed(4)), ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))])]);
+            if (key === entry.grassPlaced) continue;
+            entry.grassPlaced = key;
+            const frame = fieldFrame(m);
+            const grid = ground ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
+            entry.grass!.place(doc, frame, grid, hashString(entry.id));
+        }
+    }
+
+    /** Whether `id` is `ancestor` or under it. */
+    private isUnder(id: string, ancestor: string): boolean {
+        for (let n = this.store.node(id); n; n = n.parent ? this.store.node(n.parent) : undefined) if (n.id === ancestor) return true;
+        return false;
+    }
+
+    /** The shown meshes of a ground object and of the objects under it (not skinned ones, which move). */
+    private groundRenderers(id: string): RenderNode[] {
+        const out: RenderNode[] = [];
+        for (const nid of [id, ...this.store.descendants(id).map((n) => n.id)]) {
+            if (!this.entries.get(nid)?.visible) continue;
+            for (const r of this.renderersOf(nid)) if (!(r instanceof SkinnedMeshRenderer) && !(r instanceof SkinnedMeshRenderer2)) out.push(r);
+        }
+        return out;
+    }
+
+    // ------------------------------------------------------------ instancing
+
+    /** An object with instancing draws the meshes of its group instanced: its own and its children's. */
+    private applyInstancing(entry: Entry, doc: InstancingDoc | undefined) {
+        if (!doc) {
+            if (entry.instancer) {
+                entry.obj.removeComponent(InstanceDrawComponent);
+                entry.instancer = null;
+                // Its members go back to drawing on their own (flushGroups).
+                this.dirtyGroups.add(entry.id);
+            }
+            return;
+        }
+        if (entry.instancer) return;
+        const inst = entry.obj.addComponent(InstanceDrawComponent);
+        // The editor hands it its members (flushGroups).
+        inst.autoGroup = false;
+        // Seen by the GI probes, as its members would be.
+        inst.castGI = true;
+        entry.instancer = inst;
+        this.dirtyGroups.add(entry.id);
+    }
+
+    /** Which instancing group each object's meshes are drawn in: its nearest ancestor with instancing, itself included. */
+    private assignGroups() {
+        const memo = new Map<string, string>();
+        const groupOf = (id: string | null): string => {
+            if (!id) return '';
+            const known = memo.get(id);
+            if (known !== undefined) return known;
+            const n = this.store.node(id);
+            const g = !n ? '' : n.instancing ? n.id : groupOf(n.parent);
+            memo.set(id, g);
+            return g;
+        };
+        for (const e of this.entries.values()) {
+            const g = groupOf(e.id);
+            if (g === e.group) continue;
+            if (e.group) this.dirtyGroups.add(e.group);
+            if (g) this.dirtyGroups.add(g);
+            e.group = g;
+        }
+    }
+
+    /**
+     * Groups the instancing groups that changed again: the renderers each
+     * one draws, and the ones it lets go of, which draw on their own again
+     * as their objects show them.
+     */
+    private flushGroups() {
+        if (!this.dirtyGroups.size) return;
+        const groups = Array.from(this.dirtyGroups);
+        this.dirtyGroups.clear();
+        for (const id of groups) {
+            const inst = this.entries.get(id)?.instancer ?? null;
+            const members = inst ? this.membersOf(id) : [];
+            const keep = new Set<RenderNode>(members.map((m) => m.r));
+            for (const m of this.groupMembers.get(id) ?? []) {
+                if (keep.has(m.r)) continue;
+                this.instanced.delete(m.r);
+                if (!m.r.isDestroyed) m.r.enable = this.shownAlone(m);
+            }
+            for (const m of members) this.instanced.add(m.r);
+            if (members.length) this.groupMembers.set(id, members);
+            else this.groupMembers.delete(id);
+            inst?.rebuild(members.map((m) => m.r));
+        }
+    }
+
+    /** The renderers a group draws: shown meshes of its objects that can be instanced (models once they show the group's materials). */
+    private membersOf(group: string): GroupMember[] {
+        const out: GroupMember[] = [];
+        for (const e of this.entries.values()) {
+            if (e.group !== group || !e.visible || this.detached.has(e.id)) continue;
+            if (e.mesh && !e.mirror && instanceable(e.mesh)) out.push({ r: e.mesh, id: e.id });
+            const info = e.model?.group === group ? e.model.info : null;
+            const parts = this.store.node(e.id)?.model?.parts ?? {};
+            for (const part of info?.parts ?? []) {
+                const r = part.renderer;
+                if (part.skinned || parts[part.path]?.visible === false || !(r instanceof MeshRenderer) || !instanceable(r)) continue;
+                out.push({ r, id: e.id, path: part.path });
+            }
+        }
+        return out;
+    }
+
+    /** Whether a renderer an instancer let go of shows on its own: its object is shown, and a model's part is not hidden. */
+    private shownAlone(m: GroupMember): boolean {
+        if (!this.entries.get(m.id)?.visible) return false;
+        return !m.path || this.store.node(m.id)?.model?.parts?.[m.path]?.visible !== false;
+    }
+
+    /** Whether a renderer is shown: drawn on its own, or by an instancer. */
+    shown(r: RenderNode): boolean {
+        return r.enable || this.instanced.has(r);
+    }
+
+    /** Instancing groups and what they draw: how many meshes in how many draw calls. */
+    instancingOf(id: string): { meshes: number; draws: number } | null {
+        const inst = this.entries.get(id)?.instancer;
+        return inst ? { meshes: this.groupMembers.get(id)?.length ?? 0, draws: inst.groupCount } : null;
+    }
+
+    /**
+     * The model's prefab with copies of its materials for an instancing
+     * group, shared by the group's instances; `state` lets go of it.
+     */
+    private loadGroupPrefab(assetId: string, group: string, state: ModelState): Promise<Object3D> {
+        const key = `${group}|${assetId}`;
+        let rec = this.groupPrefabs.get(key);
+        if (!rec) {
+            const prefab = this.loadPrefab(assetId).then((base) => {
+                const copy = base.clone();
+                const ctx = this.runtime.engine.context3D;
+                // Parts drawn on their own (skinned, see-through) get copies of
+                // their own: the instancer compiles the ones it draws for itself.
+                const instanced = new Map<Material, Material>();
+                const alone = new Map<Material, Material>();
+                copy.traverse((o: Object3D) => {
+                    o.components.forEach((c) => {
+                        if (!(c instanceof RenderNode) || !c.materials?.length) return;
+                        const copies = c instanceof MeshRenderer && instanceable(c) ? instanced : alone;
+                        c.materials = c.materials.map((m) => {
+                            let k = copies.get(m);
+                            if (!k) copies.set(m, (k = cloneMaterial(m, ctx)));
+                            return k;
+                        });
+                    });
+                });
+                return copy;
+            });
+            const made = { prefab, users: 0 };
+            prefab.catch(() => {
+                if (this.groupPrefabs.get(key) === made) this.groupPrefabs.delete(key);
+            });
+            this.groupPrefabs.set(key, made);
+            rec = made;
+        }
+        const held = rec;
+        held.users++;
+        state.release = () => {
+            if (--held.users > 0) return;
+            if (this.groupPrefabs.get(key) === held) this.groupPrefabs.delete(key);
+            // Its materials go with it; the file's textures and shapes stay with the file's prefab.
+            void held.prefab.then((p) => this.disposeLater(p), () => {});
+        };
+        return held.prefab;
     }
 
     // ------------------------------------------------------------ visibility
@@ -741,6 +1122,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.isolation = ids;
         this.isolateLights = !!ids && hideLights;
         this.updateVisibility();
+        this.flushGroups();
         this.runtime.gi.invalidate();
     }
 
@@ -793,9 +1175,13 @@ export class SceneSync extends Emitter<SyncEvents> {
     private setEnabled(entry: Entry, visible: boolean, force = false) {
         if (entry.visible === visible && !force) return;
         entry.visible = visible;
-        if (entry.mesh) entry.mesh.enable = visible;
+        // Its group takes it in or leaves it out, once the change is done (flushGroups).
+        if (entry.group) this.dirtyGroups.add(entry.group);
+        if (entry.mesh) entry.mesh.enable = visible && !this.instanced.has(entry.mesh);
         if (entry.light) entry.light.enable = visible;
         if (entry.particles) entry.particles.enable = visible;
+        if (entry.mirror) entry.mirror.enable = visible;
+        entry.grass?.setVisible(visible);
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);
@@ -812,12 +1198,12 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** Resolves once every model and texture requested so far has loaded or failed. */
     async whenLoaded(): Promise<void> {
+        const all = () => [...this.prefabs.values(), ...Array.from(this.groupPrefabs.values(), (g) => g.prefab), ...this.textures.values()];
         for (;;) {
-            const pending = [...this.prefabs.values(), ...this.textures.values()];
+            const pending = all();
             await Promise.allSettled(pending);
             // Loaded models can ask for more textures (their overrides).
-            const now = [...this.prefabs.values(), ...this.textures.values()];
-            if (now.every((p) => pending.includes(p))) return;
+            if (all().every((p) => pending.includes(p))) return;
         }
     }
 
@@ -876,6 +1262,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     tex = new CompressedTexture2D(this.runtime.engine.context3D, role === 'color' ? 'srgb' : 'linear');
                     tex.name = meta.name;
                     tex.maxSize = this.textureMaxSize;
+                    tex.maxAnisotropy = QUALITY[this.runtime.qualityLevel].anisotropy;
                     // Known before it has data, so a refresh meanwhile runs after this fill.
                     this.assetTextures.set(key, tex);
                 }
@@ -1009,6 +1396,25 @@ function oneRange(g: GeometryBase): GeometryBase {
     subs.length = 0;
     g.addSubGeometry({ indexStart: start, indexCount: total, vertexStart: 0, vertexCount: 0, firstStart: 0, index: 0, topology: 0 });
     return g;
+}
+
+/** How far a shape's top is above its origin (shapes are centered on it): where a mirror on it reflects. */
+function shapeTop(g: GeometryDoc): number {
+    switch (g.type) {
+        case 'plane':
+            return 0;
+        case 'sphere':
+            return g.radius;
+        case 'torus':
+            return g.tube;
+        default:
+            return g.height / 2;
+    }
+}
+
+/** Renderers an instancer can draw: opaque (the instancer draws with the opaque ones), not mirrors, not skinned or morphing. */
+function instanceable(r: MeshRenderer): boolean {
+    return InstanceDrawComponent.canInstance(r) && r.renderOrder < 3000 && !r.hasMask(MirrorComponent.MIRROR_MASK);
 }
 
 function nonZero(v: number): number {

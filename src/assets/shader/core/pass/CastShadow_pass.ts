@@ -22,17 +22,24 @@ struct VertexOutput {
     ${SkeletonAnimation_shader.groupBindingAndFunctions(2, 1)}
 #endif
 
+// Instanced draws (InstanceDrawComponent) read each instance's matrix index.
+#include "InstanceUniform"
+
 var<private> worldMatrix: mat4x4<f32>;
 
 @vertex
 fn main(vertex:VertexAttributes) -> VertexOutput {
-    worldMatrix = models.matrix[vertex.index];
+    var modelIndex = u32(vertex.index);
+    #if USE_INSTANCEDRAW
+        modelIndex = u32(instanceDrawID.matrixIDs[vertex.index]);
+    #endif
+    worldMatrix = models.matrix[modelIndex];
     let shadowMatrix: mat4x4<f32> = globalUniform.projMat * globalUniform.viewMat;
     var vertexPosition = vertex.position.xyz;
     var vertexNormal = vertex.normal.xyz;
 
     if (globalUniform.useRTE != 0) {
-        UpdateWorldMatrixToRTE_PrivatePtr(u32(vertex.index), &worldMatrix);
+        UpdateWorldMatrixToRTE_PrivatePtr(modelIndex, &worldMatrix);
     }
 
     #if USE_MORPHTARGETS
@@ -83,16 +90,23 @@ struct VertexOutput {
     ${SkeletonAnimation_shader.groupBindingAndFunctions(2, 1)}
 #endif
 
+// Instanced draws (InstanceDrawComponent) read each instance's matrix index.
+#include "InstanceUniform"
+
 var<private> worldMatrix: mat4x4<f32>;
 
 @vertex
 fn main(vertex:VertexAttributes) -> VertexOutput {
-    worldMatrix = models.matrix[vertex.index];
+    var modelIndex = u32(vertex.index);
+    #if USE_INSTANCEDRAW
+        modelIndex = u32(instanceDrawID.matrixIDs[vertex.index]);
+    #endif
+    worldMatrix = models.matrix[modelIndex];
     let shadowMatrix: mat4x4<f32> = globalUniform.projMat * globalUniform.viewMat;
     var vertexPosition = vertex.position.xyz;
 
     if (globalUniform.useRTE != 0) {
-        UpdateWorldMatrixToRTE_PrivatePtr(u32(vertex.index), &worldMatrix);
+        UpdateWorldMatrixToRTE_PrivatePtr(modelIndex, &worldMatrix);
     }
 
     // Skinning OVERWRITES worldMatrix (glTF 2.0 skinning matrix already
@@ -138,8 +152,10 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
       var baseMap: texture_2d<f32>;
     #endif
 
+    // Point and spot shadows are depth only (PointShadowPass draws the
+    // faces into the shadow atlas, which has no color target): the depth
+    // is the distance from the light over its far distance.
     struct FragmentOutput {
-      @location(auto) o_Target: vec4<f32>,
       @builtin(frag_depth) out_depth: f32
     };
 
@@ -148,18 +164,16 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
         let lightWorldPos = globalUniform.CameraPos;
         var distance = length(worldPos.xyz - lightWorldPos) ;
         distance = distance / globalUniform.far;
-        var fragOut:FragmentOutput; 
 
       #if USE_ALPHACUT
+        // Cut-out texels cast nothing (written, they would be at the light).
         let Albedo = textureSample(baseMap,baseMapSampler,fragUV);
-        if(Albedo.w > 0.5){
-          fragOut = FragmentOutput(vec4<f32>(0.0),distance);
+        if(Albedo.w <= 0.5){
+          discard;
         }
-      #else
-        fragOut = FragmentOutput(vec4<f32>(0.0),distance);
       #endif
-      
-        return fragOut ;
+
+        return FragmentOutput(distance);
     }
 `
 

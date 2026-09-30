@@ -19,6 +19,7 @@ export let DirectShadow_frag: string = /*wgsl*/ `
             let ldx = globalUniform.shadowLights[u32(i) / 4u][u32(i) % 4u];
             let light = lightBuffer[u32(ldx)];
             var shadowIndex = i32(light.castShadow);
+            if (shadowIndex < 0) { continue; }
             var shadowMatrix:mat4x4<f32>;
 
             #if USE_CSM
@@ -26,7 +27,8 @@ export let DirectShadow_frag: string = /*wgsl*/ `
                   visibility = 0.0;
                   var validCount = 0;
                   var totalWeight = 0.0;
-                  for(var csm: i32 = 0; csm < csmCount; csm++) {
+                  let cascades = clamp(i32(light.csmShadowMapNum), 1, csmCount);
+                  for(var csm: i32 = 0; csm < cascades; csm++) {
                     shadowMatrix = globalUniform.shadowMatrix[shadowIndex + csm];
                     let csmShadowResult = directShadowMapingIndex(light, shadowMatrix, shadowIndex + csm, light.shadowBias[csm], light.normalBias[csm], dWorldPosDx, dWorldPosDy);
                     if(csmShadowResult.y < 0.5) {
@@ -34,7 +36,7 @@ export let DirectShadow_frag: string = /*wgsl*/ `
 
                       var weight:f32 = calcCSMBlendWeight(csmShadowResult.zw);
 
-                      if(validCount == 1 && csm == csmCount - 1){
+                      if(validCount == 1 && csm == cascades - 1){
                         visibility = 1.0 - weight + csmShadowResult.x * weight;
                         totalWeight = 1.0;
                       } else {

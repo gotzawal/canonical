@@ -140,6 +140,20 @@ export type ShadowSetting = {
      */
     enableStaticCache?: boolean;
 
+    /**
+     * Largest side of the point and spot lights' shadow atlas (each light's
+     * faces are tiles of it, at the light's shadowMapSize); when the lights
+     * ask for more, every face is halved until it fits. Default 4096.
+     */
+    pointShadowAtlasMax?: number;
+
+    /**
+     * The directional shadow maps' size in use: ShadowPass sizes them to the
+     * largest shadowMapSize of the lights that cast (up to
+     * maxShadowMapWidth). Set by the engine.
+     */
+    mapSizeInUse?: number;
+
     /** Contact Shadows — short screen-space ray-march along the dominant
      *  directional light. Adds the close-contact darkness CSM can't
      *  resolve (object-on-floor, fingers-on-table). Enable by adding

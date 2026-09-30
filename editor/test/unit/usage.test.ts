@@ -1,8 +1,9 @@
 import { describe, expect, it, vi } from 'vitest';
-import { groupTotals, modelTotals, usageCsv, UsageLog } from '../../src/ai/usage';
+import { groupTotals, modelTotals, usageCsv, UsageLog, workTotals } from '../../src/ai/usage';
 import { newScene } from '../../src/core/defaults';
 import { Store } from '../../src/core/store';
 import { drawParams } from '../../src/openrouter/imageQuality';
+import { dataUrlSize, imageTokens } from '../../src/openrouter/imageTokens';
 import type { ImageModel } from '../../src/openrouter/images';
 
 // The log is kept in IndexedDB, which Node has not: a map stands in.
@@ -29,6 +30,16 @@ describe('image quality', () => {
         // What a model does not list is left to it.
         expect(drawParams(undefined, 'high')).toEqual({});
     });
+
+    it('reads an image\'s size from its data and estimates its tokens per provider', () => {
+        // A PNG header of a 1200 x 800 image.
+        const png = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52, 0, 0, 0x04, 0xb0, 0, 0, 0x03, 0x20, 8, 2, 0, 0, 0];
+        expect(dataUrlSize(`data:image/png;base64,${btoa(String.fromCharCode(...png))}`)).toEqual({ w: 1200, h: 800 });
+        expect(imageTokens('anthropic/claude', 1024, 683, undefined)).toBe(933);
+        expect(imageTokens('openai/gpt', 1024, 683, 'low')).toBe(85);
+        expect(imageTokens('openai/gpt', 1024, 683, undefined)).toBe(85 + 170 * 4);
+        expect(imageTokens('google/gemini', 1024, 683, undefined)).toBe(258 * 2);
+    });
 });
 
 describe('usage log', () => {
@@ -36,10 +47,10 @@ describe('usage log', () => {
         const log = new UsageLog(new Store(newScene()));
         await log.loading;
         const req = log.begin('request', 'Build a "cabin", please');
-        req.chat('acme/model', { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 800 }, cost: 0.01 });
-        req.chat('acme/model', { prompt_tokens: 1200, completion_tokens: 70, cost: 0.02 });
+        req.chat('acme/model', { prompt_tokens: 1000, completion_tokens: 50, prompt_tokens_details: { cached_tokens: 800 }, cost: 0.01 }, { imageTokens: 300, work: 'objects' });
+        req.chat('acme/model', { prompt_tokens: 1200, completion_tokens: 70, cost: 0.02 }, { work: 'answer' });
         req.sent(2, 'low');
-        req.tool();
+        req.tool('images');
         req.images('acme/painter', 2, 0.08, 'high');
         req.end();
         log.begin('memo', 'Scene memo').end();
@@ -50,6 +61,9 @@ describe('usage log', () => {
         expect(log.entries.map((e) => [e.kind, e.calls])).toEqual([['request', 2], ['script', 2]]);
         const e = log.entries[0];
         expect([e.prompt, e.cached, e.completion, e.sent, e.made, e.tools, e.seeQuality, e.drawQuality, e.running]).toEqual([2200, 800, 120, 2, 2, 1, 'low', 'high', undefined]);
+        // Split by what each call worked on; the images made count for the tool that made them.
+        expect(e.imageTokens).toBe(300);
+        expect(workTotals(log.entries).map(([k, x]) => [k, x.calls, x.prompt, x.imageTokens, x.made])).toEqual([['answer', 1, 1200, 0, 0], ['objects', 1, 1000, 300, 0], ['images', 0, 0, 0, 2]]);
         const t = log.totals();
         expect([t.count, t.calls, t.prompt, t.completion, t.made]).toEqual([2, 4, 2220, 130, 2]);
         expect(t.cost).toBeCloseTo(0.11);

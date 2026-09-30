@@ -8,10 +8,11 @@ import { cacheStyle } from '../openrouter/caching';
 import { chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart } from '../openrouter/client';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
 import { SEE_DETAIL, SEE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
+import { dataUrlSize, imageTokens } from '../openrouter/imageTokens';
 import { aiSettings } from '../openrouter/settings';
-import { runTool, toolDefs } from './registry';
+import { runTool, toolDefs, toolWork } from './registry';
 import type { Approval, ToolEnv } from './toolUtil';
-import type { UsageTask } from './usage';
+import type { UsageTask, WorkKind } from './usage';
 
 export interface ToolTurn {
     name: string;
@@ -350,6 +351,7 @@ export class Agent extends Emitter<AgentEvents> {
                 const turn = this.push({ role: 'assistant', text: '' });
                 last = turn;
                 this.setActivity('');
+                const imagesIn = imageTokensOf(this.history, model);
                 const res = await chat(
                     key,
                     {
@@ -367,7 +369,7 @@ export class Agent extends Emitter<AgentEvents> {
                         },
                     },
                 );
-                task.chat(model, res.usage);
+                task.chat(model, res.usage, { imageTokens: imagesIn, work: workOf(res.message.tool_calls ?? []) });
                 cut();
                 this.history.push(res.message);
                 // Images are sent once; later requests only mention them. With a
@@ -396,7 +398,7 @@ export class Agent extends Emitter<AgentEvents> {
                     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
                     const toolTurn = this.push({ role: 'tool', text: '', tool: { name: call.function.name, args: call.function.arguments || '{}', state: 'running' } });
                     this.setActivity(call.function.name);
-                    task.tool();
+                    task.tool(toolWork(call.function.name) ?? undefined);
                     let args: Record<string, any> = {};
                     let content: string;
                     try {
@@ -704,6 +706,42 @@ export class Agent extends Emitter<AgentEvents> {
             if (this.refreshing === job) this.refreshing = null;
         }
     }
+}
+
+/** The pixel sizes of the images in the history, read once from their data. */
+const imageSizes = new WeakMap<ContentPart, { w: number; h: number } | null>();
+
+/** Prompt tokens of the images in these messages for a model, estimated from their sizes. */
+function imageTokensOf(messages: readonly ChatMessage[], model: string): number {
+    let n = 0;
+    for (const m of messages) {
+        if (!Array.isArray(m.content)) continue;
+        for (const p of m.content) {
+            if (p.type !== 'image_url') continue;
+            let size = imageSizes.get(p);
+            if (size === undefined) imageSizes.set(p, (size = dataUrlSize(p.image_url.url)));
+            if (size) n += imageTokens(model, size.w, size.h, p.image_url.detail);
+        }
+    }
+    return n;
+}
+
+/** What a model call worked on: the group most of its tool calls belong to, or an answer without any. */
+function workOf(calls: readonly { function: { name: string } }[]): WorkKind {
+    const counts = new Map<WorkKind, number>();
+    let best: WorkKind = 'answer';
+    let most = 0;
+    for (const c of calls) {
+        const k = toolWork(c.function.name);
+        if (!k) continue;
+        const n = (counts.get(k) ?? 0) + 1;
+        counts.set(k, n);
+        if (n > most) {
+            most = n;
+            best = k;
+        }
+    }
+    return best;
 }
 
 /** An image for the model, with OpenAI's detail hint for the quality (other providers go by its pixels). */

@@ -71,17 +71,18 @@ export let GodRay_cs: string = /*wgsl*/ `
     }
 
     fn directShadowMaping(P:vec3<f32>, N:vec3<f32>, shadowBias: f32)  {
-      let enableCSM:bool = globalUniform.enableCSM > 0.5;
       var light = directLight;
       var visibility = 1.0;
       var shadowIndex = i32(light.castShadow);
       if (shadowIndex >= 0 ) {
         var shadowMatrix:mat4x4<f32>;
-        if(enableCSM && csmCount > 1){
-          for(var csm:i32 = 0; csm < csmCount; csm ++){
-            var csmShadowBias = globalUniform.csmShadowBias[csm];
-            shadowMatrix = globalUniform.csmMatrix[csm];
-            let csmShadowResult = directShadowMapingIndex(light, shadowMatrix, P, N, csm, csmShadowBias);
+        // A cascaded light has its cascades in consecutive layers from its
+        // shadow index, nearest first: the first that holds the point.
+        let cascades = clamp(i32(light.csmShadowMapNum), 1, csmCount);
+        if(light.csmShadowMapIndex >= 0.0 && cascades > 1){
+          for(var csm:i32 = 0; csm < cascades; csm ++){
+            shadowMatrix = globalUniform.shadowMatrix[shadowIndex + csm];
+            let csmShadowResult = directShadowMapingIndex(light, shadowMatrix, P, N, shadowIndex + csm, light.shadowBias[csm]);
             if(csmShadowResult.y < 0.5){
               visibility = csmShadowResult.x;
               break;

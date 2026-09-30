@@ -3,8 +3,13 @@
 // textures that are alive (an estimate of GPU memory: drivers pad and tile,
 // and the browser allocates for itself). The engine's own counters see only
 // its older draw path, so the WebGPU methods are wrapped instead, once and
-// before the engine starts. Every wrapper forwards its call unchanged and
-// never throws. No engine imports: the unit tests run it on fake classes.
+// before the engine starts. Every wrapper forwards its call unchanged (a
+// profiled pass gets timestamp writes added) and never throws. No engine
+// imports: the unit tests run it on fake classes.
+//
+// For the Profiler, it also keeps every live texture, the draws and CPU time
+// of each render graph pass (the runtime names them with passBegin/passEnd),
+// and, while profiling on a device with timestamp queries, their GPU time.
 
 /** What one frame asked the GPU to do. */
 export interface FrameCounts {
@@ -23,8 +28,38 @@ export interface FrameCounts {
     uploadBytes: number;
 }
 
-/** Textures by what fills them: images and data from the CPU, what passes draw into, the rest. */
-export type TextureClass = 'image' | 'target' | 'other';
+/**
+ * Textures by what they are: images and data from the CPU, shadow maps
+ * (depth arrays and the depth targets named for shadows), environment cube
+ * maps (the sky, reflections), what passes draw into, and the rest (mostly
+ * what compute passes write: post effects, the depth pyramid, GI atlases).
+ */
+export type TextureClass = 'image' | 'data' | 'shadow' | 'environment' | 'target' | 'other';
+
+export const TEXTURE_CLASSES: TextureClass[] = ['image', 'data', 'shadow', 'environment', 'target', 'other'];
+
+/** A live texture, for the list of what takes the memory. */
+export interface TextureInfo {
+    label: string;
+    format: string;
+    width: number;
+    height: number;
+    layers: number;
+    mips: number;
+    samples: number;
+    bytes: number;
+    cls: TextureClass;
+}
+
+/** What one render graph pass (or the work around the graph) did in a frame. */
+export interface PassStats {
+    name: string;
+    /** CPU milliseconds encoding it, GPU milliseconds (null without timestamps), draws and triangles. */
+    cpu: number;
+    gpu: number | null;
+    draws: number;
+    triangles: number;
+}
 /** Buffers by use; staging buffers come and go with the GPU's lag, so they stay out of the stable total. */
 export type BufferClass = 'vertex' | 'index' | 'uniform' | 'storage' | 'staging' | 'other';
 
@@ -59,6 +94,11 @@ const INSTALLED = Symbol.for('morglay.gpuStats');
 // GPUBufferUsage and GPUTextureUsage flags (the constants are not there in Node).
 const MAP_READ = 0x1, MAP_WRITE = 0x2, INDEX = 0x10, VERTEX = 0x20, UNIFORM = 0x40, STORAGE = 0x80;
 const RENDER_ATTACHMENT = 0x10;
+const QUERY_RESOLVE = 0x200, COPY_SRC = 0x4, COPY_DST = 0x8;
+/** Work outside the render graph's passes. */
+const OUTSIDE = 'Outside the graph';
+/** Passes a frame can time on the GPU. */
+const TIMED_PASSES = 256;
 
 const zero = (): FrameCounts => ({ draws: 0, triangles: 0, instances: 0, renderPasses: 0, computePasses: 0, dispatches: 0, pipelines: 0, bindGroups: 0, submits: 0, uploadBytes: 0 });
 
@@ -135,6 +175,26 @@ interface Resource {
     cls: TextureClass | BufferClass;
     bytes: number;
     alive: boolean;
+    /** Textures: what the list shows. */
+    info?: Omit<TextureInfo, 'bytes' | 'cls'>;
+}
+
+/** The class of a new texture, from its descriptor. */
+export function textureClass(desc: any): TextureClass {
+    const s = desc?.size;
+    const w = Number(Array.isArray(s) ? s[0] : s?.width) || 1;
+    const h = Number(Array.isArray(s) ? (s[1] ?? 1) : (s?.height ?? 1)) || 1;
+    const layers = Number(Array.isArray(s) ? (s[2] ?? 1) : (s?.depthOrArrayLayers ?? 1)) || 1;
+    const depth = /^(depth|stencil)/.test(String(desc?.format ?? ''));
+    if (depth && (layers > 1 || /shadow/i.test(String(desc?.label ?? '')))) return 'shadow';
+    if (!depth && desc?.dimension !== '3d' && w === h && layers >= 6 && layers % 6 === 0) return 'environment';
+    return (Number(desc?.usage) || 0) & RENDER_ATTACHMENT ? 'target' : 'other';
+}
+
+interface PassFrame {
+    cpu: number;
+    draws: number;
+    triangles: number;
 }
 
 export class GpuStats {
@@ -144,20 +204,69 @@ export class GpuStats {
     private cpuRecent: number[] = [];
     private last = zero();
     readonly memory: GpuMemory = {
-        textures: { image: { bytes: 0, count: 0 }, target: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 } },
+        textures: {
+            image: { bytes: 0, count: 0 }, data: { bytes: 0, count: 0 }, shadow: { bytes: 0, count: 0 }, environment: { bytes: 0, count: 0 },
+            target: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 },
+        },
         buffers: { vertex: { bytes: 0, count: 0 }, index: { bytes: 0, count: 0 }, uniform: { bytes: 0, count: 0 }, storage: { bytes: 0, count: 0 }, staging: { bytes: 0, count: 0 }, other: { bytes: 0, count: 0 } },
         stable: 0,
     };
     pipelinesCreated = 0;
+    /** Live textures. */
+    private live = new Set<Resource>();
+    /** The pass being recorded, its start, and per pass what the frame being drawn did. */
+    scope = OUTSIDE;
+    private scopeStart = 0;
+    private passFrame = new Map<string, PassFrame>();
+    private passRecent: Map<string, PassFrame>[] = [];
+    /** GPU milliseconds per pass of the frames timed lately (a few frames apart). */
+    private gpuRecent: Map<string, number>[] = [];
+    /** Time the passes on the GPU (while a profiler looks, on devices with timestamp queries). */
+    profileGpu = false;
+    /** @internal Set up by installGpuStats. */
+    timing: { supported(): boolean; resolve(): void } | null = null;
+    /** @internal Its own GPU calls are not counted. */
+    internal = false;
+    /** Work timed before the engine's frame (addCpu), outside its CPU time. */
+    private before = new Set<string>();
 
     /** @internal Counts go to the frame being drawn. */
     get counts(): FrameCounts {
         return this.current;
     }
 
+    /** @internal What the pass being recorded did. */
+    passCounts(): PassFrame {
+        let p = this.passFrame.get(this.scope);
+        if (!p) this.passFrame.set(this.scope, (p = { cpu: 0, draws: 0, triangles: 0 }));
+        return p;
+    }
+
     /** Starts counting a frame (the runtime calls it before the engine updates). */
     beginFrame() {
         this.current = zero();
+        this.passFrame = new Map();
+        this.scope = OUTSIDE;
+    }
+
+    /** A render graph pass starts recording (its draws and GPU time count for it). */
+    passBegin(name: string) {
+        this.scope = name;
+        this.scopeStart = performance.now();
+    }
+
+    passEnd(name: string) {
+        if (this.scope !== name) return;
+        this.passCounts().cpu += performance.now() - this.scopeStart;
+        this.scope = OUTSIDE;
+    }
+
+    /** CPU time of work before the engine's frame (scripts in Play), shown as a pass of its own. */
+    addCpu(name: string, ms: number) {
+        this.before.add(name);
+        let p = this.passFrame.get(name);
+        if (!p) this.passFrame.set(name, (p = { cpu: 0, draws: 0, triangles: 0 }));
+        p.cpu += ms;
     }
 
     /** Ends the frame: its counts become the last frame's; `cpuMs` is the engine's CPU time in it. */
@@ -168,8 +277,68 @@ export class GpuStats {
         if (cpuMs !== undefined && Number.isFinite(cpuMs)) {
             this.cpuRecent.push(cpuMs);
             if (this.cpuRecent.length > RECENT) this.cpuRecent.shift();
+            // The engine's time not spent in the graph's passes: its updates, compute work and the rest.
+            let passes = 0;
+            for (const [name, p] of this.passFrame) if (name !== OUTSIDE && !this.before.has(name)) passes += p.cpu;
+            let outside = this.passFrame.get(OUTSIDE);
+            if (!outside) this.passFrame.set(OUTSIDE, (outside = { cpu: 0, draws: 0, triangles: 0 }));
+            outside.cpu += Math.max(0, cpuMs - passes);
         }
+        this.passRecent.push(this.passFrame);
+        if (this.passRecent.length > RECENT) this.passRecent.shift();
+        this.timing?.resolve();
         this.current = zero();
+        this.passFrame = new Map();
+        this.scope = OUTSIDE;
+    }
+
+    /** @internal GPU milliseconds per pass of a timed frame. */
+    gpuFrame(times: Map<string, number>) {
+        this.gpuRecent.push(times);
+        if (this.gpuRecent.length > 16) this.gpuRecent.shift();
+    }
+
+    /** Whether passes can be timed on the GPU (the device has timestamp queries). */
+    get gpuTimed(): boolean {
+        return !!this.timing?.supported();
+    }
+
+    /**
+     * What each pass did on average over the last `frames` frames, in the
+     * order they ran (work outside the graph first): CPU time, draws and
+     * triangles, and GPU time over the frames timed lately.
+     */
+    passes(frames = 60): PassStats[] {
+        const recent = this.passRecent.slice(-frames);
+        const out = new Map<string, PassStats>();
+        const at = (name: string) => {
+            let p = out.get(name);
+            if (!p) out.set(name, (p = { name, cpu: 0, gpu: null, draws: 0, triangles: 0 }));
+            return p;
+        };
+        at(OUTSIDE);
+        for (const f of recent) {
+            for (const [name, c] of f) {
+                const p = at(name);
+                p.cpu += c.cpu / recent.length;
+                p.draws += c.draws / recent.length;
+                p.triangles += c.triangles / recent.length;
+            }
+        }
+        if (this.gpuRecent.length) {
+            for (const f of this.gpuRecent) for (const [name, ms] of f) {
+                const p = at(name);
+                p.gpu = (p.gpu ?? 0) + ms / this.gpuRecent.length;
+            }
+        }
+        return [...out.values()];
+    }
+
+    /** Every live texture, the largest first. */
+    textures(): TextureInfo[] {
+        const out: TextureInfo[] = [];
+        for (const r of this.live) if (r.info) out.push({ ...r.info, bytes: r.bytes, cls: r.cls as TextureClass });
+        return out.sort((a, b) => b.bytes - a.bytes);
     }
 
     /** The most of each count over the last `frames` frames. */
@@ -197,6 +366,7 @@ export class GpuStats {
         t.bytes += r.bytes;
         t.count++;
         if (r.cls !== 'staging') this.memory.stable += r.bytes;
+        if (r.kind === 'texture') this.live.add(r);
     }
 
     /** @internal Takes a destroyed (or collected) resource out, once. */
@@ -207,11 +377,16 @@ export class GpuStats {
         t.bytes -= r.bytes;
         t.count--;
         if (r.cls !== 'staging') this.memory.stable -= r.bytes;
+        this.live.delete(r);
     }
 
-    /** @internal A texture that got pixels from the CPU is an image. */
+    /**
+     * @internal A texture that got pixels from the CPU is an image (or data,
+     * from a buffer); shadow maps and cube maps stay what they are.
+     */
     reclassify(r: Resource, cls: TextureClass) {
-        if (!r.alive || r.cls === cls) return;
+        if (!r.alive || r.cls === cls || r.cls === 'shadow' || r.cls === 'environment') return;
+        if (cls === 'data' && r.cls === 'image') return;
         this.untrack(r);
         r.alive = true;
         r.cls = cls;
@@ -275,8 +450,17 @@ export function installGpuStats(g: any = globalThis): GpuStats {
         remember(buf, { kind: 'buffer', cls: bufferClass(Number(desc?.usage) || 0), bytes: Number(desc?.size) || 0, alive: true });
     });
     wrap(g.GPUDevice, 'createTexture', (_d, [desc], tex) => {
-        const usage = Number(desc?.usage) || 0;
-        remember(tex, { kind: 'texture', cls: usage & RENDER_ATTACHMENT ? 'target' : 'other', bytes: textureBytes(desc), alive: true });
+        const s = desc?.size;
+        const info = {
+            label: String(desc?.label ?? ''),
+            format: String(desc?.format ?? ''),
+            width: Number(Array.isArray(s) ? s[0] : s?.width) || 1,
+            height: Number(Array.isArray(s) ? (s[1] ?? 1) : (s?.height ?? 1)) || 1,
+            layers: Number(Array.isArray(s) ? (s[2] ?? 1) : (s?.depthOrArrayLayers ?? 1)) || 1,
+            mips: Number(desc?.mipLevelCount) || 1,
+            samples: Number(desc?.sampleCount) || 1,
+        };
+        remember(tex, { kind: 'texture', cls: textureClass(desc), bytes: textureBytes(desc), alive: true, info });
     });
     wrap(g.GPUBuffer, 'destroy', (buf) => forget(buf));
     wrap(g.GPUTexture, 'destroy', (tex) => forget(tex));
@@ -293,8 +477,17 @@ export function installGpuStats(g: any = globalThis): GpuStats {
     wrap(g.GPUDevice, 'createComputePipeline', () => stats.pipelinesCreated++);
     wrap(g.GPUDevice, 'createComputePipelineAsync', () => stats.pipelinesCreated++);
 
-    wrap(g.GPUCommandEncoder, 'beginRenderPass', () => stats.counts.renderPasses++);
-    wrap(g.GPUCommandEncoder, 'beginComputePass', () => stats.counts.computePasses++);
+    // The device of each command encoder, for timing its passes.
+    const deviceOf = new WeakMap<object, any>();
+    wrap(g.GPUDevice, 'createCommandEncoder', (device, _a, enc) => enc && deviceOf.set(enc, device));
+    const timer = gpuTimer(stats, g);
+    stats.timing = timer;
+    wrapBefore(g.GPUCommandEncoder, 'beginRenderPass', (enc, args) => timer.timed(deviceOf.get(enc), args), () => {
+        if (!stats.internal) stats.counts.renderPasses++;
+    });
+    wrapBefore(g.GPUCommandEncoder, 'beginComputePass', (enc, args) => timer.timed(deviceOf.get(enc), args), () => {
+        if (!stats.internal) stats.counts.computePasses++;
+    });
     wrap(g.GPUComputePassEncoder, 'dispatchWorkgroups', () => stats.counts.dispatches++);
     wrap(g.GPUComputePassEncoder, 'dispatchWorkgroupsIndirect', () => stats.counts.dispatches++);
 
@@ -302,9 +495,15 @@ export function installGpuStats(g: any = globalThis): GpuStats {
     const countsFor = (enc: any): FrameCounts => bundleCounts.get(enc) ?? stats.counts;
     const draw = (enc: any, count: number, instances: number) => {
         const c = countsFor(enc);
+        const tris = triangles(drawing.get(enc) ?? 'triangle-list', count) * instances;
         c.draws++;
         c.instances += instances;
-        c.triangles += triangles(drawing.get(enc) ?? 'triangle-list', count) * instances;
+        c.triangles += tris;
+        if (c === stats.counts) {
+            const p = stats.passCounts();
+            p.draws++;
+            p.triangles += tris;
+        }
     };
     for (const cls of [g.GPURenderPassEncoder, g.GPURenderBundleEncoder]) {
         wrap(cls, 'setPipeline', (enc, [pipeline]) => {
@@ -326,11 +525,17 @@ export function installGpuStats(g: any = globalThis): GpuStats {
     wrap(g.GPURenderPassEncoder, 'executeBundles', (_enc, [bundles]) => {
         for (const b of bundles ?? []) {
             const c = bundleOf.get(b);
-            if (c) addCounts(stats.counts, c);
+            if (!c) continue;
+            addCounts(stats.counts, c);
+            const p = stats.passCounts();
+            p.draws += c.draws;
+            p.triangles += c.triangles;
         }
     });
 
-    wrap(g.GPUQueue, 'submit', () => stats.counts.submits++);
+    wrap(g.GPUQueue, 'submit', () => {
+        if (!stats.internal) stats.counts.submits++;
+    });
     wrap(g.GPUQueue, 'writeBuffer', (_q, [, , data, dataOffset, size]) => {
         // With a typed array, the offset and size count its elements.
         const unit = ArrayBuffer.isView(data) ? ((data as any).BYTES_PER_ELEMENT ?? 1) : 1;
@@ -346,8 +551,139 @@ export function installGpuStats(g: any = globalThis): GpuStats {
         stats.counts.uploadBytes += data?.byteLength ?? 0;
     });
     wrap(g.GPUQueue, 'copyExternalImageToTexture', (_q, [, dest]) => image(dest));
+    // Textures filled from buffers hold data: lookup tables, generated or decoded textures.
+    wrap(g.GPUCommandEncoder, 'copyBufferToTexture', (_e, [, dest]) => {
+        const r = dest?.texture && resources.get(dest.texture);
+        if (r) stats.reclassify(r, 'data');
+    });
 
     return stats;
+
+    /** Like wrap, with `before` changing the arguments first. */
+    function wrapBefore(cls: any, name: string, before: (self: any, args: any[]) => any[], after: () => void) {
+        const proto = cls?.prototype;
+        const orig = proto?.[name];
+        if (typeof orig !== 'function' || orig[WRAPPED]) return;
+        const wrapped = function (this: any, ...args: any[]) {
+            let a = args;
+            try {
+                a = before(this, args);
+            } catch {
+                a = args;
+            }
+            const result = orig.apply(this, a);
+            try {
+                after();
+            } catch {
+                // Counting never breaks drawing.
+            }
+            return result;
+        };
+        (wrapped as any)[WRAPPED] = true;
+        proto[name] = wrapped;
+    }
+}
+
+/**
+ * Times passes on the GPU while `stats.profileGpu` is on: every pass of a
+ * frame gets timestamp writes into a query set, which the end of the frame
+ * resolves and reads back; frames are timed while no read-back is pending.
+ */
+function gpuTimer(stats: GpuStats, g: any) {
+    let device: any = null;
+    /** The device the query set is for (set up once). */
+    let setFor: any = null;
+    let querySet: any = null;
+    let resolveBuf: any = null;
+    let readBuf: any = null;
+    let used = 0;
+    let names: string[] = [];
+    let pending = false;
+    let pendingSince = 0;
+    /** Frames read back, and whether any had real times (some devices write zeros). */
+    let reads = 0;
+    let valid = false;
+    const ok = (d: any) => !!d?.features?.has?.('timestamp-query') && typeof d.createQuerySet === 'function';
+    const setup = (d: any) => {
+        if (setFor === d) return !!querySet;
+        setFor = d;
+        querySet = null;
+        stats.internal = true;
+        try {
+            querySet = d.createQuerySet({ type: 'timestamp', count: TIMED_PASSES * 2 });
+            resolveBuf = d.createBuffer({ size: TIMED_PASSES * 16, usage: QUERY_RESOLVE | COPY_SRC });
+            readBuf = d.createBuffer({ size: TIMED_PASSES * 16, usage: (g.GPUBufferUsage?.MAP_READ ?? MAP_READ) | COPY_DST });
+        } catch {
+            querySet = null;
+        } finally {
+            stats.internal = false;
+        }
+        return !!querySet;
+    };
+    return {
+        // Some devices write zeros, and a read-back that never comes back means none arrive.
+        supported: () => ok(device) && (valid || reads < 4) && !(pending && performance.now() - pendingSince > 5000),
+        /** The pass descriptor, with timestamp writes when this pass is timed. */
+        timed(d: any, args: any[]): any[] {
+            if (!d) return args;
+            if (!device && ok(d)) device = d;
+            if (!stats.profileGpu || pending || stats.internal || used + 2 > TIMED_PASSES * 2 || !ok(d)) return args;
+            const desc = args[0];
+            if (desc?.timestampWrites || !setup(d)) return args;
+            const at = used;
+            used += 2;
+            names.push(stats.scope);
+            return [{ ...(desc ?? {}), timestampWrites: { querySet, beginningOfPassWriteIndex: at, endOfPassWriteIndex: at + 1 } }, ...args.slice(1)];
+        },
+        /** Ends a timed frame: resolves its timestamps and reads them back. */
+        resolve() {
+            if (!used || pending || !querySet) {
+                used = 0;
+                names = [];
+                return;
+            }
+            const count = used;
+            const passNames = names;
+            used = 0;
+            names = [];
+            pending = true;
+            pendingSince = performance.now();
+            stats.internal = true;
+            try {
+                const enc = device.createCommandEncoder();
+                enc.resolveQuerySet(querySet, 0, count, resolveBuf, 0);
+                enc.copyBufferToBuffer(resolveBuf, 0, readBuf, 0, count * 8);
+                device.queue.submit([enc.finish()]);
+            } catch {
+                pending = false;
+                return;
+            } finally {
+                stats.internal = false;
+            }
+            readBuf.mapAsync(g.GPUMapMode?.READ ?? 1, 0, count * 8).then(
+                () => {
+                    const t = new BigInt64Array(readBuf.getMappedRange(0, count * 8).slice(0));
+                    readBuf.unmap();
+                    const times = new Map<string, number>();
+                    for (let i = 0; i < passNames.length; i++) {
+                        const ns = Number(t[2 * i + 1] - t[2 * i]);
+                        // A pass whose encoder was never submitted reads 0s.
+                        if (!(ns > 0 && ns < 1e9)) continue;
+                        times.set(passNames[i], (times.get(passNames[i]) ?? 0) + ns / 1e6);
+                    }
+                    reads++;
+                    if (times.size) {
+                        valid = true;
+                        stats.gpuFrame(times);
+                    }
+                    pending = false;
+                },
+                () => {
+                    pending = false;
+                },
+            );
+        },
+    };
 }
 
 /** The counter of the page, if installed. */

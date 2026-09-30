@@ -1,7 +1,7 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
-    MeshRenderer, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, Texture,
-    View3D, VolumetricFogPost,
+    AtmosphericComponent, BloomPost, Camera3D, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowPass, PointShadowPass, LightBase, SkyRenderer, SolidColorSky, SSRPost,
+    Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
 import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
@@ -11,11 +11,12 @@ import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
 import { GIController, giEngineSetting } from './gi';
 import { installGpuStats, type GpuStats } from './gpuStats';
+import { fitLightShadow } from './shadows';
 
 type PostCtor = new () => PostBase;
 
-/** The built-in effects in the order they run: fog over ambient occlusion, light shafts over fog, bloom of it all. */
-const BUILTIN_ORDER = ['GTAOPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
+/** The built-in effects in the order they run: reflections over ambient occlusion, fog over them, light shafts over fog, bloom of it all. */
+const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
 const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
 /** Least time between two bakes of the physical sky with clouds, ms. */
 const CLOUD_BAKE_MS = 250;
@@ -65,9 +66,6 @@ export class Runtime {
     /** A tier previewed instead of the document's (View > Graphics Quality, ?quality=). */
     private qualityOverride: QualityLevel | null = null;
     private qualitySetting: QualitySetting = 'auto';
-    /** Directional shadows: meters covered, and whether around the camera. */
-    private shadowRange = 60;
-    private shadowFollow = false;
     private lastEnvDoc: EnvironmentDoc | null = null;
 
     fps = 0;
@@ -92,6 +90,11 @@ export class Runtime {
     private physical: PhysicalSkyComponent | null = null;
     private solidSky: SkyRenderer | null = null;
     private solidSkyTexture: SolidColorSky | null = null;
+    /** The HDRI sky's image asset, and its cube texture once loaded. */
+    private hdriAsset: string | null = null;
+    private hdriTexture: Texture | null = null;
+    /** An object URL for an image asset (the scene sync sets it): the HDRI sky loads through it. */
+    assetUrl: ((asset: string) => Promise<string | null>) | null = null;
     private post: PostProcessingComponent;
     private lastEnv = '';
     /** Environment waiting for a sky component to finish starting. */
@@ -119,6 +122,14 @@ export class Runtime {
         this.grid.name = 'EditorGrid';
         this.grid.y = 0.002;
         this.scene.addChild(this.grid);
+        // Mirrors leave it out, as they leave each other out; it casts no
+        // shadow (it would be drawn into every shadow map, every frame).
+        this.grid.traverse((o: Object3D) => {
+            const mr = o.getComponent(MeshRenderer);
+            if (!mr) return;
+            mr.addMask(MirrorComponent.MIRROR_MASK);
+            mr.castShadow = false;
+        });
 
         this.view = new View3D();
         this.view.scene = this.scene;
@@ -136,6 +147,8 @@ export class Runtime {
     static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean; quality?: QualityLevel } = {}): Promise<Runtime> {
         let runtime: Runtime | null = null;
         const stats = opts.stats === false ? null : installGpuStats();
+        // The Profiler's CPU time, draws and GPU time per pass.
+        if (stats) RenderGraph.passHook = { begin: (name) => stats.passBegin(name), end: (name) => stats.passEnd(name) };
         const quality = opts.quality ?? 'high';
         const tier = QUALITY[quality];
         const engine = await Engine3D.init({
@@ -143,14 +156,17 @@ export class Runtime {
             setting: {
                 // The editor does its own ray picking against the document.
                 pick: { enable: false },
-                // The map size has to be the size the shadows are filtered and biased for.
+                // Each light sizes its own shadow map (engine/shadows.ts), up
+                // to the device tier's largest; the engine allocates them as
+                // lights cast.
                 shadow: {
                     type: 'PCF',
                     shadowBound: 60,
                     shadowSize: tier.shadowMapSize,
-                    maxShadowMapWidth: tier.shadowMapSize,
-                    maxShadowMapHeight: tier.shadowMapSize,
-                    pointShadowSize: tier.pointShadowSize,
+                    maxShadowMapWidth: tier.shadowMapMax,
+                    maxShadowMapHeight: tier.shadowMapMax,
+                    pointShadowSize: tier.pointShadowSize / 2,
+                    pointShadowAtlasMax: tier.shadowAtlasMax,
                 },
                 gi: giEngineSetting(),
                 // Imported models keep the node matrices of their files
@@ -256,6 +272,7 @@ export class Runtime {
     private beforeTick() {
         this.stats?.beginFrame();
         this.fitShadowLights();
+        const start = performance.now();
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -264,6 +281,8 @@ export class Runtime {
             }
         }
         this.engineStart = performance.now();
+        // Play (scripts, behavior trees, physics) and the walk camera run here.
+        if (this.beforeListeners.size) this.stats?.addCpu('Play and walk', this.engineStart - start);
     }
 
     /** The camera the view renders through: the editor camera, or a scene camera in Play mode. */
@@ -297,23 +316,27 @@ export class Runtime {
     }
 
     /**
-     * Directional shadows cover `shadowRange` meters around their light
-     * (or the camera), and as far toward the light as that, so tall
-     * casters do not lose their tops. Lights that start later get it on
-     * the next frame; the setters do nothing when nothing changed.
+     * Fits every shadow-casting light's map to the tier drawn: its size,
+     * when it is drawn again and what a directional light's covers (see
+     * engine/shadows.ts). Lights that start later get it on the next frame;
+     * the setters do nothing when nothing changed.
      */
     private fitShadowLights() {
-        const lights = ShadowLightsCollect.directionLightList?.get(this.scene);
-        if (!lights?.length) return;
-        const r = this.shadowRange;
-        for (const l of lights) {
-            if (!(l instanceof DirectLight) || l.enableCSM) continue;
-            l.shadowBoundWidth = r;
-            l.shadowBoundHeight = r;
-            l.shadowBoundNear = -r;
-            l.shadowBoundFar = r;
-            l.shadowFollow = this.shadowFollow;
+        const tier = QUALITY[this.qualityLevel];
+        for (const l of EntityCollect.instance.getLights(this.scene)) {
+            if (l instanceof LightBase && l.castShadow) fitLightShadow(l, tier);
         }
+    }
+
+    /**
+     * Draws every shadow map again next frame: the maps are drawn again on
+     * their own when a light or a caster moves, not when a material
+     * changes what a caster cuts out.
+     */
+    redrawShadows() {
+        const graph = this.view.renderGraph;
+        graph?.getPass<ShadowPass>('ShadowPass')?.forceUpdate();
+        graph?.getPass<PointShadowPass>('PointShadowPass')?.forceUpdate();
     }
 
     private tick() {
@@ -389,6 +412,18 @@ export class Runtime {
         gtao.maxDistance = Math.min(50, Math.max(0.1, env.ao.distance));
         this.togglePost(GTAOPost, env.ao.enable && tier.ao);
 
+        const ssr = pp.ssr!;
+        ssr.reflectionRatio = env.ssr.strength;
+        ssr.roughnessThreshold = env.ssr.roughness;
+        ssr.fadeDistanceMax = env.ssr.distance;
+        ssr.fadeDistanceMin = env.ssr.distance * 0.5;
+        if (tier.ssrScale > 0 && ssr.pixelRatio !== tier.ssrScale) {
+            ssr.pixelRatio = tier.ssrScale;
+            // Made at the old size: traced again at the new one.
+            (this.post.getPost(SSRPost as any) as SSRPost | null)?.onResize();
+        }
+        this.togglePost(SSRPost, env.ssr.enable && tier.ssrScale > 0);
+
         const fog = pp.globalFog!;
         const f = env.fog;
         fog.fogType = FOG_TYPES[f.mode] ?? 0;
@@ -429,11 +464,9 @@ export class Runtime {
         this.togglePost(GodRayPost, gr.enable && tier.godRaySteps > 0);
 
         const shadow = setting.shadow;
-        this.shadowRange = Math.min(env.shadow.range, tier.shadowRangeMax);
-        this.shadowFollow = env.shadow.follow;
-        shadow.shadowBound = this.shadowRange;
         shadow.pcfKernelScale = env.shadow.softness;
         shadow.updateFrameRate = tier.shadowEvery;
+        shadow.pointShadowAtlasMax = tier.shadowAtlasMax;
         this.fitShadowLights();
 
         const fxaa = this.postList()?.get('FXAAPost');
@@ -462,7 +495,7 @@ export class Runtime {
             this.scene.removeComponent(PhysicalSkyComponent);
             this.physical = null;
         }
-        if (sky !== 'color' && this.solidSky) {
+        if (sky !== 'color' && sky !== 'hdri' && this.solidSky) {
             if (!this.solidSky.geometry) return false;
             this.scene.removeComponent(SkyRenderer);
             this.solidSky = null;
@@ -499,7 +532,9 @@ export class Runtime {
             c.displaySun = p.displaySun;
             c.exposure = p.exposure;
         } else {
+            // A flat color, or the HDRI image once it has loaded (the color until then).
             const color = hexToColor(env.skyColor);
+            const made = !this.solidSky;
             if (!this.solidSky) {
                 this.solidSky = this.scene.addComponent(SkyRenderer);
                 this.solidSkyTexture = new SolidColorSky(color, this.engine.context3D);
@@ -508,9 +543,41 @@ export class Runtime {
             } else {
                 this.solidSkyTexture!.color = color;
             }
+            const hdri = sky === 'hdri' ? env.skyHdri ?? null : null;
+            if (hdri !== this.hdriAsset) {
+                this.hdriAsset = hdri;
+                this.hdriTexture = null;
+                this.showSkyMap(this.solidSkyTexture!);
+                if (hdri) void this.loadHdri(hdri);
+            } else if (made && this.hdriTexture) {
+                // Back from another sky: the image loaded before shows again.
+                this.showSkyMap(this.hdriTexture);
+            }
             this.solidSky.exposure = env.skyExposure;
         }
         return true;
+    }
+
+    /** Shows a sky texture around the scene, and lights the scene with it. */
+    private showSkyMap(tex: Texture) {
+        if (!this.solidSky) return;
+        this.solidSky.map = tex as any;
+        this.scene.envMap = tex as any;
+        this.gi.invalidate();
+    }
+
+    /** Loads the HDRI sky's image into a cube texture and shows it, if it is still the one asked for. */
+    private async loadHdri(asset: string) {
+        try {
+            const url = await this.assetUrl?.(asset);
+            if (!url || this.hdriAsset !== asset) return;
+            const tex = await Engine3D.resFor(this.engine.context3D).loadHDRTextureCube(url);
+            if (this.hdriAsset !== asset || !tex) return;
+            this.hdriTexture = tex;
+            this.showSkyMap(tex);
+        } catch (e) {
+            console.warn('[editor] the HDRI sky could not be loaded', e);
+        }
     }
 
     private postPass(): any {

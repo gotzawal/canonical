@@ -1,0 +1,65 @@
+name: Library mirror
+
+# Mirrors the open-source assets listed in scripts/library/sources.json into
+# editor/library (scripts/mirror-library.mjs) and commits them to the branch
+# that changed the list. The runner reaches the asset hosts (GitHub, Poly
+# Haven's API) that a development machine may not; the mirror pins what it
+# took (commits, asset ids), so the next run takes the same files.
+
+on:
+  push:
+    branches-ignore: [main]
+    paths:
+      - scripts/library/sources.json
+      - .github/workflows/library-mirror.yml
+  workflow_dispatch:
+    inputs:
+      latest:
+        description: Move every source to its newest assets (--latest)
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: library-mirror-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Setup node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install deps
+        run: pnpm install --frozen-lockfile
+
+      - name: Mirror the sources
+        run: node scripts/mirror-library.mjs ${{ inputs.latest && '--latest' || '' }}
+
+      - name: Commit the mirror
+        run: |
+          git add -A editor/library scripts/library/sources.json
+          if git diff --cached --quiet; then
+            echo "The mirror is up to date."
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m "chore(library): mirror the asset sources" -m "Made by the Library mirror workflow from scripts/library/sources.json."
+          git push

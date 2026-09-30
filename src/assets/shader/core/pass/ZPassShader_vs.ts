@@ -33,9 +33,22 @@ export let ZPassShader_vs: string = /*wgsl*/ `
         ${SkeletonAnimation_shader.groupBindingAndFunctions(1, 0)}
     #endif
 
+    // Instanced draws (InstanceDrawComponent) read each instance's matrix
+    // index; group 1, the first after the global one this pass has.
+    #if USE_INSTANCEDRAW
+        struct InstanceUniform {
+            matrixIDs : array<i32>
+        };
+        @group(1) @binding(7)
+        var<storage, read> instanceDrawID : InstanceUniform;
+    #endif
+
     @vertex
     fn main(vertex: VertexAttributes) -> VertexOutput {
         worldMatrix = models.matrix[vertex.index];
+        #if USE_INSTANCEDRAW
+            worldMatrix = models.matrix[u32(instanceDrawID.matrixIDs[vertex.index])];
+        #endif
 
         var vertexPosition = vertex.position;
         var vertexNormal = vertex.normal;

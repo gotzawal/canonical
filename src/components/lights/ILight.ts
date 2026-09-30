@@ -9,6 +9,11 @@ export interface ILight {
     lightData: LightData;
     needUpdateShadow: boolean;
     realTimeShadow: boolean;
+    shadowUpdate: 'auto' | 'every_frame' | 'static';
+    shadowMapSize: number;
+    shadowMapWidth: number;
+    shadowMapHeight: number;
+    _shadowSignatures: number[];
 
     shadowIndex: number;
 

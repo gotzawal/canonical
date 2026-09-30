@@ -14,9 +14,11 @@ import type {
 import { findNode, findService, isCompositeDoc, memoryChoiceKeys, newItemId, toReadableId, treeIds, uniqueId, walkNodes } from './format';
 import { BUILTIN_MODELS, MODEL_KINDS, modelKind } from './models';
 import {
-    COMMON_FIELDS, decoratorType, DECORATOR_TYPES, fieldDefault, isReadableId, KEY_OWNERS, KEY_TYPES, NODE_TYPES, nodeType,
+    COMMON_FIELDS, decoratorType, DECORATOR_TYPES, fieldDefault, isReadableId, KEY_OWNERS, KEY_TYPES, newItem, NODE_TYPES, nodeType,
     serviceType, SERVICE_TYPES, typeDefault, valueFits, type FieldDef, type ItemTypeDef,
 } from './nodeTypes';
+
+const COMPOSITES = NODE_TYPES.filter((t) => t.category === 'composite').map((t) => t.type);
 import { isFolderUrl, issueKey, validateAgent, validateModels, validateSchema, validateTree, type Issue } from './validate';
 
 /** One operation: { op: 'add_node', tree: 'Guard', parent: 'root', node: {...} }. See OP_DOCS for the list. */
@@ -105,7 +107,7 @@ export const OP_DOCS: { op: string; fields: string; description: string }[] = [
     { op: 'move_node', fields: 'tree, node, parent, index? | before? | after?', description: 'Move a node to another parent or position (index, or before / after a sibling id).' },
     { op: 'delete_node', fields: 'tree, node', description: 'Delete a node and everything under it.' },
     { op: 'duplicate_node', fields: 'tree, node, id?', description: 'Copy a node and its subtree (new ids) right after it.' },
-    { op: 'wrap_nodes', fields: 'tree, nodes: [ids], type: selector|sequence, id?', description: 'Put sibling nodes (or the root) into a new Selector or Sequence where the first one was.' },
+    { op: 'wrap_nodes', fields: 'tree, nodes: [ids], type: selector|sequence|parallel|random, id?', description: 'Put sibling nodes (or the root) into a new composite where the first one was.' },
     { op: 'add_decorator', fields: 'tree, node, decorator: {type, ...fields}, index?', description: 'Attach a decorator.' },
     { op: 'update_decorator', fields: 'tree, node, index, set', description: 'Change a decorator (by its index on the node).' },
     { op: 'remove_decorator', fields: 'tree, node, index', description: 'Remove a decorator.' },
@@ -703,7 +705,7 @@ function placement(op: BehaviorOp, parent: BtCompositeDoc, tree: BehaviorTreeDoc
 
 function asComposite(tree: BehaviorTreeDoc, ref: unknown, field = 'parent'): BtCompositeDoc {
     const { node } = nodeIn(tree, ref, field);
-    if (!isCompositeDoc(node)) throw new OpFail(`"${node.id}" is a ${nodeType(node.type)?.label ?? node.type}; only Selector and Sequence nodes have children.`, { tree: tree.id, node: node.id, field });
+    if (!isCompositeDoc(node)) throw new OpFail(`"${node.id}" is a ${nodeType(node.type)?.label ?? node.type}; only composites (Selector, Sequence, Parallel, Random Selector) have children.`, { tree: tree.id, node: node.id, field });
     return node;
 }
 
@@ -1008,19 +1010,20 @@ function apply(d: Draft, op: BehaviorOp) {
             const ids = need<unknown[]>(op, 'nodes');
             if (!Array.isArray(ids) || !ids.length) throw new OpFail('nodes must be a list of node ids.', { tree: t.id, field: 'nodes' });
             const type = String(need(op, 'type'));
-            if (type !== 'selector' && type !== 'sequence') throw new OpFail('type must be selector or sequence.', { tree: t.id, field: 'type' });
+            const def = nodeType(type);
+            if (def?.category !== 'composite') throw new OpFail(`type must be a composite: ${COMPOSITES.join(', ')}.`, { tree: t.id, field: 'type' });
             const taken = treeIds(t);
             const id = op.id === undefined ? newItemId(type, taken) : readableId(op.id, taken, { tree: t.id });
             const hits = ids.map((r) => nodeIn(t, r, 'nodes'));
             if (hits.length === 1 && !hits[0].parent) {
-                t.root = { id, type, children: [t.root] } as BtNodeDoc;
+                t.root = newItem(def, { id, children: [t.root] }) as BtNodeDoc;
             } else {
                 const parent = hits[0].parent;
                 if (!parent || hits.some((h) => h.parent !== parent)) throw new OpFail('Only siblings (nodes with the same parent) can be wrapped together.', { tree: t.id, field: 'nodes' });
                 const nodes = parent.children.filter((c) => hits.some((h) => h.node === c));
                 const at = parent.children.indexOf(nodes[0]);
                 parent.children = parent.children.filter((c) => !nodes.includes(c));
-                parent.children.splice(at, 0, { id, type, children: nodes } as BtNodeDoc);
+                parent.children.splice(at, 0, newItem(def, { id, children: nodes }) as BtNodeDoc);
             }
             d.touchTree(t);
             d.created.push({ kind: 'node', id, tree: t.id });

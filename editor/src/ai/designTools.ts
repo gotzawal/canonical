@@ -85,7 +85,7 @@ export const designTools = tools({
                 },
             },
             effects: { type: 'array', items: { type: 'object', properties: { id: { type: 'string' }, name: { type: 'string' }, area: { type: 'string' }, note: { type: 'string' }, done: { type: 'boolean' }, remove: { type: 'boolean' } }, required: ['name'] } },
-            budget: { type: 'object', properties: { shadow_lights: { type: 'number' }, fps: { type: 'number' } } },
+            budget: { type: 'object', properties: { shadow_lights: { type: 'number' }, shadow_memory: { type: 'number', description: 'MiB the shadow maps may take at the high tier.' }, fps: { type: 'number' } } },
         },
         run({ env, args, store }) {
             // Validate on a copy so a bad field changes nothing.
@@ -527,6 +527,7 @@ function applyDesign(env: ToolEnv, d: DesignDoc, args: Json): { changed: string[
     if (args.budget !== undefined) {
         const b = args.budget as Json;
         if (b.shadow_lights !== undefined) d.budget.shadowLights = Math.max(0, Math.round(num(b.shadow_lights, 'budget.shadow_lights')));
+        if (b.shadow_memory !== undefined) d.budget.shadowMemory = Math.min(4096, Math.max(1, Math.round(num(b.shadow_memory, 'budget.shadow_memory'))));
         if (b.fps !== undefined) d.budget.fps = Math.max(1, num(b.fps, 'budget.fps'));
         changed.push('budget');
     }

@@ -737,10 +737,10 @@ export class RenderNode extends ComponentBase {
                                 renderShader.setTexture(`shadowMap`, depth2DArrayTexture as any);
                             }
                         }
-                        if (graph.pool.has('_PointShadowCubeArray')) {
-                            const cubeArrayTexture = graph.pool.get('_PointShadowCubeArray');
-                            if (cubeArrayTexture) {
-                                renderShader.setTexture(`pointShadowMap`, cubeArrayTexture as any);
+                        if (graph.pool.has('_PointShadowAtlas')) {
+                            const atlasTexture = graph.pool.get('_PointShadowAtlas');
+                            if (atlasTexture) {
+                                renderShader.setTexture(`pointShadowMap`, atlasTexture as any);
                             }
                         }
                     }

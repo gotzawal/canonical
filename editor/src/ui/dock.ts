@@ -3,6 +3,7 @@ import { BehaviorPanel } from './behavior/behaviorPanel';
 import { onChanges, touches } from './batch';
 import { CodePanel, type CodeKind } from './codePanel';
 import { DecisionLogPanel } from './decisionLogPanel';
+import { ProfilerPanel } from './profilerPanel';
 import { clear, h, shortcutLabel } from './dom';
 import { icon } from './icons';
 import { confirmDialog, toast } from './overlays';
@@ -21,17 +22,18 @@ interface OpenDoc {
 const DOCK_KEY = 'canonical-editor/dock';
 
 /** Tabs that are always there, before the file tabs. */
-type FixedKey = 'graph' | 'behavior' | 'decisions';
+type FixedKey = 'graph' | 'behavior' | 'decisions' | 'profiler';
 
 /**
  * Bottom panel under the viewport: the render graph, the behavior trees, the
- * decision log and one tab per open script, shader or tree JSON.
+ * decision log, the profiler and one tab per open script, shader or tree JSON.
  */
 export class Dock {
     readonly el: HTMLElement;
     readonly graph: RenderGraphPanel;
     readonly behavior: BehaviorPanel;
     readonly decisions: DecisionLogPanel;
+    readonly profiler: ProfilerPanel;
     private tabs: HTMLElement;
     private body: HTMLElement;
     private graphTab: HTMLElement;
@@ -43,13 +45,15 @@ export class Dock {
         this.graph = new RenderGraphPanel(editor);
         this.behavior = new BehaviorPanel(editor);
         this.decisions = new DecisionLogPanel(editor);
+        this.profiler = new ProfilerPanel(editor);
         this.graphTab = this.makeTab('graph', icon('graph', 13), 'Render Graph', null);
         this.fixed = {
             graph: { tab: this.graphTab, el: this.graph.el, setVisible: (v) => this.graph.setVisible(v) },
             behavior: { tab: this.makeTab('behavior', icon('behavior', 13), 'Behavior', null), el: this.behavior.el, setVisible: (v) => this.behavior.setVisible(v) },
             decisions: { tab: this.makeTab('decisions', icon('list', 13), 'Decisions', null), el: this.decisions.el, setVisible: (v) => this.decisions.setVisible(v) },
+            profiler: { tab: this.makeTab('profiler', icon('gauge', 13), 'Profiler', null), el: this.profiler.el, setVisible: (v) => this.profiler.setVisible(v) },
         };
-        this.tabs = h('div', { class: 'dock-tabs', attrs: { role: 'tablist' } }, this.graphTab, this.fixed.behavior.tab, this.fixed.decisions.tab);
+        this.tabs = h('div', { class: 'dock-tabs', attrs: { role: 'tablist' } }, this.graphTab, this.fixed.behavior.tab, this.fixed.decisions.tab, this.fixed.profiler.tab);
         const collapse = h(
             'button',
             { class: 'icon-btn dock-collapse', title: `Collapse / expand (${shortcutLabel('Mod+J')})`, attrs: { type: 'button', 'aria-label': 'Collapse panel' } },
@@ -62,6 +66,7 @@ export class Dock {
         editor.on('open-code', ({ kind, id }) => this.open(kind, id));
         editor.on('show-graph', () => this.show('graph'));
         editor.on('show-behavior', () => this.show('behavior'));
+        editor.on('show-profiler', () => this.show('profiler'));
         editor.on('flush-edits', () => this.applyEdits());
         // Scripts and shaders change without a hint, behavior trees with a behavior hint.
         onChanges(editor.store, (hint) => touches(hint, 'behavior') && this.syncDocs());
@@ -151,7 +156,7 @@ export class Dock {
 
     private makeTab(key: string, ic: Element, label: string, title: HTMLElement | null): HTMLElement {
         const tab = h('div', { class: 'dock-tab', dataset: { key }, attrs: { role: 'tab', tabindex: 0 } }, ic, title ?? h('span', { class: 'dock-tab-title', text: label }));
-        const fixed = key === 'graph' || key === 'behavior' || key === 'decisions';
+        const fixed = key === 'graph' || key === 'behavior' || key === 'decisions' || key === 'profiler';
         tab.addEventListener('click', (e) => {
             if ((e.target as HTMLElement).closest('.dock-tab-close')) return;
             if (this.active === key && !this.collapsed) {

@@ -125,6 +125,10 @@ describe('GPU counting', () => {
         staging.destroy();
         target.destroy();
         expect(stats.memory.stable).toBe(64);
+        // Depth arrays are shadow maps, and the list names every live texture.
+        device.createTexture({ size: { width: 16, height: 16, depthOrArrayLayers: 2 }, format: 'depth32float', usage: 0x2 | 0x4, label: 'shadows' });
+        expect(stats.memory.textures.shadow).toEqual({ bytes: 2048, count: 1 });
+        expect(stats.textures().map((t) => [t.label, t.cls, t.bytes])).toEqual([['shadows', 'shadow', 2048], ['', 'image', 64]]);
     });
 
     it('counts draws, triangles and passes per frame, and bundles each time they run', () => {

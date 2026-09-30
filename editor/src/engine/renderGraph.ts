@@ -166,9 +166,9 @@ export class RenderGraphController extends Emitter<GraphEvents> {
                 const wanted = new Map<string, string>();
                 post.onTextures = (assets) => {
                     for (const name of Array.from(wanted.keys())) if (!assets.some((a) => a.name === name)) wanted.delete(name);
-                    for (const { name, asset } of assets) {
+                    for (const { name, asset, role } of assets) {
                         wanted.set(name, asset);
-                        void this.sync.loadTexture(asset).then((tex) => {
+                        void this.sync.loadTexture(asset, role).then((tex) => {
                             if (tex && wanted.get(name) === asset) post.setTexture(name, tex);
                         });
                     }

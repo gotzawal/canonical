@@ -197,7 +197,104 @@ export const TRIPLANAR_MARKER = '@morglay triplanar';
 /** The marker under the editor's earlier name, in older projects. */
 export const OLD_TRIPLANAR_MARKER = '@canonical triplanar';
 
-export const TRIPLANAR_CODE = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo texture is
+export const TRIPLANAR_CODE = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo, normal
+// and ARM (occlusion, roughness, metallic) textures are projected along x, y
+// and z and blended by the surface normal, so they keep their real size on
+// every mesh. tile is the size of one texture tile in meters. Only the
+// projections a surface faces are read: a floor or a wall reads each texture
+// once. maps says which textures there are (1: normal, 2: ARM); roughness and
+// metallic multiply the ARM map's.
+// @property albedo texture white
+// @property normalTex texture normal
+// @property armTex texture data
+// @property tile float 2 0.05 50
+// @property sharpness float 4 1 16
+// @property normalStrength float 1 0 2
+// @property maps float 0 0 3
+
+struct Triplanar {
+    color: vec4f,
+    arm: vec3f,
+    // The normal maps' slope, in world space.
+    bump: vec3f,
+};
+
+fn triplanarSample(p: vec3f, n: vec3f) -> Triplanar {
+    let s = 1.0 / max(materialUniform.tile, 0.001);
+    var w = pow(abs(n), vec3f(materialUniform.sharpness));
+    w = w / max(w.x + w.y + w.z, 0.0001);
+    // Leave out the projections that barely count, then weigh the rest to one.
+    w = select(vec3f(0.0), w, w > vec3f(0.02));
+    w = w / max(w.x + w.y + w.z, 0.0001);
+    // Gradients while every pixel runs here: the projections below read
+    // only where they weigh (textureSampleGrad needs no uniform flow).
+    let dx = dpdx(p) * s;
+    let dy = dpdy(p) * s;
+    let flags = u32(materialUniform.maps + 0.5);
+    let useNormal = (flags & 1u) != 0u;
+    let useArm = (flags & 2u) != 0u;
+    var out: Triplanar;
+    out.color = vec4f(0.0);
+    out.arm = vec3f(0.0);
+    out.bump = vec3f(0.0);
+    // Along x: u east (+z), up the image +y.
+    if (w.x > 0.0) {
+        let uv = vec2f(p.z, -p.y) * s;
+        let gx = vec2f(dx.z, -dx.y);
+        let gy = vec2f(dy.z, -dy.y);
+        out.color += textureSampleGrad(albedo, albedoSampler, uv, gx, gy) * w.x;
+        out.arm += select(vec3f(1.0), textureSampleGrad(armTex, armTexSampler, uv, gx, gy).rgb, useArm) * w.x;
+        if (useNormal) {
+            let t = textureSampleGrad(normalTex, normalTexSampler, uv, gx, gy).xy * 2.0 - 1.0;
+            out.bump += (t.x * vec3f(0.0, 0.0, 1.0) + t.y * vec3f(0.0, 1.0, 0.0)) * w.x;
+        }
+    }
+    // Along y: u +x, up the image -z.
+    if (w.y > 0.0) {
+        let uv = vec2f(p.x, p.z) * s;
+        let gx = vec2f(dx.x, dx.z);
+        let gy = vec2f(dy.x, dy.z);
+        out.color += textureSampleGrad(albedo, albedoSampler, uv, gx, gy) * w.y;
+        out.arm += select(vec3f(1.0), textureSampleGrad(armTex, armTexSampler, uv, gx, gy).rgb, useArm) * w.y;
+        if (useNormal) {
+            let t = textureSampleGrad(normalTex, normalTexSampler, uv, gx, gy).xy * 2.0 - 1.0;
+            out.bump += (t.x * vec3f(1.0, 0.0, 0.0) + t.y * vec3f(0.0, 0.0, -1.0)) * w.y;
+        }
+    }
+    // Along z: u +x, up the image +y.
+    if (w.z > 0.0) {
+        let uv = vec2f(p.x, -p.y) * s;
+        let gx = vec2f(dx.x, -dx.y);
+        let gy = vec2f(dy.x, -dy.y);
+        out.color += textureSampleGrad(albedo, albedoSampler, uv, gx, gy) * w.z;
+        out.arm += select(vec3f(1.0), textureSampleGrad(armTex, armTexSampler, uv, gx, gy).rgb, useArm) * w.z;
+        if (useNormal) {
+            let t = textureSampleGrad(normalTex, normalTexSampler, uv, gx, gy).xy * 2.0 - 1.0;
+            out.bump += (t.x * vec3f(1.0, 0.0, 0.0) + t.y * vec3f(0.0, 1.0, 0.0)) * w.z;
+        }
+    }
+    return out;
+}
+
+fn frag() {
+    let n = normalize(ORI_VertexVarying.vWorldNormal);
+    let p = ORI_VertexVarying.vWorldPos.xyz;
+    let t = triplanarSample(p, n);
+    let c = t.color * materialUniform.baseColor;
+    ORI_ShadingInput.BaseColor = vec4f(c.rgb, materialUniform.baseColor.a);
+    ORI_ShadingInput.Roughness = clamp(t.arm.g * materialUniform.roughness, 0.02, 1.0);
+    ORI_ShadingInput.Metallic = t.arm.b * materialUniform.metallic;
+    ORI_ShadingInput.Specular = 1.0;
+    ORI_ShadingInput.AmbientOcclusion = t.arm.r;
+    ORI_ShadingInput.EmissiveColor = vec4f(materialUniform.emissiveColor.rgb, 1.0);
+    ORI_ShadingInput.Normal = normalize(n + t.bump * materialUniform.normalStrength);
+    useShadow();
+    BxDFShading();
+}
+`;
+
+/** Earlier versions of TRIPLANAR_CODE: a project that still has one unchanged gets the current one. */
+export const OLD_TRIPLANAR_CODES: readonly string[] = (() => { const v1 = `// World space triplanar surface (${TRIPLANAR_MARKER}): the albedo texture is
 // projected along x, y and z and blended by the surface normal, so it keeps
 // its real size on every mesh. tile is the size of one texture tile in
 // meters. Roughness and metallic come from the material.
@@ -230,6 +327,9 @@ fn frag() {
     BxDFShading();
 }
 `;
+    // Under the editor's earlier marker too.
+    return [v1, v1.replace(TRIPLANAR_MARKER, OLD_TRIPLANAR_MARKER)];
+})();
 
 /** A post shader running a template's code (found by a marker in it), else one by its file name. */
 export function findPostShader(doc: SceneDoc, name: string, marker: string): ShaderDoc | undefined {
@@ -363,6 +463,63 @@ fn frag() {
     ORI_ShadingInput.EmissiveColor = vec4f(materialUniform.emissiveColor.rgb * materialUniform.emissiveIntensity, 1.0);
     ORI_ShadingInput.Normal = ORI_VertexVarying.vWorldNormal;
     useShadow();
+    BxDFShading();
+}
+`,
+    },
+    {
+        id: 'water',
+        label: 'Water',
+        description: 'Waves, a fresnel reflection of the sky and, with a Mirror component on the object, of the scene, and the sun\'s glint.',
+        kind: 'material',
+        lighting: 'lit',
+        code: `// Water for a flat surface (a plane). mirrorColor(offset) is the scene a
+// Mirror component on the object reflects, moved by offset (screen units);
+// its alpha is 0 without one, and the sky is reflected instead.
+// @property deepColor color #0b2a36
+// @property shallowColor color #1f5e66
+// @property waveScale float 1 0.05 5
+// @property waveSpeed float 1 0 5
+// @property waveHeight float 0.15 0 1
+// @property distortion float 0.03 0 0.2
+// @property reflectivity float 1 0 1
+
+// Slopes of three waves across the surface.
+fn waveSlope(p: vec2f, t: f32) -> vec2f {
+    let k = materialUniform.waveScale;
+    var s = vec2f(0.8, 0.6) * cos(dot(p, vec2f(0.8, 0.6)) * 1.1 * k + t * 1.2);
+    s += vec2f(-0.5, 0.87) * cos(dot(p, vec2f(-0.5, 0.87)) * 2.3 * k - t * 1.7) * 0.5;
+    s += vec2f(0.28, -0.96) * cos(dot(p, vec2f(0.28, -0.96)) * 4.9 * k + t * 2.3) * 0.25;
+    return s * materialUniform.waveHeight;
+}
+
+fn frag() {
+    let p = ORI_VertexVarying.vWorldPos.xyz;
+    let slope = waveSlope(p.xz, getTime() * materialUniform.waveSpeed);
+    let n = normalize(vec3f(-slope.x, 1.0, -slope.y));
+    let v = normalize(globalUniform.CameraPos.xyz - p);
+    let nv = max(dot(n, v), 0.0);
+    let fresnel = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
+    let r = reflect(-v, n);
+
+    // The mirrored scene where there is one, else the sky.
+    let mirror = mirrorColor(n.xz * materialUniform.distortion);
+    let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, r, 0.0).rgb * globalUniform.skyExposure;
+    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity;
+    let sun = lightBuffer[0];
+    let glint = pow(max(dot(r, -normalize(sun.direction)), 0.0), 600.0) * sun.lightColor.rgb * sun.intensity * 8.0;
+
+    ORI_ShadingInput.BaseColor = vec4f(mix(materialUniform.deepColor.rgb, materialUniform.shallowColor.rgb, sqrt(nv)) * (1.0 - fresnel), 1.0);
+    // Rough, so the lighting adds no reflection of its own over this one.
+    ORI_ShadingInput.Roughness = 1.0;
+    ORI_ShadingInput.Metallic = 0.0;
+    ORI_ShadingInput.Specular = 0.0;
+    ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.Normal = n;
+    useShadow();
+    // Emission is read as gamma-encoded color: encode the linear light.
+    let light = reflection * fresnel + glint * directShadowVisibility[0];
+    ORI_ShadingInput.EmissiveColor = vec4f(pow(max(light, vec3f(0.0)), vec3f(1.0 / 2.4)), 1.0);
     BxDFShading();
 }
 `,

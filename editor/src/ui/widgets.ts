@@ -640,7 +640,7 @@ const collapsed = readLocal<Record<string, boolean>>(COLLAPSE_KEY, {});
 
 /** Collapsible inspector section; remembers its open state. */
 export function section(key: string, title: string, iconName: string | null, body: Node[], actions: Node[] = []): HTMLElement {
-    const el = h('section', { class: 'section' + (collapsed[key] ? ' collapsed' : '') });
+    const el = h('section', { class: 'section' + (collapsed[key] ? ' collapsed' : ''), attrs: { 'data-section': key } });
     const header = pressable(
         h(
             'header',

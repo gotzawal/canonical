@@ -39,10 +39,12 @@ export class CompressedTexture2D extends Texture {
     constructor(ctx?: Context3D, colorSpace: TextureColorSpace = 'linear') {
         super();
         this.colorSpace = colorSpace;
-        // A filtering sampler; the mips come with the data.
+        // A filtering sampler over every level: the mips come with the data.
+        // (Stopping at level 4 left a 1024 texture at 64 x 64 however far
+        // it was, which shimmers on tiling surfaces in the distance.)
         this.useMipmap = true;
         this.lodMinClamp = 0;
-        this.lodMaxClamp = 4;
+        this.lodMaxClamp = 32;
         if (ctx) bindCtx(this, ctx);
     }
 

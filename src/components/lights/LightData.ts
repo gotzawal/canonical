@@ -119,6 +119,17 @@ export class LightData extends Struct {
     public csmShadowMapNum: number = 0;
     public csmShadowMapIndex: number = -1;
 
+    /**
+     * Point and spot lights: where each face's shadow is in the shadow atlas,
+     * as atlas uv (x, y) per face (+X, -X, +Y, -Y, +Z, -Z); a face without
+     * one (a spot light's cone does not reach it) has x < 0.
+     */
+    public shadowTiles: Float32Array = new Float32Array(12).fill(-1);
+
+    /** Point and spot lights: a face's size in atlas uv (x, y), and one texel of the atlas in uv (x, y). */
+    public shadowTileScale: number[] = [0, 0];
+    public shadowAtlasTexel: number[] = [0, 0];
+
     // Per-light soft-shadow / PCSS light-size multiplier.
     // -1 means "fall back to globalUniform.shadowSoft". Consumed by
     // DirectShadow_frag and PointShadow_frag SOFT branches.

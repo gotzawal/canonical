@@ -21,10 +21,16 @@ export class LightEntries {
     public storageGPUBuffer: StorageGPUBuffer;
     public irradianceVolume: DDGIIrradianceVolume;
     private _lightList: MemoryInfo[] = [];
+    private _maxCascades: number;
+    /** Floats between the bias arrays and the shadow tiles (a vec4 array starts on 16 bytes). */
+    private _tilePad: number;
 
     constructor(scene: Scene3D) {
         const setting = scene.view!.engine3D.setting;
-        const lightDataSize = LightData.lightSize + setting.shadow.maxCascades * 2;
+        this._maxCascades = setting.shadow.maxCascades;
+        const head = LightData.lightSize + this._maxCascades * 2;
+        this._tilePad = (4 - (head % 4)) % 4;
+        const lightDataSize = head + this._tilePad + 16;
 
         this.storageGPUBuffer = new StorageGPUBuffer(
             lightDataSize * setting.light.maxLight,
@@ -111,7 +117,15 @@ export class LightEntries {
         memory.writeFloat(light.shadowFar);
         memory.writeFloat(light.softness);
 
-        memory.writeArray(light.shadowBias);
-        memory.writeArray(light.normalBias);
+        for (let i = 0; i < this._maxCascades; i++) memory.writeFloat(light.shadowBias[i] ?? 0);
+        for (let i = 0; i < this._maxCascades; i++) memory.writeFloat(light.normalBias[i] ?? 0);
+
+        for (let i = 0; i < this._tilePad; i++) memory.writeFloat(0);
+        const tiles = light.shadowTiles;
+        for (let i = 0; i < 12; i++) memory.writeFloat(tiles ? tiles[i] : -1);
+        memory.writeFloat(light.shadowTileScale[0] ?? 0);
+        memory.writeFloat(light.shadowTileScale[1] ?? 0);
+        memory.writeFloat(light.shadowAtlasTexel[0] ?? 0);
+        memory.writeFloat(light.shadowAtlasTexel[1] ?? 0);
     }
 }

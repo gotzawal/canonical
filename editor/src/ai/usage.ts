@@ -1,7 +1,10 @@
 // What the models cost, per piece of work: each request of the assistant,
 // the summaries of long conversations, the scene memo, images made by hand
-// and the language model calls of scripts in Play. The log is kept per
-// project in this browser (IndexedDB), and the chat's token count opens it
+// and the language model calls of scripts in Play. The assistant's requests
+// are also split by what each model call worked on (the tools it called).
+// Input tokens are split into text and images (estimated from the images'
+// sizes, see openrouter/imageTokens.ts). The log is kept per project in this
+// browser (IndexedDB), and the chat's token count opens it
 // (ui/usageDialog.ts).
 
 import { kvGet, kvSet } from '../core/db';
@@ -10,6 +13,7 @@ import { Emitter } from '../core/events';
 import { uid } from '../core/ids';
 import type { Store } from '../core/store';
 import type { StageId } from '../core/types';
+import type { ToolGroup } from '../design/stages';
 import { cacheTokens, type Usage } from '../openrouter/client';
 import type { ImageQuality } from '../openrouter/imageQuality';
 
@@ -22,6 +26,44 @@ export const USAGE_KINDS: Record<UsageKind, string> = {
     images: 'Images made by hand',
     script: 'Scripts (this.chat)',
 };
+
+/**
+ * What a model call of an assistant request worked on: the group of the
+ * tools it called (the most called one), or an answer without tool calls.
+ */
+export type WorkKind = ToolGroup | 'answer';
+
+export const WORK_KINDS: Record<WorkKind, string> = {
+    answer: 'Answers and questions',
+    read: 'Reading the scene',
+    design: 'Planning and checklists',
+    objects: 'Building and placing objects',
+    prefabs: 'Prefabs',
+    shots: 'Shots',
+    capture: 'Looking at the view',
+    images: 'Paintovers and swatches',
+    concepts: 'Concept images',
+    lights: 'Lighting',
+    environment: 'Sky and environment',
+    compare: 'Comparing shots',
+    materials: 'Materials',
+    effects: 'Effects',
+    audio: 'Sound',
+    code: 'Scripts, shaders and behavior',
+    play: 'Play tests',
+};
+
+/** The part of a request's usage one kind of work spent. */
+export interface WorkPart {
+    calls: number;
+    prompt: number;
+    cached: number;
+    completion: number;
+    imageTokens: number;
+    /** Credits of its model calls and of the images its tools made. */
+    cost: number;
+    made: number;
+}
 
 export interface UsageEntry {
     id: string;
@@ -41,6 +83,8 @@ export interface UsageEntry {
     cached: number;
     written: number;
     completion: number;
+    /** Prompt tokens of the images sent, estimated where not reported (missing in older entries). */
+    imageTokens?: number;
     /** Credits of the language model calls, where reported. */
     cost: number;
     /** Images sent to the language model, and how sharp. */
@@ -53,6 +97,8 @@ export interface UsageEntry {
     drawQuality?: ImageQuality;
     /** Tool calls of an assistant request. */
     tools: number;
+    /** An assistant request's usage by what its model calls worked on (missing in older entries). */
+    work?: Partial<Record<WorkKind, WorkPart>>;
     /** Still going on. */
     running?: boolean;
 }
@@ -64,6 +110,8 @@ export interface UsageTotals {
     prompt: number;
     cached: number;
     completion: number;
+    /** Of the prompt tokens, those of images. */
+    imageTokens: number;
     /** Credits of the language models and the image models. */
     cost: number;
     sent: number;
@@ -71,7 +119,7 @@ export interface UsageTotals {
     ms: number;
 }
 
-export const emptyTotals = (): UsageTotals => ({ count: 0, calls: 0, prompt: 0, cached: 0, completion: 0, cost: 0, sent: 0, made: 0, ms: 0 });
+export const emptyTotals = (): UsageTotals => ({ count: 0, calls: 0, prompt: 0, cached: 0, completion: 0, imageTokens: 0, cost: 0, sent: 0, made: 0, ms: 0 });
 
 export function addTotals(t: UsageTotals, e: UsageEntry | UsageTotals): UsageTotals {
     const one = 'kind' in e;
@@ -80,6 +128,7 @@ export function addTotals(t: UsageTotals, e: UsageEntry | UsageTotals): UsageTot
     t.prompt += e.prompt;
     t.cached += e.cached;
     t.completion += e.completion;
+    t.imageTokens += e.imageTokens ?? 0;
     t.cost += one ? e.cost + e.imageCost : e.cost;
     t.sent += e.sent;
     t.made += e.made;
@@ -100,6 +149,38 @@ export function groupTotals(entries: readonly UsageEntry[], key: (e: UsageEntry)
     return [...groups].sort((a, b) => tokensOf(b[1]) - tokensOf(a[1]) || b[1].cost - a[1].cost);
 }
 
+/**
+ * The assistant's requests by what their model calls worked on, largest
+ * first; requests logged before the breakdown are under null.
+ */
+export function workTotals(entries: readonly UsageEntry[]): [WorkKind | null, UsageTotals][] {
+    const groups = new Map<WorkKind | null, UsageTotals>();
+    const at = (k: WorkKind | null) => {
+        let t = groups.get(k);
+        if (!t) groups.set(k, (t = emptyTotals()));
+        return t;
+    };
+    for (const e of entries) {
+        if (e.kind !== 'request') continue;
+        if (!e.work) {
+            addTotals(at(null), e);
+            continue;
+        }
+        for (const [k, p] of Object.entries(e.work) as [WorkKind, WorkPart][]) {
+            const t = at(k);
+            t.count++;
+            t.calls += p.calls;
+            t.prompt += p.prompt;
+            t.cached += p.cached;
+            t.completion += p.completion;
+            t.imageTokens += p.imageTokens;
+            t.cost += p.cost;
+            t.made += p.made;
+        }
+    }
+    return [...groups].sort((a, b) => tokensOf(b[1]) - tokensOf(a[1]) || b[1].cost - a[1].cost);
+}
+
 /** Totals per model: the language model's calls under its name, generated images under the image model's. */
 export function modelTotals(entries: readonly UsageEntry[]): [string, UsageTotals][] {
     const groups = new Map<string, UsageTotals>();
@@ -116,6 +197,7 @@ export function modelTotals(entries: readonly UsageEntry[]): [string, UsageTotal
             t.prompt += e.prompt;
             t.cached += e.cached;
             t.completion += e.completion;
+            t.imageTokens += e.imageTokens ?? 0;
             t.cost += e.cost;
             t.sent += e.sent;
         }
@@ -134,6 +216,7 @@ export const tokensOf = (t: { prompt: number; completion: number }) => t.prompt 
 const CSV_HEAD = [
     'started', 'kind', 'work', 'stage', 'model', 'calls', 'prompt_tokens', 'cached_tokens', 'cache_write_tokens', 'completion_tokens', 'cost_usd',
     'images_sent', 'image_quality_sent', 'image_model', 'images_made', 'image_cost_usd', 'image_quality_made', 'tool_calls', 'seconds',
+    'image_tokens', 'work_tokens',
 ];
 
 /** The entries as CSV, one row each, oldest first. */
@@ -145,6 +228,7 @@ export function usageCsv(entries: readonly UsageEntry[]): string {
     const rows = [...entries].sort((a, b) => a.at - b.at).map((e) => [
         new Date(e.at).toISOString(), e.kind, e.label, e.stage ?? '', e.model, e.calls, e.prompt, e.cached, e.written, e.completion, round(e.cost),
         e.sent, e.seeQuality ?? '', e.imageModel, e.made, round(e.imageCost), e.drawQuality ?? '', e.tools, (e.ms / 1000).toFixed(1),
+        e.imageTokens ?? '', Object.entries(e.work ?? {}).map(([k, p]) => `${k} ${tokensOf(p!)}`).join('; '),
     ].map(cell).join(','));
     return [CSV_HEAD.join(','), ...rows].join('\n') + '\n';
 }
@@ -171,21 +255,47 @@ const SCRIPT_MERGE_MS = 10 * 60_000;
 export class UsageTask {
     private start = performance.now();
     private ended = false;
+    /** What the tool running now works on: images it makes count there. */
+    private current: WorkKind | null = null;
 
     constructor(private log: UsageLog, readonly entry: UsageEntry, readonly key: string) {}
 
-    /** A language model call's usage report. */
-    chat(model: string, u: Usage | null | undefined) {
+    /**
+     * A language model call's usage report, with the prompt tokens of the
+     * images it was sent (an estimate, where the report has none) and, for
+     * an assistant request, what the call worked on.
+     */
+    chat(model: string, u: Usage | null | undefined, opts: { imageTokens?: number; work?: WorkKind } = {}) {
         const e = this.entry;
         const cache = cacheTokens(u);
+        const prompt = u?.prompt_tokens ?? 0;
+        const completion = u?.completion_tokens ?? 0;
+        const reported = u?.prompt_tokens_details?.image_tokens ?? 0;
+        const imageTokens = Math.min(prompt, reported > 0 ? reported : Math.round(opts.imageTokens ?? 0));
+        const cost = u?.cost ?? 0;
         e.model ||= model;
         e.calls++;
-        e.prompt += u?.prompt_tokens ?? 0;
-        e.completion += u?.completion_tokens ?? 0;
+        e.prompt += prompt;
+        e.completion += completion;
+        e.imageTokens = (e.imageTokens ?? 0) + imageTokens;
         e.cached += cache.read;
         e.written += cache.written;
-        e.cost += u?.cost ?? 0;
+        e.cost += cost;
+        if (opts.work) {
+            const p = this.part(opts.work);
+            p.calls++;
+            p.prompt += prompt;
+            p.cached += cache.read;
+            p.completion += completion;
+            p.imageTokens += imageTokens;
+            p.cost += cost;
+        }
         this.log.touched(this);
+    }
+
+    private part(k: WorkKind): WorkPart {
+        const work = (this.entry.work ??= {});
+        return (work[k] ??= { calls: 0, prompt: 0, cached: 0, completion: 0, imageTokens: 0, cost: 0, made: 0 });
     }
 
     /** Images sent to the language model. */
@@ -196,18 +306,25 @@ export class UsageTask {
         this.log.touched(this);
     }
 
-    /** Images an image model made. */
+    /** Images an image model made (for the tool running now, in a request). */
     images(model: string, count: number, cost: number | null, quality?: ImageQuality) {
         const e = this.entry;
         e.imageModel ||= model;
         e.made += count;
         e.imageCost += cost ?? 0;
         if (quality) e.drawQuality = quality;
+        if (this.current) {
+            const p = this.part(this.current);
+            p.made += count;
+            p.cost += cost ?? 0;
+        }
         this.log.touched(this);
     }
 
-    tool() {
+    /** A tool call of a request, and what it works on. */
+    tool(work?: WorkKind) {
         this.entry.tools++;
+        this.current = work ?? null;
     }
 
     end() {

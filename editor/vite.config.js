@@ -1,7 +1,7 @@
 // Vite config for the browser-only scene editor (editor/).
-// The editor imports the engine straight from ../src (and the particle and
-// atmosphere packages from ../packages), so every build ships whatever
-// engine code is on the branch being built.
+// The editor imports the engine straight from ../src (and the particle,
+// atmosphere and grass packages from ../packages), so every build ships
+// whatever engine code is on the branch being built.
 //
 // Two pages are built: the editor (index.html) and the game player
 // (player.html). File > Build & Deploy copies the player's files into every
@@ -47,6 +47,10 @@ function shared() {
                 { find: '@orillusion/core', replacement: here('../src/index.ts') },
                 { find: '@orillusion/particle', replacement: here('../packages/particle/index.ts') },
                 { find: '@orillusion/atmosphere', replacement: here('../packages/atmosphere/index.ts') },
+                // Only the grass of the geometry package (its index brings in a font parser).
+                { find: '@orillusion/geometry/grass', replacement: here('../packages/geometry/grass/index.ts') },
+                // Only the audio components of the media package (its index brings in video materials).
+                { find: '@orillusion/media-extention/audio', replacement: here('../packages/media-extention/audio.ts') },
                 // The Basis encoder of ktx2-encoder, which its package exports do not
                 // expose: its module and its WebAssembly (imported with ?url).
                 { find: /^basis-encoder$/, replacement: here('../node_modules/ktx2-encoder/dist/basis/basis_encoder.js') },
@@ -72,7 +76,8 @@ function shared() {
  * files their code names, the favicon). `ai` lists the files only agents
  * with models use (the inference worker, ONNX Runtime and its WebAssembly),
  * which games without Ask or Recall leave out; `physics` those of Rapier,
- * which games without physics bodies leave out; `ktx2`, `draco` and
+ * which games without physics bodies leave out; `navmesh` the path finding,
+ * which games without walking NPCs leave out; `ktx2`, `draco` and
  * `meshopt` the decoders of compressed textures and models, which games
  * without such assets leave out.
  */
@@ -143,6 +148,8 @@ function playerManifest() {
                 files: Array.from(files).sort(),
                 ai: only('/play/ai/services.ts'),
                 physics: only('/@dimforge/rapier3d-compat/'),
+                // Path finding (recast-navigation and its worker) for walking NPCs.
+                navmesh: only('/play/navmeshRuntime.ts'),
                 // Decoders the engine loads only for assets that need them.
                 ktx2: only('/src/textures/ktx2/_KTX2Assets.ts'),
                 draco: only('/extends/_DracoAssets.ts'),
@@ -162,6 +169,11 @@ const MIME = {
     '.png': 'image/png',
     '.ico': 'image/x-icon',
     '.wasm': 'application/wasm',
+    '.glb': 'model/gltf-binary',
+    '.ogg': 'audio/ogg',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.md': 'text/markdown; charset=utf-8',
 }
 
 /**
@@ -247,9 +259,39 @@ function devPlayer() {
     }
 }
 
+const LIBRARY = here('./library')
+
+/**
+ * The asset library (editor/library, mirrored by scripts/mirror-library.mjs)
+ * at library/ next to the editor: served by the dev server, copied into the
+ * editor's build. It is not in public/, so the player builds leave it out.
+ */
+function library() {
+    return {
+        name: 'morglay-library',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const url = decodeURIComponent((req.url || '').split('?')[0])
+                if (!url.startsWith('/library/')) return next()
+                const file = path.resolve(LIBRARY, '.' + url.slice('/library'.length))
+                if (!file.startsWith(LIBRARY + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+                    res.statusCode = 404
+                    res.end('Not found')
+                    return
+                }
+                res.setHeader('Content-Type', MIME[path.extname(file)] || 'application/octet-stream')
+                res.end(fs.readFileSync(file))
+            })
+        },
+        writeBundle(options) {
+            if (fs.existsSync(LIBRARY)) fs.cpSync(LIBRARY, path.join(options.dir, 'library'), { recursive: true })
+        },
+    }
+}
+
 export default defineConfig({
     ...shared(),
-    plugins: [playerManifest(), devPlayer()],
+    plugins: [playerManifest(), devPlayer(), library()],
     server: {
         host: '0.0.0.0',
         port: 8100,

@@ -14,6 +14,15 @@
 //   again (an Ask triggered on activate asks once, not on every loop).
 // - Aborted tasks get their abort hook (scripts: onTaskAbort and the task's
 //   AbortSignal).
+// - A Parallel runs its children at the same time, so several branches can
+//   be active and several tasks running; every other composite runs one
+//   child at a time. A Random Selector draws its order each time it starts.
+// - Decorators: conditions and cooldowns decide whether a node may run;
+//   Invert and Force Result change the result it ends with (also when its
+//   conditions keep it from running or abort it; an abort from above ends
+//   a node without a result); Repeat and Retry run it again after a run
+//   that succeeded or failed, on the next tick, so nothing spins within a
+//   tick; Time Limit aborts a run that takes too long, which then fails.
 //
 // The tree never waits on anything: answers, recall results and promises
 // settle between ticks and the next tick sees them.
@@ -21,8 +30,9 @@
 import { valueFits } from '../../core/behavior/nodeTypes';
 import type { Object3D } from '@orillusion/core';
 import type {
-    AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, ConditionDecoratorDoc, InferTaskDoc,
-    MoveToTaskDoc, RecallServiceDoc, ScriptTaskDoc,
+    AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BtDecoratorDoc, BtNodeDoc, BtServiceDoc, ConditionDecoratorDoc, FindTaskDoc, FleeTaskDoc,
+    HearingServiceDoc, InferTaskDoc, LookAtTaskDoc, MoveToTaskDoc, ParallelNodeDoc, PlayAnimationTaskDoc, PlaySoundTaskDoc, RecallServiceDoc,
+    ScriptTaskDoc, SightServiceDoc, Vec3, WanderTaskDoc,
 } from '../../core/types';
 import type { Blackboard } from './blackboard';
 import type { InferHandle } from './infer';
@@ -54,9 +64,19 @@ export interface TaskHandle {
     fail(): void;
 }
 
-/** What Move To needs from the agent's character (play/character.ts). */
+/** What the walking tasks need from the agent's character (play/character.ts, on a path when there is a navigation mesh). */
 export interface Walker {
-    moveTo(target: Object3D, opts: { radius: number; run: boolean; signal: AbortSignal }): Promise<boolean>;
+    moveTo(target: Object3D | Vec3, opts: { radius: number; run: boolean; signal: AbortSignal }): Promise<boolean>;
+    /** The way to face, degrees around y; null faces the way it walks. */
+    face: number | null;
+    /** The way the body faces now, degrees around y. */
+    readonly facing: number;
+}
+
+/** A sound a Play Sound task started. */
+export interface SoundPlaying {
+    stop(): void;
+    readonly done: Promise<void>;
 }
 
 /** What the tree needs from its agent. */
@@ -79,8 +99,26 @@ export interface TreeHost {
     infer(doc: InferTaskDoc): InferHandle;
     /** Runs a Recall service once. */
     recall(doc: RecallServiceDoc): void;
-    /** The agent's character, for Move To; null without one. */
+    /** The agent's character, for the walking tasks; null without one. */
     character(): Walker | null;
+    /** Where the agent's object is. */
+    position(): Vec3;
+    /** Where the agent stood when Play started (Wander's center). */
+    home(): Vec3;
+    /** Turns the agent toward a point; true once it faces it. null lets a character face where it walks again. */
+    turn(point: Vec3 | null): boolean;
+    /** A point to walk to within `radius` of `center` (a reachable one on the navigation mesh), or null. */
+    randomPoint(center: Vec3, radius: number): Vec3 | null;
+    /** A point about `distance` from `from` the agent can walk to, as far from it as it finds, or null. */
+    fleePoint(from: Vec3, distance: number): Vec3 | null;
+    /** The nearest object with a name (a trailing * matches the start) within `radius`; `visible`: in plain view. */
+    findNearest(name: string, radius: number, visible: boolean): Object3D | null;
+    /** Plays a sound at the agent (null when there is no such sound). */
+    playSound(clip: string, volume: number, range: number): SoundPlaying | null;
+    /** Plays a clip of the agent's model (fade < 0: the model's crossfade); false for an unknown clip. */
+    playAnimation(clip: string, fade: number): boolean;
+    /** Runs a sensor once. */
+    sense(doc: SightServiceDoc | HearingServiceDoc): void;
     /** Raised when the context pool changes (an Ask with Use Context treats it like a fact change). */
     readonly contextVersion: number;
     /** A problem worth a warning in the console (reported once per node). */
@@ -220,6 +258,153 @@ class MoveToTask implements TaskRt {
     }
 }
 
+class LookAtTask implements TaskRt {
+    private until = 0;
+    constructor(private doc: LookAtTaskDoc, private host: TreeHost) {}
+    start(now: number): Status {
+        this.until = now + 3;
+        return this.update(now);
+    }
+    update(now: number): Status {
+        const target = this.host.blackboard.get(this.doc.target) as Object3D | null | undefined;
+        if (!target?.transform) {
+            this.host.turn(null);
+            return 'failure';
+        }
+        const w = target.transform.worldPosition;
+        // Done when it faces the target, or when it turned as long as a turn can take.
+        if (this.host.turn([w.x, w.y, w.z]) || now >= this.until) {
+            this.host.turn(null);
+            return 'success';
+        }
+        return 'running';
+    }
+    abort() {
+        this.host.turn(null);
+    }
+}
+
+/** Walks the character to a point picked when the task starts (Wander, Flee). */
+class WalkTask implements TaskRt {
+    private result: Status = 'running';
+    private controller: AbortController | null = null;
+    constructor(
+        private host: TreeHost,
+        private id: string,
+        private pick: () => Vec3 | null,
+        private opts: { radius: number; run: boolean; done?: () => boolean },
+    ) {}
+    start(): Status {
+        const walker = this.host.character();
+        if (!walker) {
+            this.host.warn(this.id, 'Walking needs a Character on the agent\'s object (Add Component > Character).');
+            return 'failure';
+        }
+        const to = this.pick();
+        if (!to) return 'failure';
+        const controller = (this.controller = new AbortController());
+        walker.moveTo(to, { radius: this.opts.radius, run: this.opts.run, signal: controller.signal }).then((arrived) => {
+            if (!controller.signal.aborted) this.result = arrived ? 'success' : 'failure';
+        });
+        return this.update();
+    }
+    update(): Status {
+        if (this.result === 'running' && this.opts.done?.()) {
+            this.abort();
+            return 'success';
+        }
+        return this.result;
+    }
+    abort() {
+        this.controller?.abort();
+        this.controller = null;
+    }
+}
+
+function wanderTask(doc: WanderTaskDoc, host: TreeHost): TaskRt {
+    return new WalkTask(host, doc.id, () => {
+        const around = doc.around ? (host.blackboard.get(doc.around) as Object3D | null | undefined) : null;
+        const w = around?.transform?.worldPosition;
+        return host.randomPoint(w ? [w.x, w.y, w.z] : host.home(), doc.radius);
+    }, { radius: 0.5, run: doc.run });
+}
+
+function fleeTask(doc: FleeTaskDoc, host: TreeHost): TaskRt {
+    const threat = (): Vec3 | null => {
+        const o = host.blackboard.get(doc.from) as Object3D | null | undefined;
+        const w = o?.transform?.worldPosition;
+        return w ? [w.x, w.y, w.z] : null;
+    };
+    const far = () => {
+        const t = threat();
+        const p = host.position();
+        return !t || Math.hypot(p[0] - t[0], p[2] - t[2]) >= doc.distance;
+    };
+    return new WalkTask(host, doc.id, () => {
+        const t = threat();
+        return t ? host.fleePoint(t, doc.distance) : null;
+    }, { radius: 0.5, run: doc.run, done: far });
+}
+
+class FindTask implements TaskRt {
+    constructor(private doc: FindTaskDoc, private host: TreeHost) {}
+    start(): Status {
+        const found = this.host.findNearest(this.doc.name, this.doc.radius, this.doc.visible);
+        if (!found) return 'failure';
+        try {
+            this.host.blackboard.write(this.doc.output, found, 'tree');
+            return 'success';
+        } catch (e: any) {
+            this.host.warn(this.doc.id, e?.message || String(e));
+            return 'failure';
+        }
+    }
+    update(): Status {
+        return 'success';
+    }
+    abort() {}
+}
+
+class PlaySoundTask implements TaskRt {
+    private result: Status = 'running';
+    private sound: SoundPlaying | null = null;
+    constructor(private doc: PlaySoundTaskDoc, private host: TreeHost) {}
+    start(): Status {
+        const sound = this.host.playSound(this.doc.clip, this.doc.volume, this.doc.range);
+        if (!sound) return 'failure';
+        if (!this.doc.wait) return 'success';
+        this.sound = sound;
+        sound.done.then(() => {
+            if (this.sound === sound) this.result = 'success';
+        });
+        return 'running';
+    }
+    update(): Status {
+        return this.result;
+    }
+    abort() {
+        this.sound?.stop();
+        this.sound = null;
+    }
+}
+
+class PlayAnimationTask implements TaskRt {
+    private until = 0;
+    constructor(private doc: PlayAnimationTaskDoc, private host: TreeHost) {}
+    start(now: number): Status {
+        if (!this.host.playAnimation(this.doc.clip, this.doc.fade)) {
+            this.host.warn(this.doc.id, `The agent's model has no clip "${this.doc.clip}".`);
+            return 'failure';
+        }
+        this.until = now + Math.max(0, this.doc.seconds);
+        return this.update(now);
+    }
+    update(now: number): Status {
+        return now >= this.until ? 'success' : 'running';
+    }
+    abort() {}
+}
+
 class AskTask implements TaskRt {
     private handle: AskHandle | null = null;
     constructor(private doc: AskTaskDoc, private host: TreeHost) {}
@@ -267,6 +452,18 @@ function makeTask(doc: BtNodeDoc, host: TreeHost): TaskRt | null {
             return new ScriptTask(doc, host);
         case 'move_to':
             return new MoveToTask(doc, host);
+        case 'look_at':
+            return new LookAtTask(doc, host);
+        case 'wander':
+            return wanderTask(doc, host);
+        case 'flee':
+            return fleeTask(doc, host);
+        case 'find':
+            return new FindTask(doc, host);
+        case 'play_sound':
+            return new PlaySoundTask(doc, host);
+        case 'play_animation':
+            return new PlayAnimationTask(doc, host);
         case 'ask':
             return new AskTask(doc, host);
         case 'infer':
@@ -291,11 +488,17 @@ class ServiceRt {
         return Math.max(0.05, this.doc.interval * (1 + j));
     }
 
+    /** Recall and the sensors run on their interval. */
+    private run(d: Exclude<BtServiceDoc, AskServiceDoc>) {
+        if (d.type === 'recall') this.host.recall(d);
+        else this.host.sense(d);
+    }
+
     activate(now: number) {
         this.active = true;
         const d = this.doc;
-        if (d.type === 'recall') {
-            this.host.recall(d);
+        if (d.type !== 'ask') {
+            this.run(d);
             this.nextAt = now + this.interval();
             return;
         }
@@ -306,9 +509,9 @@ class ServiceRt {
 
     tick(now: number) {
         const d = this.doc;
-        if (d.type === 'recall') {
+        if (d.type !== 'ask') {
             if (now >= this.nextAt) {
-                this.host.recall(d);
+                this.run(d);
                 this.nextAt = now + this.interval();
             }
             return;
@@ -344,36 +547,85 @@ class ServiceRt {
 
 // ----------------------------------------------------------------- nodes
 
+type Done = 'success' | 'failure';
+
 class NodeRt {
     readonly children: NodeRt[] = [];
     readonly services: ServiceRt[];
     readonly cooldowns: { doc: BtDecoratorDoc; until: number }[];
     readonly conditions: ConditionDecoratorDoc[];
+    /** Result decorators: Invert (an odd number of them), then Force Result. */
+    readonly invert: boolean;
+    readonly force: Done | null;
+    /** Repeat / Retry: runs in all (0: no limit), or null without one. */
+    readonly repeat: number | null;
+    readonly retry: number | null;
+    /** Time Limit: seconds a run may take, or null. */
+    readonly timeLimit: number | null;
     active = false;
-    /** Composites: index of the running child. */
+    /** Selector, Sequence, Random Selector: position of the running child in the run order. */
     current = -1;
+    /** Random Selector: the order of this run (child indices). */
+    order: number[] | null = null;
+    /** Position in the parent's run order (the index, except under a Random Selector). */
+    pos = 0;
+    /** Parallel: how each child ended in this run (null: running or not started). */
+    results: (Done | null)[] = [];
+    /** Parallel with policy first: children that run again on the next tick. */
+    readonly restart = new Set<number>();
     task: TaskRt | null = null;
     /** Result of the entry check the last time it was made (for lower priority aborts). */
     lastPass: boolean | null = null;
     /** How the node last ended, for the debug view. */
     last: { status: Status | 'aborted'; at: number } | null = null;
+    /** Repeat / Retry: runs that succeeded and failed so far in this activation. */
+    repeats = 0;
+    tries = 0;
+    /** Repeat / Retry: the node runs again on the next tick. */
+    again = false;
+    /** When the current run started (Time Limit). */
+    startedAt = 0;
 
     constructor(readonly doc: BtNodeDoc, readonly parent: NodeRt | null, readonly index: number, host: TreeHost) {
         const decos = doc.decorators ?? [];
         this.conditions = decos.filter((d): d is ConditionDecoratorDoc => d.type === 'condition');
         this.cooldowns = decos.filter((d) => d.type === 'cooldown').map((d) => ({ doc: d, until: -Infinity }));
+        this.invert = decos.filter((d) => d.type === 'invert').length % 2 === 1;
+        this.force = decos.find((d) => d.type === 'force')?.result ?? null;
+        const count = (type: 'repeat' | 'retry') => {
+            const d = decos.find((x) => x.type === type) as { count: number } | undefined;
+            return d ? Math.max(0, Math.round(d.count)) : null;
+        };
+        this.repeat = count('repeat');
+        this.retry = count('retry');
+        const limit = decos.find((d) => d.type === 'time_limit') as { seconds: number } | undefined;
+        this.timeLimit = limit ? Math.max(0.05, limit.seconds) : null;
         this.services = (doc.services ?? []).map((s) => new ServiceRt(s, host));
-        if (doc.type === 'selector' || doc.type === 'sequence') {
+        if (doc.type === 'selector' || doc.type === 'sequence' || doc.type === 'parallel' || doc.type === 'random') {
             doc.children.forEach((c, i) => this.children.push(new NodeRt(c, this, i, host)));
         }
     }
 
     get composite(): boolean {
-        return this.doc.type === 'selector' || this.doc.type === 'sequence';
+        return this.doc.type === 'selector' || this.doc.type === 'sequence' || this.doc.type === 'parallel' || this.doc.type === 'random';
+    }
+
+    get parallel(): boolean {
+        return this.doc.type === 'parallel';
     }
 
     get decorated(): boolean {
         return this.conditions.length > 0 || this.cooldowns.length > 0;
+    }
+
+    /** The child at a position of the run order. */
+    childAt(pos: number): NodeRt | undefined {
+        return this.children[this.order ? this.order[pos] : pos];
+    }
+
+    /** The running child of a Selector, Sequence or Random Selector. */
+    get cur(): NodeRt | undefined {
+        return this.current >= 0 ? this.childAt(this.current) : undefined;
     }
 }
 
@@ -411,10 +663,11 @@ export function conditionPasses(bb: Blackboard, d: ConditionDecoratorDoc): boole
     }
 }
 
-/** Debug view of an instance: the active path and how nodes last ended. */
+/** Debug view of an instance: the active nodes and how nodes last ended. */
 export interface TreeDebug {
     active: string[];
-    running: string | null;
+    /** The running tasks (several under a Parallel). */
+    running: string[];
     last: Record<string, { status: Status | 'aborted'; at: number }>;
 }
 
@@ -456,9 +709,9 @@ export class TreeInstance {
             if (st !== 'running') this.root.last = { status: st, at: now };
             return;
         }
-        this.checkAborts(now);
+        this.checkAborts(this.root, now);
         this.tickServices(this.root, now);
-        this.updateTask(now);
+        this.advance(now);
     }
 
     /** Aborts everything (Play stops or the agent is removed); the tree does not run again. */
@@ -481,35 +734,82 @@ export class TreeInstance {
         return true;
     }
 
+    /** Invert, then Force Result. */
+    private modify(n: NodeRt, st: Done): Done {
+        let out = st;
+        if (n.invert) out = out === 'success' ? 'failure' : 'success';
+        return n.force ?? out;
+    }
+
     /** Tries to run a node: checks its decorators, activates it and runs it as far as it goes now. */
     private enter(n: NodeRt, now: number): Status {
         if (this.stopped || ++this.entries > MAX_ENTRIES) return 'failure';
         const pass = this.entryPasses(n, now);
         n.lastPass = pass;
         if (!pass) {
-            n.last = { status: 'failure', at: now };
-            return 'failure';
+            const st = this.modify(n, 'failure');
+            n.last = { status: st, at: now };
+            return st;
         }
         n.active = true;
+        n.repeats = 0;
+        n.tries = 0;
         for (const s of n.services) if (!s.active) s.activate(now);
-        let st: Status;
-        if (n.composite) st = this.runChildren(n, 0, now);
-        else {
-            n.task = makeTask(n.doc, this.host);
-            st = n.task ? n.task.start(now) : 'failure';
-        }
+        let st = this.body(n, now);
         // The task stopped the tree (it destroyed its own object): everything is aborted already.
         if (this.stopped) return 'failure';
+        if (st !== 'running') st = this.settle(n, st, now);
         if (st !== 'running') this.deactivate(n, now, st);
         return st;
     }
 
-    /** Runs a composite's children from `from` on; returns the composite's status (it is not deactivated here). */
+    /** Starts a run of an active node: its children or its task. */
+    private body(n: NodeRt, now: number): Status {
+        n.startedAt = now;
+        n.again = false;
+        if (n.parallel) return this.runParallel(n, now);
+        if (n.composite) {
+            if (n.doc.type === 'random') {
+                const order = n.children.map((_, i) => i);
+                for (let i = order.length - 1; i > 0; i--) {
+                    const j = Math.floor(this.host.random() * (i + 1));
+                    [order[i], order[j]] = [order[j], order[i]];
+                }
+                n.order = order;
+            }
+            return this.runChildren(n, 0, now);
+        }
+        n.task = makeTask(n.doc, this.host);
+        return n.task ? n.task.start(now) : 'failure';
+    }
+
+    /**
+     * A run of the node ended with `st`: Repeat or Retry may run it again on
+     * the next tick ('running'), else Invert and Force give its result.
+     */
+    private settle(n: NodeRt, st: Done, now: number): Status {
+        const limit = st === 'success' ? n.repeat : n.retry;
+        if (limit !== null) {
+            const runs = st === 'success' ? ++n.repeats : ++n.tries;
+            if (limit === 0 || runs < limit) {
+                n.again = true;
+                n.task = null;
+                n.current = -1;
+                n.last = { status: st, at: now };
+                return 'running';
+            }
+        }
+        return this.modify(n, st);
+    }
+
+    /** Runs a composite's children from position `from` on; returns the composite's status (it is not deactivated here). */
     private runChildren(n: NodeRt, from: number, now: number): Status {
-        const selector = n.doc.type === 'selector';
+        const selector = n.doc.type !== 'sequence';
         for (let i = from; i < n.children.length; i++) {
             n.current = i;
-            const st = this.enter(n.children[i], now);
+            const child = n.childAt(i)!;
+            child.pos = i;
+            const st = this.enter(child, now);
             if (this.stopped) return 'failure';
             if (st === 'running') return 'running';
             if (selector && st === 'success') return 'success';
@@ -519,11 +819,53 @@ export class TreeInstance {
         return selector ? 'failure' : 'success';
     }
 
+    /** Starts every child of a Parallel; its status when that is decided already. */
+    private runParallel(n: NodeRt, now: number): Status {
+        n.results = n.children.map(() => null);
+        n.restart.clear();
+        if (!n.children.length) return (n.doc as ParallelNodeDoc).policy === 'one' ? 'failure' : 'success';
+        for (const child of n.children) {
+            const st = this.enter(child, now);
+            if (this.stopped) return 'failure';
+            if (st === 'running') continue;
+            const decided = this.childEnded(n, child, st, now);
+            if (decided) return decided;
+        }
+        return 'running';
+    }
+
+    /**
+     * A child of a Parallel ended: the Parallel's result when that decides
+     * it (the children still running are aborted), else null.
+     */
+    private childEnded(n: NodeRt, child: NodeRt, st: Done, now: number): Done | null {
+        const policy = (n.doc as ParallelNodeDoc).policy;
+        n.results[child.index] = st;
+        let decided: Done | null = null;
+        if (policy === 'first') {
+            if (child.index === 0) decided = st;
+            // The others run beside the first one: again on the next tick.
+            else n.restart.add(child.index);
+        } else if (policy === 'all') {
+            if (st === 'failure') decided = 'failure';
+            else if (n.results.every((r) => r === 'success')) decided = 'success';
+        } else if (st === 'success') decided = 'success';
+        else if (n.results.every((r) => r === 'failure')) decided = 'failure';
+        if (decided) {
+            for (const c of n.children) if (c !== child) this.abort(c, now);
+            n.restart.clear();
+        }
+        return decided;
+    }
+
     private deactivate(n: NodeRt, now: number, st: Status | 'aborted') {
         if (!n.active) return;
         n.active = false;
         n.current = -1;
+        n.order = null;
         n.task = null;
+        n.again = false;
+        n.restart.clear();
         n.last = { status: st, at: now };
         // The root's services run as long as the tree does (see stop()).
         if (n !== this.root) for (const s of n.services) s.deactivate();
@@ -533,8 +875,10 @@ export class TreeInstance {
     /** Aborts a node and everything running under it, deepest first. */
     private abort(n: NodeRt, now: number) {
         if (!n.active) return;
-        if (n.composite) {
-            const cur = n.children[n.current];
+        if (n.parallel) {
+            for (const c of n.children) this.abort(c, now);
+        } else if (n.composite) {
+            const cur = n.cur;
             if (cur) this.abort(cur, now);
         } else if (n.task) {
             // A task that finished since the last tick (its promise settled,
@@ -549,71 +893,115 @@ export class TreeInstance {
         this.deactivate(n, now, 'aborted');
     }
 
-    /** A child finished with `st`: its parents go on (next child) or finish, up to the root. */
-    private propagate(child: NodeRt, st: Status, now: number) {
+    /**
+     * A node's run ended on its own (its task, its children, a time limit):
+     * it runs again, or it ends and its parents go on.
+     */
+    private finish(n: NodeRt, st: Done, now: number) {
+        const out = this.settle(n, st, now);
+        if (out === 'running') return;
+        this.deactivate(n, now, out);
+        this.propagate(n, out, now);
+    }
+
+    /** A child ended with `st`: its parents go on (next child) or end, up to the root. */
+    private propagate(child: NodeRt, st: Done, now: number) {
         let node = child;
-        let status = st;
+        let status: Done = st;
         let parent = node.parent;
         while (parent && !this.stopped) {
-            const selector = parent.doc.type === 'selector';
-            const goOn = selector ? status === 'failure' : status === 'success';
-            if (goOn) {
-                const next = this.runChildren(parent, node.index + 1, now);
-                if (next === 'running') return;
-                status = next;
+            if (!parent.active) return;
+            let ended: Done;
+            if (parent.parallel) {
+                const decided = this.childEnded(parent, node, status, now);
+                if (!decided) return;
+                ended = decided;
+            } else {
+                const selector = parent.doc.type !== 'sequence';
+                const goOn = selector ? status === 'failure' : status === 'success';
+                ended = status;
+                if (goOn) {
+                    const next = this.runChildren(parent, node.pos + 1, now);
+                    if (next === 'running') return;
+                    ended = next;
+                }
             }
-            this.deactivate(parent, now, status);
+            const out = this.settle(parent, ended, now);
+            if (out === 'running') return;
+            this.deactivate(parent, now, out);
             node = parent;
+            status = out;
             parent = node.parent;
         }
-        // The root finished: the tree starts over on the next tick.
+        // The root ended: the tree starts over on the next tick.
     }
 
     // -------------------------------------------------------------- aborts
 
-    /** Checks the conditions along the active path; returns true when something was aborted. */
-    private checkAborts(now: number): boolean {
-        let n: NodeRt | undefined = this.root;
-        while (n && n.active) {
-            // Self: the node's own conditions (the root has none).
-            if (n.parent && n.conditions.length && !this.conditionsPass(n)) {
-                n.lastPass = false;
-                // A task that finished before its conditions failed keeps its result.
-                const done = n.task ? n.task.update(now) : 'running';
-                if (done !== 'running') {
-                    this.deactivate(n, now, done);
-                    this.propagate(n, done, now);
-                    return true;
-                }
-                this.abort(n, now);
-                this.propagate(n, 'failure', now);
+    /** Checks conditions and time limits over the active nodes; true when something was aborted. */
+    private checkAborts(n: NodeRt, now: number): boolean {
+        if (!n.active) return false;
+        // Self: the node's own conditions (the root has none).
+        if (n.parent && n.conditions.length && !this.conditionsPass(n)) {
+            n.lastPass = false;
+            // A task that finished before its conditions failed keeps its result.
+            const done = n.task ? n.task.update(now) : 'running';
+            if (done !== 'running') {
+                this.finish(n, done, now);
                 return true;
             }
-            if (!n.composite) return false;
-            const cur: NodeRt | undefined = n.children[n.current];
-            if (!cur) return false;
-            // Lower priority: a higher branch of a Selector whose decorators start to pass.
-            if (n.doc.type === 'selector') {
-                for (let i = 0; i < n.current; i++) {
-                    const sib = n.children[i];
-                    if (!sib.decorated) continue;
-                    const pass = this.entryPasses(sib, now);
-                    const was = sib.lastPass;
-                    sib.lastPass = pass;
-                    if (pass && was === false) {
-                        this.abort(cur, now);
-                        const st = this.runChildren(n, i, now);
-                        if (st !== 'running') {
-                            this.deactivate(n, now, st);
-                            this.propagate(n, st, now);
-                        }
-                        return true;
-                    }
+            this.abort(n, now);
+            const out = this.modify(n, 'failure');
+            n.last = { status: out, at: now };
+            this.propagate(n, out, now);
+            return true;
+        }
+        // Time Limit: the run took too long, it fails (a Retry may try again).
+        if (n.timeLimit !== null && !n.again && now - n.startedAt >= n.timeLimit) {
+            const done = n.task ? n.task.update(now) : 'running';
+            if (done !== 'running') {
+                this.finish(n, done, now);
+                return true;
+            }
+            this.abortRun(n, now);
+            this.finish(n, 'failure', now);
+            return true;
+        }
+        if (!n.composite) return false;
+        if (n.parallel) {
+            for (const c of n.children) if (this.checkAborts(c, now)) return true;
+            return false;
+        }
+        const cur = n.cur;
+        if (!cur) return false;
+        // Lower priority: a higher branch of a Selector whose decorators start to pass.
+        if (n.doc.type === 'selector') {
+            for (let i = 0; i < n.current; i++) {
+                const sib = n.children[i];
+                if (!sib.decorated) continue;
+                const pass = this.entryPasses(sib, now);
+                const was = sib.lastPass;
+                sib.lastPass = pass;
+                if (pass && was === false) {
+                    this.abort(cur, now);
+                    const st = this.runChildren(n, i, now);
+                    if (st !== 'running') this.finish(n, st, now);
+                    return true;
                 }
             }
-            n = cur;
         }
-        return false;
+        return this.checkAborts(cur, now);
+    }
+
+    /** Aborts what a node runs now, the node staying active (its run is ended by the caller). */
+    private abortRun(n: NodeRt, now: number) {
+        if (n.parallel) for (const c of n.children) this.abort(c, now);
+        else if (n.composite) {
+            const cur = n.cur;
+            if (cur) this.abort(cur, now);
+        } else n.task?.abort(now);
+        n.task = null;
+        n.current = -1;
     }
 
     // ------------------------------------------------------------ services
@@ -621,44 +1009,76 @@ export class TreeInstance {
     private tickServices(n: NodeRt, now: number) {
         if (!n.active) return;
         for (const s of n.services) if (s.active) s.tick(now);
-        if (n.composite) {
-            const cur = n.children[n.current];
+        if (n.parallel) for (const c of n.children) this.tickServices(c, now);
+        else if (n.composite) {
+            const cur = n.cur;
             if (cur) this.tickServices(cur, now);
         }
     }
 
-    // ---------------------------------------------------------------- task
+    // ---------------------------------------------------------------- tasks
 
-    private updateTask(now: number) {
-        let n: NodeRt = this.root;
-        while (n.composite) {
-            const cur = n.children[n.current];
-            if (!cur || !cur.active) return;
-            n = cur;
+    /**
+     * Moves the tree on: running tasks that finished end, nodes that repeat
+     * start their next run, and a Parallel's side branches start again.
+     */
+    private advance(now: number) {
+        const work: { n: NodeRt; kind: 'task' | 'again' | 'restart' }[] = [];
+        const visit = (n: NodeRt) => {
+            if (!n.active) return;
+            if (n.again) {
+                work.push({ n, kind: 'again' });
+                return;
+            }
+            if (n.parallel) {
+                for (const i of n.restart) work.push({ n: n.children[i], kind: 'restart' });
+                n.children.forEach(visit);
+            } else if (n.composite) {
+                const cur = n.cur;
+                if (cur) visit(cur);
+            } else if (n.task) work.push({ n, kind: 'task' });
+        };
+        visit(this.root);
+        for (const { n, kind } of work) {
+            if (this.stopped) return;
+            if (kind === 'task') {
+                if (!n.active || !n.task) continue;
+                const st = n.task.update(now);
+                if (st !== 'running') this.finish(n, st, now);
+            } else if (kind === 'again') {
+                if (!n.active || !n.again) continue;
+                const st = this.body(n, now);
+                if (st !== 'running' && !this.stopped) this.finish(n, st, now);
+            } else {
+                const parent = n.parent!;
+                if (!parent.active || !parent.restart.delete(n.index)) continue;
+                parent.results[n.index] = null;
+                const st = this.enter(n, now);
+                if (st !== 'running' && !this.stopped) {
+                    const decided = this.childEnded(parent, n, st, now);
+                    if (decided) this.finish(parent, decided, now);
+                }
+            }
         }
-        if (!n.active || !n.task) return;
-        const st = n.task.update(now);
-        if (st === 'running') return;
-        this.deactivate(n, now, st);
-        this.propagate(n, st, now);
     }
 
     // --------------------------------------------------------------- debug
 
     debug(): TreeDebug {
         const active: string[] = [];
-        let running: string | null = null;
-        let n: NodeRt | undefined = this.root;
-        if (!n.active) for (const s of n.services) if (s.active) active.push(s.doc.id);
-        while (n && n.active) {
+        const running: string[] = [];
+        const visit = (n: NodeRt) => {
+            if (!n.active) return;
             active.push(n.doc.id);
             for (const s of n.services) if (s.active) active.push(s.doc.id);
-            if (!n.composite) {
-                running = n.doc.id;
-                break;
-            }
-            n = n.children[n.current];
-        }
+            if (n.parallel) n.children.forEach(visit);
+            else if (n.composite) {
+                const cur = n.cur;
+                if (cur) visit(cur);
+            } else running.push(n.doc.id);
+        };
+        if (!this.root.active) for (const s of this.root.services) if (s.active) active.push(s.doc.id);
+        visit(this.root);
         const last: TreeDebug['last'] = {};
         for (const [id, node] of this.byId) if (node.last) last[id] = node.last;
         return { active, running, last };

@@ -223,7 +223,8 @@ export class DesignPanel {
                               showMenu(PARTICLE_PRESETS.map((p) => ({ label: p.label, icon: 'sparkle', action: () => void this.editor.createParticles(p.id) })), r.left, r.bottom + 4);
                           }, 'small', 'sparkle')
                         : null,
-                    id === 'effects' ? button('Fog and bloom', () => this.editor.emit('show-scene', undefined), 'small', 'sliders') : null,
+                    id === 'effects' ? button('Sky model', () => this.editor.emit('show-scene', 'skyModel'), 'small', 'sun') : null,
+                    id === 'effects' ? button('Fog, bloom and reflections', () => this.editor.emit('show-scene', 'post'), 'small', 'sliders') : null,
                     id === 'effects' ? button('Vignette', () => {
                         addVignette(this.editor);
                         this.editor.emit('show-graph', undefined);
@@ -250,7 +251,10 @@ export class DesignPanel {
                         pipeline.applyKeyLight();
                         toast('The key light and the sky\'s sun follow the mood now.', 'success');
                     }, 'small', 'sun'),
-                    button('Sky, exposure and GI', () => this.editor.emit('show-scene', undefined), 'small', 'sliders'),
+                    button('Sun, exposure and GI', () => this.editor.emit('show-scene', 'sky'), 'small', 'sliders'),
+                    id === 'light' ? button('Shadows', () => this.editor.emit('show-scene', 'shadows'), 'small', 'sun') : null,
+                    id === 'material' ? button('Grass', () => void this.editor.createGrass(), 'small', 'grass') : null,
+                    id === 'material' ? button('Water', () => void this.editor.createWater(), 'small', 'mirror') : null,
                     d.shots.some((s) => s.target) ? button('Compare shots', () => pipeline.openCompare((d.shots.find((s) => s.target && !s.matched?.includes(id)) ?? d.shots.find((s) => s.target))!.id), 'small', 'graph') : null,
                 ),
             );
@@ -463,7 +467,8 @@ export class DesignPanel {
         rows.push(h('div', { class: 'group-label', text: 'Budget' }));
         const shadows = new NumberField({ value: d.budget.shadowLights, step: 0.1, min: 0, precision: 0, commit: (v) => this.edit('Shadow Light Budget', (dd) => (dd.budget.shadowLights = Math.round(v))) });
         const fps = new NumberField({ value: d.budget.fps, step: 0.5, min: 1, precision: 0, commit: (v) => this.edit('Frame Rate Budget', (dd) => (dd.budget.fps = Math.round(v))) });
-        rows.push(row('Shadow Lights', shadows.el, 'Most lights that cast shadows'), row('Frame Rate', fps.el, 'Frames per second to keep'));
+        const shadowMemory = new NumberField({ value: d.budget.shadowMemory, step: 1, min: 1, precision: 0, commit: (v) => this.edit('Shadow Memory Budget', (dd) => (dd.budget.shadowMemory = Math.min(4096, Math.max(1, Math.round(v))))) });
+        rows.push(row('Shadow Lights', shadows.el, 'Most lights that cast shadows'), row('Shadow Memory', shadowMemory.el, 'MiB the shadow maps may take at the high tier'), row('Frame Rate', fps.el, 'Frames per second to keep'));
 
         // Questions.
         if (d.questions.length) {

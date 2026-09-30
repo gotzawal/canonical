@@ -862,7 +862,13 @@ export class RenderShaderPass extends ShaderPassBase {
                                 }
                                 uniforms.push(this.uniforms[field.name]);
                             }
-                            this.materialDataUniformBuffer.initDataUniform(uniforms);
+                            // Made again with the same fields (for another of
+                            // the group's buffers): keep the uniform buffer, and
+                            // the values in it, that other draws may still use.
+                            const current = this.materialDataUniformBuffer.uniformNodes;
+                            const same = !!this.materialDataUniformBuffer.byteSize && current.length === uniforms.length
+                                && uniforms.every((u, i) => u === current[i]);
+                            if (!same) this.materialDataUniformBuffer.initDataUniform(uniforms);
                         }
 
                         if (!buffer._boundCtx && this._boundCtx) bindCtx(buffer, this._boundCtx);
@@ -1317,20 +1323,13 @@ export class RenderShaderPass extends ShaderPassBase {
         this.shaderVariant = ShaderReflection.genRenderShaderVariant(this);
         let reflection = ShaderReflection.poolGetReflection(this.shaderVariant);
         if (!reflection) {
-            // The shaderReflection instance is shared across re-runs on the
-            // same ShaderPassBase. Re-parsing with a changed define (e.g.
-            // USE_VIDEO_TEXTURE flipping from false → true after the video
-            // texture loads) produces a new variable type at the same
-            // binding slot. Without clearing the previous groups[]/variables{}
-            // entries, `combineShaderReflectionVarInfo` sees aInfo (stale)
-            // vs bInfo (new) and emits `dataType not match` even though the
-            // pipeline actually builds correctly from the fresh parse.
-            if (this.shaderReflection) {
-                this.shaderReflection.groups = [];
-                this.shaderReflection.variables = {};
-                this.shaderReflection.vs_variables = [];
-                this.shaderReflection.fs_variables = [];
-            }
+            // Parse into a fresh reflection. The current one is pooled under
+            // this pass's previous variant and shared with every pass of that
+            // variant: re-parsing it in place after a define changed (e.g.
+            // USE_VIDEO_TEXTURE once the video loads, USE_INSTANCEDRAW when
+            // an instancer takes the material) handed those passes this
+            // variant's bindings, and kept stale entries at reused slots.
+            this.shaderReflection = new ShaderReflection();
 
             let vsPreShader = Preprocessor.parse(this._destVS, this.defineValue);
             vsPreShader = Preprocessor.parse(vsPreShader, this.defineValue);

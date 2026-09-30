@@ -191,7 +191,7 @@ export class PropertiesPanel {
             });
             const fields = def.fields.map((f) => this.field(f, get, (set, label) => this.edit({ op: 'update_decorator', tree: tree.id, node: node.id, index: i, set }, label), def));
             return this.partBox(
-                [icon(d.type === 'condition' ? 'filter' : 'history', 13), h('span', { class: 'bt-part-title', text: def.label }), brief],
+                [icon(def.icon, 13), h('span', { class: 'bt-part-title', text: def.label }), brief],
                 fields,
                 part?.kind === 'decorator' && part.index === i,
                 () => this.host.apply([{ op: 'remove_decorator', tree: tree.id, node: node.id, index: i }], `Remove ${def.label}`),
@@ -211,7 +211,7 @@ export class PropertiesPanel {
         return h(
             'section',
             { class: 'bt-group' },
-            h('div', { class: 'bt-group-title' }, h('span', { text: 'Decorators' }), h('span', { class: 'muted small', text: isRoot ? 'not on the root' : 'conditions and cooldowns' })),
+            h('div', { class: 'bt-group-title' }, h('span', { text: 'Decorators' }), h('span', { class: 'muted small', text: isRoot ? 'not on the root' : 'conditions, cooldowns, results and repeats' })),
             list,
             isRoot ? null : add,
         );

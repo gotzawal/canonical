@@ -65,6 +65,18 @@ describe('sanitize', () => {
         expect(doc.aiModels).toEqual([]);
         expect(() => sanitize({ ...emptyScene(), version: SCENE_VERSION + 1 })).toThrow(/newer version/);
     });
+
+    it('moves the scene\'s directional shadow settings to its directional lights', () => {
+        const sun = (id: string, castShadow: boolean) => ({ id, name: id, parent: null, visible: true, position: [0, 0, 0], rotation: [0, 0, 0], scale: [1, 1, 1], light: { type: 'directional', castShadow } });
+        const old = { ...emptyScene(), version: 3, nodes: [sun('moon', false), sun('sun', true), sun('fill', true)] } as any;
+        old.environment = { ...old.environment, shadow: { range: 150, softness: 2, follow: false, cascades: true } };
+        const doc = sanitize(old);
+        const shadow = (id: string) => doc.nodes.find((n) => n.id === id)!.light!.shadow;
+        // The first that casts (the sun) takes the cascades; the others cover the range around the camera.
+        expect([shadow('moon').coverage, shadow('sun').coverage, shadow('fill').coverage]).toEqual(['follow', 'cascades', 'follow']);
+        expect(shadow('sun')).toMatchObject({ range: 150, cascades: 4, resolution: 'medium', update: 'auto' });
+        expect(doc.environment.shadow).toEqual({ softness: 2 });
+    });
 });
 
 describe('Store', () => {

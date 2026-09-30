@@ -44,14 +44,15 @@ export class ShadowBiasCalculator {
     static resolvePointShadowBias(light: PointLight | SpotLight, pointShadowMapSize: number): number {
         const v = (light as any)._shadowBias;
         if (typeof v === 'number') return v;
-        // Cube texel angular size = 2/mapSize rad; at distance r its footprint
-        // perpendicular to the face direction spans (2*r/mapSize). Coefficient
-        // 0.5 makes the baseline = half a texel footprint at worst-case
-        // distance (len=range), which matches the analytic receiver-plane
-        // depth variation inside one texel at perpendicular view (NoL=1).
-        // Shader amplifies by 1/NoL for grazing surfaces.
+        // Face texel angular size = 2/mapSize rad; at distance r its footprint
+        // perpendicular to the face direction spans (2*r/mapSize). The faces
+        // toward the light are stored, so a lit surface compares with itself:
+        // a texel and a half at worst-case distance (len=range) covers the
+        // depth across a texel plus the PCF taps' reach (1.25 texels) at
+        // perpendicular view (NoL=1). The shader scales it by len/range and
+        // amplifies it by 1/NoL for grazing surfaces.
         const texelSize = (2 * (light.lightData.range || 1)) / Math.max(pointShadowMapSize, 1);
-        return texelSize * 0.5;
+        return texelSize * 1.5;
     }
 
     /**

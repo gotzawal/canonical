@@ -49,22 +49,21 @@ describe('environment settings of the graphics upgrade', () => {
     it('default to what scenes looked like before', () => {
         const env = defaults(Environment);
         expect(env.quality).toBe('auto');
-        expect(env.shadow).toEqual({ range: 60, softness: 1, follow: false });
+        expect(env.shadow).toEqual({ softness: 1 });
         expect(env.fog).toMatchObject({ enable: false, mode: 'linear', near: 5, far: 80, intensity: 1, sky: 0.8, sunScatter: 1, sunFocus: 2.7 });
         expect(env.godRays.enable).toBe(false);
         expect(env.volumetricFog.enable).toBe(false);
         // A scene saved before keeps its fog and gets the rest.
         const old = repair(Environment, { sky: 'color', fog: { enable: true, color: '#112233', near: 2, far: 40, intensity: 0.5 } })!;
         expect(old.fog).toMatchObject({ enable: true, color: '#112233', near: 2, far: 40, intensity: 0.5, mode: 'linear', density: 0.02 });
-        expect(old.shadow.range).toBe(60);
     });
 
     it('take the assistant\'s snake_case arguments, clamped', () => {
-        const env = patch(Environment, defaults(Environment), { fog: { mode: 'height', height_falloff: 0.2 }, god_rays: { enable: true, focus: 100 }, volumetric_fog: { anisotropy: 2 }, shadow: { follow: true } }, 'environment');
+        const env = patch(Environment, defaults(Environment), { fog: { mode: 'height', height_falloff: 0.2 }, god_rays: { enable: true, focus: 100 }, volumetric_fog: { anisotropy: 2 }, shadow: { softness: 9 } }, 'environment');
         expect(env.fog).toMatchObject({ mode: 'height', heightFalloff: 0.2 });
         expect(env.godRays).toMatchObject({ enable: true, focus: 40 });
         expect(env.volumetricFog.anisotropy).toBe(0.95);
-        expect(env.shadow.follow).toBe(true);
+        expect(env.shadow.softness).toBe(4);
         expect(() => patch(Environment, env, { god_rays: { strength: 1 } }, 'environment')).toThrow(InputError);
         const props = toolSchema(Environment).properties;
         expect(props.quality.enum).toEqual(['auto', 'low', 'medium', 'high']);

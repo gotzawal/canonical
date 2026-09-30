@@ -232,6 +232,15 @@ export class GTAOPost extends PostBase {
     public onResize() {
         let [w, h] = this._boundCtx!.presentationSize;
         this.gtaoTexture.resize(w, h);
+        // The history of the last frame has one value per pixel: a larger view needs a larger buffer.
+        const pixels = this.gtaoTexture.width * this.gtaoTexture.height;
+        if (this.aoBuffer && this.aoBuffer.byteSize < pixels * 4) {
+            this.aoBuffer.destroy();
+            this.aoBuffer = new StorageGPUBuffer(pixels);
+            this.gtaoCompute.setStorageBuffer('aoBuffer', this.aoBuffer);
+            // Bind groups rebuild at the next dispatch.
+            this.gtaoCompute.bindGroups.fill(null);
+        }
         this.gtaoCompute.workerSizeX = Math.ceil(this.gtaoTexture.width / 8);
         this.gtaoCompute.workerSizeY = Math.ceil(this.gtaoTexture.height / 8);
         this.gtaoCompute.workerSizeZ = 1;

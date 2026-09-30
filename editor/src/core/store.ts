@@ -5,7 +5,7 @@ import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, 
 import { sanitizeDesign } from './design';
 import { migrateScene } from './migrate';
 import { isMobileDevice } from './quality';
-import { Animation, Body, Camera, Character, Environment, Mesh, Model, Params, Particles, Player } from './model';
+import { Animation, AudioSource, Body, Camera, Character, Environment, Grass, Instancing, Light, Mesh, Mirror, Model, Params, Particles, Player } from './model';
 import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
     SCENE_VERSION, UNTITLED_SCENE, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
@@ -71,6 +71,10 @@ export interface Prefs {
      * simple view, which shows only the scene and the chat with the assistant.
      */
     editMode: boolean;
+    /** Asset catalogs added by URL, listed in the Library after the editor's own (core/library.ts). */
+    libraryCatalogs: string[];
+    /** Show the navigation mesh the characters walk on (View > Navigation Mesh). */
+    navMesh: boolean;
 }
 
 /**
@@ -180,6 +184,8 @@ function defaultPrefs(): Prefs {
         backgroundCompression: true,
         compressImports: true,
         editMode: false,
+        libraryCatalogs: [],
+        navMesh: false,
     };
 }
 
@@ -210,6 +216,8 @@ function loadPrefs(): Prefs {
     prefs.editMode = prefs.editMode === true;
     prefs.backgroundCompression = prefs.backgroundCompression !== false;
     prefs.compressImports = prefs.compressImports !== false;
+    prefs.navMesh = prefs.navMesh === true;
+    prefs.libraryCatalogs = Array.isArray(prefs.libraryCatalogs) ? prefs.libraryCatalogs.filter((u) => typeof u === 'string' && u.length > 0) : [];
     return prefs;
 }
 
@@ -217,7 +225,9 @@ function loadPrefs(): Prefs {
 function storedPrefs(prefs: Prefs): Partial<Prefs> & { v: number } {
     const base = defaultPrefs();
     const out: Partial<Prefs> & { v: number } = { v: PREFS_VERSION };
-    for (const k of Object.keys(prefs) as (keyof Prefs)[]) if (prefs[k] !== base[k]) (out as Record<string, unknown>)[k] = prefs[k];
+    for (const k of Object.keys(prefs) as (keyof Prefs)[]) {
+        if (JSON.stringify(prefs[k]) !== JSON.stringify(base[k])) (out as Record<string, unknown>)[k] = prefs[k];
+    }
     return out;
 }
 
@@ -1075,10 +1085,15 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
     };
     set('mesh', isObj(node.mesh) && isObj(node.mesh.material) ? Mesh.parse(node.mesh) : undefined);
     set('model', repair(Model, node.model));
+    set('light', repair(Light, node.light));
     set('camera', repair(Camera, node.camera));
     set('particles', repair(Particles, node.particles));
     set('body', repair(Body, node.body));
     set('animation', repair(Animation, node.animation));
+    set('mirror', node.mesh ? repair(Mirror, node.mirror) : undefined);
+    set('grass', repair(Grass, node.grass));
+    set('instancing', repair(Instancing, node.instancing));
+    set('audio', repair(AudioSource, node.audio));
     // A player controls a character (an older player carried the body itself).
     const character = repair(Character, node.character ?? node.player);
     set('character', character);

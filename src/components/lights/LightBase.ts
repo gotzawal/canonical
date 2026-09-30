@@ -58,10 +58,65 @@ export class LightBase extends ComponentBase implements ILight {
 
     public needUpdateShadow: boolean = true;
 
+    private _shadowUpdate: 'auto' | 'every_frame' | 'static' = 'auto';
+    private _shadowMapSize: number = 0;
+
     /**
-     * Whether to enable real-time rendering of shadows
+     * When the light's shadow map is drawn again:
+     *  - `'auto'`: when the light, or a caster its shadow reaches, moves or
+     *    changes; casters that change shape where they stand (skinned,
+     *    morphed, displaced in the vertex shader: `frustumCulled` off) make
+     *    it every frame while they are in reach;
+     *  - `'every_frame'`: every frame;
+     *  - `'static'`: only renderers with `shadowCacheMode = 'static'` cast
+     *    it, and it is drawn when the light or they change (or on
+     *    `needUpdateShadow`).
      */
-    public realTimeShadow: boolean = true;
+    public get shadowUpdate(): 'auto' | 'every_frame' | 'static' {
+        return this._shadowUpdate;
+    }
+
+    public set shadowUpdate(value: 'auto' | 'every_frame' | 'static') {
+        if (value === this._shadowUpdate) return;
+        this._shadowUpdate = value;
+        this.needUpdateShadow = true;
+    }
+
+    /**
+     * Size in texels of this light's shadow map (directional lights, which
+     * share the largest one asked for) or of each face of it (point and spot
+     * lights, rounded to a power of two); 0 takes the engine's shadowSize or
+     * pointShadowSize.
+     */
+    public get shadowMapSize(): number {
+        return this._shadowMapSize;
+    }
+
+    public set shadowMapSize(value: number) {
+        value = Math.max(0, Math.round(value) || 0);
+        if (value === this._shadowMapSize) return;
+        this._shadowMapSize = value;
+        this.needUpdateShadow = true;
+    }
+
+    /**
+     * Whether shadows are drawn every frame.
+     * @deprecated Use {@link shadowUpdate}.
+     */
+    public get realTimeShadow(): boolean {
+        return this._shadowUpdate === 'every_frame';
+    }
+
+    public set realTimeShadow(value: boolean) {
+        this.shadowUpdate = value ? 'every_frame' : 'auto';
+    }
+
+    /**
+     * What each of the light's shadow maps (a cascade, or its atlas faces)
+     * was last drawn with: redrawn when it changes.
+     * @internal
+     */
+    public _shadowSignatures: number[] = [];
 
     protected _castGI: boolean = false;
     protected _castShadow: boolean = false;

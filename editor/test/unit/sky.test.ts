@@ -21,7 +21,7 @@ describe('the sky', () => {
         // Clouds belong to the physical sky only.
         expect(skyParams({ ...env, sky: 'atmospheric' }).enableClouds).toBe(false);
         const props = toolSchema(Environment).properties;
-        expect(props.sky.enum).toEqual(['atmospheric', 'physical', 'color']);
+        expect(props.sky.enum).toEqual(['atmospheric', 'physical', 'color', 'hdri']);
         expect(Object.keys(props.atmosphere.properties)).toEqual(['sun_size', 'sun_brightness', 'show_sun', 'altitude', 'clouds']);
     });
 

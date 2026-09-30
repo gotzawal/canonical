@@ -297,6 +297,7 @@ class SwatchDialog {
         if (!this.slotId) return;
         try {
             const slot = await useSwatch(this.editor.store, this.slotId, s.id);
+            for (const asset of slot.added) this.editor.compressImported(asset);
             toast(`${slot.name} uses ${s.name} now.`, 'success');
             void this.renderLibrary();
         } catch (e: any) {

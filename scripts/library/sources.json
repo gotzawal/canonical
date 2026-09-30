@@ -1,0 +1,106 @@
+{
+    "$comment": "Open-source assets mirrored into editor/library by scripts/mirror-library.mjs (the library-mirror workflow runs it when this file changes), so the editor can offer them without depending on the upstream links. Only CC0 or public domain assets: the mirror ships them with the editor. ref pins the upstream commit and ids the Poly Haven assets a rule picked (the most downloaded of its categories); run the script with --latest to move to the newest ones.",
+    "sources": [
+        {
+            "id": "kenney-city",
+            "name": "Starter Kit City Builder",
+            "author": "Kenney",
+            "license": "CC0-1.0",
+            "licenseNote": "Its README marks the sprites and 3D models CC0 (the project code is MIT); its sounds are left out.",
+            "url": "https://github.com/KenneyNL/Starter-Kit-City-Builder",
+            "git": "https://github.com/KenneyNL/Starter-Kit-City-Builder",
+            "ref": "4535092b740b378b700efd9df9e27a631815b84a",
+            "items": [
+                { "glob": "models/building-*.glb", "kind": "model", "tags": ["city", "building"] },
+                { "glob": "models/road-*.glb", "kind": "model", "tags": ["city", "road"] },
+                { "glob": "models/pavement*.glb", "kind": "model", "tags": ["city", "ground"] },
+                { "glob": "models/grass*.glb", "kind": "model", "tags": ["city", "nature", "ground"] }
+            ]
+        },
+        {
+            "id": "kenney-arena",
+            "name": "Mini Arena",
+            "author": "Kenney",
+            "license": "CC0-1.0",
+            "url": "https://github.com/KenneyNL/Starter-Kit-Basic-Scene",
+            "git": "https://github.com/KenneyNL/Starter-Kit-Basic-Scene",
+            "ref": "a6927e66ff8dd8e173660ce4825abe773c65f683",
+            "items": [
+                { "glob": "sample/Mini Arena/Models/GLB format/*.glb", "kind": "model", "tags": ["arena", "medieval"] }
+            ]
+        },
+        {
+            "id": "kenney-platformer",
+            "name": "Starter Kit 3D Platformer",
+            "author": "Kenney",
+            "license": "CC0-1.0",
+            "url": "https://github.com/KenneyNL/Starter-Kit-3D-Platformer",
+            "git": "https://github.com/KenneyNL/Starter-Kit-3D-Platformer",
+            "ref": "3fa8a04b1c01ab23db43123d4ce814a34c3fc7f0",
+            "items": [
+                { "glob": "models/*.glb", "kind": "model", "tags": ["platformer"] },
+                { "glob": "sounds/*.ogg", "kind": "audio", "tags": ["platformer", "effect"] },
+                { "glob": "sprites/particle.png", "kind": "texture", "tags": ["particle"] }
+            ]
+        },
+        {
+            "id": "kenney-fps",
+            "name": "Starter Kit FPS",
+            "author": "Kenney",
+            "license": "CC0-1.0",
+            "url": "https://github.com/KenneyNL/Starter-Kit-FPS",
+            "git": "https://github.com/KenneyNL/Starter-Kit-FPS",
+            "ref": "185fd2326d74a5cf858cffc616f87cf9696f9cc0",
+            "items": [
+                { "glob": "models/*.glb", "kind": "model", "tags": ["shooter"] },
+                { "glob": "sounds/*.ogg", "kind": "audio", "tags": ["shooter", "effect"] },
+                { "glob": "sprites/blob_shadow.png", "kind": "texture", "tags": ["decal"] },
+                { "glob": "sprites/burst.png", "kind": "texture", "tags": ["particle"] }
+            ]
+        },
+        {
+            "id": "kenney-racing",
+            "name": "Starter Kit Racing",
+            "author": "Kenney",
+            "license": "CC0-1.0",
+            "url": "https://github.com/KenneyNL/Starter-Kit-Racing",
+            "git": "https://github.com/KenneyNL/Starter-Kit-Racing",
+            "ref": "2f2e5f2646dda89cb21d4e8539bab60c6e955dc8",
+            "items": [
+                { "glob": "models/*.glb", "kind": "model", "tags": ["racing"] },
+                { "glob": "audio/*.ogg", "kind": "audio", "tags": ["racing", "effect"] },
+                { "glob": "sprites/smoke.png", "kind": "texture", "tags": ["particle"] }
+            ]
+        },
+        {
+            "id": "polyhaven",
+            "type": "polyhaven",
+            "name": "Poly Haven",
+            "author": "Poly Haven and its artists",
+            "license": "CC0-1.0",
+            "licenseNote": "Mirrored through Poly Haven's public API; each asset credits its authors.",
+            "url": "https://polyhaven.com",
+            "api": "https://api.polyhaven.com",
+            "resolution": "1k",
+            "items": [
+                { "kind": "hdri", "categories": ["outdoor", "sunrise-sunset"], "count": 2, "tags": ["sky", "outdoor", "sunset"], "ids": ["lilienstein", "the_sky_is_on_fire"] },
+                { "kind": "hdri", "categories": ["outdoor", "midday"], "count": 2, "tags": ["sky", "outdoor", "day"], "ids": ["kloofendal_48d_partly_cloudy_puresky", "wide_street_01"] },
+                { "kind": "hdri", "categories": ["night"], "count": 1, "tags": ["sky", "night"], "ids": ["moonless_golf"] },
+                { "kind": "hdri", "categories": ["indoor"], "count": 1, "tags": ["indoor"], "ids": ["brown_photostudio_02"] },
+                { "kind": "material", "categories": ["terrain"], "count": 5, "tags": ["ground", "terrain", "natural"], "ids": ["brown_mud_leaves_01", "asphalt_02", "forrest_ground_01", "snow_02", "rock_face_03"] },
+                { "kind": "material", "categories": ["rock"], "count": 1, "tags": ["rock", "natural"], "ids": ["forest_ground_04"] },
+                { "kind": "material", "categories": ["snow"], "count": 1, "tags": ["ground", "snow", "winter"], "ids": ["snow_01"] },
+                { "kind": "material", "categories": ["brick"], "count": 2, "tags": ["wall", "brick"], "ids": ["red_brick", "red_brick_03"] },
+                { "kind": "material", "categories": ["wood"], "count": 2, "tags": ["wood"], "ids": ["plywood", "laminate_floor_02"] },
+                { "kind": "material", "categories": ["concrete"], "count": 2, "tags": ["concrete", "wall", "floor"], "ids": ["concrete_floor_worn_001", "concrete_floor_02"] },
+                { "kind": "material", "categories": ["plaster"], "count": 1, "tags": ["wall", "plaster"], "ids": ["beige_wall_001"] },
+                { "kind": "material", "categories": ["road"], "count": 1, "tags": ["road", "street"], "ids": ["sandstone_cracks"] },
+                { "kind": "material", "categories": ["metal"], "count": 1, "tags": ["metal"], "ids": ["metal_plate"] },
+                { "kind": "material", "categories": ["roofing"], "count": 1, "tags": ["roof"], "ids": ["factory_wall"] },
+                { "kind": "model", "categories": ["nature"], "count": 4, "maxTris": 60000, "tags": ["nature"], "ids": ["grass_medium_01", "grass_bermuda_01", "rock_moss_set_02", "potted_plant_04"] },
+                { "kind": "model", "categories": ["furniture"], "count": 3, "maxTris": 60000, "tags": ["furniture", "interior"], "ids": ["sofa_02", "wooden_table_02", "sofa_03"] },
+                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"], "ids": ["Camera_01", "Television_01", "Lantern_01", "wine_bottles_01"] }
+            ]
+        }
+    ]
+}

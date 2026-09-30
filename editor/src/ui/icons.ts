@@ -11,6 +11,9 @@ const PATHS: Record<string, string> = {
     stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',
     capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
     physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
+    gauge: '<path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 17l4.5-6"/><circle cx="12" cy="17" r="1.2"/>',
+    grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
+    mirror: '<ellipse cx="12" cy="10" rx="6" ry="7.5"/><path d="M9.5 8.5 12 6M9.5 12l4.5-4.5M12 17.5V21M8.5 21h7"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
     sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2.5v2.5M12 19v2.5M2.5 12H5M19 12h2.5M5.3 5.3l1.8 1.8M16.9 16.9l1.8 1.8M5.3 18.7l1.8-1.8M16.9 7.1l1.8-1.8"/>',
@@ -84,6 +87,9 @@ const PATHS: Record<string, string> = {
     maximize: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
     behavior: '<circle cx="12" cy="5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="18.5" r="2"/><path d="M12 7v4M12 11H6v5.5M12 11h6v5.5"/>',
     btSelector: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.8 2.1c-.8.5-1.3 1-1.3 2M12 16.5v.01"/>',
+    btParallel: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M8 8v8M12 8v8M16 8v8"/>',
+    btRandom: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><circle cx="8.5" cy="8.5" r="1"/><circle cx="15.5" cy="8.5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="8.5" cy="15.5" r="1"/><circle cx="15.5" cy="15.5" r="1"/>',
+    swap: '<path d="M4 8h14l-3.5-3.5M20 16H6l3.5 3.5"/>',
     btSequence: '<rect x="3.5" y="3.5" width="17" height="17" rx="3"/><path d="M7.5 12h9M13 8.5l3.5 3.5-3.5 3.5"/>',
     key: '<circle cx="8" cy="15.5" r="4"/><path d="m11 12.5 8.5-8.5M16 7l2.5 2.5M13.5 9.5 16 12"/>',
     filter: '<path d="M4 5h16l-6.2 7.3V18l-3.6 2v-7.7Z"/>',
@@ -92,6 +98,8 @@ const PATHS: Record<string, string> = {
     book: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 20.5A2.5 2.5 0 0 1 7.5 18H19v3H7.5"/>',
     minimize: '<path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
     panels: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M8.5 4.5v15M15.5 4.5v15"/>',
+    speaker: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4Z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+    library: '<rect x="3.5" y="4" width="4" height="16" rx="1"/><rect x="9" y="4" width="4" height="16" rx="1"/><path d="m14.8 5.4 3.9-1 3.8 14.4-3.9 1Z"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>',
 };
 
@@ -105,7 +113,7 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; character?: unknown }): string {
+export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; grass?: unknown; character?: unknown; audio?: unknown }): string {
     if (node.prefab) return 'prefab';
     if (node.character) return 'walk';
     if (node.particles) return 'sparkle';
@@ -116,5 +124,7 @@ export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: 
         const t = node.mesh.geometry.type;
         return t === 'box' ? 'cube' : t;
     }
+    if (node.grass) return 'grass';
+    if (node.audio) return 'speaker';
     return 'empty';
 }

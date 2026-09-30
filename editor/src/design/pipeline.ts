@@ -23,7 +23,7 @@ import type { Player } from '../play/player';
 import type { CameraController } from '../viewport/cameraController';
 import { syncSlots } from './materialSlots';
 import { cameraFov, FRAME_MARGIN, frameFov, frameRect } from './shotCamera';
-import { layoutChanged, nextStage, stageDef, stageProgress, type CheckState } from './stages';
+import { layoutChanged, nextStage, stageDef, stageProgress, type CheckContext, type CheckState } from './stages';
 
 interface PipelineEvents {
     /** A long operation (captures) started or ended. */
@@ -46,6 +46,8 @@ export interface PipelineHost {
     player: Player;
     compiler: ScriptCompiler;
     blocked(): string;
+    /** What the stages' automatic checks measure in the running editor: shadow memory, compressed textures. */
+    measure?(): Pick<CheckContext, 'shadowBytes' | 'textures'>;
 }
 
 /** Snapshot file: the scene without its design section. */
@@ -65,7 +67,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
     /** The view's field of view before a shot was shown. */
     private viewFov: number | null = null;
     /** The last progress worked out, for the document version it was worked out for. */
-    private progressCache: { version: number; stage: StageId; fps: number; result: ReturnType<typeof stageProgress> } | null = null;
+    private progressCache: { version: number; stage: StageId; fps: string; result: ReturnType<typeof stageProgress> } | null = null;
     /** Whether the layout changed after the Level stage, for the document version it was worked out for. */
     private layoutCache: { version: number; changed: boolean } | null = null;
 
@@ -93,10 +95,11 @@ export class Pipeline extends Emitter<PipelineEvents> {
 
     progress(stage: StageId = this.design.stage): { done: number; total: number; open: CheckState[]; items: CheckState[] } {
         // Views and the assistant ask again and again; some items look at every object (placed objects, the level check).
-        const fps = Math.round(this.host.runtime.fps) * 1000 + this.host.runtime.fpsLimit;
+        const measured = this.host.measure?.() ?? {};
+        const fps = `${Math.round(this.host.runtime.fps) * 1000 + this.host.runtime.fpsLimit}|${measured.shadowBytes}|${JSON.stringify(measured.textures ?? null)}`;
         const c = this.progressCache;
         if (c && c.version === this.store.version && c.stage === stage && c.fps === fps) return c.result;
-        const result = stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps, fpsLimit: this.host.runtime.fpsLimit }, stage);
+        const result = stageProgress({ doc: this.store.doc, design: this.design, fps: this.host.runtime.fps, fpsLimit: this.host.runtime.fpsLimit, ...measured }, stage);
         this.progressCache = { version: this.store.version, stage, fps, result };
         return result;
     }

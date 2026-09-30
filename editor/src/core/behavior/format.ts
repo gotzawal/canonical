@@ -55,7 +55,7 @@ export function newItemId(type: string, taken: Set<string>): string {
 // ---------------------------------------------------------------- walking
 
 export function isCompositeDoc(n: BtNodeDoc): n is BtCompositeDoc {
-    return n.type === 'selector' || n.type === 'sequence';
+    return n.type === 'selector' || n.type === 'sequence' || n.type === 'parallel' || n.type === 'random';
 }
 
 /** Every node of a tree, depth first (execution order). */

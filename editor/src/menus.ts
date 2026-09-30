@@ -8,6 +8,7 @@ import { h } from './ui/dom';
 import { mascotPose } from './ui/mascot';
 import { dialog, MenuItem } from './ui/overlays';
 import { showBehaviorReference } from './ui/behaviorReference';
+import { importFromLink, openFromLink, openLibraryDialog } from './ui/libraryDialog';
 import { showReference } from './ui/reference';
 import { glassOn } from './ui/theme';
 import { viewportMenu } from './ui/viewportMenu';
@@ -46,9 +47,12 @@ export function createMenu(editor: Editor): MenuItem[] {
             icon: 'sparkle',
             submenu: PARTICLE_PRESETS.map((pr) => ({ label: pr.label, icon: 'sparkle', action: () => void editor.createParticles(pr.id) })),
         },
+        { label: 'Grass', icon: 'grass', action: () => void editor.createGrass() },
+        { label: 'Water', icon: 'mirror', action: () => void editor.createWater() },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },
+        { label: 'Model from Library...', icon: 'library', action: () => openLibraryDialog(editor, { kind: 'model' }) },
         { separator: true },
         ...createAssetMenu(editor),
     ];
@@ -73,6 +77,7 @@ export function menuDefinitions(
                 { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
                 { separator: true },
                 cmd('file.open'),
+                { label: 'Open Link...', icon: 'link', action: () => void openFromLink(editor) },
                 cmd('file.save'),
                 cmd('file.saveProject'),
                 { label: 'Version History...', icon: 'history', action: panels.versions },
@@ -81,6 +86,9 @@ export function menuDefinitions(
                 { separator: true },
                 { label: 'Import Model...', icon: 'model', action: () => void editor.importModelDialog() },
                 { label: 'Import Texture...', icon: 'image', action: () => void editor.importTextureDialog() },
+                { label: 'Import Sound...', icon: 'speaker', action: () => void editor.importSoundDialog() },
+                { label: 'Import from Link...', icon: 'link', action: () => void importFromLink(editor) },
+                { label: 'Library...', icon: 'library', action: () => openLibraryDialog(editor) },
             ],
         },
         {
@@ -116,6 +124,7 @@ export function menuDefinitions(
                 { label: 'Helpers', checked: () => store.prefs.helpers, action: () => store.setPrefs({ helpers: !store.prefs.helpers }) },
                 { label: 'Snapping', checked: () => store.prefs.snap, action: () => store.setPrefs({ snap: !store.prefs.snap }) },
                 { label: 'Glass Effects', checked: () => glassOn(store.prefs), action: () => store.setPrefs({ glass: !glassOn(store.prefs) }) },
+                { label: 'Navigation Mesh', checked: () => store.prefs.navMesh, action: () => store.setPrefs({ navMesh: !store.prefs.navMesh }) },
                 { separator: true },
                 ...viewportMenu(store),
                 { separator: true },

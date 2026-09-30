@@ -1,6 +1,6 @@
 // Where a scene refers to its assets, shaders and scripts: the objects,
-// the prefab templates (placed again later), the post chain and shader
-// code. Every question about them goes through this one walk: what a file
+// the prefab templates (placed again later), the post chain, the sky and
+// shader code. Every question about them goes through this one walk: what a file
 // must carry, whether something is in use, and what deleting it clears.
 
 import type { MaterialDoc, ParamValue, SceneDoc, TextureRole } from './types';
@@ -10,10 +10,10 @@ export type RefKind = 'asset' | 'shader' | 'script';
 export interface Ref {
     kind: RefKind;
     id: string;
-    /** An object's (a prefab template's too), the post chain's, a prefab's model, or shader code. */
-    at: 'object' | 'post' | 'prefab' | 'code';
-    /** Of an asset: what it is to its holder, a texture's role or a model; unknown for shader code. */
-    role?: TextureRole | 'model';
+    /** An object's (a prefab template's too), the post chain's, a prefab's model, the environment's (the HDRI sky), or shader code. */
+    at: 'object' | 'post' | 'prefab' | 'environment' | 'code';
+    /** Of an asset: what it is to its holder, a texture's role, a model or a sound; unknown for shader code. */
+    role?: TextureRole | 'model' | 'audio';
     /** Takes the reference out (the holder goes back to its default); missing where that is not done. */
     drop?(): void;
 }
@@ -23,14 +23,38 @@ const MAPS = ['map', 'normalMap', 'metalRoughMap', 'aoMap', 'emissiveMap'] as co
 /** The role of the texture of each map of a material. */
 export const MAP_ROLES: Record<(typeof MAPS)[number], TextureRole> = { map: 'color', normalMap: 'normal', metalRoughMap: 'data', aoMap: 'data', emissiveMap: 'color' };
 
+/**
+ * How each texture property of a shader reads its asset, by the property's
+ * default (engine/shaders.ts TEXTURE_DEFAULTS): 'normal' as a normal map,
+ * 'data' as linear values, the others as colors.
+ */
+function textureParamRoles(code: string): Map<string, TextureRole> {
+    const roles = new Map<string, TextureRole>();
+    for (const m of code.matchAll(/@property\s+(\w+)\s+texture(?:\s+(\w+))?/g)) {
+        const d = (m[2] ?? '').toLowerCase();
+        roles.set(m[1], d === 'normal' ? 'normal' : d === 'data' ? 'data' : 'color');
+    }
+    return roles;
+}
+
 export function refs(doc: SceneDoc): Ref[] {
     const out: Ref[] = [];
     const known = new Set(doc.assets.map((a) => a.id));
-    // Texture properties of custom shaders hold asset ids as values.
-    const params = (values: Record<string, ParamValue> | undefined, at: Ref['at']) => {
+    const shaderRoles = new Map<string, Map<string, TextureRole>>();
+    const rolesOf = (shader: string | null | undefined) => {
+        if (!shader) return undefined;
+        let r = shaderRoles.get(shader);
+        if (!r) {
+            r = textureParamRoles(doc.shaders.find((s) => s.id === shader)?.code ?? '');
+            shaderRoles.set(shader, r);
+        }
+        return r;
+    };
+    // Texture properties of custom shaders hold asset ids as values, read as their property says.
+    const params = (values: Record<string, ParamValue> | undefined, at: Ref['at'], shader?: string | null) => {
+        const roles = rolesOf(shader);
         for (const [name, v] of Object.entries(values ?? {})) {
-            // Loaded as colors, like every texture property (SceneSync.loadTexture).
-            if (typeof v === 'string' && known.has(v)) out.push({ kind: 'asset', id: v, at, role: 'color', drop: () => delete values![name] });
+            if (typeof v === 'string' && known.has(v)) out.push({ kind: 'asset', id: v, at, role: roles?.get(name) ?? 'color', drop: () => delete values![name] });
         }
     };
     for (const n of [...doc.nodes, ...doc.prefabs.flatMap((p) => p.nodes)]) {
@@ -49,7 +73,7 @@ export function refs(doc: SceneDoc): Ref[] {
                     },
                 });
             }
-            params(m.params, 'object');
+            params(m.params, 'object', m.shader);
         }
         if (n.model?.asset) out.push({ kind: 'asset', id: n.model.asset, at: 'object', role: 'model' });
         for (const o of Object.values(n.model?.materials ?? {})) {
@@ -65,10 +89,16 @@ export function refs(doc: SceneDoc): Ref[] {
                     },
                 });
             }
-            params(o.params, 'object');
+            params(o.params, 'object', o.shader);
         }
         const particles = n.particles;
         if (particles?.texture) out.push({ kind: 'asset', id: particles.texture, at: 'object', role: 'color', drop: () => (particles.texture = null) });
+        const grass = n.grass;
+        if (grass?.texture) out.push({ kind: 'asset', id: grass.texture, at: 'object', role: 'color', drop: () => (grass.texture = null) });
+        // Gusts are read as data, texel by texel.
+        if (grass?.windMap) out.push({ kind: 'asset', id: grass.windMap, at: 'object', role: 'data', drop: () => (grass.windMap = null) });
+        const audio = n.audio;
+        if (audio?.clip) out.push({ kind: 'asset', id: audio.clip, at: 'object', role: 'audio', drop: () => (audio.clip = null) });
         for (const r of n.scripts ?? []) {
             out.push({
                 kind: 'script',
@@ -86,11 +116,29 @@ export function refs(doc: SceneDoc): Ref[] {
     const rg = doc.renderGraph;
     for (const p of rg.posts) {
         out.push({ kind: 'shader', id: p.shader, at: 'post', drop: () => (rg.posts = rg.posts.filter((x) => x !== p)) });
-        params(p.params, 'post');
+        params(p.params, 'post', p.shader);
     }
+    // The HDRI sky shows its image as it is (the full range the sky reads): no role, so no compressed copies.
+    const env = doc.environment;
+    if (env.sky === 'hdri' && env.skyHdri && known.has(env.skyHdri)) out.push({ kind: 'asset', id: env.skyHdri, at: 'environment', drop: () => (env.skyHdri = null) });
     // ... and a property's default may name one in the shader code.
     for (const s of doc.shaders) for (const id of known) if (s.code.includes(id)) out.push({ kind: 'asset', id, at: 'code' });
+    // Scripts and behavior trees play sounds by name (this.playSound('coin'), Play Sound tasks).
+    const sounds = doc.assets.filter((a) => a.kind === 'audio');
+    if (sounds.length) {
+        const texts = [...doc.scripts.map((s) => s.code), JSON.stringify(doc.behaviors)];
+        for (const a of sounds) if (texts.some((t) => namesSound(t, a))) out.push({ kind: 'asset', id: a.id, at: 'code', role: 'audio' });
+    }
     return out;
+}
+
+/** True when a text names a sound as a string: its id, or its name with or without the extension (any case). */
+export function namesSound(text: string, a: { id: string; name: string }): boolean {
+    if (text.includes(a.id)) return true;
+    const stem = a.name.replace(/\.[a-z0-9]+$/i, '');
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Any case: the sound is found by name that way in Play (AudioSystem.find).
+    return new RegExp(`['"\`]${esc(stem)}(${esc(a.name.slice(stem.length))})?['"\`]`, 'i').test(text);
 }
 
 /**
@@ -116,8 +164,8 @@ export function useCounts(doc: SceneDoc): { scripts: Map<string, number>; prefab
  * What each asset the scene uses is to it: texture roles, 'model', or
  * 'unknown' where only shader code names it (the game may load it any way).
  */
-export function assetRoles(doc: SceneDoc): Map<string, Set<TextureRole | 'model' | 'unknown'>> {
-    const out = new Map<string, Set<TextureRole | 'model' | 'unknown'>>();
+export function assetRoles(doc: SceneDoc): Map<string, Set<TextureRole | 'model' | 'audio' | 'unknown'>> {
+    const out = new Map<string, Set<TextureRole | 'model' | 'audio' | 'unknown'>>();
     for (const r of refs(doc)) {
         if (r.kind !== 'asset') continue;
         let set = out.get(r.id);

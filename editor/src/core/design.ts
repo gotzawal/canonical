@@ -48,7 +48,7 @@ export function defaultDesign(): DesignDoc {
         play: { route: [], sightlines: [], areaOrder: [], notes: '' },
         effects: [],
         materials: [],
-        budget: { shadowLights: 4, fps: 60 },
+        budget: { shadowLights: 4, shadowMemory: 64, fps: 60 },
         questions: [],
         shots: [],
         stage: 'brief',
@@ -239,6 +239,8 @@ export function sanitizeDesign(input: any): DesignDoc {
             name: str(ms.name, 'Material', 200) || 'Material',
             description: str(ms.description, '', 4000),
             swatch: typeof ms.swatch === 'string' && ms.swatch ? ms.swatch : null,
+            ...(typeof ms.normal === 'string' && ms.normal ? { normal: ms.normal } : {}),
+            ...(typeof ms.arm === 'string' && ms.arm ? { arm: ms.arm } : {}),
             color: hex(ms.color, '#ffffff'),
             roughness: clampNum(ms.roughness, 0.8, 0, 1),
             metallic: clampNum(ms.metallic, 0, 0, 1),
@@ -249,7 +251,7 @@ export function sanitizeDesign(input: any): DesignDoc {
     );
 
     const bud = isObj(input.budget) ? input.budget : {};
-    out.budget = { shadowLights: Math.round(clampNum(bud.shadowLights, 4, 0, 64)), fps: clampNum(bud.fps, 60, 1, 240) };
+    out.budget = { shadowLights: Math.round(clampNum(bud.shadowLights, 4, 0, 64)), shadowMemory: Math.round(clampNum(bud.shadowMemory, 64, 1, 4096)), fps: clampNum(bud.fps, 60, 1, 240) };
 
     out.questions = ids(
         list(input.questions).filter(isObj).map((q): QuestionDoc => {
@@ -383,7 +385,7 @@ export function designAssetIds(design: DesignDoc): Set<string> {
         }
         for (const h of s.history) out.add(h.asset);
     }
-    for (const m of design.materials) if (m.swatch) out.add(m.swatch);
+    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm]) if (id) out.add(id);
     for (const sn of design.snapshots) {
         out.add(sn.asset);
         if (sn.thumb) out.add(sn.thumb);
@@ -407,9 +409,9 @@ export function detailLevel(design: DesignDoc): DetailLevel {
     return design.detail === 'detailed' ? 'detailed' : 'quick';
 }
 
-/** Objects that make up the level: everything but lights, cameras, effects and the player, which may move without changing it. */
+/** Objects that make up the level: everything but lights, cameras, effects (particles, grass) and the player, which may move without changing it. */
 export function isLevelObject(n: NodeDoc): boolean {
-    return !n.light && !n.camera && !n.particles && !n.player;
+    return !n.light && !n.camera && !n.particles && !n.grass && !n.player && !(n.audio && !n.mesh && !n.model);
 }
 
 /**

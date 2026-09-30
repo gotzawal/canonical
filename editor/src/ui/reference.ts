@@ -36,6 +36,10 @@ const MEMBERS: [string, string][] = [
     ['this.character / this.getCharacter(objOrName)', "The object's character (null without one): move(x, z) this frame, moveTo(objOrPoint, { radius, run }) resolving true on arrival, jump(), stop(), run and face; its state velocity, speed, grounded, facing and mode ('idle', 'walk', 'run', 'jump', 'fall') and on('jump' | 'land' | 'mode', fn) to animate it by."],
     ['this.animator / this.getAnimator(objOrName)', 'The skeletal animation of the object\'s model (null without clips): clips, clip (playing now), speed, and play(clip, fade?) crossfading over fade seconds. A character\'s model changes clip with its mode by itself.'],
     ['this.body / this.getBody(objOrName)', 'The physics body (null without one): velocity and angularVelocity (degrees per second) to read or set, applyImpulse([x, y, z]), applyTorqueImpulse([x, y, z]), teleport(position, rotation?), type, mass, sleeping, wakeUp().'],
+    ['this.audio / this.getAudio(objOrName)', 'The Audio component (null without one): play(), pause(), stop(), and playing, time, duration, volume (0..2), pitch (playback rate) and loop.'],
+    ['this.playSound(name, options?)', "Plays a sound asset once ('coin' or 'coin.ogg'). Options: volume, pitch, loop, at (an object it follows, or [x, y, z]) for a sound heard from there, near and far (meters). Returns { stop(), done } or null when there is no such sound. Agents with hearing notice sounds played at a place."],
+    ['this.nav', 'The navigation mesh in Play (null until it is ready, and in scenes without walking NPCs or scripts that use it): path(from, to) returns the corners of the way around walls, randomPoint(center, radius) a reachable point, closest(point, within?) the nearest point on it. Points are [x, y, z] or objects. this.character.moveTo follows such paths by itself ({ straight: true } walks straight).'],
+    ['this.noise(range, at?)', 'Tells agents with hearing that this object made a sound carrying range meters (at its place, or at at), without playing one: footsteps, a door.'],
     ['this.physics', 'The physics world (null when the scene has none): gravity [x, y, z] and raycast(origin, direction, maxDistance?, ignoreObject?) returning { object, point, normal, distance } or null.'],
     ['this.find(name) / this.findAll(name)', 'Objects by name.'],
     ['this.getScript(objOrName, scriptName?)', 'A script instance on another object.'],
@@ -67,6 +71,7 @@ const MATERIAL: [string, string][] = [
     ['Unlit', 'Set ORI_ShadingInput.BaseColor, then call UnLit();'],
     ['fn vert(inputData: VertexAttributes) -> VertexOutput', 'Optional. Change a copy of the input, then ORI_Vert(v); return ORI_VertexOut;'],
     ['Imported models', 'On a material slot of an imported model, baseMap is the model\'s color texture, and texture properties named normalMap, maskMap (roughness in G, metallic in B), emissiveMap and aoMap receive the model\'s own maps: // @property normalMap texture normal'],
+    ['mirrorColor(offset), mirrorUV()', 'On an object with a Mirror component: the scene it reflects at this pixel, moved by offset (screen units, e.g. by waves), with alpha 0 without a mirror; mirrorUV() is the undistorted screen position. The Water template uses them.'],
 ];
 
 const MATERIAL_TYPES: [string, string][] = [

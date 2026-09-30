@@ -528,6 +528,23 @@ export class Viewport {
         ctx.restore();
     }
 
+    /** Outline of a grass field's area: meters along the object's turned x and z axes, whatever its scale. */
+    private drawArea(m: ArrayLike<number>, size: [number, number]) {
+        const x = normalize([m[0], m[1], m[2]]), z = normalize([m[8], m[9], m[10]]);
+        const at = (u: number, v: number) => this.picker.project([m[12] + x[0] * u + z[0] * v, m[13] + x[1] * u + z[1] * v, m[14] + x[2] * u + z[2] * v]);
+        const [w, d] = [size[0] / 2, size[1] / 2];
+        const p = [at(-w, -d), at(w, -d), at(w, d), at(-w, d)];
+        const ctx = this.ctx;
+        ctx.beginPath();
+        for (let i = 0; i < 4; i++) {
+            const a = p[i], b = p[(i + 1) % 4];
+            if (!a.visible || !b.visible) continue;
+            ctx.moveTo(a.x, a.y);
+            ctx.lineTo(b.x, b.y);
+        }
+        ctx.stroke();
+    }
+
     private strokeBox(corners: Vec3[]) {
         const ctx = this.ctx;
         const p = corners.map((c) => this.picker.project(c));
@@ -589,6 +606,7 @@ export class Viewport {
             ctx.lineTo(sp.x, sp.y + 6);
             ctx.closePath();
             ctx.stroke();
+            if (selected && node.grass) this.drawArea(m, node.grass.size);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 9 });
         } else if (node.model && this.sync.modelState(node.id)?.status !== 'ready') {
             ctx.font = '600 11px Inter, system-ui, sans-serif';
@@ -596,6 +614,12 @@ export class Viewport {
             ctx.fillText(state?.status === 'error' ? 'model failed' : 'loading...', sp.x + 8, sp.y - 8);
             ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 10 });
+        }
+        // A 3D sound: heard at full volume within the inner sphere, fading out up to the outer one.
+        if (selected && node.audio?.spatial) {
+            this.drawSphere(pos, node.audio.near);
+            ctx.globalAlpha *= 0.5;
+            this.drawSphere(pos, Math.max(node.audio.far, node.audio.near));
         }
         ctx.restore();
     }

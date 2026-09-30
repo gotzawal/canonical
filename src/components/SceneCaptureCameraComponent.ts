@@ -113,6 +113,8 @@ export class SceneCaptureCameraComponent extends ComponentBase {
     private _gBuffer: GBufferFrame | null = null;
     private _rendererPassState: RendererPassState | null = null;
     private _renderContext: RenderContext | null = null;
+    /** The context the render targets were made in, to free them. */
+    private _ctx: import('../gfx/graphics/webGpu/Context3D').Context3D | null = null;
     private _allocatedW: number = 0;
     private _allocatedH: number = 0;
     /** Stable, per-component key for {@link GBufferFrame.getGBufferFrame}.
@@ -244,6 +246,7 @@ export class SceneCaptureCameraComponent extends ComponentBase {
             this._gBufferKey = `sceneCapture_${(this.object3D as any).instanceID}`;
         }
 
+        this._ctx = ctx;
         this._gBuffer = GBufferFrame.getGBufferFrame(this._gBufferKey, ctx, this.width, this.height, true, undefined, 0);
         this._rendererPassState = WebGPUDescriptorCreator.createRendererPassState(ctx, this._gBuffer);
         // Apply user clear color to the color attachment descriptor.
@@ -263,6 +266,9 @@ export class SceneCaptureCameraComponent extends ComponentBase {
     }
 
     public destroy(force?: boolean): void {
+        // The render targets are kept per key; nothing else uses this one's.
+        if (this._gBuffer && this._gBufferKey && this._ctx) GBufferFrame.release(this._gBufferKey, this._ctx);
+        this._ctx = null;
         this._camera = null;
         this._gBuffer = null;
         this._rendererPassState = null;

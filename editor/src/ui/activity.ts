@@ -14,6 +14,9 @@ const ACTIVITY: Record<string, string> = {
     set_model_material: 'Changing a model\'s materials',
     set_model_part: 'Changing a model',
     add_model: 'Placing a model',
+    search_library: 'Searching the library',
+    add_from_library: 'Adding from the library',
+    import_url: 'Downloading a file',
     view_images: 'Looking at images',
     capture_viewport: 'Looking at the view',
     // plan
