@@ -83,22 +83,22 @@
             "api": "https://api.polyhaven.com",
             "resolution": "1k",
             "items": [
-                { "kind": "hdri", "categories": ["outdoor", "sunrise-sunset"], "count": 2, "tags": ["sky", "outdoor", "sunset"] },
-                { "kind": "hdri", "categories": ["outdoor", "midday"], "count": 2, "tags": ["sky", "outdoor", "day"] },
-                { "kind": "hdri", "categories": ["night"], "count": 1, "tags": ["sky", "night"] },
-                { "kind": "hdri", "categories": ["indoor"], "count": 1, "tags": ["indoor"] },
-                { "kind": "material", "categories": ["terrain"], "count": 5, "tags": ["ground", "terrain", "natural"] },
-                { "kind": "material", "categories": ["rock"], "count": 1, "tags": ["rock", "natural"] },
-                { "kind": "material", "categories": ["brick"], "count": 2, "tags": ["wall", "brick"] },
-                { "kind": "material", "categories": ["wood"], "count": 2, "tags": ["wood"] },
-                { "kind": "material", "categories": ["concrete"], "count": 2, "tags": ["concrete", "wall", "floor"] },
-                { "kind": "material", "categories": ["plaster"], "count": 1, "tags": ["wall", "plaster"] },
-                { "kind": "material", "categories": ["road"], "count": 1, "tags": ["road", "street"] },
-                { "kind": "material", "categories": ["metal"], "count": 1, "tags": ["metal"] },
-                { "kind": "material", "categories": ["roofing"], "count": 1, "tags": ["roof"] },
-                { "kind": "model", "categories": ["nature"], "count": 4, "maxTris": 60000, "tags": ["nature"] },
-                { "kind": "model", "categories": ["furniture"], "count": 3, "maxTris": 60000, "tags": ["furniture", "interior"] },
-                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"] }
+                { "kind": "hdri", "categories": ["outdoor", "sunrise-sunset"], "count": 2, "tags": ["sky", "outdoor", "sunset"], "ids": ["lilienstein", "the_sky_is_on_fire"] },
+                { "kind": "hdri", "categories": ["outdoor", "midday"], "count": 2, "tags": ["sky", "outdoor", "day"], "ids": ["kloofendal_48d_partly_cloudy_puresky", "wide_street_01"] },
+                { "kind": "hdri", "categories": ["night"], "count": 1, "tags": ["sky", "night"], "ids": ["moonless_golf"] },
+                { "kind": "hdri", "categories": ["indoor"], "count": 1, "tags": ["indoor"], "ids": ["brown_photostudio_02"] },
+                { "kind": "material", "categories": ["terrain"], "count": 5, "tags": ["ground", "terrain", "natural"], "ids": ["coast_sand_rocks_02", "brown_mud_leaves_01", "aerial_rocks_02", "asphalt_02", "aerial_grass_rock"] },
+                { "kind": "material", "categories": ["rock"], "count": 1, "tags": ["rock", "natural"], "ids": ["aerial_rocks_04"] },
+                { "kind": "material", "categories": ["brick"], "count": 2, "tags": ["wall", "brick"], "ids": ["red_brick", "red_brick_03"] },
+                { "kind": "material", "categories": ["wood"], "count": 2, "tags": ["wood"], "ids": ["plywood", "laminate_floor_02"] },
+                { "kind": "material", "categories": ["concrete"], "count": 2, "tags": ["concrete", "wall", "floor"], "ids": ["concrete_floor_worn_001", "concrete_floor_02"] },
+                { "kind": "material", "categories": ["plaster"], "count": 1, "tags": ["wall", "plaster"], "ids": ["beige_wall_001"] },
+                { "kind": "material", "categories": ["road"], "count": 1, "tags": ["road", "street"], "ids": ["aerial_asphalt_01"] },
+                { "kind": "material", "categories": ["metal"], "count": 1, "tags": ["metal"], "ids": ["metal_plate"] },
+                { "kind": "material", "categories": ["roofing"], "count": 1, "tags": ["roof"], "ids": ["factory_wall"] },
+                { "kind": "model", "categories": ["nature"], "count": 4, "maxTris": 60000, "tags": ["nature"], "ids": ["grass_medium_01", "grass_bermuda_01", "rock_moss_set_02", "potted_plant_04"] },
+                { "kind": "model", "categories": ["furniture"], "count": 3, "maxTris": 60000, "tags": ["furniture", "interior"], "ids": ["sofa_02", "wooden_table_02", "sofa_03"] },
+                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"], "ids": ["Camera_01", "Television_01", "Lantern_01", "wine_bottles_01"] }
             ]
         }
     ]

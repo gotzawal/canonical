@@ -42,6 +42,181 @@
    "license": "CC0-1.0",
    "url": "https://github.com/KenneyNL/Starter-Kit-Racing",
    "commit": "2f2e5f2646dda89cb21d4e8539bab60c6e955dc8"
+  },
+  {
+   "id": "polyhaven",
+   "name": "Poly Haven",
+   "author": "Poly Haven and its artists",
+   "license": "CC0-1.0",
+   "licenseNote": "Mirrored through Poly Haven's public API; each asset credits its authors.",
+   "url": "https://polyhaven.com",
+   "assets": [
+    {
+     "id": "polyhaven/lilienstein",
+     "author": "Andreas Mischok",
+     "origin": "https://polyhaven.com/a/lilienstein"
+    },
+    {
+     "id": "polyhaven/the-sky-is-on-fire",
+     "author": "Greg Zaal and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/the_sky_is_on_fire"
+    },
+    {
+     "id": "polyhaven/kloofendal-48d-partly-cloudy-puresky",
+     "author": "Greg Zaal and Jarod Guest",
+     "origin": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky"
+    },
+    {
+     "id": "polyhaven/wide-street-01",
+     "author": "Sergej Majboroda",
+     "origin": "https://polyhaven.com/a/wide_street_01"
+    },
+    {
+     "id": "polyhaven/moonless-golf",
+     "author": "Greg Zaal",
+     "origin": "https://polyhaven.com/a/moonless_golf"
+    },
+    {
+     "id": "polyhaven/brown-photostudio-02",
+     "author": "Sergej Majboroda",
+     "origin": "https://polyhaven.com/a/brown_photostudio_02"
+    },
+    {
+     "id": "polyhaven/coast-sand-rocks-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/coast_sand_rocks_02"
+    },
+    {
+     "id": "polyhaven/brown-mud-leaves-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/brown_mud_leaves_01"
+    },
+    {
+     "id": "polyhaven/aerial-rocks-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/aerial_rocks_02"
+    },
+    {
+     "id": "polyhaven/asphalt-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/asphalt_02"
+    },
+    {
+     "id": "polyhaven/aerial-grass-rock",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/aerial_grass_rock"
+    },
+    {
+     "id": "polyhaven/aerial-rocks-04",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/aerial_rocks_04"
+    },
+    {
+     "id": "polyhaven/red-brick",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/red_brick"
+    },
+    {
+     "id": "polyhaven/red-brick-03",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/red_brick_03"
+    },
+    {
+     "id": "polyhaven/plywood",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/plywood"
+    },
+    {
+     "id": "polyhaven/laminate-floor-02",
+     "author": "Dario Barresi and Charlotte Baglioni",
+     "origin": "https://polyhaven.com/a/laminate_floor_02"
+    },
+    {
+     "id": "polyhaven/concrete-floor-worn-001",
+     "author": "Dimitrios Savva and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/concrete_floor_worn_001"
+    },
+    {
+     "id": "polyhaven/concrete-floor-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/concrete_floor_02"
+    },
+    {
+     "id": "polyhaven/beige-wall-001",
+     "author": "Dimitrios Savva and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/beige_wall_001"
+    },
+    {
+     "id": "polyhaven/aerial-asphalt-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/aerial_asphalt_01"
+    },
+    {
+     "id": "polyhaven/metal-plate",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/metal_plate"
+    },
+    {
+     "id": "polyhaven/factory-wall",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/factory_wall"
+    },
+    {
+     "id": "polyhaven/grass-medium-01",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/grass_medium_01"
+    },
+    {
+     "id": "polyhaven/grass-bermuda-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/grass_bermuda_01"
+    },
+    {
+     "id": "polyhaven/rock-moss-set-02",
+     "author": "Kless Gyzen",
+     "origin": "https://polyhaven.com/a/rock_moss_set_02"
+    },
+    {
+     "id": "polyhaven/potted-plant-04",
+     "author": "James Ray Cock",
+     "origin": "https://polyhaven.com/a/potted_plant_04"
+    },
+    {
+     "id": "polyhaven/sofa-02",
+     "author": "Kirill Sannikov",
+     "origin": "https://polyhaven.com/a/sofa_02"
+    },
+    {
+     "id": "polyhaven/wooden-table-02",
+     "author": "Serhii Khromov",
+     "origin": "https://polyhaven.com/a/wooden_table_02"
+    },
+    {
+     "id": "polyhaven/sofa-03",
+     "author": "Fran Calvente",
+     "origin": "https://polyhaven.com/a/sofa_03"
+    },
+    {
+     "id": "polyhaven/camera-01",
+     "author": "Rajil Jose Macatangay",
+     "origin": "https://polyhaven.com/a/Camera_01"
+    },
+    {
+     "id": "polyhaven/television-01",
+     "author": "Gabriel Radić",
+     "origin": "https://polyhaven.com/a/Television_01"
+    },
+    {
+     "id": "polyhaven/lantern-01",
+     "author": "Rajil Jose Macatangay",
+     "origin": "https://polyhaven.com/a/Lantern_01"
+    },
+    {
+     "id": "polyhaven/wine-bottles-01",
+     "author": "Rico Cilliers and Jurita Burger",
+     "origin": "https://polyhaven.com/a/wine_bottles_01"
+    }
+   ]
   }
  ],
  "items": [
@@ -1807,6 +1982,933 @@
     2.8
    ],
    "thumb": "kenney-racing/thumbs/vehicle-truck-yellow.png"
+  },
+  {
+   "id": "polyhaven/aerial-asphalt-01",
+   "name": "Aerial Asphalt 01",
+   "kind": "material",
+   "file": "polyhaven/aerial-asphalt-01/color.jpg",
+   "bytes": 511347,
+   "source": "polyhaven",
+   "tags": [
+    "road",
+    "street",
+    "flat",
+    "cracked"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/aerial_asphalt_01",
+   "maps": {
+    "normal": "polyhaven/aerial-asphalt-01/normal.jpg",
+    "arm": "polyhaven/aerial-asphalt-01/arm.jpg"
+   },
+   "tile": 30,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/aerial-asphalt-01.png"
+  },
+  {
+   "id": "polyhaven/aerial-grass-rock",
+   "name": "Aerial Grass Rock",
+   "kind": "material",
+   "file": "polyhaven/aerial-grass-rock/color.jpg",
+   "bytes": 681579,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "moss",
+    "grass",
+    "cliff",
+    "cave",
+    "rock face"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/aerial_grass_rock",
+   "maps": {
+    "normal": "polyhaven/aerial-grass-rock/normal.jpg",
+    "arm": "polyhaven/aerial-grass-rock/arm.jpg"
+   },
+   "tile": 15,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/aerial-grass-rock.png"
+  },
+  {
+   "id": "polyhaven/aerial-rocks-02",
+   "name": "Aerial Rocks 02",
+   "kind": "material",
+   "file": "polyhaven/aerial-rocks-02/color.jpg",
+   "bytes": 831872,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "rocks",
+    "rough",
+    "moss",
+    "cliff",
+    "rock face",
+    "cave"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/aerial_rocks_02",
+   "maps": {
+    "normal": "polyhaven/aerial-rocks-02/normal.jpg",
+    "arm": "polyhaven/aerial-rocks-02/arm.jpg"
+   },
+   "tile": 50,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/aerial-rocks-02.png"
+  },
+  {
+   "id": "polyhaven/aerial-rocks-04",
+   "name": "Aerial Rocks 04",
+   "kind": "material",
+   "file": "polyhaven/aerial-rocks-04/color.jpg",
+   "bytes": 918009,
+   "source": "polyhaven",
+   "tags": [
+    "rock",
+    "natural",
+    "rough",
+    "rocks",
+    "moss",
+    "cliff",
+    "rock face",
+    "cave"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/aerial_rocks_04",
+   "maps": {
+    "normal": "polyhaven/aerial-rocks-04/normal.jpg",
+    "arm": "polyhaven/aerial-rocks-04/arm.jpg"
+   },
+   "tile": 80,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/aerial-rocks-04.png"
+  },
+  {
+   "id": "polyhaven/asphalt-02",
+   "name": "Asphalt 02",
+   "kind": "material",
+   "file": "polyhaven/asphalt-02/color.jpg",
+   "bytes": 924894,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "asphalt",
+    "cracked",
+    "flat",
+    "road",
+    "asphalt road",
+    "tarmac road",
+    "gritty",
+    "weathered"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/asphalt_02",
+   "maps": {
+    "normal": "polyhaven/asphalt-02/normal.jpg",
+    "arm": "polyhaven/asphalt-02/arm.jpg"
+   },
+   "tile": 3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/asphalt-02.png"
+  },
+  {
+   "id": "polyhaven/beige-wall-001",
+   "name": "Beige Wall 001",
+   "kind": "material",
+   "file": "polyhaven/beige-wall-001/color.jpg",
+   "bytes": 207631,
+   "source": "polyhaven",
+   "tags": [
+    "wall",
+    "plaster",
+    "beige",
+    "painted",
+    "smooth",
+    "suburb",
+    "house",
+    "home"
+   ],
+   "author": "Dimitrios Savva and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/beige_wall_001",
+   "maps": {
+    "normal": "polyhaven/beige-wall-001/normal.jpg",
+    "arm": "polyhaven/beige-wall-001/arm.jpg"
+   },
+   "tile": 3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/beige-wall-001.png"
+  },
+  {
+   "id": "polyhaven/brown-mud-leaves-01",
+   "name": "Brown Mud Leaves 01",
+   "kind": "material",
+   "file": "polyhaven/brown-mud-leaves-01/color.jpg",
+   "bytes": 1019147,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "grass",
+    "mud",
+    "moss",
+    "stones",
+    "orange",
+    "forest"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/brown_mud_leaves_01",
+   "maps": {
+    "normal": "polyhaven/brown-mud-leaves-01/normal.jpg",
+    "arm": "polyhaven/brown-mud-leaves-01/arm.jpg"
+   },
+   "tile": 1.3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/brown-mud-leaves-01.png"
+  },
+  {
+   "id": "polyhaven/brown-photostudio-02",
+   "name": "Brown Photostudio 02",
+   "kind": "hdri",
+   "file": "polyhaven/brown-photostudio-02.hdr",
+   "bytes": 1648130,
+   "source": "polyhaven",
+   "tags": [
+    "indoor",
+    "bed",
+    "studio",
+    "fluorescent",
+    "window",
+    "couch",
+    "chair",
+    "photo",
+    "table"
+   ],
+   "author": "Sergej Majboroda",
+   "origin": "https://polyhaven.com/a/brown_photostudio_02",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/brown-photostudio-02.png"
+  },
+  {
+   "id": "polyhaven/camera-01",
+   "name": "Camera 01",
+   "kind": "model",
+   "file": "polyhaven/camera-01.glb",
+   "bytes": 2101000,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "vintage",
+    "camera",
+    "antique",
+    "ornate",
+    "photography",
+    "retro",
+    "lens"
+   ],
+   "author": "Rajil Jose Macatangay",
+   "origin": "https://polyhaven.com/a/Camera_01",
+   "tris": 26987,
+   "extent": [
+    0.214,
+    0.078,
+    0.263
+   ],
+   "thumb": "polyhaven/thumbs/camera-01.png"
+  },
+  {
+   "id": "polyhaven/coast-sand-rocks-02",
+   "name": "Coast Sand Rocks 02",
+   "kind": "material",
+   "file": "polyhaven/coast-sand-rocks-02/color.jpg",
+   "bytes": 751098,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "grass",
+    "rock face",
+    "rock",
+    "moss",
+    "rough",
+    "uneven",
+    "weathered",
+    "stones"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/coast_sand_rocks_02",
+   "maps": {
+    "normal": "polyhaven/coast-sand-rocks-02/normal.jpg",
+    "arm": "polyhaven/coast-sand-rocks-02/arm.jpg"
+   },
+   "tile": 15,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/coast-sand-rocks-02.png"
+  },
+  {
+   "id": "polyhaven/concrete-floor-02",
+   "name": "Concrete Floor 02",
+   "kind": "material",
+   "file": "polyhaven/concrete-floor-02/color.jpg",
+   "bytes": 589226,
+   "source": "polyhaven",
+   "tags": [
+    "concrete",
+    "wall",
+    "floor",
+    "rough",
+    "moss",
+    "plain"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/concrete_floor_02",
+   "maps": {
+    "normal": "polyhaven/concrete-floor-02/normal.jpg",
+    "arm": "polyhaven/concrete-floor-02/arm.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/concrete-floor-02.png"
+  },
+  {
+   "id": "polyhaven/concrete-floor-worn-001",
+   "name": "Concrete Floor Worn 001",
+   "kind": "material",
+   "file": "polyhaven/concrete-floor-worn-001/color.jpg",
+   "bytes": 285901,
+   "source": "polyhaven",
+   "tags": [
+    "concrete",
+    "wall",
+    "floor",
+    "worn",
+    "old",
+    "plain",
+    "grey",
+    "weathered",
+    "bare",
+    "discolored"
+   ],
+   "author": "Dimitrios Savva and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/concrete_floor_worn_001",
+   "maps": {
+    "normal": "polyhaven/concrete-floor-worn-001/normal.jpg",
+    "arm": "polyhaven/concrete-floor-worn-001/arm.jpg"
+   },
+   "tile": 3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/concrete-floor-worn-001.png"
+  },
+  {
+   "id": "polyhaven/factory-wall",
+   "name": "Factory Wall",
+   "kind": "material",
+   "file": "polyhaven/factory-wall/color.jpg",
+   "bytes": 301758,
+   "source": "polyhaven",
+   "tags": [
+    "roof",
+    "wall",
+    "fence",
+    "industrial",
+    "corrugated"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/factory_wall",
+   "maps": {
+    "normal": "polyhaven/factory-wall/normal.jpg",
+    "arm": "polyhaven/factory-wall/arm.jpg"
+   },
+   "tile": 3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/factory-wall.png"
+  },
+  {
+   "id": "polyhaven/grass-bermuda-01",
+   "name": "Grass Bermuda 01",
+   "kind": "model",
+   "file": "polyhaven/grass-bermuda-01.glb",
+   "bytes": 563200,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "grass",
+    "shrub",
+    "field",
+    "foliage",
+    "natural",
+    "outdoor"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/grass_bermuda_01",
+   "tris": 941,
+   "extent": [
+    1.686,
+    0.158,
+    0.142
+   ],
+   "thumb": "polyhaven/thumbs/grass-bermuda-01.png"
+  },
+  {
+   "id": "polyhaven/grass-medium-01",
+   "name": "Grass Medium 01",
+   "kind": "model",
+   "file": "polyhaven/grass-medium-01.glb",
+   "bytes": 1243904,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "grass",
+    "green",
+    "shrub",
+    "outdoor",
+    "field",
+    "meadow"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/grass_medium_01",
+   "tris": 24730,
+   "extent": [
+    5.605,
+    0.343,
+    0.327
+   ],
+   "thumb": "polyhaven/thumbs/grass-medium-01.png"
+  },
+  {
+   "id": "polyhaven/kloofendal-48d-partly-cloudy-puresky",
+   "name": "Kloofendal 48d Partly Cloudy (Pure Sky)",
+   "kind": "hdri",
+   "file": "polyhaven/kloofendal-48d-partly-cloudy-puresky.hdr",
+   "bytes": 1435119,
+   "source": "polyhaven",
+   "tags": [
+    "sky",
+    "outdoor",
+    "day",
+    "pure skies"
+   ],
+   "author": "Greg Zaal and Jarod Guest",
+   "origin": "https://polyhaven.com/a/kloofendal_48d_partly_cloudy_puresky",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/kloofendal-48d-partly-cloudy-puresky.png"
+  },
+  {
+   "id": "polyhaven/laminate-floor-02",
+   "name": "Laminate Floor 02",
+   "kind": "material",
+   "file": "polyhaven/laminate-floor-02/color.jpg",
+   "bytes": 268902,
+   "source": "polyhaven",
+   "tags": [
+    "wood",
+    "even",
+    "flat",
+    "wooden",
+    "floor",
+    "laminate",
+    "smooth",
+    "tiles",
+    "brown"
+   ],
+   "author": "Dario Barresi and Charlotte Baglioni",
+   "origin": "https://polyhaven.com/a/laminate_floor_02",
+   "maps": {
+    "normal": "polyhaven/laminate-floor-02/normal.jpg",
+    "arm": "polyhaven/laminate-floor-02/arm.jpg"
+   },
+   "tile": 1.7,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/laminate-floor-02.png"
+  },
+  {
+   "id": "polyhaven/lantern-01",
+   "name": "Lantern 01",
+   "kind": "model",
+   "file": "polyhaven/lantern-01.glb",
+   "bytes": 998276,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "metal",
+    "glass",
+    "lantern",
+    "antique",
+    "vintage",
+    "hurricane",
+    "lamp"
+   ],
+   "author": "Rajil Jose Macatangay",
+   "origin": "https://polyhaven.com/a/Lantern_01",
+   "tris": 33902,
+   "extent": [
+    0.122,
+    0.294,
+    0.097
+   ],
+   "thumb": "polyhaven/thumbs/lantern-01.png"
+  },
+  {
+   "id": "polyhaven/lilienstein",
+   "name": "Lilienstein",
+   "kind": "hdri",
+   "file": "polyhaven/lilienstein.hdr",
+   "bytes": 1726218,
+   "source": "polyhaven",
+   "tags": [
+    "sky",
+    "outdoor",
+    "sunset",
+    "sun",
+    "grass",
+    "field",
+    "forest",
+    "meadow"
+   ],
+   "author": "Andreas Mischok",
+   "origin": "https://polyhaven.com/a/lilienstein",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/lilienstein.png"
+  },
+  {
+   "id": "polyhaven/metal-plate",
+   "name": "Metal Plate",
+   "kind": "material",
+   "file": "polyhaven/metal-plate/color.jpg",
+   "bytes": 537629,
+   "source": "polyhaven",
+   "tags": [
+    "metal",
+    "bare",
+    "painted",
+    "rusty",
+    "pattern",
+    "iron",
+    "factory",
+    "industrial",
+    "steel"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/metal_plate",
+   "maps": {
+    "normal": "polyhaven/metal-plate/normal.jpg",
+    "arm": "polyhaven/metal-plate/arm.jpg"
+   },
+   "tile": 0.5,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/metal-plate.png"
+  },
+  {
+   "id": "polyhaven/moonless-golf",
+   "name": "Moonless Golf",
+   "kind": "hdri",
+   "file": "polyhaven/moonless-golf.hdr",
+   "bytes": 1672754,
+   "source": "polyhaven",
+   "tags": [
+    "sky",
+    "night",
+    "grass",
+    "golf",
+    "stars",
+    "milky way",
+    "field"
+   ],
+   "author": "Greg Zaal",
+   "origin": "https://polyhaven.com/a/moonless_golf",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/moonless-golf.png"
+  },
+  {
+   "id": "polyhaven/plywood",
+   "name": "Plywood",
+   "kind": "material",
+   "file": "polyhaven/plywood/color.jpg",
+   "bytes": 477063,
+   "source": "polyhaven",
+   "tags": [
+    "wood",
+    "clean",
+    "even",
+    "smooth",
+    "flat",
+    "continuous",
+    "consistent"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/plywood",
+   "maps": {
+    "normal": "polyhaven/plywood/normal.jpg",
+    "arm": "polyhaven/plywood/arm.jpg"
+   },
+   "tile": 0.5,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/plywood.png"
+  },
+  {
+   "id": "polyhaven/potted-plant-04",
+   "name": "Potted Plant 04",
+   "kind": "model",
+   "file": "polyhaven/potted-plant-04.glb",
+   "bytes": 792580,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "cactus",
+    "aloe",
+    "succulent",
+    "potplant",
+    "small",
+    "pot",
+    "plant",
+    "decor"
+   ],
+   "author": "James Ray Cock",
+   "origin": "https://polyhaven.com/a/potted_plant_04",
+   "tris": 8929,
+   "extent": [
+    0.168,
+    0.267,
+    0.185
+   ],
+   "thumb": "polyhaven/thumbs/potted-plant-04.png"
+  },
+  {
+   "id": "polyhaven/red-brick",
+   "name": "Red Brick",
+   "kind": "material",
+   "file": "polyhaven/red-brick/color.jpg",
+   "bytes": 556339,
+   "source": "polyhaven",
+   "tags": [
+    "wall",
+    "brick",
+    "bricks",
+    "red brick",
+    "brick wall",
+    "rough",
+    "exterior"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/red_brick",
+   "maps": {
+    "normal": "polyhaven/red-brick/normal.jpg",
+    "arm": "polyhaven/red-brick/arm.jpg"
+   },
+   "tile": 1.4,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/red-brick.png"
+  },
+  {
+   "id": "polyhaven/red-brick-03",
+   "name": "Red Brick 03",
+   "kind": "material",
+   "file": "polyhaven/red-brick-03/color.jpg",
+   "bytes": 656689,
+   "source": "polyhaven",
+   "tags": [
+    "wall",
+    "brick",
+    "red",
+    "industrial",
+    "factory",
+    "brown"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/red_brick_03",
+   "maps": {
+    "normal": "polyhaven/red-brick-03/normal.jpg",
+    "arm": "polyhaven/red-brick-03/arm.jpg"
+   },
+   "tile": 1,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/red-brick-03.png"
+  },
+  {
+   "id": "polyhaven/rock-moss-set-02",
+   "name": "Rock Moss Set 02",
+   "kind": "model",
+   "file": "polyhaven/rock-moss-set-02.glb",
+   "bytes": 1174620,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "rocks",
+    "outdoor",
+    "stones",
+    "pebbles",
+    "rock",
+    "dirt"
+   ],
+   "author": "Kless Gyzen",
+   "origin": "https://polyhaven.com/a/rock_moss_set_02",
+   "tris": 57647,
+   "extent": [
+    8.278,
+    1.368,
+    3.41
+   ],
+   "thumb": "polyhaven/thumbs/rock-moss-set-02.png"
+  },
+  {
+   "id": "polyhaven/sofa-02",
+   "name": "Sofa 02",
+   "kind": "model",
+   "file": "polyhaven/sofa-02.glb",
+   "bytes": 464272,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "wood",
+    "chair",
+    "prop",
+    "couch",
+    "leather",
+    "fabric"
+   ],
+   "author": "Kirill Sannikov",
+   "origin": "https://polyhaven.com/a/sofa_02",
+   "tris": 2728,
+   "extent": [
+    1.807,
+    0.709,
+    0.818
+   ],
+   "thumb": "polyhaven/thumbs/sofa-02.png"
+  },
+  {
+   "id": "polyhaven/sofa-03",
+   "name": "Sofa 03",
+   "kind": "model",
+   "file": "polyhaven/sofa-03.glb",
+   "bytes": 562760,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "vintage",
+    "chair",
+    "couch",
+    "seat",
+    "fancy",
+    "mansion",
+    "manor",
+    "victorian"
+   ],
+   "author": "Fran Calvente",
+   "origin": "https://polyhaven.com/a/sofa_03",
+   "tris": 8004,
+   "extent": [
+    2.731,
+    1.118,
+    0.925
+   ],
+   "thumb": "polyhaven/thumbs/sofa-03.png"
+  },
+  {
+   "id": "polyhaven/television-01",
+   "name": "Television 01",
+   "kind": "model",
+   "file": "polyhaven/television-01.glb",
+   "bytes": 550184,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "vintage",
+    "furniture",
+    "metal",
+    "wood",
+    "tv",
+    "television",
+    "video"
+   ],
+   "author": "Gabriel Radić",
+   "origin": "https://polyhaven.com/a/Television_01",
+   "tris": 1918,
+   "extent": [
+    0.6,
+    0.457,
+    0.471
+   ],
+   "thumb": "polyhaven/thumbs/television-01.png"
+  },
+  {
+   "id": "polyhaven/the-sky-is-on-fire",
+   "name": "The Sky Is On Fire",
+   "kind": "hdri",
+   "file": "polyhaven/the-sky-is-on-fire.hdr",
+   "bytes": 1526564,
+   "source": "polyhaven",
+   "tags": [
+    "sky",
+    "outdoor",
+    "sunset",
+    "twilight",
+    "rail",
+    "promenade",
+    "path",
+    "ocean",
+    "wave",
+    "backplates"
+   ],
+   "author": "Greg Zaal and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/the_sky_is_on_fire",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/the-sky-is-on-fire.png"
+  },
+  {
+   "id": "polyhaven/wide-street-01",
+   "name": "Wide Street 01",
+   "kind": "hdri",
+   "file": "polyhaven/wide-street-01.hdr",
+   "bytes": 1474393,
+   "source": "polyhaven",
+   "tags": [
+    "sky",
+    "outdoor",
+    "day",
+    "sun",
+    "road",
+    "street",
+    "asphalt",
+    "city",
+    "backplates"
+   ],
+   "author": "Sergej Majboroda",
+   "origin": "https://polyhaven.com/a/wide_street_01",
+   "pixels": [
+    1024,
+    512
+   ],
+   "thumb": "polyhaven/thumbs/wide-street-01.png"
+  },
+  {
+   "id": "polyhaven/wine-bottles-01",
+   "name": "Wine Bottles 01",
+   "kind": "model",
+   "file": "polyhaven/wine-bottles-01.glb",
+   "bytes": 1419104,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "wine",
+    "drink",
+    "bottle",
+    "champagne",
+    "grape",
+    "farmhouse",
+    "vineyard"
+   ],
+   "author": "Rico Cilliers and Jurita Burger",
+   "origin": "https://polyhaven.com/a/wine_bottles_01",
+   "tris": 28848,
+   "extent": [
+    0.676,
+    0.331,
+    0.081
+   ],
+   "thumb": "polyhaven/thumbs/wine-bottles-01.png"
+  },
+  {
+   "id": "polyhaven/wooden-table-02",
+   "name": "Wooden Table 02",
+   "kind": "model",
+   "file": "polyhaven/wooden-table-02.glb",
+   "bytes": 541140,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "wooden",
+    "worn",
+    "village",
+    "rural",
+    "natural",
+    "simple"
+   ],
+   "author": "Serhii Khromov",
+   "origin": "https://polyhaven.com/a/wooden_table_02",
+   "tris": 196,
+   "extent": [
+    1.134,
+    0.8,
+    0.706
+   ],
+   "thumb": "polyhaven/thumbs/wooden-table-02.png"
   }
  ]
 }
