@@ -19,6 +19,7 @@
             "@orillusion/particle": ["../packages/particle/index.ts"],
             "@orillusion/atmosphere": ["../packages/atmosphere/index.ts"],
             "@orillusion/geometry/grass": ["../packages/geometry/grass/index.ts"],
+            "@orillusion/media-extention/audio": ["../packages/media-extention/audio.ts"],
             "basis-encoder": ["../node_modules/ktx2-encoder/dist/basis/basis_encoder"]
         },
         "types": ["vite/client", "@webgpu/types"]

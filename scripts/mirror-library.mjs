@@ -1,17 +1,19 @@
 #!/usr/bin/env node
 // Mirrors the open-source asset packs of scripts/library/sources.json into
-// editor/public/library, so the editor serves them next to itself and a
-// project copies one in only when it is picked (Library in the Assets panel).
-// Upstream links can move or vanish; the mirror cannot.
+// editor/library, which the editor serves next to itself (library/ in its
+// build): a project copies a file in only when it is picked (the Library of
+// the Assets panel, or the assistant). Upstream links can move or vanish;
+// the mirror cannot.
 //
 //   node scripts/mirror-library.mjs              every source, at its pinned ref
 //   node scripts/mirror-library.mjs kenney-city  only that source
 //   node scripts/mirror-library.mjs --latest     move every source to its newest commit
 //
 // Models are packed into self-contained GLBs (their external textures and
-// buffers embedded), with their size and triangle count in the catalog;
-// sounds and images are copied as they are. Writes library/catalog.json,
-// which the editor reads, and library/LICENSES.md.
+// buffers embedded) with a thumbnail each, and their extent, triangles and
+// animation clips in the catalog; sounds and images are copied as they are.
+// Writes library/catalog.json, which the editor reads, and
+// library/LICENSES.md.
 
 import { execFileSync } from 'node:child_process';
 import { copyFileSync, existsSync, globSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
@@ -20,10 +22,11 @@ import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NodeIO, getBounds } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { renderThumbnail } from './library/thumbnail.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const SOURCES = join(ROOT, 'scripts/library/sources.json');
-const OUT = join(ROOT, 'editor/public/library');
+const OUT = join(ROOT, 'editor/library');
 const CACHE = join(tmpdir(), 'morglay-library');
 
 const args = process.argv.slice(2);
@@ -62,11 +65,16 @@ const slug = (file) =>
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
 
-async function packModel(file, out) {
+async function packModel(file, out, thumb) {
     const doc = await io.read(file);
     const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
     const glb = await io.writeBinary(doc);
     writeFileSync(out, glb);
+    const png = renderThumbnail(doc);
+    if (png) {
+        mkdirSync(dirname(join(OUT, thumb)), { recursive: true });
+        writeFileSync(join(OUT, thumb), png);
+    }
     let tris = 0;
     const count = (node) => {
         for (const prim of node.getMesh()?.listPrimitives() ?? []) {
@@ -79,7 +87,7 @@ async function packModel(file, out) {
     const { min, max } = scene ? getBounds(scene) : { min: [0, 0, 0], max: [0, 0, 0] };
     const extent = max.map((v, i) => Math.round((v - min[i]) * 1000) / 1000);
     const animations = doc.getRoot().listAnimations().map((a) => a.getName()).filter(Boolean);
-    return { tris: Math.round(tris), extent, ...(animations.length ? { animations } : {}) };
+    return { tris: Math.round(tris), extent, ...(png ? { thumb } : {}), ...(animations.length ? { animations } : {}) };
 }
 
 /** Seconds of an Ogg Vorbis or Opus file: the last page's granule position over the rate. */
@@ -129,15 +137,17 @@ for (const [index, src] of config.sources.entries()) {
         const files = globSync(rule.glob, { cwd: dir }).sort();
         if (!files.length) console.warn(`  nothing matches ${rule.glob}`);
         for (const rel of files) {
+            // A model and a sound of the same name (coin.glb, coin.ogg) tell their kind apart.
             let id = slug(rel);
-            while (seen.has(id)) id += '-2';
+            if (seen.has(id)) id += `-${{ model: 'model', audio: 'sound', texture: 'image' }[rule.kind] ?? rule.kind}`;
+            for (let n = 2; seen.has(id); n++) id = id.replace(/(-\d+)?$/, `-${n}`);
             seen.add(id);
             const from = join(dir, rel);
             const ext = rule.kind === 'model' ? '.glb' : extname(rel).toLowerCase();
             const file = `${src.id}/${id}${ext}`;
             const out = join(OUT, file);
             let info = {};
-            if (rule.kind === 'model') info = await packModel(from, out);
+            if (rule.kind === 'model') info = await packModel(from, out, `${src.id}/thumbs/${id}.png`);
             else {
                 copyFileSync(from, out);
                 const bytes = readFileSync(out);

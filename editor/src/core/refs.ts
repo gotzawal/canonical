@@ -12,8 +12,8 @@ export interface Ref {
     id: string;
     /** An object's (a prefab template's too), the post chain's, a prefab's model, or shader code. */
     at: 'object' | 'post' | 'prefab' | 'code';
-    /** Of an asset: what it is to its holder, a texture's role or a model; unknown for shader code. */
-    role?: TextureRole | 'model';
+    /** Of an asset: what it is to its holder, a texture's role, a model or a sound; unknown for shader code. */
+    role?: TextureRole | 'model' | 'audio';
     /** Takes the reference out (the holder goes back to its default); missing where that is not done. */
     drop?(): void;
 }
@@ -73,6 +73,8 @@ export function refs(doc: SceneDoc): Ref[] {
         if (grass?.texture) out.push({ kind: 'asset', id: grass.texture, at: 'object', role: 'color', drop: () => (grass.texture = null) });
         // Gusts are read as data, texel by texel.
         if (grass?.windMap) out.push({ kind: 'asset', id: grass.windMap, at: 'object', role: 'data', drop: () => (grass.windMap = null) });
+        const audio = n.audio;
+        if (audio?.clip) out.push({ kind: 'asset', id: audio.clip, at: 'object', role: 'audio', drop: () => (audio.clip = null) });
         for (const r of n.scripts ?? []) {
             out.push({
                 kind: 'script',
@@ -94,7 +96,22 @@ export function refs(doc: SceneDoc): Ref[] {
     }
     // ... and a property's default may name one in the shader code.
     for (const s of doc.shaders) for (const id of known) if (s.code.includes(id)) out.push({ kind: 'asset', id, at: 'code' });
+    // Scripts and behavior trees play sounds by name (this.playSound('coin'), Play Sound tasks).
+    const sounds = doc.assets.filter((a) => a.kind === 'audio');
+    if (sounds.length) {
+        const texts = [...doc.scripts.map((s) => s.code), JSON.stringify(doc.behaviors)];
+        for (const a of sounds) if (texts.some((t) => namesSound(t, a))) out.push({ kind: 'asset', id: a.id, at: 'code', role: 'audio' });
+    }
     return out;
+}
+
+/** True when a text names a sound as a string: its id, or its name with or without the extension (any case). */
+export function namesSound(text: string, a: { id: string; name: string }): boolean {
+    if (text.includes(a.id)) return true;
+    const stem = a.name.replace(/\.[a-z0-9]+$/i, '');
+    const esc = (x: string) => x.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Any case: the sound is found by name that way in Play (AudioSystem.find).
+    return new RegExp(`['"\`]${esc(stem)}(${esc(a.name.slice(stem.length))})?['"\`]`, 'i').test(text);
 }
 
 /**
@@ -120,8 +137,8 @@ export function useCounts(doc: SceneDoc): { scripts: Map<string, number>; prefab
  * What each asset the scene uses is to it: texture roles, 'model', or
  * 'unknown' where only shader code names it (the game may load it any way).
  */
-export function assetRoles(doc: SceneDoc): Map<string, Set<TextureRole | 'model' | 'unknown'>> {
-    const out = new Map<string, Set<TextureRole | 'model' | 'unknown'>>();
+export function assetRoles(doc: SceneDoc): Map<string, Set<TextureRole | 'model' | 'audio' | 'unknown'>> {
+    const out = new Map<string, Set<TextureRole | 'model' | 'audio' | 'unknown'>>();
     for (const r of refs(doc)) {
         if (r.kind !== 'asset') continue;
         let set = out.get(r.id);

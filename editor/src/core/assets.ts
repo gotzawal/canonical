@@ -36,6 +36,7 @@ export function kindOf(file: { name: string; type: string }): AssetKind | null {
     const name = file.name.toLowerCase();
     if (name.endsWith('.glb') || name.endsWith('.gltf')) return 'model';
     if (/\.(png|jpe?g|webp|gif|bmp|avif|ktx2)$/.test(name) || file.type.startsWith('image/')) return 'texture';
+    if (/\.(mp3|ogg|oga|opus|wav|m4a|aac|flac|weba)$/.test(name) || file.type.startsWith('audio/')) return 'audio';
     return null;
 }
 
@@ -160,6 +161,12 @@ function guessMime(name: string): string {
     if (n.endsWith('.jpg') || n.endsWith('.jpeg')) return 'image/jpeg';
     if (n.endsWith('.webp')) return 'image/webp';
     if (n.endsWith('.ktx2')) return 'image/ktx2';
+    if (n.endsWith('.mp3')) return 'audio/mpeg';
+    if (/\.(ogg|oga|opus)$/.test(n)) return 'audio/ogg';
+    if (n.endsWith('.wav')) return 'audio/wav';
+    if (n.endsWith('.m4a') || n.endsWith('.aac')) return 'audio/mp4';
+    if (n.endsWith('.flac')) return 'audio/flac';
+    if (n.endsWith('.weba')) return 'audio/webm';
     if (n.endsWith('.json')) return 'application/json';
     return 'application/octet-stream';
 }

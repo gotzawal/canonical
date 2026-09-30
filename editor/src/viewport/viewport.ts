@@ -615,6 +615,12 @@ export class Viewport {
             ctx.strokeRect(sp.x - 5, sp.y - 5, 10, 10);
             this.icons.push({ id: node.id, x: sp.x, y: sp.y, r: 10 });
         }
+        // A 3D sound: heard at full volume within the inner sphere, fading out up to the outer one.
+        if (selected && node.audio?.spatial) {
+            this.drawSphere(pos, node.audio.near);
+            ctx.globalAlpha *= 0.5;
+            this.drawSphere(pos, Math.max(node.audio.far, node.audio.near));
+        }
         ctx.restore();
     }
 

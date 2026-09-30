@@ -316,6 +316,22 @@ export function dialog(title: string, body: Node | string, buttons: DialogButton
     });
 }
 
+/** Asks for a line of text (a link, a name); null when cancelled or left empty. */
+export async function promptText(title: string, label: string, opts: { value?: string; placeholder?: string; ok?: string } = {}): Promise<string | null> {
+    const input = h('input', { class: 'text', attrs: { type: 'text', spellcheck: 'false', autocomplete: 'off', placeholder: opts.placeholder ?? '' } });
+    input.value = opts.value ?? '';
+    const body = h('label', { class: 'prompt-field' }, h('span', { class: 'muted small', text: label }), input);
+    const ok = opts.ok ?? 'OK';
+    const answer = dialog(title, body, [{ label: 'Cancel' }, { label: ok, primary: true, value: 'ok' }]);
+    // Enter answers, and the editor's shortcuts stay out of the field.
+    input.addEventListener('keydown', (e) => {
+        e.stopPropagation();
+        if (e.key === 'Enter') (input.closest('.dialog')?.querySelector('.btn.primary') as HTMLButtonElement | null)?.click();
+    });
+    requestAnimationFrame(() => input.focus());
+    return (await answer) === 'ok' ? input.value.trim() || null : null;
+}
+
 export interface Modal {
     readonly box: HTMLElement;
     readonly footer: HTMLElement;

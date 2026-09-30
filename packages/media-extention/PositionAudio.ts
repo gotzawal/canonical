@@ -139,6 +139,12 @@ export class PositionAudio extends StaticAudio {
     protected connect() {
         this.source?.connect(this.panner);
     }
+    public play(): this {
+        super.play();
+        // Where the object is from the first sample on, not at the origin until the next update.
+        this.onUpdate();
+        return this;
+    }
     public start() {
     }
     public stop(): this {
@@ -168,7 +174,8 @@ export class PositionAudio extends StaticAudio {
         }
     }
     public destroy(force?: boolean) {
-        this.panner.disconnect();
+        // Without a listener there is no panner yet.
+        this.panner?.disconnect();
         this.hideHelper();
         super.destroy(force);
     }

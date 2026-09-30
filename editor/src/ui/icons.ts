@@ -95,6 +95,8 @@ const PATHS: Record<string, string> = {
     book: '<path d="M5 5.5A2.5 2.5 0 0 1 7.5 3H19v15H7.5A2.5 2.5 0 0 0 5 20.5Z"/><path d="M5 20.5A2.5 2.5 0 0 1 7.5 18H19v3H7.5"/>',
     minimize: '<path d="M9 4v5H4M20 9h-5V4M15 20v-5h5M4 15h5v5"/>',
     panels: '<rect x="3.5" y="4.5" width="17" height="15" rx="2"/><path d="M8.5 4.5v15M15.5 4.5v15"/>',
+    speaker: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4Z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
+    library: '<rect x="3.5" y="4" width="4" height="16" rx="1"/><rect x="9" y="4" width="4" height="16" rx="1"/><path d="m14.8 5.4 3.9-1 3.8 14.4-3.9 1Z"/>',
     edit: '<path d="M4 20h4L19 9l-4-4L4 16Z"/><path d="m13.5 6.5 4 4"/>',
 };
 
@@ -108,7 +110,7 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; grass?: unknown; character?: unknown }): string {
+export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; grass?: unknown; character?: unknown; audio?: unknown }): string {
     if (node.prefab) return 'prefab';
     if (node.character) return 'walk';
     if (node.particles) return 'sparkle';
@@ -120,5 +122,6 @@ export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: 
         return t === 'box' ? 'cube' : t;
     }
     if (node.grass) return 'grass';
+    if (node.audio) return 'speaker';
     return 'empty';
 }

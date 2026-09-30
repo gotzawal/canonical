@@ -2,6 +2,8 @@ import { applyBehaviorOps, writeBehaviorChanges, type OpsMode, type OpsResult } 
 import { PARTICLE_PRESETS, presetParticles } from './core/particles';
 import { makeCharacterNode } from './core/character';
 import { formatBytes, kindOf, putAsset } from './core/assets';
+import { externalUris, packGltf } from './core/gltfPack';
+import { download as downloadFile, kindOfUrl, librarySource, urlFileName, type LibraryItem } from './core/library';
 import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
@@ -10,7 +12,7 @@ import {
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
-import { Grass, Mirror } from './core/model';
+import { AudioSource, Grass, Mirror } from './core/model';
 import { defaults } from './core/schema';
 import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
@@ -20,8 +22,8 @@ import {
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
-    GeometryType, GrassDoc, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc, SceneDoc, ScriptDoc, ShaderDoc,
-    ShaderKind, TextureCompression, Vec3,
+    AssetKind, AssetMeta, AssetSource, GeometryType, GrassDoc, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc,
+    SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
 import type { RenderGraphController } from './engine/renderGraph';
@@ -58,6 +60,27 @@ export interface EditorDeps {
     viewport: Viewport;
     /** Compressed copies of the textures (KTX2) games ship. */
     derived: DerivedAssets;
+}
+
+export interface ImportUrlOptions {
+    /** Where a model goes (default: where new objects go, framed). */
+    at?: Vec3;
+    /** false adds a model's file without placing it. */
+    place?: boolean;
+    /** The asset's name (default: the link's file name). */
+    name?: string;
+    kind?: AssetKind;
+    source?: AssetSource;
+    signal?: AbortSignal;
+    onProgress?: (loaded: number, total?: number) => void;
+}
+
+export interface ImportedUrl {
+    asset: AssetMeta;
+    /** The placed model's node. */
+    node?: string;
+    /** The project had the file already. */
+    reused: boolean;
 }
 
 /** What the viewport shows: the scene, or the walk camera or the reference room (viewport/walk.ts, referenceRoom.ts). */
@@ -420,9 +443,12 @@ export class Editor extends Emitter<EditorEvents> {
                     continue;
                 }
                 const kind = kindOf(file);
-                if (kind === 'model') await this.importModel(file, at);
-                else if (kind === 'texture') await this.importTexture(file);
-                else toast(`Unsupported file: ${file.name}`, 'error');
+                if (kind === 'model') await this.importModel(file, at, files);
+                else if (kind === 'texture') {
+                    // The files a .gltf dropped with them names are part of it.
+                    if (!files.some((f) => f !== file && /\.gltf$/i.test(f.name))) await this.importTexture(file);
+                } else if (kind === 'audio') await this.importAudio(file);
+                else if (!files.some((f) => /\.gltf$/i.test(f.name))) toast(`Unsupported file: ${file.name}`, 'error');
             } catch (e: any) {
                 console.error(e);
                 toast(`Import failed: ${e?.message || e}`, 'error');
@@ -430,15 +456,21 @@ export class Editor extends Emitter<EditorEvents> {
         }
     }
 
-    async importModel(file: File, at?: Vec3) {
-        if (file.name.toLowerCase().endsWith('.gltf')) {
-            const text = await file.text();
-            if (/"uri"\s*:\s*"(?!data:)/.test(text)) {
-                toast('This .gltf references external files. Use a .glb or an embedded .gltf.', 'error');
+    /** `with`: files imported with it, where a .gltf finds the files it names (they are packed into one GLB). */
+    async importModel(file: File, at?: Vec3, with_: File[] = []) {
+        let blob: Blob = file;
+        let name = file.name;
+        if (name.toLowerCase().endsWith('.gltf')) {
+            const json = JSON.parse(await file.text());
+            const missing = externalUris(json).filter((uri) => !fileNamed(with_, uri));
+            if (missing.length) {
+                toast(`This .gltf names other files (${missing.slice(0, 3).join(', ')}): drop them together with it, or use a .glb.`, 'error');
                 return;
             }
+            blob = await packGltf(json, (uri) => fileNamed(with_, uri)!.arrayBuffer());
+            name = name.replace(/\.gltf$/i, '.glb');
         }
-        const meta = await putAsset(file, file.name, 'model');
+        const meta = await putAsset(blob, name, 'model');
         // One undo step takes both back: the file and the object showing it.
         this.store.transact('Import Model', () => {
             this.store.update((doc) => doc.assets.push(meta));
@@ -446,6 +478,12 @@ export class Editor extends Emitter<EditorEvents> {
         });
         toast(`Imported ${file.name}`, 'success');
         this.compressImported(meta.id);
+    }
+
+    async importAudio(file: File) {
+        const meta = await putAsset(file, file.name, 'audio');
+        this.store.commit('Import Sound', (doc) => doc.assets.push(meta));
+        toast(`Imported ${file.name}. Play it with an Audio component or from a script.`, 'success');
     }
 
     /** With Prefs.compressImports, an imported file is compressed and replaces its original once that is done (the view shows the file meanwhile). */
@@ -463,7 +501,8 @@ export class Editor extends Emitter<EditorEvents> {
         return done.filter(Boolean).length;
     }
 
-    addModel(assetId: string, at?: Vec3, frame = false) {
+    /** Places a model asset (where new objects go without `at`); returns the new node's id. */
+    addModel(assetId: string, at?: Vec3, frame = false): string | undefined {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
         if (!meta) return;
         const spot = at ?? this.viewport.spawnPoint();
@@ -482,6 +521,7 @@ export class Editor extends Emitter<EditorEvents> {
             this.settleModel(id, spot);
             if (frame) this.viewport.frameNodes([id]);
         });
+        return node.id;
     }
 
     /** Centers a freshly loaded model on `spot` and rests it on top of it. */
@@ -507,6 +547,84 @@ export class Editor extends Emitter<EditorEvents> {
         });
         toast(targets.length ? `Applied ${file.name} to ${targets.length} object(s)` : `Imported ${file.name}. Assign it from the Material section.`, 'success');
         this.compressImported(meta.id);
+    }
+
+    /**
+     * A sound asset plays from these objects (their Audio component gets it,
+     * added when missing), or from a new sound object at `at` (where new
+     * objects go by default) when none are given. Returns the objects' ids.
+     */
+    addSound(assetId: string, targets: string[] = [], at?: Vec3): string[] {
+        const meta = this.store.doc.assets.find((a) => a.id === assetId && a.kind === 'audio');
+        if (!meta) return [];
+        const ids = targets.filter((id) => this.store.node(id) && !this.store.node(id)!.prefabChild);
+        if (ids.length) {
+            this.store.commit('Set Audio Clip', (doc) => {
+                for (const n of doc.nodes) if (ids.includes(n.id)) n.audio = { ...(n.audio ?? defaults(AudioSource)), clip: assetId };
+            }, { nodes: ids });
+            return ids;
+        }
+        const spot = at ?? this.viewport.spawnPoint();
+        const node = makeNode(this.uniqueName(meta.name.replace(/\.[a-z0-9]+$/i, ''), null), null, tidy3([spot[0], spot[1] + 1, spot[2]], 3));
+        node.audio = { ...defaults(AudioSource), clip: assetId };
+        this.insert([node], 'Add Sound');
+        return [node.id];
+    }
+
+    // ------------------------------------------------------------ downloads
+
+    /**
+     * Copies a Library item into the project and, for a model, places it
+     * (see importUrl). A file copied from the same item before is used again.
+     */
+    addFromLibrary(item: LibraryItem, opts: ImportUrlOptions = {}): Promise<ImportedUrl> {
+        const ext = item.file.match(/\.[a-z0-9]+$/i)?.[0] ?? '';
+        return this.importUrl(item.url, { ...opts, name: item.name + ext, kind: item.kind, source: librarySource(item) });
+    }
+
+    /**
+     * Downloads a model, image or sound into the project, so the scene keeps
+     * it when the link goes away (a file downloaded from the same link, or
+     * the same Library item, is used again), and places a model: at `at`, or
+     * where new objects go; `place: false` only adds the file. A .gltf is
+     * packed with the files it names into one GLB.
+     */
+    async importUrl(url: string, opts: ImportUrlOptions = {}): Promise<ImportedUrl> {
+        const abs = new URL(url, document.baseURI).href;
+        if (!/^https?:$/.test(new URL(abs).protocol)) throw new Error('Only http and https links can be imported.');
+        if (/\.(zip|json)$/i.test(urlFileName(abs))) throw new Error('That is a scene or project file: open it with File > Open Link.');
+        const source: AssetSource = opts.source ?? { url: abs };
+        let asset = this.store.doc.assets.find((a) => (source.item ? a.source?.item === source.item : a.source?.url === abs));
+        const reused = !!asset;
+        if (!asset) {
+            let name = opts.name ?? urlFileName(abs);
+            let blob = await downloadFile(abs, { signal: opts.signal, onProgress: opts.onProgress });
+            const head = new Uint8Array(await blob.slice(0, 4).arrayBuffer());
+            if (/\.gltf$/i.test(name) || (head[0] === 0x7b && kindOfUrl(name, blob.type) === 'model')) {
+                // A .gltf: packed with the files it names, fetched next to it.
+                const json = JSON.parse(await blob.text());
+                blob = await packGltf(json, (uri) => downloadFile(new URL(uri, abs).href, { signal: opts.signal }).then((b) => b.arrayBuffer()));
+                name = name.replace(/\.gltf$/i, '') + '.glb';
+            } else if (head[0] === 0x67 && head[1] === 0x6c && head[2] === 0x54 && head[3] === 0x46 && !/\.glb$/i.test(name)) {
+                // A GLB under another name: the engine picks its parser by the extension.
+                name += '.glb';
+            }
+            const kind: AssetKind | null = opts.kind ?? kindOfUrl(name, blob.type);
+            if (kind !== 'model' && kind !== 'texture' && kind !== 'audio') throw new Error(`${name} is not a model (.glb, .gltf), image or sound file.`);
+            asset = await putAsset(blob, name, kind, undefined, { source });
+        }
+        const meta = asset;
+        let node: string | undefined;
+        const place = meta.kind === 'model' && opts.place !== false;
+        const label = meta.kind === 'model' ? 'Import Model' : meta.kind === 'audio' ? 'Import Sound' : 'Import Texture';
+        if (!reused) {
+            this.store.transact(label, () => {
+                this.store.update((doc) => doc.assets.push(meta));
+                if (place) node = this.addModel(meta.id, opts.at, !opts.at);
+            });
+            if (meta.kind !== 'audio') this.compressImported(meta.id);
+        } else if (place) node = this.addModel(meta.id, opts.at, !opts.at);
+        return { asset: meta, node, reused };
     }
 
     applyTexture(assetId: string | null, ids = this.store.selection) {
@@ -1459,14 +1577,40 @@ export class Editor extends Emitter<EditorEvents> {
     private async openSceneFromFile(file: File) {
         if (!(await this.confirmReplace('Open scene', 'Open', `Replace the current scene with ${file.name}?`))) return;
         try {
-            const { doc, camera } = file.name.toLowerCase().endsWith('.zip') ? await importProject(file) : await importSceneFile(await file.text());
-            this.loadDoc(doc, camera ?? defaultCamera(), false);
-            const scripts = this.store.doc.scripts.length;
-            if (scripts) toast(`Opened ${file.name}. Its ${scripts} script${scripts === 1 ? ' is' : 's are'} paused until you enable ${scripts === 1 ? 'it' : 'them'}.`, 'info', 6000);
-            else toast(`Opened ${file.name}`, 'success');
+            await this.openBlob(file, file.name);
         } catch (e: any) {
             toast(e?.message || String(e), 'error');
         }
+    }
+
+    /**
+     * Opens a scene (.json) or project (.zip) from a link, as File > Open
+     * opens a file: its scripts stay paused until enabled. The site must let
+     * other sites read the file (GitHub raw links, GitHub Pages and most file
+     * hosts do). True when it opened.
+     */
+    async openUrl(url: string): Promise<boolean> {
+        const abs = new URL(url, document.baseURI).href;
+        const name = urlFileName(abs);
+        if (!(await this.confirmReplace('Open link', 'Open', `Replace the current scene with ${name}?`))) return false;
+        try {
+            const blob = await downloadFile(abs);
+            const head = new Uint8Array(await blob.slice(0, 2).arrayBuffer());
+            // A zip starts with PK, whatever the link is called.
+            await this.openBlob(blob, head[0] === 0x50 && head[1] === 0x4b && !/\.zip$/i.test(name) ? name + '.zip' : name);
+            return true;
+        } catch (e: any) {
+            toast(e?.message || String(e), 'error');
+            return false;
+        }
+    }
+
+    private async openBlob(blob: Blob, name: string) {
+        const { doc, camera } = name.toLowerCase().endsWith('.zip') ? await importProject(blob) : await importSceneFile(await blob.text());
+        this.loadDoc(doc, camera ?? defaultCamera(), false);
+        const scripts = this.store.doc.scripts.length;
+        if (scripts) toast(`Opened ${name}. Its ${scripts} script${scripts === 1 ? ' is' : 's are'} paused until you enable ${scripts === 1 ? 'it' : 'them'}.`, 'info', 6000);
+        else toast(`Opened ${name}`, 'success');
     }
 
     async importModelDialog() {
@@ -1476,6 +1620,11 @@ export class Editor extends Emitter<EditorEvents> {
 
     async importTextureDialog() {
         const files = await pickFiles('image/*,.ktx2', true);
+        if (files.length) await this.importFiles(files);
+    }
+
+    async importSoundDialog() {
+        const files = await pickFiles('audio/*,.mp3,.ogg,.opus,.wav,.m4a,.aac,.flac', true);
         if (files.length) await this.importFiles(files);
     }
 
@@ -1532,6 +1681,16 @@ export class Editor extends Emitter<EditorEvents> {
 
 function round(v: number): number {
     return Math.round(v * 100) / 100;
+}
+
+/** The file of a list that a URI in a .gltf names (by its file name). */
+function fileNamed(files: File[], uri: string): File | undefined {
+    let name = uri;
+    try {
+        name = decodeURIComponent(uri);
+    } catch { /* as written */ }
+    name = name.split(/[\\/]/).pop()!.toLowerCase();
+    return files.find((f) => f.name.toLowerCase() === name);
 }
 
 /** Merges an override patch into ModelDoc.materials / .parts, dropping empty entries. */

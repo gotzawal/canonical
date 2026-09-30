@@ -31,6 +31,7 @@ import { PipelineBar } from './ui/pipelineBar';
 import { StartScreen } from './ui/startScreen';
 import { StepsBar } from './ui/stepsBar';
 import { openVersionHistory } from './ui/versionHistory';
+import { draggedLibraryItem } from './ui/libraryDialog';
 import { ShotView } from './ui/shotView';
 import { Dock } from './ui/dock';
 import { h } from './ui/dom';
@@ -233,8 +234,19 @@ async function main() {
                 editor.placePrefab(ref.slice(7), point);
                 return;
             }
+            if (ref.startsWith('library:')) {
+                const item = draggedLibraryItem(ref.slice(8));
+                if (!item) return;
+                // A sound plays from the object it was dropped on, else from a new sound object there.
+                void editor
+                    .addFromLibrary(item, { at: point })
+                    .then(({ asset }) => asset.kind === 'audio' && editor.addSound(asset.id, hitId ? [hitId] : [], hitId ? undefined : point))
+                    .catch((e) => toast(e?.message || String(e), 'error'));
+                return;
+            }
             const asset = store.doc.assets.find((a) => a.id === ref);
             if (asset?.kind === 'model') editor.addModel(ref, point);
+            else if (asset?.kind === 'audio') store.select(editor.addSound(ref, hitId ? [hitId] : [], hitId ? undefined : point));
             else if (asset) editor.applyTexture(ref, hitId && store.node(hitId)?.mesh ? [hitId] : store.selection);
         },
         onPickPart: (id, renderer) => {
@@ -575,6 +587,22 @@ async function main() {
     });
 
     (window as any).__editor = editor;
+    openLinkedScene(editor);
+}
+
+/**
+ * ?open=<link> opens that scene or project (an example hosted anywhere),
+ * asking first when the current scene would be lost. The parameter is
+ * taken off the address, so a reload does not open it again.
+ */
+function openLinkedScene(editor: Editor) {
+    const params = new URLSearchParams(location.search);
+    const link = params.get('open');
+    if (!link) return;
+    params.delete('open');
+    const rest = params.toString();
+    history.replaceState(null, '', location.pathname + (rest ? `?${rest}` : '') + location.hash);
+    void editor.openUrl(link);
 }
 
 /**

@@ -21,6 +21,7 @@ import type {
     AiModelDoc, AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, InferTaskDoc,
     MemoryItemDoc, RecallServiceDoc, SceneDoc, ScriptTaskDoc,
 } from '../../core/types';
+import type { HeardSound } from '../audio';
 import type { Script } from '../script';
 import { AskRunner, fillTemplate } from './ask';
 import { Blackboard, BlackboardError, type AnswerMeta, type RuntimeValue } from './blackboard';
@@ -225,6 +226,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     modelLost = false;
     /** The agents' tick offsets are set in the first frame of a session. */
     private spreadPending = false;
+    /** Sounds of the last second, for the hearing sensors (play/ai/sensors.ts). */
+    noises: (HeardSound & { time: number })[] = [];
     private queryCache = new Map<string, Promise<Float32Array | null>>();
     /** Vectors of the queries embedded so far (by the same keys). */
     private queryVectors = new Map<string, Float32Array>();
@@ -330,6 +333,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         }
         this.agents.length = 0;
         this.inbox = [];
+        this.noises = [];
         this.running = false;
         this.session++;
         this.services()?.scheduler.clear();
@@ -397,6 +401,14 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
             if (this.agents.length) this.host.warn('A model stopped (its GPU device was lost): AI keys are back to their defaults.');
         }
         this.modelLost = lost;
+    }
+
+    /** A sound was made (played in 3D, or a script's noise): agents with hearing may notice it. */
+    hear(s: HeardSound) {
+        if (!this.running || !(s.range > 0)) return;
+        const now = this.time;
+        this.noises = this.noises.filter((n) => now - n.time <= 1);
+        this.noises.push({ ...s, time: now });
     }
 
     /** An agent's object was destroyed by a script: its tree stops. */

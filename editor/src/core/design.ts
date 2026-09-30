@@ -409,7 +409,7 @@ export function detailLevel(design: DesignDoc): DetailLevel {
 
 /** Objects that make up the level: everything but lights, cameras, effects (particles, grass) and the player, which may move without changing it. */
 export function isLevelObject(n: NodeDoc): boolean {
-    return !n.light && !n.camera && !n.particles && !n.grass && !n.player;
+    return !n.light && !n.camera && !n.particles && !n.grass && !n.player && !(n.audio && !n.mesh && !n.model);
 }
 
 /**

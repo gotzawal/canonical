@@ -4,6 +4,7 @@ import { invert, transformPoint } from '../core/math';
 import type { BodyDoc, Vec3 } from '../core/types';
 import type { BlackboardApi } from './ai/agents';
 import type { AnimatorApi } from './animation';
+import type { AudioApi, SoundHandle, SoundOptions } from './audio';
 import type { SayOptions } from './ai/speech';
 import type { Character } from './character';
 import type { Input } from './input';
@@ -98,6 +99,9 @@ export interface PlayApi {
     body(target: Object3D | string): BodyApi | null;
     physics(): PhysicsApi | null;
     animator(target: Object3D | string): AnimatorApi | null;
+    audioOf(target: Object3D | string): AudioApi | null;
+    playSound(owner: Script, clip: string, opts?: SoundOptions): SoundHandle | null;
+    noise(owner: Script, range: number, at?: Object3D | [number, number, number]): void;
     remember(text: string, tags: string[]): string | null;
     memory(id: string): { id: string; text: string; tags: string[] } | null;
     saveMemories(): SavedMemory[];
@@ -323,6 +327,39 @@ export class Script {
     /** Another object's animation (by object or name). */
     getAnimator(target: Object3D | string): AnimatorApi | null {
         return this.api.animator(target);
+    }
+
+    /**
+     * This object's Audio component (null without one): play(), pause(),
+     * stop(), and playing, time, duration, volume, pitch and loop.
+     */
+    get audio(): AudioApi | null {
+        return this.api.audioOf(this.object3D);
+    }
+
+    /** Another object's Audio component (by object or name). */
+    getAudio(target: Object3D | string): AudioApi | null {
+        return this.api.audioOf(target);
+    }
+
+    /**
+     * Plays a sound asset once by name ('coin' or 'coin.ogg'). Options:
+     * volume, pitch, loop, and at (an object it follows, or [x, y, z]) for
+     * a sound heard from there, which agents with hearing notice; without
+     * at it is heard the same everywhere. Returns { stop(), done } (done
+     * is a Promise), or null when there is no such sound.
+     */
+    playSound(clip: string, opts?: SoundOptions): SoundHandle | null {
+        return this.api.playSound(this, clip, opts);
+    }
+
+    /**
+     * Tells agents with hearing that this object made a sound that carries
+     * `range` meters (at its place, or at `at`) without playing one:
+     * footsteps, a door, a thrown stone landing.
+     */
+    noise(range: number, at?: Object3D | [number, number, number]) {
+        this.api.noise(this, range, at);
     }
 
     /**

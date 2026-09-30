@@ -14,6 +14,7 @@ import { SpeechQueue, type SayOptions } from './ai/speech';
 import { scriptLocation, type ScriptCompiler } from './compiler';
 import { Input } from './input';
 import { Animations, type AnimatorApi } from './animation';
+import { AudioSystem, type AudioApi, type SoundHandle, type SoundOptions } from './audio';
 import { Characters, type Character } from './character';
 import { bodyOf, loadPhysics, physicsLoaded, preloadPhysics, usesPhysics, Physics, type BodyApi, type PhysicsApi } from './physics';
 import { PlayControls } from './playControls';
@@ -119,6 +120,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private world: Physics | null = null;
     /** The animated models of the session (play/animation.ts). */
     private animations: Animations | null = null;
+    /** The sounds of the session (play/audio.ts). */
+    private audio: AudioSystem | null = null;
+    /** Play without sound (the assistant's play tests). */
+    private muted = false;
     /** Stops so far: a Play waiting for Rapier starts only when no Stop came in between. */
     private runs = 0;
     private controller: PlayerController | null = null;
@@ -192,6 +197,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.setupCamera();
         this.setupCharacters();
         this.animations = new Animations(this.store, this.sync, this.characters?.list ?? []);
+        this.setupAudio();
         this.setupPhysics();
         this.instantiate();
         // Blackboards exist before awake() / start(), so scripts can write their first facts there.
@@ -226,6 +232,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         // Running tasks are aborted first (their scripts get onTaskAbort), then scripts get onDestroy.
         this.agents.stop();
         this.speech.cancelAll();
+        this.audio?.dispose();
+        this.audio = null;
         for (const c of this.chats) c.abort();
         this.chats.clear();
         for (const inst of this.instances) {
@@ -303,7 +311,13 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         if (this.state !== 'stopped') this.stop();
         if (usesPhysics(this.store.doc)) await loadPhysics();
         if (signal?.aborted) throw new DOMException('Aborted', 'AbortError');
-        this.play();
+        // A test run plays without sound.
+        this.muted = true;
+        try {
+            this.play();
+        } finally {
+            this.muted = false;
+        }
         await new Promise<void>((resolve) => {
             const done = () => {
                 clearTimeout(timer);
@@ -322,6 +336,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private setState(state: PlayState) {
         this.state = state;
         this.animations?.pause(state === 'paused');
+        this.audio?.pause(state === 'paused');
         this.emit('state', state);
     }
 
@@ -369,6 +384,22 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             this.controls.start({ jump: players[0].character!.jump > 0 });
         }
         if (players.length > 1) this.warn(`One player plays at a time: ${players[0].name} does; ${players.slice(1).map((n) => n.name).join(', ')} stand(s) still.`);
+    }
+
+    /** Shown objects with an Audio component play their clips (Play on Start ones at once). */
+    private setupAudio() {
+        const nodes = this.store.doc.nodes.filter((n) => n.audio && this.sync.entries.get(n.id)?.visible && !this.sync.detached.has(n.id));
+        const scripted = this.store.doc.scripts.some((s) => /\bthis\.(playSound|audio|getAudio)\b/.test(s.code));
+        const trees = JSON.stringify(this.store.doc.behaviors).includes('"play_sound"');
+        if (!nodes.length && !scripted && !trees) return;
+        try {
+            this.audio = new AudioSystem(() => this.store.doc.assets, (text) => this.warn(text), { muted: this.muted });
+        } catch (e: any) {
+            this.warn(`Sound is not available in this browser: ${e?.message || e}`);
+            return;
+        }
+        this.audio.onSound = (heard) => this.agents.hear(heard);
+        for (const n of nodes) this.audio.add(this.sync.entries.get(n.id)!.obj, n.audio!);
     }
 
     private setupPhysics() {
@@ -472,6 +503,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             if (!inst.broken && !inst.destroyed) this.call(inst, 'lateUpdate', dt);
         }
         this.controller?.updateCamera();
+        this.audio?.frame(this.runtime.activeCamera);
         if (this.pendingDestroy.length) {
             const due = this.pendingDestroy.filter((d) => d.at <= this.time.elapsed);
             this.pendingDestroy = this.pendingDestroy.filter((d) => d.at > this.time.elapsed);
@@ -743,6 +775,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         // Destroyed characters stop; the player's camera stays where it was.
         this.characters?.remove(doomed);
         this.world?.remove(doomed);
+        this.audio?.removeObjects(doomed);
         if (this.controller && doomed.has(this.controller.character.obj)) this.controller = null;
         for (const inst of this.instances) {
             if (!inst.destroyed && doomed.has(inst.obj)) {
@@ -886,6 +919,25 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         return this.agents.loadMemories(items);
     }
 
+    audioOf(target: Object3D | string): AudioApi | null {
+        const obj = typeof target === 'string' ? this.findObject(target) : target;
+        return this.audio?.api(obj) ?? null;
+    }
+
+    playSound(owner: Script, clip: string, opts: SoundOptions = {}): SoundHandle | null {
+        if (!this.audio) {
+            this.warn('Sounds play only when the scene has sound: import one or add one from the Library.');
+            return null;
+        }
+        return this.audio.play(String(clip ?? ''), opts, owner.object3D ?? null);
+    }
+
+    /** Tells the agents' hearing about a sound the object made (footsteps, a door) without playing one. */
+    noise(owner: Script, range: number, at?: Object3D | [number, number, number]) {
+        const obj = owner.object3D;
+        this.agents.hear({ at: at ? (Array.isArray(at) ? [at[0], at[1], at[2]] : worldOf(at)) : worldOf(obj), range: Math.max(0, Number(range) || 0), source: obj });
+    }
+
     say(owner: Script, text: string, opts: SayOptions = {}): Promise<void> {
         return this.speech.say(String(text ?? ''), opts);
     }
@@ -910,6 +962,11 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             t.cancelled = true;
         };
     }
+}
+
+function worldOf(obj: Object3D): [number, number, number] {
+    const w = obj.transform.worldPosition;
+    return [w.x, w.y, w.z];
 }
 
 /** Scripts and shaders added or changed since `before` (copies), or null when there are none. */

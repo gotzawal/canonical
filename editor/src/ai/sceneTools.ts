@@ -5,7 +5,7 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player } from '../core/model';
 import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
@@ -62,6 +62,10 @@ const objectFields = {
         ...toolSchema(Grass, 'A field of grass blades (one draw for thousands) around the object, bent by wind gusts. ground (an object id or name: a terrain, floor or a group of them) is what the blades stand on, so the field follows any terrain; blades outside it or on steep slopes are left out. Without ground the field is flat at the object\'s height. size is in meters in the object\'s turned frame; count is the cost (up to 30000). null removes it.'),
         type: ['object', 'null'],
     },
+    audio: {
+        ...toolSchema(AudioSource, 'A sound source: in Play the object plays an audio asset (clip: id or name; search_library kind audio finds sounds), heard from its place (spatial: louder near it, full volume within near meters, fading out up to far) or everywhere (spatial false: music). loop for ambience and music, autoplay off to start it from a script (this.audio.play()). Scripts play one-off sounds with this.playSound(name). null removes it.'),
+        type: ['object', 'null'],
+    },
     instancing: {
         ...toolSchema(Instancing, 'Instanced drawing for placing many copies (trees, rocks, fence posts, crates): the meshes of this object and of every object under it that share a shape and a material (primitives, prefab instances, the same imported model) draw in one draw call per shape and material. Put the copies under one group with instancing ({}); moving them is free, adding or restyling regroups them. Skinned or animated meshes, transparent materials and mirrors draw on their own. null removes it.'),
         type: ['object', 'null'],
@@ -70,7 +74,7 @@ const objectFields = {
     receive_shadow: { type: 'boolean' },
 };
 const SHAPES = GEOMETRY_TYPES;
-const TYPES = [...SHAPES, 'empty', 'grass', 'directional_light', 'point_light', 'spot_light', 'camera'];
+const TYPES = [...SHAPES, 'empty', 'grass', 'sound', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 /** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
 const SCENE_RESULT_CHARS = 28_000;
@@ -462,6 +466,7 @@ function nodeType(n: NodeDoc): string {
     if (n.mesh) return n.mesh.geometry.type;
     if (n.particles) return 'particles';
     if (n.grass) return 'grass';
+    if (n.audio) return 'sound';
     return 'empty';
 }
 
@@ -537,6 +542,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         out.grass = { count: g.count, size: g.size, ground: g.ground, height: g.height, colors: [g.bottomColor, g.topColor], wind: g.wind };
     }
     if (n.instancing) out.instancing = true;
+    if (n.audio) {
+        const a = n.audio;
+        out.audio = { clip: doc.assets.find((x) => x.id === a.clip)?.name ?? null, volume: a.volume, loop: a.loop, autoplay: a.autoplay, spatial: a.spatial, ...(a.spatial ? { near: a.near, far: a.far } : {}), ...(a.pitch !== 1 ? { pitch: a.pitch } : {}) };
+    }
     if (n.model) {
         out.model = { asset: n.model.asset, asset_name: doc.assets.find((a) => a.id === n.model!.asset)?.name };
         const o = Object.keys(n.model.materials ?? {}).length + Object.keys(n.model.parts ?? {}).length;
@@ -661,6 +670,23 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
     }
     if (spec.instancing === null) delete n.instancing;
     else if (spec.instancing) n.instancing = defaults(Instancing);
+    if (spec.audio === null) delete n.audio;
+    else if (spec.audio) {
+        const { clip, ...fields } = spec.audio as Json;
+        const a = patch(AudioSource, n.audio ?? defaults(AudioSource), fields, 'audio');
+        if (clip !== undefined) a.clip = soundId(doc, clip, 'audio.clip');
+        n.audio = a;
+    }
+}
+
+/** A sound asset by id or name (with or without its extension). */
+function soundId(doc: SceneDoc, v: unknown, what: string): string | null {
+    if (v === null || v === '') return null;
+    const sounds = doc.assets.filter((a) => a.kind === 'audio');
+    const want = String(v).toLowerCase();
+    const found = sounds.find((a) => a.id === v) ?? sounds.find((a) => a.name.toLowerCase() === want || a.name.replace(/\.[a-z0-9]+$/i, '').toLowerCase() === want);
+    if (!found) throw new ToolError(`${what}: no sound "${v}" in the project${sounds.length ? ` (sounds: ${sounds.map((a) => a.name).join(', ')})` : ''}. Add one with search_library / add_from_library or import_url.`);
+    return found.id;
 }
 
 function textureId(doc: SceneDoc, v: unknown, what: string): string | null {
@@ -712,6 +738,11 @@ function makeTyped(type: string): NodeDoc {
         case 'grass': {
             const n = makeNode('Grass');
             n.grass = defaults(Grass);
+            return n;
+        }
+        case 'sound': {
+            const n = makeNode('Sound');
+            n.audio = defaults(AudioSource);
             return n;
         }
         case 'directional_light':
@@ -777,7 +808,9 @@ class StagePolicy {
         if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         // Grass, water and mirrors dress the level in the Materials stage.
         if (type === 'grass') return this.any('objects', 'materials', 'effects') ? '' : `Grass cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        if (type === 'sound') return this.any('objects', 'audio') ? '' : `Sounds cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         if (spec.mirror && this.any('materials')) return '';
+        if (spec.audio && type === 'empty' && this.any('audio')) return '';
         if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         if (!this.allowed.has('objects')) return `Objects cannot be placed while the AI settings limit your tools to the ${this.stage} stage.`;
         this.layout({});
@@ -797,6 +830,7 @@ class StagePolicy {
         if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed ${limited}.`;
         if ((spec.mirror !== undefined || spec.grass !== undefined) && !this.any('objects', 'materials', 'effects')) return `Mirrors and grass cannot be changed ${limited}.`;
         if (spec.instancing !== undefined && !this.allowed.has('objects')) return `Instancing cannot be changed ${limited}.`;
+        if (spec.audio !== undefined && !this.any('objects', 'audio')) return `Sounds cannot be changed ${limited}.`;
         if (this.stage === 'Level' && spec.material) {
             const m = spec.material as Json;
             if (m.color !== undefined || m.texture !== undefined || m.shader !== undefined || m.preset !== undefined || m.emissive !== undefined) {

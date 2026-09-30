@@ -3,13 +3,16 @@
 // is rebuilt from it by engine/sync.ts.
 
 import type { Vec3 } from './math';
-import type { AnimationDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, GrassDoc, InstancingDoc, LightDoc, MeshDoc, MirrorDoc, ModelDoc, ParticlesDoc, PlayerDoc, SpecsDoc } from './model';
+import type {
+    AnimationDoc, AudioSourceDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, GrassDoc, InstancingDoc, LightDoc, MeshDoc, MirrorDoc, ModelDoc, ParticlesDoc, PlayerDoc,
+    SpecsDoc,
+} from './model';
 
 export type { Vec3 };
 
 // Components and settings defined by their schemas (core/model.ts).
 export type {
-    AlphaMode, AnimationDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, GrassDoc, InstancingDoc, LightDoc, LightType,
+    AlphaMode, AnimationDoc, AudioSourceDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, GrassDoc, InstancingDoc, LightDoc, LightType,
     MaterialDoc, MaterialOverride, MaterialType, MeshDoc, MirrorDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
 } from './model';
 
@@ -57,6 +60,8 @@ export interface NodeDoc {
     grass?: GrassDoc;
     /** The meshes of the object's children are drawn instanced: one draw per shape and material. */
     instancing?: InstancingDoc;
+    /** A sound source: plays an audio asset in Play mode, heard from the object's place. */
+    audio?: AudioSourceDoc;
     scripts?: ScriptRef[];
     /** AI behavior: the object runs a behavior tree in Play mode. */
     agent?: AgentDoc;
@@ -91,11 +96,23 @@ export interface PrefabDoc {
 }
 
 /**
- * 'image' is a picture used for planning (concepts, paintovers, captures,
- * attachments), 'data' a JSON blob (scene snapshots). Neither is used by the
- * game.
+ * 'audio' is a sound file (Audio components, scripts). 'image' is a picture
+ * used for planning (concepts, paintovers, captures, attachments), 'data' a
+ * JSON blob (scene snapshots). Neither of those two is used by the game.
  */
-export type AssetKind = 'model' | 'texture' | 'image' | 'data';
+export type AssetKind = 'model' | 'texture' | 'audio' | 'image' | 'data';
+
+/** Where a downloaded asset came from (the Library, or a URL): for the credits, and to reuse it instead of downloading it again. */
+export interface AssetSource {
+    /** The file's URL. */
+    url: string;
+    /** The library item, when it came from a catalog. */
+    item?: string;
+    /** License (an SPDX id such as CC0-1.0), author and page of the pack, when known. */
+    license?: string;
+    author?: string;
+    origin?: string;
+}
 
 export interface AssetMeta {
     id: string;
@@ -121,6 +138,8 @@ export interface AssetMeta {
      * size. Games get the file as it is.
      */
     packed?: { from: string; size: number };
+    /** Downloaded: where from. */
+    source?: AssetSource;
 }
 
 /**

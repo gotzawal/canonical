@@ -9,6 +9,8 @@ import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import { clear, h, pressable } from './dom';
 import { icon } from './icons';
 import { MenuItem, showMenu } from './overlays';
+import { openLibraryDialog } from './libraryDialog';
+import { toggleSound } from './soundPreview';
 import { iconButton } from './widgets';
 
 /** Payload of dragged assets: an asset id, or "script:<id>" / "shader:<id>". */
@@ -37,8 +39,9 @@ export class AssetsPanel {
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     showMenu(createAssetMenu(editor), r.left, r.bottom + 4);
                 }),
-                iconButton('upload', 'Import model or image', async () => {
-                    const files = await pickFiles('.glb,.gltf,image/*', true);
+                iconButton('library', 'Library: models, sounds and images to use', () => openLibraryDialog(editor)),
+                iconButton('upload', 'Import models, images or sounds', async () => {
+                    const files = await pickFiles('.glb,.gltf,image/*,audio/*,.ogg,.opus,.m4a,.flac', true);
                     if (files.length) await editor.importFiles(files);
                 }),
                 iconButton('sliders', 'Compression', (e) => {
@@ -110,15 +113,18 @@ export class AssetsPanel {
         }
         if (!assets.length && !doc.scripts.length && !doc.shaders.length && !doc.prefabs.length) {
             this.list.appendChild(
-                h('div', { class: 'empty-hint', text: 'Drop .glb / .gltf models or images onto the viewport, or use + to write a script or shader.' }),
+                h('div', { class: 'empty-hint', text: 'Drop .glb / .gltf models, images or sounds onto the viewport, pick from the Library, or use + to write a script or shader.' }),
             );
         }
         for (const a of assets) {
             const packable = (a.kind === 'texture' || a.kind === 'model') && !shipsAsIs(a);
             const size = this.editor.derived.isPacking(a.id) ? 'compressing' : a.packed ? `${formatBytes(a.size)} packed` : formatBytes(a.size);
+            const sound = a.kind === 'audio';
+            const hint = a.kind === 'model' ? 'Drag into the viewport or double-click to add' : sound ? 'Drag onto an object (or into the scene) to play it from there; double-click to add it to the selection' : 'Drag onto an object or double-click to apply to the selection';
             this.list.appendChild(
-                this.item(a.id, a.kind === 'model' ? 'model' : 'image', a.name, size, '', a.kind === 'model' ? 'Drag into the viewport or double-click to add' : 'Drag onto an object or double-click to apply to the selection', () => this.use(a.id), [
-                    { label: a.kind === 'model' ? 'Add to Scene' : 'Apply to Selection', icon: 'plus', action: () => this.use(a.id) },
+                this.item(a.id, a.kind === 'model' ? 'model' : sound ? 'speaker' : 'image', a.name, size, '', hint, () => this.use(a.id), [
+                    { label: a.kind === 'model' ? 'Add to Scene' : sound ? 'Play from Selection' : 'Apply to Selection', icon: 'plus', action: () => this.use(a.id) },
+                    ...(sound ? [{ label: 'Listen', icon: 'play', action: () => void toggleSound(a).catch((e) => toast(e?.message || String(e), 'error')) }] : []),
                     ...(packable ? [{ label: 'Compress File', icon: 'minimize', action: () => void this.compress([a.id]) }] : []),
                     { label: 'Remove from Project', icon: 'trash', action: () => this.editor.removeAsset(a.id) },
                 ]),
@@ -183,6 +189,7 @@ export class AssetsPanel {
         const asset = this.editor.store.doc.assets.find((a) => a.id === id);
         if (!asset) return;
         if (asset.kind === 'model') this.editor.addModel(id, undefined, true);
+        else if (asset.kind === 'audio') this.editor.store.select(this.editor.addSound(id, this.editor.store.selection));
         else this.editor.applyTexture(id);
     }
 }

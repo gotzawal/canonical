@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, Body, Camera, Character, Grass, Instancing, Light, Material, Mirror, Particles, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, Material, Mirror, Particles, Player } from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
@@ -26,6 +26,8 @@ import { clear, h, pressable } from './dom';
 import { icon, nodeIcon } from './icons';
 import { mascotPose } from './mascot';
 import { MenuItem, showMenu, toast } from './overlays';
+import { openLibraryDialog } from './libraryDialog';
+import { toggleSound } from './soundPreview';
 import { scriptFieldRows, shaderParamRows } from './paramFields';
 import { schemaRows } from './schemaFields';
 import { clipFor } from '../play/animation';
@@ -90,6 +92,7 @@ const COMPONENTS = {
     material: [Material, (n: NodeDoc) => n.mesh?.material],
     mirror: [Mirror, (n: NodeDoc) => n.mirror],
     grass: [Grass, (n: NodeDoc) => n.grass],
+    audio: [AudioSource, (n: NodeDoc) => n.audio],
     // Made on the first edit: every model with clips shows the section.
     animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
 } as const;
@@ -280,6 +283,7 @@ export class InspectorPanel {
         if (node.mirror && node.mesh) this.body.append(this.mirrorSection());
         if (node.grass) this.body.append(this.grassSection());
         if (node.instancing) this.body.append(this.instancingSection());
+        if (node.audio) this.body.append(this.audioSection());
         if (node.model) this.body.append(...this.modelSections(node));
         (node.scripts ?? []).forEach((ref, i) => this.body.append(this.scriptSection(node, ref, i)));
         if (node.agent) this.body.append(this.agentSection(node));
@@ -942,6 +946,29 @@ export class InspectorPanel {
         ], [remove]);
     }
 
+    private audioSection(): HTMLElement {
+        const has: Filter = (n) => !!n.audio;
+        const a = this.node.audio!;
+        const sounds = this.store.doc.assets.filter((x) => x.kind === 'audio');
+        const clip = new SelectField<string>([{ value: '', label: 'None' }, ...sounds.map((x) => ({ value: x.id, label: x.name }))], a.clip ?? '', (v) =>
+            this.hooks<string | null>('Audio Clip', has, (n, x) => (n.audio!.clip = x)).commit!(v || null));
+        this.watch(() => this.node.audio && clip.set(this.node.audio.clip ?? ''));
+        const listen = iconButton('play', 'Listen (as recorded, not in 3D)', () => {
+            const doc = this.node.audio;
+            const meta = this.store.doc.assets.find((x) => x.id === doc?.clip);
+            if (!doc || !meta) return toast('Choose a clip first.', 'info');
+            toggleSound(meta, { volume: doc.volume, pitch: doc.pitch }).catch((e) => toast(e?.message || String(e), 'error'));
+        });
+        const library = iconButton('library', 'Find a sound in the Library', () => openLibraryDialog(this.editor, { kind: 'audio' }));
+        const upload = iconButton('upload', 'Import a sound file', () => void this.editor.importSoundDialog());
+        const remove = iconButton('trash', 'Remove audio', () => this.hooks<null>('Remove Audio', has, (n) => delete n.audio).commit!(null));
+        return section('audio', 'Audio', 'speaker', [
+            h('div', { class: 'muted small pad', text: 'Plays its clip in Play, heard from here (3D) or the same everywhere. Scripts control it with this.audio and play one-off sounds with this.playSound(name).' }),
+            row('Clip', h('div', { class: 'inline grow' }, clip.el, listen, library, upload), 'A sound asset: import one, or add one from the Library'),
+            ...this.componentRows('audio', ['volume', 'pitch', 'loop', 'autoplay', 'spatial', 'near', 'far']),
+        ], [remove]);
+    }
+
     // ---------------------------------------------------------------- model
 
     /** Selected model nodes of the same model file as the primary one. */
@@ -1561,6 +1588,10 @@ export class InspectorPanel {
         if (!node.grass && !node.light && !node.camera) {
             // On a mesh or a model, the grass grows on it and covers it.
             items.push({ label: 'Grass', icon: 'grass', action: () => this.hooks<null>('Add Grass', (n) => !n.grass, (n) => (n.grass = this.editor.grassFor(n))).commit!(null) });
+        }
+        if (!node.audio && !node.light && !node.camera) {
+            const first = this.store.doc.assets.find((a) => a.kind === 'audio')?.id ?? null;
+            items.push({ label: 'Audio', icon: 'speaker', action: () => this.hooks<null>('Add Audio', (n) => !n.audio, (n) => (n.audio = { ...defaults(AudioSource), clip: first })).commit!(null) });
         }
         if (!node.instancing && !node.light && !node.camera) {
             items.push({ label: 'Instancing', icon: 'layers', action: () => this.hooks<null>('Add Instancing', (n) => !n.instancing, (n) => (n.instancing = defaults(Instancing))).commit!(null) });

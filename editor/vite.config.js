@@ -49,6 +49,8 @@ function shared() {
                 { find: '@orillusion/atmosphere', replacement: here('../packages/atmosphere/index.ts') },
                 // Only the grass of the geometry package (its index brings in a font parser).
                 { find: '@orillusion/geometry/grass', replacement: here('../packages/geometry/grass/index.ts') },
+                // Only the audio components of the media package (its index brings in video materials).
+                { find: '@orillusion/media-extention/audio', replacement: here('../packages/media-extention/audio.ts') },
                 // The Basis encoder of ktx2-encoder, which its package exports do not
                 // expose: its module and its WebAssembly (imported with ?url).
                 { find: /^basis-encoder$/, replacement: here('../node_modules/ktx2-encoder/dist/basis/basis_encoder.js') },
@@ -164,6 +166,11 @@ const MIME = {
     '.png': 'image/png',
     '.ico': 'image/x-icon',
     '.wasm': 'application/wasm',
+    '.glb': 'model/gltf-binary',
+    '.ogg': 'audio/ogg',
+    '.mp3': 'audio/mpeg',
+    '.wav': 'audio/wav',
+    '.md': 'text/markdown; charset=utf-8',
 }
 
 /**
@@ -249,9 +256,39 @@ function devPlayer() {
     }
 }
 
+const LIBRARY = here('./library')
+
+/**
+ * The asset library (editor/library, mirrored by scripts/mirror-library.mjs)
+ * at library/ next to the editor: served by the dev server, copied into the
+ * editor's build. It is not in public/, so the player builds leave it out.
+ */
+function library() {
+    return {
+        name: 'morglay-library',
+        configureServer(server) {
+            server.middlewares.use((req, res, next) => {
+                const url = decodeURIComponent((req.url || '').split('?')[0])
+                if (!url.startsWith('/library/')) return next()
+                const file = path.resolve(LIBRARY, '.' + url.slice('/library'.length))
+                if (!file.startsWith(LIBRARY + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+                    res.statusCode = 404
+                    res.end('Not found')
+                    return
+                }
+                res.setHeader('Content-Type', MIME[path.extname(file)] || 'application/octet-stream')
+                res.end(fs.readFileSync(file))
+            })
+        },
+        writeBundle(options) {
+            if (fs.existsSync(LIBRARY)) fs.cpSync(LIBRARY, path.join(options.dir, 'library'), { recursive: true })
+        },
+    }
+}
+
 export default defineConfig({
     ...shared(),
-    plugins: [playerManifest(), devPlayer()],
+    plugins: [playerManifest(), devPlayer(), library()],
     server: {
         host: '0.0.0.0',
         port: 8100,

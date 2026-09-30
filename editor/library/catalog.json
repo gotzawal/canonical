@@ -61,7 +61,8 @@
     1,
     0.55,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/building-garage.png"
   },
   {
    "id": "kenney-city/building-small-a",
@@ -79,7 +80,8 @@
     1,
     0.95,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/building-small-a.png"
   },
   {
    "id": "kenney-city/building-small-b",
@@ -97,7 +99,8 @@
     1,
     1.626,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/building-small-b.png"
   },
   {
    "id": "kenney-city/building-small-c",
@@ -115,7 +118,8 @@
     1,
     1.75,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/building-small-c.png"
   },
   {
    "id": "kenney-city/building-small-d",
@@ -133,7 +137,8 @@
     1,
     1,
     1.05
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/building-small-d.png"
   },
   {
    "id": "kenney-city/grass",
@@ -152,7 +157,8 @@
     1,
     0.06,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/grass.png"
   },
   {
    "id": "kenney-city/grass-trees",
@@ -171,7 +177,8 @@
     1,
     0.636,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/grass-trees.png"
   },
   {
    "id": "kenney-city/grass-trees-tall",
@@ -190,7 +197,8 @@
     1.072,
     0.76,
     1.006
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/grass-trees-tall.png"
   },
   {
    "id": "kenney-city/pavement",
@@ -208,7 +216,8 @@
     1,
     0.06,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/pavement.png"
   },
   {
    "id": "kenney-city/pavement-fountain",
@@ -226,7 +235,8 @@
     1,
     0.536,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/pavement-fountain.png"
   },
   {
    "id": "kenney-city/road-corner",
@@ -244,7 +254,8 @@
     1,
     0.06,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/road-corner.png"
   },
   {
    "id": "kenney-city/road-intersection",
@@ -262,7 +273,8 @@
     1,
     0.05,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/road-intersection.png"
   },
   {
    "id": "kenney-city/road-split",
@@ -280,7 +292,8 @@
     1,
     0.05,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/road-split.png"
   },
   {
    "id": "kenney-city/road-straight",
@@ -298,7 +311,8 @@
     1,
     0.05,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/road-straight.png"
   },
   {
    "id": "kenney-city/road-straight-lightposts",
@@ -316,7 +330,8 @@
     1,
     0.55,
     1
-   ]
+   ],
+   "thumb": "kenney-city/thumbs/road-straight-lightposts.png"
   },
   {
    "id": "kenney-arena/banner",
@@ -334,7 +349,8 @@
     0.6,
     1.025,
     0.225
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/banner.png"
   },
   {
    "id": "kenney-arena/block",
@@ -352,7 +368,8 @@
     1,
     0.5,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/block.png"
   },
   {
    "id": "kenney-arena/border-corner",
@@ -370,7 +387,8 @@
     0.8,
     0.4,
     0.8
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/border-corner.png"
   },
   {
    "id": "kenney-arena/border-straight",
@@ -388,7 +406,8 @@
     1,
     0.4,
     0.6
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/border-straight.png"
   },
   {
    "id": "kenney-arena/bricks",
@@ -406,7 +425,8 @@
     0.772,
     0.412,
     0.847
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/bricks.png"
   },
   {
    "id": "kenney-arena/character-soldier",
@@ -425,6 +445,7 @@
     0.836,
     0.52
    ],
+   "thumb": "kenney-arena/thumbs/character-soldier.png",
    "animations": [
     "static",
     "idle",
@@ -476,7 +497,8 @@
     0.603,
     1,
     0.6
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/column.png"
   },
   {
    "id": "kenney-arena/column-damaged",
@@ -494,7 +516,8 @@
     0.6,
     0.716,
     0.6
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/column-damaged.png"
   },
   {
    "id": "kenney-arena/floor",
@@ -512,7 +535,8 @@
     1,
     0,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/floor.png"
   },
   {
    "id": "kenney-arena/floor-detail",
@@ -530,7 +554,8 @@
     1,
     0.07,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/floor-detail.png"
   },
   {
    "id": "kenney-arena/stairs",
@@ -548,7 +573,8 @@
     1,
     0.5,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/stairs.png"
   },
   {
    "id": "kenney-arena/stairs-corner",
@@ -566,7 +592,8 @@
     1,
     0.5,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/stairs-corner.png"
   },
   {
    "id": "kenney-arena/stairs-corner-inner",
@@ -584,7 +611,8 @@
     1,
     0.5,
     1
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/stairs-corner-inner.png"
   },
   {
    "id": "kenney-arena/statue",
@@ -602,7 +630,8 @@
     0.7,
     1.336,
     0.7
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/statue.png"
   },
   {
    "id": "kenney-arena/tree",
@@ -620,7 +649,8 @@
     0.65,
     1.917,
     0.651
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/tree.png"
   },
   {
    "id": "kenney-arena/trophy",
@@ -638,7 +668,8 @@
     0.569,
     0.477,
     0.452
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/trophy.png"
   },
   {
    "id": "kenney-arena/wall",
@@ -656,7 +687,8 @@
     1,
     1,
     0.6
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/wall.png"
   },
   {
    "id": "kenney-arena/wall-corner",
@@ -674,7 +706,8 @@
     0.8,
     1,
     0.8
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/wall-corner.png"
   },
   {
    "id": "kenney-arena/wall-gate",
@@ -692,7 +725,8 @@
     1,
     1,
     0.6
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/wall-gate.png"
   },
   {
    "id": "kenney-arena/weapon-rack",
@@ -710,7 +744,8 @@
     0.72,
     0.467,
     0.3
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/weapon-rack.png"
   },
   {
    "id": "kenney-arena/weapon-spear",
@@ -728,7 +763,8 @@
     0.146,
     0.7,
     0.119
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/weapon-spear.png"
   },
   {
    "id": "kenney-arena/weapon-sword",
@@ -746,7 +782,8 @@
     0.208,
     0.501,
     0.06
-   ]
+   ],
+   "thumb": "kenney-arena/thumbs/weapon-sword.png"
   },
   {
    "id": "kenney-platformer/block-coin",
@@ -763,7 +800,8 @@
     1.083,
     1,
     1.083
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/block-coin.png"
   },
   {
    "id": "kenney-platformer/break",
@@ -793,7 +831,8 @@
     1,
     1,
     1
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/brick.png"
   },
   {
    "id": "kenney-platformer/brick-particle",
@@ -810,7 +849,8 @@
     0.5,
     0.583,
     0.583
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/brick-particle.png"
   },
   {
    "id": "kenney-platformer/character",
@@ -828,6 +868,7 @@
     1.1,
     0.635
    ],
+   "thumb": "kenney-platformer/thumbs/character.png",
    "animations": [
     "static",
     "idle",
@@ -850,7 +891,8 @@
     1,
     1,
     1
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/cloud.png"
   },
   {
    "id": "kenney-platformer/coin",
@@ -867,13 +909,14 @@
     0.415,
     0.417,
     0.167
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/coin.png"
   },
   {
-   "id": "kenney-platformer/coin-2",
+   "id": "kenney-platformer/coin-sound",
    "name": "Coin",
    "kind": "audio",
-   "file": "kenney-platformer/coin-2.ogg",
+   "file": "kenney-platformer/coin-sound.ogg",
    "bytes": 6620,
    "source": "kenney-platformer",
    "tags": [
@@ -897,7 +940,8 @@
     0.363,
     0.33,
     0.363
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/dust.png"
   },
   {
    "id": "kenney-platformer/fall",
@@ -927,7 +971,8 @@
     0.2,
     1.235,
     0.685
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/flag.png"
   },
   {
    "id": "kenney-platformer/grass",
@@ -944,7 +989,8 @@
     0.511,
     0.309,
     0.536
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/grass.png"
   },
   {
    "id": "kenney-platformer/grass-small",
@@ -961,7 +1007,8 @@
     0.248,
     0.258,
     0.313
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/grass-small.png"
   },
   {
    "id": "kenney-platformer/jump",
@@ -1019,7 +1066,8 @@
     2,
     0.55,
     2
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/platform.png"
   },
   {
    "id": "kenney-platformer/platform-falling",
@@ -1036,7 +1084,8 @@
     2.2,
     0.5,
     2.2
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/platform-falling.png"
   },
   {
    "id": "kenney-platformer/platform-grass-large-round",
@@ -1053,7 +1102,8 @@
     5,
     0.5,
     5
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/platform-grass-large-round.png"
   },
   {
    "id": "kenney-platformer/platform-large",
@@ -1070,7 +1120,8 @@
     5,
     0.55,
     5
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/platform-large.png"
   },
   {
    "id": "kenney-platformer/platform-medium",
@@ -1087,7 +1138,8 @@
     3,
     0.55,
     3
-   ]
+   ],
+   "thumb": "kenney-platformer/thumbs/platform-medium.png"
   },
   {
    "id": "kenney-platformer/walking",
@@ -1117,20 +1169,8 @@
     0.88,
     0.9,
     1.6
-   ]
-  },
-  {
-   "id": "kenney-fps/blaster-2",
-   "name": "Blaster",
-   "kind": "audio",
-   "file": "kenney-fps/blaster-2.ogg",
-   "bytes": 14032,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
    ],
-   "seconds": 1.34
+   "thumb": "kenney-fps/thumbs/blaster.png"
   },
   {
    "id": "kenney-fps/blaster-repeater",
@@ -1147,13 +1187,14 @@
     0.788,
     0.85,
     1.88
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/blaster-repeater.png"
   },
   {
-   "id": "kenney-fps/blaster-repeater-2",
+   "id": "kenney-fps/blaster-repeater-sound",
    "name": "Blaster Repeater",
    "kind": "audio",
-   "file": "kenney-fps/blaster-repeater-2.ogg",
+   "file": "kenney-fps/blaster-repeater-sound.ogg",
    "bytes": 13024,
    "source": "kenney-fps",
    "tags": [
@@ -1161,6 +1202,19 @@
     "effect"
    ],
    "seconds": 0.44
+  },
+  {
+   "id": "kenney-fps/blaster-sound",
+   "name": "Blaster",
+   "kind": "audio",
+   "file": "kenney-fps/blaster-sound.ogg",
+   "bytes": 14032,
+   "source": "kenney-fps",
+   "tags": [
+    "shooter",
+    "effect"
+   ],
+   "seconds": 1.34
   },
   {
    "id": "kenney-fps/blob-shadow",
@@ -1207,7 +1261,8 @@
     1,
     1,
     1
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/cloud.png"
   },
   {
    "id": "kenney-fps/enemy-attack",
@@ -1250,7 +1305,8 @@
     1.2,
     0.875,
     0.759
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/enemy-flying.png"
   },
   {
    "id": "kenney-fps/enemy-hurt",
@@ -1280,7 +1336,8 @@
     0.511,
     0.309,
     0.536
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/grass.png"
   },
   {
    "id": "kenney-fps/grass-small",
@@ -1297,7 +1354,8 @@
     0.248,
     0.258,
     0.313
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/grass-small.png"
   },
   {
    "id": "kenney-fps/jump-a",
@@ -1366,7 +1424,8 @@
     2.2,
     0.5,
     2.2
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/platform.png"
   },
   {
    "id": "kenney-fps/platform-large-grass",
@@ -1383,7 +1442,8 @@
     5.2,
     0.5,
     5.2
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/platform-large-grass.png"
   },
   {
    "id": "kenney-fps/walking",
@@ -1413,7 +1473,8 @@
     1.5,
     1.7,
     0.7
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/wall-high.png"
   },
   {
    "id": "kenney-fps/wall-low",
@@ -1430,7 +1491,8 @@
     2.2,
     0.8,
     0.7
-   ]
+   ],
+   "thumb": "kenney-fps/thumbs/wall-low.png"
   },
   {
    "id": "kenney-fps/weapon-change",
@@ -1460,7 +1522,8 @@
     10.164,
     4.938,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/decoration-empty.png"
   },
   {
    "id": "kenney-racing/decoration-forest",
@@ -1477,7 +1540,8 @@
     10,
     5.329,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/decoration-forest.png"
   },
   {
    "id": "kenney-racing/decoration-tents",
@@ -1494,7 +1558,8 @@
     10,
     4.2,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/decoration-tents.png"
   },
   {
    "id": "kenney-racing/engine",
@@ -1578,7 +1643,8 @@
     3.38,
     0.587,
     3.38
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/track-bump.png"
   },
   {
    "id": "kenney-racing/track-corner",
@@ -1595,7 +1661,8 @@
     10.056,
     4.938,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/track-corner.png"
   },
   {
    "id": "kenney-racing/track-finish",
@@ -1612,7 +1679,8 @@
     14.035,
     7.017,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/track-finish.png"
   },
   {
    "id": "kenney-racing/track-straight",
@@ -1629,7 +1697,8 @@
     10,
     0.75,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/track-straight.png"
   },
   {
    "id": "kenney-racing/track-tents",
@@ -1646,7 +1715,8 @@
     10,
     4.2,
     10
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/track-tents.png"
   },
   {
    "id": "kenney-racing/vehicle-motorcycle",
@@ -1663,7 +1733,8 @@
     1.09,
     1.266,
     2.435
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/vehicle-motorcycle.png"
   },
   {
    "id": "kenney-racing/vehicle-truck-green",
@@ -1680,7 +1751,8 @@
     1.5,
     1.4,
     2.903
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/vehicle-truck-green.png"
   },
   {
    "id": "kenney-racing/vehicle-truck-purple",
@@ -1697,7 +1769,8 @@
     1.5,
     1.3,
     2.8
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/vehicle-truck-purple.png"
   },
   {
    "id": "kenney-racing/vehicle-truck-red",
@@ -1714,7 +1787,8 @@
     1.5,
     1.3,
     2.8
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/vehicle-truck-red.png"
   },
   {
    "id": "kenney-racing/vehicle-truck-yellow",
@@ -1731,7 +1805,8 @@
     1.5,
     1.55,
     2.8
-   ]
+   ],
+   "thumb": "kenney-racing/thumbs/vehicle-truck-yellow.png"
   }
  ]
 }

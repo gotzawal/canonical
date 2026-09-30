@@ -23,11 +23,12 @@ export type ToolGroup =
     | 'compare'
     | 'materials'
     | 'effects'
+    | 'audio'
     | 'code'
     | 'play';
 
 export const ALL_TOOL_GROUPS: ToolGroup[] = [
-    'read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts', 'lights', 'environment', 'compare', 'materials', 'effects', 'code', 'play',
+    'read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts', 'lights', 'environment', 'compare', 'materials', 'effects', 'audio', 'code', 'play',
 ];
 
 export interface CheckResult {
@@ -328,7 +329,7 @@ export const STAGES: StageDef[] = [
             'The sky\'s physical model (single scattering, or multiple scattering for deep sunsets, dusk and clouds), particles and post effects (fog, bloom, screen space reflections, vignette). Compare the shots with their reference images again, also in grayscale so the effects keep the value structure.',
         compare: 'gray',
         matchLabel: 'Value structure still holds',
-        tools: ['read', 'design', 'effects', 'environment', 'lights', 'code', 'play', 'capture', 'compare'],
+        tools: ['read', 'design', 'effects', 'audio', 'environment', 'lights', 'code', 'play', 'capture', 'compare'],
         checks: [
             {
                 id: 'effects.list',

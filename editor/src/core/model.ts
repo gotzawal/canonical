@@ -327,6 +327,24 @@ export const Grass = z.object({
 export type GrassDoc = z.output<typeof Grass>;
 
 /**
+ * A sound source (the engine's PositionAudio, or StaticAudio when not 3D)
+ * that plays an audio asset in Play: ambience, music, a machine's hum, a
+ * fountain. The active camera hears it. Scripts control it with
+ * this.audio and play one-off sounds with this.playSound.
+ */
+export const AudioSource = z.object({
+    clip: asset({ description: 'Audio asset id (.mp3, .ogg, .wav...), or null for none.' }),
+    volume: num(1, 0, 2, { step: 0.01, slider: true, description: 'Loudness: 1 as recorded, 0 silent.' }),
+    pitch: num(1, 0.25, 4, { step: 0.01, description: 'Playback rate: 2 plays twice as fast and an octave higher, 0.5 slower and lower.' }),
+    loop: bool(true, { description: 'Starts over at the end (ambience, music); off plays it once.' }),
+    autoplay: bool(true, { title: 'Play on Start', description: 'Starts when Play starts; off waits for a script (this.audio.play()).' }),
+    spatial: bool(true, { title: '3D', description: 'Heard from where the object is: louder near it and from its side. Off plays it at the same volume everywhere (music, interface sounds).' }),
+    near: num(2, 0.1, 1000, { step: 0.1, title: 'Full Volume Within', description: '3D: meters around the object where it plays at full volume.' }),
+    far: num(30, 0.5, 10000, { step: 0.5, title: 'Heard Up To', description: '3D: meters from the object where it fades out (linearly from Full Volume Within).' }),
+});
+export type AudioSourceDoc = z.output<typeof AudioSource>;
+
+/**
  * Instanced drawing (the engine's InstanceDrawComponent) for placing many
  * copies: the meshes of the object and of the objects under it
  * (primitives, prefab parts, imported models) that share a shape and a

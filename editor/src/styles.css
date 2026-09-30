@@ -5481,6 +5481,97 @@ kbd {
     object-fit: cover;
 }
 
+/* Library (ui/libraryDialog.ts) */
+.lib-modal .dialog {
+    width: min(1100px, 94vw);
+    height: min(760px, 90vh);
+}
+
+.lib-dialog {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.lib-head {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+}
+
+.lib-search {
+    width: 300px !important;
+    max-width: 100%;
+}
+
+.lib-kinds {
+    display: flex;
+    gap: 4px;
+}
+
+.lib-catalog {
+    max-width: 260px;
+}
+
+.lib-grid {
+    flex: 1;
+    min-height: 0;
+    overflow: auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+    align-content: start;
+}
+
+.lib-tile img,
+.lib-icon {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    object-fit: contain;
+    background: #0c0d10;
+    border-radius: 5px;
+    cursor: default;
+}
+
+.lib-tile[draggable='true'] img {
+    cursor: grab;
+}
+
+.lib-icon {
+    display: grid;
+    place-items: center;
+    color: var(--muted);
+}
+
+.lib-facts,
+.lib-pack {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 10.5px;
+}
+
+.lib-pack {
+    min-width: 0;
+}
+
+.lib-credits {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    max-width: 640px;
+}
+
+.prompt-field {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: min(520px, 80vw);
+}
+
 .sw-tile.fresh {
     border-color: var(--accent);
 }

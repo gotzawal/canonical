@@ -1,5 +1,5 @@
 {
-    // The engine (../src) and the particle, atmosphere and grass packages, which the editor imports as
+    // The engine (../src) and the particle, atmosphere, grass and audio packages, which the editor imports as
     // source. As a referenced project the editor type checks against their
     // declarations, so the editor can be strict while the engine is not.
     // `tsc -b` writes the declarations to node_modules/.cache/engine-types.
@@ -26,6 +26,10 @@
         },
         "types": ["vite/client", "@webgpu/types"]
     },
-    "include": ["../src", "../packages/particle", "../packages/atmosphere", "../packages/geometry/grass", "../package.json"],
+    "include": [
+        "../src", "../packages/particle", "../packages/atmosphere", "../packages/geometry/grass",
+        "../packages/media-extention/audio.ts", "../packages/media-extention/AudioListener.ts",
+        "../packages/media-extention/StaticAudio.ts", "../packages/media-extention/PositionAudio.ts", "../package.json"
+    ],
     "exclude": ["../packages/particle/vite.config.js", "../packages/atmosphere/vite.config.js"]
 }

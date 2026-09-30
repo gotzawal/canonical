@@ -250,11 +250,29 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
         editor: editorSha() || undefined,
     };
     files.push({ path: GAME_FILE, data: JSON.stringify(game) });
+    const credits = creditsText(doc.assets);
+    if (credits) {
+        files.push({ path: 'credits.txt', data: credits });
+        log('Listed where the downloaded assets come from in credits.txt.');
+    }
     // GitHub Pages runs Jekyll, which drops files starting with "_" (Vite
     // names some chunks that way), unless this file is there.
     files.push({ path: '.nojekyll', data: '' });
     const size = files.reduce((s, f) => s + sizeOf(f.data), 0);
     return { title, files, size, warnings };
+}
+
+/** The credits of the assets that came from the Library or a link (who made them, the license, where from), or '' for none. */
+export function creditsText(assets: readonly AssetMeta[]): string {
+    const lines = assets
+        .filter((a) => a.source)
+        .map((a) => {
+            const s = a.source!;
+            const who = [s.author && `by ${s.author}`, s.license].filter(Boolean).join(', ');
+            return `- ${a.name}${who ? ` (${who})` : ''}: ${s.origin ?? s.url}`;
+        });
+    if (!lines.length) return '';
+    return ['Assets in this game that come from elsewhere:', '', ...[...new Set(lines)].sort(), ''].join('\n');
 }
 
 /** "3 textures", "1 texture", or '' for none; `one`/`many` end the word (cop-y, cop-ies). */

@@ -48,6 +48,7 @@ export const WORK_KINDS: Record<WorkKind, string> = {
     compare: 'Comparing shots',
     materials: 'Materials',
     effects: 'Effects',
+    audio: 'Sound',
     code: 'Scripts, shaders and behavior',
     play: 'Play tests',
 };
