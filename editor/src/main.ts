@@ -173,6 +173,7 @@ async function main() {
     );
     const sync = new SceneSync(runtime, store, shaders, derived);
     derived.onRefresh((asset, role) => sync.refreshTexture(asset, role));
+    derived.onReplaced((asset) => sync.reloadAsset(asset));
     const picker = new Picker(runtime, sync, store);
     const camera = new CameraController(runtime, store, picker);
     const gizmo = new Gizmo(store, picker);

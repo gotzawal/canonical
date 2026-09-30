@@ -7,15 +7,17 @@
 // replaced file make them again. Copies never enter the document, only
 // the user's options do (AssetMeta.compress).
 
-import { getAssetBlob } from '../core/assets';
+import { getAssetBlob, putAsset } from '../core/assets';
 import {
-    derivedKey, derivedOptions, ENCODER_VERSION, getDerived, isFresh, putDerived, shipsAsIs, type DerivedOptions, type DerivedRecord, type DerivedRole,
+    deleteDerivedOf, derivedKey, derivedOptions, ENCODER_VERSION, getDerived, isFresh, putDerived, shipsAsIs, shipsCopy, type DerivedOptions, type DerivedRecord, type DerivedRole,
 } from '../core/derived';
+import { assetRoles } from '../core/refs';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
 import type { AssetMeta, TextureRole } from '../core/types';
 import { gltfExtensions } from '../build/modelInfo';
 import type { TextureSource } from '../engine/sync';
+import { roleFromName } from './encode';
 import { DeriveQueue, PRIORITY, type WorkerLike } from './queue';
 
 export type DerivedState = 'off' | 'none' | 'queued' | 'encoding' | 'ready' | 'failed';
@@ -59,6 +61,7 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
     private states = new Map<string, DerivedStatus>();
     private options = new Map<string, string>();
     private refresh: ((asset: string, role?: TextureRole) => void) | null = null;
+    private replaced: ((asset: string) => void) | null = null;
     /** Stops the background jobs of an asset once it leaves the document (removed, or another project opened). */
     private stops = new Map<string, AbortController>();
 
@@ -79,6 +82,83 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         });
         this.queue.on('change', () => this.queueChanged());
         this.optionsChanged();
+    }
+
+    /** SceneSync.reloadAsset: shows an asset again once its file was replaced by its compressed form. */
+    onReplaced(fn: (asset: string) => void) {
+        this.replaced = fn;
+    }
+
+    /** Files being compressed to replace their originals. */
+    private packing = new Set<string>();
+
+    /** True while the file of this asset is being compressed in place. */
+    isPacking(asset: string): boolean {
+        return this.packing.has(asset);
+    }
+
+    /**
+     * Compresses a texture or model file and replaces the original with it,
+     * which the project then keeps instead (a texture becomes KTX2 for the
+     * role it has, a model its packed GLB). Resolves with the new meta, or
+     * null when the file stays as it is: compression off for it, compressed
+     * already, nothing gained (a model), or the file changed meanwhile.
+     */
+    async packFile(assetId: string): Promise<AssetMeta | null> {
+        const meta = this.store.doc.assets.find((a) => a.id === assetId);
+        if (!meta || (meta.kind !== 'texture' && meta.kind !== 'model') || shipsAsIs(meta) || this.packing.has(assetId)) return null;
+        const role: DerivedRole = meta.kind === 'model' ? 'model' : this.roleOf(meta);
+        const opts = derivedOptions(role, meta.compress);
+        if (!opts) return null;
+        const blob = await getAssetBlob(meta.id);
+        if (!blob || (role === 'model' ? await isDracoModel(blob) : await isKTX2File(blob))) return null;
+        const src = { size: blob.size, ...(meta.hash ? { hash: meta.hash } : {}) };
+        this.packing.add(assetId);
+        this.emit('status', assetId);
+        try {
+            const out = await this.queue.run(jobKey(derivedKey(meta.id, role), src, opts), { blob, role, opts }, PRIORITY.view, this.stopOf(meta.id));
+            // Gone, replaced or compressed already while this ran.
+            const latest = this.store.doc.assets.find((a) => a.id === assetId);
+            if (!latest || latest.size !== src.size || (latest.hash ?? '') !== (src.hash ?? '') || shipsAsIs(latest)) return null;
+            if (role === 'model' && !shipsCopy({ role, bytes: out.data.byteLength, textures: out.textures }, latest)) return null;
+            const stem = latest.name.replace(/\.[a-z0-9]+$/i, '');
+            const name = stem + (role === 'model' ? '.glb' : '.ktx2');
+            const stored = await putAsset(new Blob([out.data], { type: role === 'model' ? 'model/gltf-binary' : 'image/ktx2' }), name, meta.kind, meta.id);
+            const next: AssetMeta = {
+                ...latest,
+                name,
+                mime: stored.mime,
+                size: stored.size,
+                ...(stored.hash ? { hash: stored.hash } : {}),
+                ...(role === 'model' ? {} : { width: out.width, height: out.height }),
+                packed: { from: latest.name, size: latest.size },
+            };
+            if (!stored.hash) delete next.hash;
+            // Follows the import: no undo step of its own (the file it replaced is gone).
+            this.store.patch((doc) => {
+                const i = doc.assets.findIndex((a) => a.id === assetId);
+                if (i >= 0) doc.assets[i] = next;
+            }, { design: true });
+            await deleteDerivedOf([assetId]);
+            this.forget(assetId);
+            this.replaced?.(assetId);
+            return next;
+        } catch (e: any) {
+            if (e?.name !== 'AbortError') console.warn(`[editor] could not compress "${meta.name}"`, e);
+            return null;
+        } finally {
+            this.packing.delete(assetId);
+            this.emit('status', assetId);
+        }
+    }
+
+    /** The role a texture is compressed for when it replaces its file: a normal map wherever one uses it so, else color, else data; by its name when nothing uses it yet. */
+    private roleOf(meta: AssetMeta): TextureRole {
+        const roles = assetRoles(this.store.doc).get(meta.id);
+        if (roles?.has('normal')) return 'normal';
+        if (roles?.has('color')) return 'color';
+        if (roles?.has('data')) return 'data';
+        return roleFromName(meta.name);
     }
 
     /** SceneSync.refreshTexture: shows a texture again when its copy comes or goes. */

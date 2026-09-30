@@ -69,8 +69,9 @@ export function derivedOptions(role: DerivedRole, c?: TextureCompression | null)
     return { codec: mode === 'high' || !colors ? 'uastc' : 'etc1s', maxSize };
 }
 
-/** A texture that is a KTX2 file already: games get it as it is, whatever its options. */
-export function shipsAsIs(meta: Pick<AssetMeta, 'kind' | 'name' | 'mime'>): boolean {
+/** A texture that is a KTX2 file already, or a file compressed in the editor: games get it as it is, whatever its options. */
+export function shipsAsIs(meta: Pick<AssetMeta, 'kind' | 'name' | 'mime' | 'packed'>): boolean {
+    if (meta.packed) return true;
     return meta.kind === 'texture' && (meta.mime === 'image/ktx2' || /\.ktx2$/i.test(meta.name));
 }
 

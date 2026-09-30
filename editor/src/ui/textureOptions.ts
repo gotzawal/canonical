@@ -62,7 +62,8 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
         const asIs = shipsAsIs(meta) || draco;
         const lines: string[] = [];
         let action: HTMLElement | null = null;
-        if (asIs) lines.push(draco ? 'Draco compressed already: games get the file as it is.' : 'A KTX2 file already: games get it as it is.');
+        if (meta.packed) lines.push(`Compressed in the editor: it replaced ${meta.packed.from} (${formatBytes(meta.packed.size)}), and games get it as it is.`);
+        else if (asIs) lines.push(draco ? 'Draco compressed already: games get the file as it is.' : 'A KTX2 file already: games get it as it is.');
         else if (!opts) lines.push('Games get the file itself.');
         else if (status.state === 'ready' && status.copy) {
             const c = status.copy;
@@ -88,6 +89,14 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
                 action = button('Compress Now', () => void editor.derived.ensure(meta, role).catch(() => {}), 'small');
             }
         }
+        // Keep only the compressed file (the project gets smaller; the options then no longer apply).
+        let replace: HTMLElement | null = null;
+        if (!asIs && opts) {
+            replace = editor.derived.isPacking(assetId)
+                ? h('div', { class: 'muted small', text: 'Compressing the file...' })
+                : button('Compress File', () => void editor.compressFiles([assetId]), 'small', undefined);
+            replace.title = 'Replaces the original with its compressed form, which the editor and games then use; the original is removed from the project.';
+        }
         body.replaceChildren(
             h('div', { class: 'texture-options-title', text: `${meta.name} ${ROLE_TEXT[role]}` }),
             ...(asIs
@@ -99,7 +108,7 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
                     row(model ? 'Texture Size' : 'Max Size', sizeField.el, model ? 'The longest side of each of its textures, in pixels' : 'The longer side of the copy, in pixels'),
                 ]),
             h('div', { class: 'texture-options-status muted small' }, ...lines.map((text) => h('div', { text }))),
-            ...(action ? [action] : []),
+            h('div', { class: 'inline' }, ...(action ? [action] : []), ...(replace ? [replace] : [])),
         );
     };
     offStatus = editor.derived.on('status', (id) => id === assetId && void render());

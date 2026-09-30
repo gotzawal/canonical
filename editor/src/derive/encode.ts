@@ -70,6 +70,18 @@ export function slotRole(slots: { name: string; color: boolean }[]): TextureRole
     return 'data';
 }
 
+/**
+ * The role a texture file's name suggests, for a file no material uses yet:
+ * normal maps and data maps (roughness, metalness, occlusion, masks) by
+ * their usual suffixes, else colors.
+ */
+export function roleFromName(name: string): TextureRole {
+    const stem = name.toLowerCase().replace(/\.[a-z0-9]+$/, '');
+    if (/(^|[^a-z])(normal|nrm|nor|norm|n)$|normal/.test(stem)) return 'normal';
+    if (/rough|metal|orm|arm|occlusion|(^|[^a-z])ao($|[^a-z])|mask|spec|gloss|height|disp|bump/.test(stem)) return 'data';
+    return 'color';
+}
+
 /** How a texture of a model is encoded: its colors with the model's codec, its normal and data maps in UASTC. */
 export function modelTextureOptions(role: TextureRole, model: DerivedOptions): DerivedOptions {
     return { codec: role === 'color' ? model.codec : 'uastc', maxSize: model.maxSize };

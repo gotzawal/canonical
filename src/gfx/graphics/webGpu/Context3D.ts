@@ -43,6 +43,11 @@ export class Context3D extends CEventDispatcher {
     /** The GPUDevice owned by this context; the root handle for all GPU work. */
     public device: GPUDevice;
 
+    /** True when the device was created with this optional feature. */
+    public hasFeature(name: GPUFeatureName): boolean {
+        return !!this.device?.features?.has(name);
+    }
+
     /** The block-compressed texture families the device can sample. */
     public get compressedTextureSupport(): { bc: boolean; etc2: boolean; astc: boolean } {
         const f = this.device?.features;
@@ -147,19 +152,24 @@ export class Context3D extends CEventDispatcher {
         }
         const avail = Array.from((this.adapter.features as any) || []);
         // if (import.meta.env.DEV) console.log('[Context3D] adapter.features =', avail.join(', '));
-        // Block-compressed texture families are optional: ask for the ones
-        // the adapter has, so KTX2 textures stay compressed on the GPU.
-        const compression = (['texture-compression-bc', 'texture-compression-etc2', 'texture-compression-astc'] as GPUFeatureName[])
-            .filter((f) => this.adapter.features.has(f));
+        // Every feature is optional: ask for the ones the adapter has.
+        // Many phones lack some of these (bgra8unorm-storage and
+        // indirect-first-instance on most Android GPUs), and requiring
+        // them would stop the engine from starting there. Code that
+        // could use one checks hasFeature() first. The block-compressed
+        // families keep KTX2 textures compressed on the GPU.
+        const wanted: GPUFeatureName[] = [
+            'bgra8unorm-storage',
+            'depth-clip-control',
+            'depth32float-stencil8',
+            'indirect-first-instance',
+            'rg11b10ufloat-renderable',
+            'texture-compression-bc',
+            'texture-compression-etc2',
+            'texture-compression-astc',
+        ];
         this.device = await this.adapter.requestDevice({
-            requiredFeatures: [
-                'bgra8unorm-storage',
-                'depth-clip-control',
-                'depth32float-stencil8',
-                'indirect-first-instance',
-                'rg11b10ufloat-renderable',
-                ...compression,
-            ],
+            requiredFeatures: wanted.filter((f) => this.adapter.features.has(f)),
             requiredLimits: {
                 minUniformBufferOffsetAlignment: 256,
                 maxStorageBufferBindingSize: this.adapter.limits.maxStorageBufferBindingSize

@@ -402,3 +402,56 @@ test('packs models for games: their textures in KTX2 and their geometry with mes
     }, asset);
     expect(off).toEqual({ mode: 'off', state: 'off', copy: null });
 });
+
+test('compresses imported files and keeps only the compressed ones, which the editor and games use', async ({ browser }) => {
+    test.setTimeout(300_000);
+    const page = editor.page();
+    await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: true }));
+    try {
+        const texture = await card(page, 'Imported.png');
+        const model = await page.evaluate(async (b64) => {
+            const ed = window.__editor;
+            await ed.importFiles([new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Crate.glb', { type: 'model/gltf-binary' })]);
+            return ed.store.doc.nodes.find((n) => n.model)!.model!.asset;
+        }, base64(pngGlb(png(128, 128, quarterPixels(128)))));
+        // Both files are replaced by their compressed forms.
+        const packed = (id: string) =>
+            page.evaluate((id) => {
+                const a = window.__editor.store.doc.assets.find((x) => x.id === id)!;
+                return { name: a.name, mime: a.mime, packed: a.packed?.from ?? null };
+            }, id);
+        await expect.poll(() => packed(texture), { timeout: 150_000 }).toEqual({ name: 'Imported.ktx2', mime: 'image/ktx2', packed: 'Imported.png' });
+        await expect.poll(() => packed(model), { timeout: 150_000 }).toMatchObject({ name: 'Crate.glb', packed: 'Crate.glb' });
+
+        // The stored files are the compressed ones, and the editor shows them.
+        const shownNow = await page.evaluate(async ({ texture, model }) => {
+            const ed = window.__editor;
+            await ed.sync.whenLoaded();
+            const tex = (await ed.sync.loadTexture(texture, 'color')) as any;
+            const node = ed.store.doc.nodes.find((n) => n.model?.asset === model)!;
+            const info = ed.sync.modelInfo(node.id);
+            const mat = info?.slots[0]?.material as any;
+            return {
+                texture: tex.format as string,
+                model: ed.sync.modelState(node.id)?.status,
+                modelTexture: mat?.shader.getTexture('baseMap')?.constructor.name as string,
+                status: ed.derived.statusOf(ed.store.doc.assets.find((a) => a.id === texture)!, 'color').state,
+            };
+        }, { texture, model });
+        expect(shownNow).toMatchObject({ model: 'ready', modelTexture: 'CompressedTexture2D', status: 'off' });
+        expect(shownNow.texture).toMatch(/^(etc2|bc[17]|astc).*-srgb$/);
+
+        // Games ship the files as they are: no copies, the meshopt and KTX2 decoders.
+        const zip = await buildZip(page);
+        const game = JSON.parse(new TextDecoder().decode(zip.get('game.json')!));
+        expect(game.derived).toBeUndefined();
+        expect(game.files[texture]).toMatch(/\.ktx2$/);
+        expect(Array.from(zip.get(game.files[texture])!.subarray(0, 4))).toEqual([0xab, 0x4b, 0x54, 0x58]);
+        expect(glbJson(zip.get(game.files[model])!).extensionsRequired).toEqual(expect.arrayContaining(['KHR_texture_basisu', 'EXT_meshopt_compression']));
+        const names = Array.from(zip.keys());
+        expect(names.some((n) => /meshopt_decoder-.*\.js$/.test(n))).toBe(true);
+        expect(names.some((n) => /basis_transcoder-.*\.wasm$/.test(n))).toBe(true);
+    } finally {
+        await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: false }));
+    }
+});

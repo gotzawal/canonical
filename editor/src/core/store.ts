@@ -63,6 +63,8 @@ export interface Prefs {
     previewQuality: 'scene' | ViewportQuality;
     /** Make the compressed copies of textures (KTX2) in the background while editing, not only when building. */
     backgroundCompression: boolean;
+    /** Compress imported textures and models right away and keep only the compressed file (smaller projects). */
+    compressImports: boolean;
     /**
      * The full editor (hierarchy, inspector, pipeline, code) instead of the
      * simple view, which shows only the scene and the chat with the assistant.
@@ -174,6 +176,7 @@ function defaultPrefs(): Prefs {
         viewportQuality: 'low',
         previewQuality: 'scene',
         backgroundCompression: true,
+        compressImports: true,
         editMode: false,
     };
 }
@@ -185,6 +188,7 @@ function loadPrefs(): Prefs {
     if (!['scene', 'low', 'medium', 'high'].includes(prefs.previewQuality)) prefs.previewQuality = 'scene';
     prefs.editMode = prefs.editMode === true;
     prefs.backgroundCompression = prefs.backgroundCompression !== false;
+    prefs.compressImports = prefs.compressImports !== false;
     return prefs;
 }
 

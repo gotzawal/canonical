@@ -1061,7 +1061,8 @@ export class RenderShaderPass extends ShaderPassBase {
                 topology: shaderState.topology,
                 cullMode: shaderState.cullMode,
                 frontFace: shaderState.frontFace,
-                unclippedDepth: shaderState.unclippedDepth,
+                // Needs depth-clip-control, which some phones lack: there depth is clipped.
+                unclippedDepth: shaderState.unclippedDepth && !!this._boundCtx?.hasFeature('depth-clip-control'),
             },
             vertex: undefined,
         };

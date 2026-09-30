@@ -2,6 +2,8 @@ import type { Editor } from '../editor';
 import { useCounts } from '../core/refs';
 import { onChanges, touches } from './batch';
 import { formatBytes } from '../core/assets';
+import { shipsAsIs } from '../core/derived';
+import { toast } from '../core/messages';
 import { pickFiles } from '../core/persistence';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import { clear, h, pressable } from './dom';
@@ -39,15 +41,26 @@ export class AssetsPanel {
                     const files = await pickFiles('.glb,.gltf,image/*', true);
                     if (files.length) await editor.importFiles(files);
                 }),
+                iconButton('sliders', 'Compression', (e) => {
+                    const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
+                    showMenu(compressionMenu(editor), r.left - 220, r.bottom + 4);
+                }),
             ),
             this.list,
         );
         // It lists the assets, scripts, shaders and prefabs, and how many objects use them: where objects are does not matter.
         onChanges(editor.store, (hint) => touches(hint, 'nodes', 'design') && this.render());
         editor.store.on('load', () => this.render(true));
+        // A file being compressed shows it.
+        editor.derived.on('status', () => this.render(true));
         editor.shaders.on('status', () => this.render(true));
         editor.compiler.on('compiled', () => this.render(true));
         this.render(true);
+    }
+
+    private async compress(ids: string[]) {
+        const n = await this.editor.compressFiles(ids);
+        if (!n) toast('Nothing to compress: the file is compressed already, its compression is off, or it would not get smaller.', 'info');
     }
 
     render(force = false) {
@@ -101,9 +114,12 @@ export class AssetsPanel {
             );
         }
         for (const a of assets) {
+            const packable = (a.kind === 'texture' || a.kind === 'model') && !shipsAsIs(a);
+            const size = this.editor.derived.isPacking(a.id) ? 'compressing' : a.packed ? `${formatBytes(a.size)} packed` : formatBytes(a.size);
             this.list.appendChild(
-                this.item(a.id, a.kind === 'model' ? 'model' : 'image', a.name, formatBytes(a.size), '', a.kind === 'model' ? 'Drag into the viewport or double-click to add' : 'Drag onto an object or double-click to apply to the selection', () => this.use(a.id), [
+                this.item(a.id, a.kind === 'model' ? 'model' : 'image', a.name, size, '', a.kind === 'model' ? 'Drag into the viewport or double-click to add' : 'Drag onto an object or double-click to apply to the selection', () => this.use(a.id), [
                     { label: a.kind === 'model' ? 'Add to Scene' : 'Apply to Selection', icon: 'plus', action: () => this.use(a.id) },
+                    ...(packable ? [{ label: 'Compress File', icon: 'minimize', action: () => void this.compress([a.id]) }] : []),
                     { label: 'Remove from Project', icon: 'trash', action: () => this.editor.removeAsset(a.id) },
                 ]),
             );
@@ -204,6 +220,30 @@ export function createAssetMenu(editor: Editor): MenuItem[] {
                     editor.addPostEffect(doc.id);
                 },
             })),
+        },
+    ];
+}
+
+/** Whether imports are compressed (keeping only the compressed file) and game copies made in the background, and compressing every file now. */
+function compressionMenu(editor: Editor): MenuItem[] {
+    const store = editor.store;
+    return [
+        {
+            label: 'Compress Imported Files',
+            checked: () => store.prefs.compressImports,
+            action: () => store.setPrefs({ compressImports: !store.prefs.compressImports }),
+        },
+        {
+            label: 'Make Game Copies in the Background',
+            checked: () => store.prefs.backgroundCompression,
+            action: () => store.setPrefs({ backgroundCompression: !store.prefs.backgroundCompression }),
+        },
+        { separator: true },
+        {
+            label: 'Compress All Files Now',
+            icon: 'minimize',
+            action: () =>
+                void editor.compressFiles().then((n) => toast(n ? `Compressed ${n} file${n === 1 ? '' : 's'}.` : 'Every file is compressed already, or would not get smaller.', 'info')),
         },
     ];
 }

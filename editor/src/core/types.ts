@@ -109,6 +109,12 @@ export interface AssetMeta {
     compress?: TextureCompression;
     /** Fingerprint of a texture's or model's bytes (assets.ts fingerprint): tells a copy made from another file apart. */
     hash?: string;
+    /**
+     * The file was compressed in the editor and replaced its original (a
+     * texture by KTX2, a model by its packed GLB): the original's name and
+     * size. Games get the file as it is.
+     */
+    packed?: { from: string; size: number };
 }
 
 /**
