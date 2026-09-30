@@ -244,6 +244,8 @@ pnpm run editor:build       # static site in editor/dist
 xvfb-run -a pnpm run editor:e2e   # browser tests of the build (Playwright)
 ```
 
+The browser tests are four files, one editor page each: `smoke` (editing, Play, physics, the level check and the viewport, on a device without the optional GPU features), `assistant` (the chat in the simple view, with OpenRouter scripted), `assets` (compressed models and textures, animation clips, and a built game that plays them) and `effects` (the sky, fog, post effects and shadows at once). SwiftShader compiles shaders on the CPU, so each page takes half a minute to start; a new check goes into the file that already opens the page it needs.
+
 The editor type checks in strict mode. The engine and the particle package, which it imports as source, are a referenced project (`editor/tsconfig.engine.json`) checked as their declarations, so they keep their own, looser settings.
 
 The build has two pages: the editor (`index.html`) and the game player (`player.html`), whose files `player-manifest.json` lists for Build & Deploy. The dev server builds the player the first time Build & Deploy needs it, which takes a little while.

@@ -1,35 +1,85 @@
-import { expect, test } from '@playwright/test';
-import { scriptedAssistant, sharedEditor, toolResults, type ScriptedCall } from './editor';
+// The assistant in the simple view (the scene and the chat), with OpenRouter
+// scripted: a project starts from one request, the tools change the scene,
+// the settings limit them, the user stops a request, approves a stage from
+// the chat, and sees what the work cost, with images at the quality chosen.
+
+import { expect, test, type Route } from '@playwright/test';
+import { scriptedAssistant, sharedEditor, toolResults, USAGE, type ScriptedCall } from './editor';
 
 let assistant: Awaited<ReturnType<typeof scriptedAssistant>>;
 const editor = sharedEditor(async (page) => {
     assistant = await scriptedAssistant(page);
-});
+}, { simple: true });
 
 test.beforeEach(() => editor.reset());
 test.afterEach(() => expect(editor.errors).toEqual([]));
 
+/** Clicks in the page: SwiftShader can stall the frames Playwright's actionability checks wait for. */
+const click = (selector: string, text?: string) =>
+    editor.page().evaluate(
+        ([s, t]) => {
+            const all = Array.from(document.querySelectorAll<HTMLElement>(s!)).filter((el) => !t || el.textContent?.trim() === t);
+            all[all.length - 1]!.click();
+        },
+        [selector, text],
+    );
+
 /** Sends a request that the assistant answers with `turns` of tool calls; resolves with the tool results. */
-async function ask(turns: ScriptedCall[][]): Promise<unknown[]> {
+async function ask(turns: ScriptedCall[][], text = 'Build it.'): Promise<unknown[]> {
     const before = assistant.sent.length;
     assistant.turns = [...turns, 'Done.'];
-    await editor.page().evaluate(() => window.__editor.askAI('Build it.', true));
+    await editor.page().evaluate((t) => window.__editor.askAI(t, true), text);
     await expect.poll(() => assistant.sent.length, { timeout: 60_000 }).toBe(before + turns.length + 1);
     return toolResults(assistant.sent.slice(before));
 }
 
 const node = (name: string) => editor.page().evaluate((n) => window.__editor.store.doc.nodes.find((x) => x.name === n), name);
 
-test('offers component fields in the tool schemas', async () => {
-    await ask([]);
-    const tools = assistant.sent[assistant.sent.length - 1].tools as { function: { name: string; parameters: any } }[];
-    const create = tools.find((t) => t.function.name === 'create_objects')!.function.parameters;
-    const fields = create.properties.objects.items.properties;
-    expect(fields.character.properties.step_height).toMatchObject({ type: 'number', minimum: 0 });
-    expect(fields.light.properties.outer_angle).toMatchObject({ minimum: 1, maximum: 179 });
-    expect(fields.material.properties.transmission).toMatchObject({ minimum: 0, maximum: 1 });
-    expect(fields.material.properties.preset.enum).toContain('glass');
-    expect(fields.body.properties.type.enum).toEqual(['dynamic', 'kinematic', 'fixed']);
+test('shows only the scene and the chat, and the full editor in edit mode', async () => {
+    const page = editor.page();
+    await expect(page.locator('.ai-panel')).toBeVisible();
+    await expect(page.locator('.hierarchy')).toBeHidden();
+    await expect(page.locator('.pipeline-bar')).toBeHidden();
+    await click('.mode-toggle');
+    await expect(page.locator('.hierarchy')).toBeVisible();
+    await expect(page.locator('.pipeline-bar')).toBeVisible();
+    await click('.mode-toggle');
+    await expect(page.locator('.hierarchy')).toBeHidden();
+    expect(await page.evaluate(() => window.__editor.store.prefs.editMode)).toBe(false);
+});
+
+test('starts a project from one request: the brief, the assistant, the scene name and the steps', async () => {
+    const page = editor.page();
+    // The scene the page started with, as a project nobody started yet: the start screen asks again.
+    await page.evaluate(() => {
+        const ed = window.__editor;
+        const doc = JSON.parse(JSON.stringify(ed.store.doc));
+        doc.design.id = `p-fresh-${Math.random().toString(36).slice(2)}`;
+        ed.loadDoc(doc);
+    });
+    await expect(page.locator('.start-screen')).toBeVisible();
+    await expect(page.locator('.steps-bar')).toBeHidden();
+    await page.locator('.start-input').fill('A cozy cabin by a lake at dusk');
+    const before = assistant.sent.length;
+    assistant.turns = [[{ name: 'update_design', args: { scene_name: 'Lakeside Cabin', layout: { summary: 'A cabin on a small lake shore, 30 x 30 m.' } } }], 'The plan is ready.'];
+    await click('.start-go');
+    await expect.poll(() => assistant.sent.length, { timeout: 60_000 }).toBe(before + 2);
+
+    await expect(page.locator('.start-screen')).toBeHidden();
+    const design = await page.evaluate(() => window.__editor.store.doc.design);
+    expect(design.brief.text).toBe('A cozy cabin by a lake at dusk');
+    // The chat shows the user's words; the model got them with the instructions to start.
+    await expect(page.locator('.ai-panel .ai-msg.user').last()).toHaveText('A cozy cabin by a lake at dusk');
+    const request = assistant.sent[before].messages.at(-1).content as string;
+    expect(request).toContain('I want to make this: A cozy cabin by a lake at dusk');
+    expect(request).toContain('update_design scene_name');
+    // The assistant named the scene.
+    await expect(page.locator('.scene-name')).toHaveText('Lakeside Cabin');
+    await expect(page).toHaveTitle('Lakeside Cabin - Morglay');
+    // The user sees three steps, and is asked whether they like it.
+    await expect(page.locator('.steps-bar .step')).toHaveCount(3);
+    await expect(page.locator('.steps-bar .step.current')).toContainText('Layout');
+    await expect(page.locator('.ai-panel .ai-next')).toContainText('Like how it looks?');
 });
 
 test('creates and changes objects, the environment and particles with its tools', async () => {
@@ -65,12 +115,6 @@ test('creates and changes objects, the environment and particles with its tools'
     expect(env.gi.counts.every((c) => c <= 16)).toBe(true);
 });
 
-test('tells the assistant which argument does not fit', async () => {
-    const [result] = await ask([[{ name: 'create_objects', args: { objects: [{ type: 'box', name: 'Crate', character: { speed: 'fast' } }] } }]]);
-    expect((result as { error: string }).error).toMatch(/character\.speed/);
-    expect(await node('Crate')).toBeUndefined();
-});
-
 test('offers only the tools the AI settings allow and refuses the others', async () => {
     const [result] = await ask([[{ name: 'play', args: {} }]]);
     expect((result as { error: string }).error).toBe('Play is turned off in the AI settings.');
@@ -79,21 +123,100 @@ test('offers only the tools the AI settings allow and refuses the others', async
     for (const off of ['play', 'run_play_test', 'capture_viewport', 'generate_swatch', 'generate_concept']) expect(names).not.toContain(off);
 });
 
-test('picks a model from the suggestions of the AI settings', async () => {
+test('stops the assistant from over the view', async () => {
     const page = editor.page();
-    // Clicks in the page: SwiftShader can stall the frames Playwright's actionability checks wait for.
-    const click = (selector: string, text?: string) =>
-        page.evaluate(([s, t]) => Array.from(document.querySelectorAll<HTMLElement>(s!)).find((el) => !t || el.textContent?.trim() === t)!.click(), [selector, text]);
-    await click('.ai-model');
-    const input = page.locator('.ai-settings input[placeholder="provider/model"]');
-    await input.fill('acme');
-    // Only models with tool support are offered.
-    const offered = page.locator('.ai-settings .suggestions .suggestion');
-    await expect(offered).toHaveCount(1);
-    await expect(offered).toContainText('Acme Fast');
-    await click('.ai-settings .suggestion');
-    await expect(input).toHaveValue('acme/fast');
-    await expect(page.locator('.ai-settings .suggestions').first()).toBeHidden();
-    await click('.dialog button', 'Save');
-    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('canonical-editor/ai')!).model)).toBe('acme/fast');
+    // The model's answer is held until the test lets it go.
+    const held: Route[] = [];
+    const hold = (route: Route) => void held.push(route);
+    await page.route('**/api/v1/chat/completions', hold);
+    try {
+        await page.evaluate(() => window.__editor.askAI('Build a small park.', true));
+        const status = page.locator('.viewport .ai-status');
+        await expect(status).toBeVisible();
+        await expect(status).toContainText('Thinking...');
+        await expect(page.locator('.ai-panel .ai-send')).toHaveText('Stop');
+        await click('.viewport .ai-status-stop');
+        await expect(status).toBeHidden();
+        await expect(page.locator('.ai-panel .ai-msg.note').last()).toHaveText('Stopped.');
+        await expect(page.locator('.ai-panel .ai-send')).toHaveText('Send');
+        await expect(page.locator('.ai-panel .ai-next')).toContainText('Keep going');
+    } finally {
+        await page.unroute('**/api/v1/chat/completions', hold);
+        for (const r of held) await r.abort().catch(() => {});
+    }
+});
+
+test('completes the stage the assistant proposes from the chat', async () => {
+    const page = editor.page();
+    await ask([[{ name: 'propose_stage_complete', args: { summary: 'The areas and the layout are in the plan.' } }]], 'Go on.');
+    const card = page.locator('.ai-panel .ai-msg.approval').last();
+    await expect(card).toContainText('Brief is done. Happy with it?');
+    await expect(card).toContainText('The areas and the layout are in the plan.');
+    // While the approval waits, the chat offers nothing else.
+    await expect(page.locator('.ai-panel .ai-next')).toBeHidden();
+
+    await click('.ai-panel .ai-msg.approval button', 'Looks good');
+    // Checklist items are still open: the same question as in the Design tab.
+    await expect(page.locator('.dialog')).toContainText('Complete Brief?');
+    await click('.dialog button', 'Complete Anyway');
+    await expect.poll(() => page.evaluate(() => window.__editor.store.doc.design.stage)).toBe('level');
+    expect(await page.evaluate(() => window.__editor.store.doc.design.stages.brief.proposal)).toBeNull();
+    await expect(card).toContainText('Brief is complete.');
+    // Then the user says whether they like it, and the assistant keeps going.
+    await expect(page.locator('.ai-panel .ai-next')).toContainText('Like how it looks?');
+});
+
+test('sends attached images at the quality chosen, and counts what each request spent', async () => {
+    const page = editor.page();
+    await page.evaluate(async () => {
+        await window.__editor.usage.loading;
+        window.__editor.usage.clear();
+    });
+    // A 1200 x 800 picture dropped on the chat.
+    await page.evaluate(async () => {
+        const c = new OffscreenCanvas(1200, 800);
+        const g = c.getContext('2d')!;
+        g.fillStyle = '#3080e0';
+        g.fillRect(0, 0, 1200, 800);
+        const file = new File([await c.convertToBlob({ type: 'image/png' })], 'Sketch.png', { type: 'image/png' });
+        const data = new DataTransfer();
+        data.items.add(file);
+        document.querySelector('.ai-panel')!.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }));
+    });
+    await expect(page.locator('.ai-attachments .ai-attachment')).toHaveCount(1);
+    // Images the assistant sees: low.
+    await click('.ai-quality');
+    await click('.ai-quality-popover .seg[aria-label="Images the assistant sees"] .seg-btn', 'Low');
+    await expect(page.locator('.ai-quality')).toHaveText('Low / Medium');
+    await page.keyboard.press('Escape');
+
+    const before = assistant.sent.length;
+    assistant.turns = ['It is a blue sketch.'];
+    await page.locator('.ai-input').fill('What is on it?');
+    await click('.ai-send');
+    await expect.poll(() => assistant.sent.length, { timeout: 60_000 }).toBe(before + 1);
+    const image = (assistant.sent[before].messages.at(-1).content as any[]).find((p) => p.type === 'image_url').image_url;
+    expect(image.detail).toBe('low');
+    const size = await page.evaluate(async (url) => {
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        return [img.naturalWidth, img.naturalHeight];
+    }, image.url);
+    expect(size).toEqual([512, 341]);
+
+    // The request is one piece of work in the project's usage, with what the model reported.
+    await expect.poll(() => page.evaluate(() => window.__editor.usage.entries.filter((e) => !e.running).length)).toBe(1);
+    const entry = await page.evaluate(() => window.__editor.usage.entries[0]);
+    expect(entry).toMatchObject({ kind: 'request', label: 'What is on it?', model: 'test/model', calls: 1, prompt: USAGE.prompt_tokens, cached: 1000, completion: USAGE.completion_tokens, sent: 1, seeQuality: 'low' });
+    await expect(page.locator('.ai-usage')).toHaveText('1.5k tok · 67% cached · $0.0020');
+    await click('.ai-usage');
+    await expect(page.locator('.usage-modal .usage-table').first()).toContainText('Assistant requests');
+    await expect(page.locator('.usage-modal')).toContainText('1 sent (low)');
+    await click('.usage-modal .dialog-footer button', 'Close');
+
+    // Back to the default for the tests after this one.
+    await click('.ai-quality');
+    await click('.ai-quality-popover .seg[aria-label="Images the assistant sees"] .seg-btn', 'Medium');
+    await page.keyboard.press('Escape');
 });

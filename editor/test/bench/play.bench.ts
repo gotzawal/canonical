@@ -32,9 +32,7 @@ for (let i = 0; i < COUNT; i++) {
 const store = new Store(doc);
 const picker = new Picker(null as any, sync.asSync(), store);
 const tracked = new LevelRays(picker, sync.asSync(), store, undefined, { track: true });
-const polled = new LevelRays(picker, sync.asSync(), store);
 tracked.flush();
-polled.refresh();
 
 // 20 characters' rays in a frame (walking: about 23 short rays each).
 const rays: [Vec3, Vec3, number][] = [];
@@ -56,7 +54,6 @@ describe('catch up with the level each frame', () => {
         }
         tracked.flush();
     });
-    bench('before: every object boxed again', () => polled.refresh(), { iterations: 50, time: 0 });
 });
 
 describe('rays of 20 walking characters', () => {

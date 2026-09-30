@@ -1,9 +1,8 @@
-// The editor's work on the scenes the render measurements use (a level as
-// the assistant builds it, a large outdoor scene), and what counting draw
-// calls at the WebGPU API costs (engine/gpuStats.ts wraps every draw). The
-// draw calls and GPU memory themselves are measured in the browser
-// (test/e2e/perf.spec.ts). `pnpm run editor:bench` fails when a benchmark
-// named "(budget N ms)" takes longer (its 75th percentile; see budgets.mjs).
+// The editor's work on large scenes (a level as the assistant builds it, a
+// large outdoor scene), and what counting draw calls at the WebGPU API
+// costs (engine/gpuStats.ts wraps every draw). `pnpm run editor:bench`
+// fails when a benchmark named "(budget N ms)" takes longer (its 75th
+// percentile; see budgets.mjs).
 
 import { bench, describe } from 'vitest';
 import { Store } from '../../src/core/store';
@@ -30,7 +29,6 @@ describe('count draw calls at the WebGPU API', () => {
         setBindGroup(_i: number, _g: unknown) {}
         drawIndexed(_count: number, _instances?: number) {}
     }
-    const plain = new Pass();
     const page: any = { GPURenderPassEncoder: class extends Pass {}, GPUDevice: class {} };
     const stats = installGpuStats(page);
     const counted = new page.GPURenderPassEncoder();
@@ -45,5 +43,4 @@ describe('count draw calls at the WebGPU API', () => {
         frame(counted);
         stats.endFrame();
     });
-    bench('10,000 draws, not counted', () => frame(plain));
 });

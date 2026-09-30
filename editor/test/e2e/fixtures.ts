@@ -298,56 +298,6 @@ export function pngGlb(image: Uint8Array): Uint8Array {
     return glb(gltf, bytes);
 }
 
-/** An embedded .gltf quad whose base color image `Blue` is a data URI without a mimeType, as Blender's glTF Embedded export writes it. */
-export function dataUriGltf(image: Uint8Array): string {
-    const { positions, normals, uvs, indices } = quad();
-    const parts = [bytesOf(positions), bytesOf(normals), bytesOf(uvs), bytesOf(indices)];
-    const { bytes, at } = pack(parts);
-    const gltf = {
-        asset,
-        extensionsUsed: ['KHR_materials_unlit'],
-        ...oneNode(),
-        meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }, indices: 3, material: 0 }] }],
-        materials: [flatMaterial],
-        textures: [{ source: 0 }],
-        images: [{ uri: 'data:image/png;base64,' + base64(image), name: 'Blue' }],
-        accessors: [
-            { bufferView: 0, componentType: 5126, count: 4, type: 'VEC3', min: [-1, -1, 0], max: [1, 1, 0] },
-            { bufferView: 1, componentType: 5126, count: 4, type: 'VEC3' },
-            { bufferView: 2, componentType: 5126, count: 4, type: 'VEC2' },
-            { bufferView: 3, componentType: 5123, count: 6, type: 'SCALAR' },
-        ],
-        bufferViews: parts.map((p, i) => ({ buffer: 0, byteOffset: at[i], byteLength: p.byteLength })),
-        buffers: [{ byteLength: bytes.byteLength, uri: 'data:application/octet-stream;base64,' + base64(bytes) }],
-    };
-    return JSON.stringify(gltf);
-}
-
-/** An embedded .gltf quad whose base color image `Green` is the first bufferView. */
-export function bufferViewZeroGltf(image: Uint8Array): string {
-    const { positions, normals, uvs, indices } = quad();
-    const parts = [image, bytesOf(positions), bytesOf(normals), bytesOf(uvs), bytesOf(indices)];
-    const { bytes, at } = pack(parts);
-    const gltf = {
-        asset,
-        extensionsUsed: ['KHR_materials_unlit'],
-        ...oneNode(),
-        meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1, TEXCOORD_0: 2 }, indices: 3, material: 0 }] }],
-        materials: [flatMaterial],
-        textures: [{ source: 0 }],
-        images: [{ bufferView: 0, mimeType: 'image/png', name: 'Green' }],
-        accessors: [
-            { bufferView: 1, componentType: 5126, count: 4, type: 'VEC3', min: [-1, -1, 0], max: [1, 1, 0] },
-            { bufferView: 2, componentType: 5126, count: 4, type: 'VEC3' },
-            { bufferView: 3, componentType: 5126, count: 4, type: 'VEC2' },
-            { bufferView: 4, componentType: 5123, count: 6, type: 'SCALAR' },
-        ],
-        bufferViews: parts.map((p, i) => ({ buffer: 0, byteOffset: at[i], byteLength: p.byteLength })),
-        buffers: [{ byteLength: bytes.byteLength, uri: 'data:application/octet-stream;base64,' + base64(bytes) }],
-    };
-    return JSON.stringify(gltf);
-}
-
 /** The files of a .zip (stored or deflated, no ZIP64), by path. */
 export function unzip(zip: Uint8Array): Map<string, Uint8Array> {
     const buf = Buffer.from(zip.buffer, zip.byteOffset, zip.byteLength);

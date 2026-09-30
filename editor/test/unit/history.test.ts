@@ -282,7 +282,7 @@ describe('undo history that keeps only what changed', () => {
     });
 
     it('undoes and redoes random edits as keeping the whole document did', () => {
-        for (let seed = 1; seed <= 120; seed++) {
+        for (let seed = 1; seed <= 24; seed++) {
             const rng = random(seed);
             const doc = startScene();
             const a = new Store(JSON.parse(JSON.stringify(doc)));

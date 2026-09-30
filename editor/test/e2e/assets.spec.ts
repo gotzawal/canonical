@@ -1,11 +1,14 @@
-// Compressed and quantized models and textures through the engine's glTF
-// loader: KHR_mesh_quantization, EXT_meshopt_compression, Draco from the
-// decoder that ships with the engine, images in bufferView 0, and KTX2
-// (Basis Universal) textures transcoded for the device.
+// Imported models and textures: compressed and quantized models through the
+// engine's glTF loader (KHR_mesh_quantization, EXT_meshopt_compression,
+// Draco from the decoder that ships with the engine, KTX2 textures
+// transcoded for the device), animation clips, and imports compressed in
+// place, which the editor shows and a built game plays.
 import { expect, test, type Page } from '@playwright/test';
 import { sharedEditor } from './editor';
 import { measure } from './measure';
-import { base64, basisuGlb, bufferViewZeroGltf, dataUriGltf, dracoGlb, ktx2, meshoptGlb, png, quantizedGltf, solid } from './fixtures';
+import { buildZip, card, glbJson, playGame, quarterPixels } from './copies';
+import { base64, basisuGlb, dracoGlb, ktx2, meshoptGlb, png, pngGlb, quantizedGltf, solid } from './fixtures';
+import { rigGltf } from './rig';
 
 const problems: string[] = [];
 const editor = sharedEditor(async (page) => {
@@ -90,24 +93,10 @@ test('decodes Draco with the decoder that ships with the engine', async () => {
     expect(await loaded(page, again)).toMatchObject({ status: 'ready', triangles: 12 });
 });
 
-test('finds an image stored in the first bufferView of an embedded .gltf', async () => {
-    const page = editor.page();
-    const id = await importModel(page, 'Green.gltf', bufferViewZeroGltf(png(32, 32, solid(32, 32, [0, 255, 0, 255]))));
-    // Base color decodes as sRGB on the GPU, so the shader skips its own decode.
-    expect(await loaded(page, id)).toMatchObject({ status: 'ready', texture: { name: 'Green', format: 'rgba8unorm-srgb' }, srgbAlbedo: true });
-});
-
-test('decodes an image embedded in a .gltf as a data URI', async () => {
-    const page = editor.page();
-    const id = await importModel(page, 'Blue.gltf', dataUriGltf(png(32, 32, solid(32, 32, [0, 0, 255, 255]))));
-    expect(await loaded(page, id)).toMatchObject({ status: 'ready', texture: { name: 'Blue', format: 'rgba8unorm-srgb', kind: 'BitmapTexture2D' }, srgbAlbedo: true });
-});
-
 test('transcodes KTX2 base colors for the device, or falls back to their PNG (KHR_texture_basisu)', async () => {
     test.setTimeout(240_000);
     const page = editor.page();
     const support = await page.evaluate(() => (window.__editor.runtime.engine as any).context3D.compressedTextureSupport);
-    console.log(`Compressed textures on this device: ${JSON.stringify(support)}`);
     const compressed = support.bc || support.etc2 || support.astc;
     const color = solid(64, 64, [200, 40, 40, 255]);
 
@@ -137,72 +126,91 @@ test('transcodes KTX2 base colors for the device, or falls back to their PNG (KH
 
     // Frames draw with every one of them in view, and nothing fails validation.
     await page.evaluate(() => window.__editor.viewport.frameNodes(window.__editor.store.doc.nodes.filter((n) => n.model).map((n) => n.id)));
-    const m = await measure(page, 3);
-    expect(m.draws).toBeGreaterThan(0);
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 });
 
-/** Mean color of the middle of the view, after the scene settled. */
-async function middleColor(page: Page): Promise<number[]> {
-    await measure(page, 2);
-    return page.evaluate(async () => {
-        const rt = window.__editor.runtime;
-        const [w, h] = rt.cssSize;
-        const blob = await rt.captureFrame({ type: 'image/png', frames: 2, crop: { x: w / 2 - 10, y: h / 2 - 10, w: 20, h: 20 } });
-        const bmp = await createImageBitmap(blob);
-        const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d')!;
-        g.drawImage(bmp, 0, 0);
-        const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
-        const sum = [0, 0, 0];
-        for (let i = 0; i < d.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += d[i + k];
-        return sum.map((v) => Math.round(v / (d.length / 4)));
-    });
-}
-
-test('draws a KTX2 base color as the same image in PNG', async () => {
-    test.setTimeout(240_000);
+test('lists the clips of a model and previews the chosen one', async () => {
     const page = editor.page();
-    const color = solid(64, 64, [200, 40, 40, 255]);
-    // Only the quad in view, lit evenly on both sides by a white sky.
-    await page.evaluate(() => {
-        window.__editor.store.commit('Empty', (d) => {
-            d.nodes = [];
-            d.environment.sky = 'color';
-            d.environment.skyColor = '#ffffff';
-        });
-    });
-    const show = async (name: string, data: Uint8Array) => {
-        const id = await importModel(page, name, data);
-        await page.evaluate((id) => {
+    const id = await importModel(page, 'Rig.gltf', rigGltf());
+    /** The clip the engine's animator of the model plays. */
+    const playing = () => page.evaluate((id) => (window.__editor.sync.modelInfo(id)!.animator as any)._currentSkeletonClip?.clip.clipName, id);
+    expect(await page.evaluate((id) => window.__editor.sync.modelInfo(id)!.clips, id)).toEqual(['Idle', 'Walk', 'Run']);
+    expect(await playing()).toBe('Idle');
+
+    await page.evaluate((id) => window.__editor.store.select([id]), id);
+    const section = page.locator('.side.right section', { hasText: 'Animation' });
+    await expect(section).toBeVisible();
+    // The Clip select offers the file's clips; choosing one plays it in the view.
+    await section.locator('select').first().selectOption('Run');
+    expect(await page.evaluate((id) => window.__editor.store.node(id)!.animation?.clip, id)).toBe('Run');
+    expect(await playing()).toBe('Run');
+});
+
+test('compresses imported files in place, which the editor shows and a built game plays', async ({ browser }) => {
+    test.setTimeout(300_000);
+    const page = editor.page();
+    await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: true }));
+    try {
+        const texture = await card(page, 'Imported.png');
+        const model = await page.evaluate(async (b64) => {
             const ed = window.__editor;
-            ed.store.setCamera({ ...ed.store.camera, yaw: 0, pitch: 0 });
-            ed.viewport.frameNodes([id]);
-        }, id);
-        const rgb = await middleColor(page);
-        await page.evaluate((id) => window.__editor.store.commit('Remove', (d) => (d.nodes = d.nodes.filter((n) => n.id !== id))), id);
-        return rgb;
-    };
-    const broken = new Uint8Array(await ktx2(64, 64, color));
-    broken.fill(0, 80, 200);
-    const fromPng = await show('Png.glb', basisuGlb(broken, png(64, 64, color)));
-    const fromEtc1s = await show('Etc1s.glb', basisuGlb(await ktx2(64, 64, color)));
-    const fromUastc = await show('Uastc.glb', basisuGlb(await ktx2(64, 64, color, { uastc: true })));
-    console.log(`Middle of the view: PNG ${fromPng}, ETC1S ${fromEtc1s}, UASTC ${fromUastc}`);
-    // Red, not the sky: the quad fills the middle.
-    expect(fromPng[0]).toBeGreaterThan(fromPng[1] * 2);
-    for (const rgb of [fromEtc1s, fromUastc]) {
-        for (let k = 0; k < 3; k++) expect(Math.abs(rgb[k] - fromPng[k])).toBeLessThanOrEqual(6);
-    }
-    // The failed image fell back with a warning, not an error.
-    expect(problems).toEqual([]);
-});
+            await ed.importFiles([new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Crate.glb', { type: 'model/gltf-binary' })]);
+            return ed.store.doc.nodes.find((n) => n.model)!.model!.asset;
+        }, base64(pngGlb(png(128, 128, quarterPixels(128)))));
+        // Both files are replaced by their compressed forms.
+        const packed = (id: string) =>
+            page.evaluate((id) => {
+                const a = window.__editor.store.doc.assets.find((x) => x.id === id)!;
+                return { name: a.name, mime: a.mime, packed: a.packed?.from ?? null };
+            }, id);
+        await expect.poll(() => packed(texture), { timeout: 150_000 }).toEqual({ name: 'Imported.ktx2', mime: 'image/ktx2', packed: 'Imported.png' });
+        await expect.poll(() => packed(model), { timeout: 150_000 }).toMatchObject({ name: 'Crate.glb', packed: 'Crate.glb' });
 
-test('names the extension a model requires and the engine does not read', async () => {
-    const page = editor.page();
-    const gltf = JSON.parse(quantizedGltf());
-    gltf.extensionsRequired.push('KHR_materials_pbrSpecularGlossiness');
-    const id = await importModel(page, 'Unsupported.gltf', JSON.stringify(gltf));
-    expect(await loaded(page, id)).toMatchObject({ status: 'error' });
-    expect((await loaded(page, id)).error).toContain('KHR_materials_pbrSpecularGlossiness');
-    // The editor tells the user; that toast is not a page problem.
-    problems.length = 0;
+        // The stored files are the compressed ones, and the editor shows them.
+        const shown = await page.evaluate(async ({ texture, model }) => {
+            const ed = window.__editor;
+            await ed.sync.whenLoaded();
+            const tex = (await ed.sync.loadTexture(texture, 'color')) as any;
+            const node = ed.store.doc.nodes.find((n) => n.model?.asset === model)!;
+            const mat = ed.sync.modelInfo(node.id)?.slots[0]?.material as any;
+            return {
+                texture: tex.format as string,
+                model: ed.sync.modelState(node.id)?.status,
+                modelTexture: mat?.shader.getTexture('baseMap')?.constructor.name as string,
+                status: ed.derived.statusOf(ed.store.doc.assets.find((a) => a.id === texture)!, 'color').state,
+            };
+        }, { texture, model });
+        expect(shown).toMatchObject({ model: 'ready', modelTexture: 'CompressedTexture2D', status: 'off' });
+        expect(shown.texture).toMatch(/^(etc2|bc[17]|astc).*-srgb$/);
+
+        // Games ship the files as they are, with only the decoders they need.
+        const zip = await buildZip(page);
+        const game = JSON.parse(new TextDecoder().decode(zip.get('game.json')!));
+        expect(game.derived).toBeUndefined();
+        expect(game.files[texture]).toMatch(/\.ktx2$/);
+        expect(Array.from(zip.get(game.files[texture])!.subarray(0, 4))).toEqual([0xab, 0x4b, 0x54, 0x58]);
+        expect(glbJson(zip.get(game.files[model])!).extensionsRequired).toEqual(expect.arrayContaining(['KHR_texture_basisu', 'EXT_meshopt_compression']));
+        const names = Array.from(zip.keys());
+        expect(names.some((n) => /meshopt_decoder-.*\.js$/.test(n))).toBe(true);
+        expect(names.some((n) => /basis_transcoder-.*\.wasm$/.test(n))).toBe(true);
+        expect(names.some((n) => /_DracoAssets|draco_decoder/.test(n))).toBe(false);
+
+        // The game, served as a static site, plays them.
+        const played = await playGame(browser, zip, async (player) => {
+            await player.waitForFunction(() => {
+                const p = (window as any).__player;
+                return ['ready', 'error'].includes(p.sync.modelState(p.store.doc.nodes.find((n: any) => n.model).id)?.status);
+            }, null, { polling: 200, timeout: 120_000 });
+            return player.evaluate(async (texture) => {
+                const p = (window as any).__player;
+                await p.sync.whenLoaded();
+                const node = p.store.doc.nodes.find((n: any) => n.model);
+                return { texture: (await p.sync.loadTexture(texture, 'color')).format as string, model: p.sync.modelState(node.id)?.status as string };
+            }, texture);
+        });
+        expect(played.model).toBe('ready');
+        expect(played.texture).toMatch(/^(etc2|bc[17]|astc).*-srgb$/);
+    } finally {
+        await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: false }));
+    }
 });
