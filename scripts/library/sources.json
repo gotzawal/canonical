@@ -1,5 +1,5 @@
 {
-    "$comment": "Open-source asset packs mirrored into editor/public/library by scripts/mirror-library.mjs, so the editor can offer them without depending on the upstream links. Only CC0 or public domain assets: the mirror ships them with the editor. ref pins the upstream commit; run the script with --latest to move to the newest one.",
+    "$comment": "Open-source assets mirrored into editor/library by scripts/mirror-library.mjs (the library-mirror workflow runs it when this file changes), so the editor can offer them without depending on the upstream links. Only CC0 or public domain assets: the mirror ships them with the editor. ref pins the upstream commit and ids the Poly Haven assets a rule picked (the most downloaded of its categories); run the script with --latest to move to the newest ones.",
     "sources": [
         {
             "id": "kenney-city",
@@ -70,6 +70,35 @@
                 { "glob": "models/*.glb", "kind": "model", "tags": ["racing"] },
                 { "glob": "audio/*.ogg", "kind": "audio", "tags": ["racing", "effect"] },
                 { "glob": "sprites/smoke.png", "kind": "texture", "tags": ["particle"] }
+            ]
+        },
+        {
+            "id": "polyhaven",
+            "type": "polyhaven",
+            "name": "Poly Haven",
+            "author": "Poly Haven and its artists",
+            "license": "CC0-1.0",
+            "licenseNote": "Mirrored through Poly Haven's public API; each asset credits its authors.",
+            "url": "https://polyhaven.com",
+            "api": "https://api.polyhaven.com",
+            "resolution": "1k",
+            "items": [
+                { "kind": "hdri", "categories": ["outdoor", "sunrise-sunset"], "count": 2, "tags": ["sky", "outdoor", "sunset"] },
+                { "kind": "hdri", "categories": ["outdoor", "midday"], "count": 2, "tags": ["sky", "outdoor", "day"] },
+                { "kind": "hdri", "categories": ["night"], "count": 1, "tags": ["sky", "night"] },
+                { "kind": "hdri", "categories": ["indoor"], "count": 1, "tags": ["indoor"] },
+                { "kind": "material", "categories": ["terrain"], "count": 5, "tags": ["ground", "terrain", "natural"] },
+                { "kind": "material", "categories": ["rock"], "count": 1, "tags": ["rock", "natural"] },
+                { "kind": "material", "categories": ["brick"], "count": 2, "tags": ["wall", "brick"] },
+                { "kind": "material", "categories": ["wood"], "count": 2, "tags": ["wood"] },
+                { "kind": "material", "categories": ["concrete"], "count": 2, "tags": ["concrete", "wall", "floor"] },
+                { "kind": "material", "categories": ["plaster"], "count": 1, "tags": ["wall", "plaster"] },
+                { "kind": "material", "categories": ["road"], "count": 1, "tags": ["road", "street"] },
+                { "kind": "material", "categories": ["metal"], "count": 1, "tags": ["metal"] },
+                { "kind": "material", "categories": ["roofing"], "count": 1, "tags": ["roof"] },
+                { "kind": "model", "categories": ["nature"], "count": 4, "maxTris": 60000, "tags": ["nature"] },
+                { "kind": "model", "categories": ["furniture"], "count": 3, "maxTris": 60000, "tags": ["furniture", "interior"] },
+                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"] }
             ]
         }
     ]

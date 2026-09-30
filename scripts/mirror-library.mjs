@@ -12,6 +12,10 @@
 // Models are packed into self-contained GLBs (their external textures and
 // buffers embedded) with a thumbnail each, and their extent, triangles and
 // animation clips in the catalog; sounds and images are copied as they are.
+// Sources of type "polyhaven" come from Poly Haven's API instead of a git
+// repository (library/polyhaven.mjs): realistic HDRIs, PBR materials and
+// models, pinned by their ids. The GitHub workflow library-mirror.yml runs
+// this script when the list changes and commits what it mirrored.
 // Writes library/catalog.json, which the editor reads, and
 // library/LICENSES.md.
 
@@ -22,6 +26,8 @@ import { basename, dirname, extname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { NodeIO, getBounds } from '@gltf-transform/core';
 import { ALL_EXTENSIONS } from '@gltf-transform/extensions';
+import { MeshoptDecoder, MeshoptEncoder } from 'meshoptimizer';
+import { mirrorPolyHaven } from './library/polyhaven.mjs';
 import { renderThumbnail } from './library/thumbnail.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
@@ -34,7 +40,9 @@ const latest = args.includes('--latest');
 const only = args.filter((a) => !a.startsWith('--'));
 
 const config = JSON.parse(readFileSync(SOURCES, 'utf8'));
-const io = new NodeIO().registerExtensions(ALL_EXTENSIONS);
+await MeshoptDecoder.ready;
+await MeshoptEncoder.ready;
+const io = new NodeIO().registerExtensions(ALL_EXTENSIONS).registerDependencies({ 'meshopt.decoder': MeshoptDecoder, 'meshopt.encoder': MeshoptEncoder });
 
 const git = (cwd, ...a) => execFileSync('git', a, { cwd, stdio: ['ignore', 'pipe', 'inherit'] }).toString().trim();
 
@@ -65,16 +73,9 @@ const slug = (file) =>
         .replace(/[^a-z0-9]+/g, '-')
         .replace(/^-|-$/g, '');
 
-async function packModel(file, out, thumb) {
-    const doc = await io.read(file);
+/** A model's triangles, size in meters (x, y, z) as authored, and animation clips. */
+function modelInfo(doc) {
     const scene = doc.getRoot().getDefaultScene() ?? doc.getRoot().listScenes()[0];
-    const glb = await io.writeBinary(doc);
-    writeFileSync(out, glb);
-    const png = renderThumbnail(doc);
-    if (png) {
-        mkdirSync(dirname(join(OUT, thumb)), { recursive: true });
-        writeFileSync(join(OUT, thumb), png);
-    }
     let tris = 0;
     const count = (node) => {
         for (const prim of node.getMesh()?.listPrimitives() ?? []) {
@@ -87,7 +88,20 @@ async function packModel(file, out, thumb) {
     const { min, max } = scene ? getBounds(scene) : { min: [0, 0, 0], max: [0, 0, 0] };
     const extent = max.map((v, i) => Math.round((v - min[i]) * 1000) / 1000);
     const animations = doc.getRoot().listAnimations().map((a) => a.getName()).filter(Boolean);
-    return { tris: Math.round(tris), extent, ...(png ? { thumb } : {}), ...(animations.length ? { animations } : {}) };
+    return { tris: Math.round(tris), extent, animations };
+}
+
+async function packModel(file, out, thumb) {
+    const doc = await io.read(file);
+    const glb = await io.writeBinary(doc);
+    writeFileSync(out, glb);
+    const png = renderThumbnail(doc);
+    if (png) {
+        mkdirSync(dirname(join(OUT, thumb)), { recursive: true });
+        writeFileSync(join(OUT, thumb), png);
+    }
+    const { tris, extent, animations } = modelInfo(doc);
+    return { tris, extent, ...(png ? { thumb } : {}), ...(animations.length ? { animations } : {}) };
 }
 
 /** Seconds of an Ogg Vorbis or Opus file: the last page's granule position over the rate. */
@@ -125,6 +139,15 @@ for (const [index, src] of config.sources.entries()) {
             sources.push(kept);
             items.push(...previous.items.filter((i) => i.source === src.id));
         }
+        continue;
+    }
+    if (src.type === 'polyhaven') {
+        console.log(`${src.id}: ${src.api ?? 'https://api.polyhaven.com'}`);
+        const got = await mirrorPolyHaven({ src, out: OUT, latest, io, modelInfo });
+        items.push(...got);
+        const { items: _rules, api: _api, type: _type, resolution: _res, ...meta } = src;
+        sources.push({ ...meta, assets: got.map((i) => ({ id: i.id, author: i.author, origin: i.origin })) });
+        console.log(`  ${got.length} assets, ${(got.reduce((s, i) => s + i.bytes, 0) / 1024 / 1024).toFixed(1)} MiB`);
         continue;
     }
     console.log(`${src.id}: ${src.git}`);
@@ -191,14 +214,17 @@ const credits = [
     'The credits are kept all the same.',
     '',
     ...sources.flatMap((s) => [
-        `- **${s.name}** by ${s.author}, ${s.license}${s.licenseNote ? ` (${s.licenseNote})` : ''}: ${s.url} at \`${s.commit}\``,
+        s.commit
+            ? `- **${s.name}** by ${s.author}, ${s.license}${s.licenseNote ? ` (${s.licenseNote})` : ''}: ${s.url} at \`${s.commit}\``
+            : `- **${s.name}** by ${s.author}, ${s.license}${s.licenseNote ? ` (${s.licenseNote})` : ''}: ${s.url}`,
+        ...(s.assets ?? []).map((a) => `  - ${a.id} by ${a.author}: ${a.origin}`),
     ]),
     '',
 ];
 writeFileSync(join(OUT, 'LICENSES.md'), credits.join('\n'));
 
 // One line per rule, as the file is written by hand.
-const text = JSON.stringify(config, null, 4).replace(/\{\n\s+"glob"[^{}]*?\n\s+\}/g, (rule) =>
+const text = JSON.stringify(config, null, 4).replace(/\{\n\s+"(glob|kind)"[^{}]*?\n\s+\}/g, (rule) =>
     rule.replace(/\s*\n\s*/g, ' ').replace(/\[ /g, '[').replace(/ \]/g, ']'),
 );
 writeFileSync(SOURCES, text + '\n');
