@@ -1,9 +1,10 @@
 import { Document, WebIO } from '@gltf-transform/core';
-import { EXTMeshoptCompression, EXTTextureWebP, KHRTextureBasisu } from '@gltf-transform/extensions';
+import { EXTMeshoptCompression, EXTTextureWebP, KHRMeshQuantization, KHRTextureBasisu } from '@gltf-transform/extensions';
 import { MeshoptDecoder } from 'meshoptimizer/decoder';
 import { describe, expect, it } from 'vitest';
 import type { TextureRole } from '../../src/core/types';
 import { packModel } from '../../src/derive/model';
+import { sameColor } from '../../src/derive/encode';
 
 const KTX2 = new Uint8Array([0xab, 0x4b, 0x54, 0x58, 0x20, 0x32, 0x30, 0xbb, 0x0d, 0x0a, 0x1a, 0x0a]);
 const POSITIONS = new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0.123456789, 0.5, -0.25]);
@@ -60,7 +61,7 @@ function glbJson(data: ArrayBuffer): any {
 
 async function reread(data: ArrayBuffer): Promise<Document> {
     await MeshoptDecoder.ready;
-    const io = new WebIO().registerExtensions([EXTMeshoptCompression, KHRTextureBasisu, EXTTextureWebP]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
+    const io = new WebIO().registerExtensions([EXTMeshoptCompression, KHRTextureBasisu, EXTTextureWebP, KHRMeshQuantization]).registerDependencies({ 'meshopt.decoder': MeshoptDecoder });
     return io.readBinary(new Uint8Array(data));
 }
 
@@ -132,5 +133,49 @@ describe('model copies', () => {
         const { encode } = fakeEncoder();
         await expect(packModel(glbOf({ asset: { version: '2.0' }, extensionsUsed: ['KHR_draco_mesh_compression'] }), encode)).rejects.toThrow('Draco');
         await expect(packModel(glbOf({ asset: { version: '2.0' }, extensionsUsed: ['VENDOR_magic'] }), encode)).rejects.toThrow('VENDOR_magic');
+    });
+
+    it('turn textures of one color into material factors, and keep a slot without a factor textured', async () => {
+        const glb = new Blob([await new WebIO().registerExtensions([EXTTextureWebP]).writeBinary(sampleDoc())]);
+        const { encode } = fakeEncoder();
+        // The base color is flat red, the normal map flat (straight up), the ORM map flat too: roughness 0.5, metal 1, occlusion 0.5.
+        const flat = async (blob: Blob) => {
+            const n = new Uint8Array(await blob.arrayBuffer()).at(-1);
+            return n === 1 ? [255, 0, 0, 255] : n === 2 ? [128, 128, 255, 255] : n === 3 ? [128, 128, 255, 255] : null;
+        };
+        const out = await packModel(glb, encode, flat as any, { quantize: false, flat: true });
+        // The ORM map stays: occlusion of 0.5 has no factor to go to (roughness and metalness still moved to theirs).
+        expect(out).toMatchObject({ flattened: 2, textures: 1 });
+        const m = (await reread(out.data)).getRoot().listMaterials()[0];
+        expect(m.getBaseColorTexture()).toBeNull();
+        expect(m.getBaseColorFactor()).toEqual([1, 0, 0, 1]);
+        expect(m.getNormalTexture()).toBeNull();
+        expect(m.getMetallicRoughnessTexture()).toBeNull();
+        expect(m.getRoughnessFactor()).toBeCloseTo(0.5, 2);
+        expect(m.getMetallicFactor()).toBeCloseTo(1, 2);
+        expect(m.getOcclusionTexture()?.getMimeType()).toBe('image/ktx2');
+        expect(sameColor(new Uint8Array([1, 2, 3, 4, 2, 3, 4, 5]))).toEqual([1, 2, 3, 4]);
+        expect(sameColor(new Uint8Array([1, 2, 3, 4, 9, 2, 3, 4]))).toBeNull();
+    });
+
+    it('quantize normals with meshopt filters, keeping positions and node transforms exact', async () => {
+        const doc = sampleDoc();
+        const prim = doc.getRoot().listMeshes()[0].listPrimitives()[0];
+        const normals = new Float32Array([0, 0, 1, 0, 0.6, 0.8, 1, 0, 0, 0.577, 0.577, 0.577]);
+        prim.setAttribute('NORMAL', doc.createAccessor('normal').setType('VEC3').setArray(normals).setBuffer(doc.getRoot().listBuffers()[0]));
+        const glb = new Blob([await new WebIO().registerExtensions([EXTTextureWebP]).writeBinary(doc)]);
+        const plain = await packModel(glb, fakeEncoder().encode);
+        const out = await packModel(glb, fakeEncoder().encode, null, { quantize: true, flat: false });
+        expect(glbJson(out.data).extensionsRequired).toEqual(expect.arrayContaining(['KHR_mesh_quantization', 'EXT_meshopt_compression']));
+        expect(out.data.byteLength).toBeLessThan(plain.data.byteLength);
+        const root = (await reread(out.data)).getRoot();
+        const p = root.listMeshes()[0].listPrimitives()[0];
+        expect(Array.from(p.getAttribute('POSITION')!.getArray()!)).toEqual(Array.from(POSITIONS));
+        const n = p.getAttribute('NORMAL')!;
+        for (let i = 0; i < 4; i++) {
+            const v = n.getElement(i, []);
+            for (let k = 0; k < 3; k++) expect(Math.abs(v[k] - normals[i * 3 + k])).toBeLessThan(0.03);
+        }
+        expect(root.listNodes()[0].getTranslation()).toEqual([1, 2, 3]);
     });
 });

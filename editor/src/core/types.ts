@@ -134,6 +134,10 @@ export type TextureRole = 'color' | 'normal' | 'data';
 export interface TextureCompression {
     mode?: 'auto' | 'high' | 'off';
     maxSize?: number;
+    /** Models: store normals, tangents and animations with meshopt's lossy filters (on unless false). */
+    quantize?: boolean;
+    /** Models: textures of one flat color become the material's factors (on unless false). */
+    flat?: boolean;
 }
 
 /** A JavaScript behaviour that runs in Play mode (see play/script.ts). */

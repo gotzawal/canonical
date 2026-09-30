@@ -8,7 +8,7 @@
 import BASIS from 'basis-encoder';
 import type { DerivedOptions } from '../core/derived';
 import type { TextureRole } from '../core/types';
-import { encodedSize, encoderSettings, modelTextureOptions } from './encode';
+import { encodedSize, encoderSettings, modelTextureOptions, sameColor } from './encode';
 
 export type DeriveIn =
     | { type: 'init'; wasmUrl: string }
@@ -16,7 +16,7 @@ export type DeriveIn =
     | { type: 'model'; id: number; blob: Blob; opts: DerivedOptions };
 
 export type DeriveOut =
-    | { type: 'done'; id: number; data: ArrayBuffer; width: number; height: number; levels: number; alpha: boolean; textures?: number }
+    | { type: 'done'; id: number; data: ArrayBuffer; width: number; height: number; levels: number; alpha: boolean; textures?: number; flattened?: number }
     | { type: 'failed'; id: number; message: string };
 
 declare const self: DedicatedWorkerGlobalScope;
@@ -51,8 +51,21 @@ function encoder(): Promise<any> {
 
 async function packModel(blob: Blob, opts: DerivedOptions) {
     const { packModel } = await import('./model');
-    const out = await packModel(blob, async (image, role) => new Uint8Array((await encodeImage(image, role, modelTextureOptions(role, opts))).data));
-    return { data: out.data, width: 0, height: 0, levels: 0, alpha: false, textures: out.textures };
+    const out = await packModel(
+        blob,
+        async (image, role) => new Uint8Array((await encodeImage(image, role, modelTextureOptions(role, opts))).data),
+        flatColor,
+        { quantize: !!opts.quantize, flat: !!opts.flat },
+    );
+    return { data: out.data, width: 0, height: 0, levels: 0, alpha: false, textures: out.textures, flattened: out.flattened };
+}
+
+/** The color of an image whose pixels are all the same (within 2 of 255 a channel), else null. */
+async function flatColor(blob: Blob): Promise<[number, number, number, number] | null> {
+    const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none' });
+    const pixels = readPixels(bitmap);
+    bitmap.close();
+    return sameColor(pixels);
 }
 
 async function encodeImage(blob: Blob, role: TextureRole, opts: DerivedOptions) {

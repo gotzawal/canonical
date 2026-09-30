@@ -30,6 +30,10 @@ export interface DerivedOptions {
     codec: 'etc1s' | 'uastc';
     /** Longest side of a texture (of each texture in a model). */
     maxSize: number;
+    /** Models: meshopt's lossy filters for normals, tangents and animations. */
+    quantize?: boolean;
+    /** Models: flat-color textures become material factors. */
+    flat?: boolean;
 }
 
 export interface DerivedRecord {
@@ -49,8 +53,9 @@ export interface DerivedRecord {
     height: number;
     levels: number;
     alpha: boolean;
-    /** Models: how many of their textures were encoded to KTX2. */
+    /** Models: how many of their textures were encoded to KTX2, and how many of one color became factors. */
     textures?: number;
+    flattened?: number;
     /** When it was made and last used (ms since epoch), for evicting old copies. */
     made: number;
     used: number;
@@ -66,7 +71,9 @@ export function derivedOptions(role: DerivedRole, c?: TextureCompression | null)
     if (mode === 'off') return null;
     const maxSize = c?.maxSize && c.maxSize > 0 ? Math.round(c.maxSize) : DEFAULT_MAX_SIZE;
     const colors = role === 'color' || role === 'model';
-    return { codec: mode === 'high' || !colors ? 'uastc' : 'etc1s', maxSize };
+    const codec = mode === 'high' || !colors ? 'uastc' : 'etc1s';
+    if (role === 'model') return { codec, maxSize, quantize: c?.quantize !== false, flat: c?.flat !== false };
+    return { codec, maxSize };
 }
 
 /** A texture that is a KTX2 file already, or a file compressed in the editor: games get it as it is, whatever its options. */
@@ -80,8 +87,8 @@ export function shipsAsIs(meta: Pick<AssetMeta, 'kind' | 'name' | 'mime' | 'pack
  * texture's copy always is (a quarter or less of the GPU memory); a model's
  * when it holds KTX2 textures, or else when it is smaller.
  */
-export function shipsCopy(rec: Pick<DerivedRecord, 'role' | 'bytes' | 'textures'>, meta: Pick<AssetMeta, 'size'>): boolean {
-    return rec.role !== 'model' || (rec.textures ?? 0) > 0 || rec.bytes < meta.size;
+export function shipsCopy(rec: Pick<DerivedRecord, 'role' | 'bytes' | 'textures' | 'flattened'>, meta: Pick<AssetMeta, 'size'>): boolean {
+    return rec.role !== 'model' || (rec.textures ?? 0) > 0 || (rec.flattened ?? 0) > 0 || rec.bytes < meta.size;
 }
 
 /**
@@ -93,7 +100,7 @@ export function shipsCopy(rec: Pick<DerivedRecord, 'role' | 'bytes' | 'textures'
 export function isFresh(rec: DerivedRecord | null | undefined, meta: Pick<AssetMeta, 'size' | 'hash'>, opts: DerivedOptions): rec is DerivedRecord {
     if (!rec || rec.encoder !== ENCODER_VERSION || rec.src.size !== meta.size) return false;
     if ((rec.src.hash ?? '') !== (meta.hash ?? '')) return false;
-    return rec.opts.codec === opts.codec && rec.opts.maxSize === opts.maxSize;
+    return rec.opts.codec === opts.codec && rec.opts.maxSize === opts.maxSize && !!rec.opts.quantize === !!opts.quantize && !!rec.opts.flat === !!opts.flat;
 }
 
 // ------------------------------------------------------------------ storage

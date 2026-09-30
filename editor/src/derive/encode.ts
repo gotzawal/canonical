@@ -105,3 +105,13 @@ export function textureMemory(width: number, height: number, blockBytes = 0): nu
 export function copyBlockBytes(codec: 'etc1s' | 'uastc', alpha: boolean): number {
     return codec === 'etc1s' && !alpha ? 8 : 16;
 }
+
+/** The color every RGBA pixel has, within `tolerance` a channel (the first pixel's), or null when they differ. */
+export function sameColor(pixels: Uint8Array, tolerance = 2): [number, number, number, number] | null {
+    if (pixels.length < 4) return null;
+    const first = [pixels[0], pixels[1], pixels[2], pixels[3]] as [number, number, number, number];
+    for (let i = 4; i < pixels.length; i += 4) {
+        for (let k = 0; k < 4; k++) if (Math.abs(pixels[i + k] - first[k]) > tolerance) return null;
+    }
+    return first;
+}

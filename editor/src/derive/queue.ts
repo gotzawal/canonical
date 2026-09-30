@@ -22,8 +22,9 @@ export interface Encoded {
     height: number;
     levels: number;
     alpha: boolean;
-    /** Models: textures encoded to KTX2. */
+    /** Models: textures encoded to KTX2, and textures of one color that became factors. */
     textures?: number;
+    flattened?: number;
 }
 
 /** The part of a Worker the queue uses (tests give a fake one). */
@@ -205,8 +206,8 @@ export class DeriveQueue extends Emitter<{ change: void }> {
         if (!job || job.id !== msg.id) return;
         slot.job = null;
         if (msg.type === 'done') {
-            const { data, width, height, levels, alpha, textures } = msg;
-            this.finish(job, { data, width, height, levels, alpha, ...(textures === undefined ? {} : { textures }) }, null);
+            const { data, width, height, levels, alpha, textures, flattened } = msg;
+            this.finish(job, { data, width, height, levels, alpha, ...(textures === undefined ? {} : { textures }), ...(flattened === undefined ? {} : { flattened }) }, null);
         }
         else this.finish(job, null, new Error(msg.message));
         this.pump();

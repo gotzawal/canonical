@@ -1437,6 +1437,9 @@ export class Editor extends Emitter<EditorEvents> {
         const next: TextureCompression = { ...meta.compress, ...patch };
         if (next.mode === 'auto' || !next.mode) delete next.mode;
         if (!next.maxSize) delete next.maxSize;
+        // On unless turned off.
+        if (next.quantize !== false) delete next.quantize;
+        if (next.flat !== false) delete next.flat;
         if (JSON.stringify(next) === JSON.stringify(meta.compress ?? {})) return;
         // The copies are not part of the document, so only the assets change.
         this.store.commit('Texture Compression', (doc) => {

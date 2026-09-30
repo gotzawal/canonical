@@ -11,7 +11,7 @@ import { copyBlockBytes, encodedSize, textureMemory } from '../derive/encode';
 import type { Editor } from '../editor';
 import { h } from './dom';
 import { popover } from './overlays';
-import { button, row, SelectField } from './widgets';
+import { button, CheckboxField, row, SelectField } from './widgets';
 
 const ROLE_TEXT: Record<DerivedRole, string> = { color: 'as a color map', normal: 'as a normal map', data: 'as a data map', model: 'for games' };
 
@@ -69,7 +69,8 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
             const c = status.copy;
             if (model) {
                 const textures = c.textures ?? 0;
-                lines.push(`Ready: ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}), with ${textures} texture${textures === 1 ? '' : 's'} in KTX2 and packed geometry.`);
+                const flat = c.flattened ?? 0;
+                lines.push(`Ready: ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}), with ${textures} texture${textures === 1 ? '' : 's'} in KTX2${flat ? `, ${flat} flat-color texture${flat === 1 ? '' : 's'} as values` : ''} and packed geometry.`);
                 if (!shipsCopy({ role, bytes: c.bytes, textures }, meta)) lines.push('It saves nothing here, so games get the file.');
             } else {
                 lines.push(`Ready: ${c.opts.codec.toUpperCase()} ${c.width} x ${c.height}, ${formatBytes(c.bytes)} to download (the file is ${formatBytes(meta.size)}).`);
@@ -106,6 +107,17 @@ export function openTextureOptions(editor: Editor, anchor: HTMLElement, assetId:
                         ? 'How its textures are encoded: ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'
                         : 'ETC1S is the smallest and suits colors; UASTC keeps normal and data maps (and sharp colors) close to the file.'),
                     row(model ? 'Texture Size' : 'Max Size', sizeField.el, model ? 'The longest side of each of its textures, in pixels' : 'The longer side of the copy, in pixels'),
+                    ...(model
+                        ? [
+                            row('Quantize', new CheckboxField(meta.compress?.quantize !== false, (v) => editor.setTextureCompression(assetId, { quantize: v }), 'Normals and animation').el,
+                                'Stores normals, tangents and animation keys with fewer bits (smaller, nearly identical); positions and UVs stay exact'),
+                            row('Flat Colors', new CheckboxField(meta.compress?.flat !== false, (v) => editor.setTextureCompression(assetId, { flat: v }), 'As values').el,
+                                'Textures of one color become the material\'s color, roughness or metalness values'),
+                        ]
+                        : [
+                            row('Flat Color', new CheckboxField(meta.compress?.flat !== false, (v) => editor.setTextureCompression(assetId, { flat: v }), 'As values').el,
+                                'When the file is compressed and is one color, materials get that color (or roughness, metalness) as values instead'),
+                        ]),
                 ]),
             h('div', { class: 'texture-options-status muted small' }, ...lines.map((text) => h('div', { text }))),
             h('div', { class: 'inline' }, ...(action ? [action] : []), ...(replace ? [replace] : [])),

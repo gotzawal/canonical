@@ -12,12 +12,13 @@ import {
     deleteDerivedOf, derivedKey, derivedOptions, ENCODER_VERSION, getDerived, isFresh, putDerived, shipsAsIs, shipsCopy, type DerivedOptions, type DerivedRecord, type DerivedRole,
 } from '../core/derived';
 import { assetRoles } from '../core/refs';
+import { flattenTexture, usesAsMap } from '../core/flatten';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
 import type { AssetMeta, TextureRole } from '../core/types';
 import { gltfExtensions } from '../build/modelInfo';
 import type { TextureSource } from '../engine/sync';
-import { roleFromName } from './encode';
+import { roleFromName, sameColor } from './encode';
 import { DeriveQueue, PRIORITY, type WorkerLike } from './queue';
 
 export type DerivedState = 'off' | 'none' | 'queued' | 'encoding' | 'ready' | 'failed';
@@ -26,7 +27,7 @@ export type DerivedState = 'off' | 'none' | 'queued' | 'encoding' | 'ready' | 'f
 export interface DerivedStatus {
     state: DerivedState;
     /** The copy, when ready. */
-    copy?: Pick<DerivedRecord, 'bytes' | 'width' | 'height' | 'levels' | 'alpha' | 'opts' | 'textures'>;
+    copy?: Pick<DerivedRecord, 'bytes' | 'width' | 'height' | 'levels' | 'alpha' | 'opts' | 'textures' | 'flattened'>;
     error?: string;
 }
 
@@ -37,12 +38,24 @@ async function isKTX2File(blob: Blob): Promise<boolean> {
     return KTX2_MAGIC.every((b, i) => head[i] === b);
 }
 
+/** The color every pixel of an image has (within 2 of 255 a channel), else null. */
+async function flatColorOf(blob: Blob): Promise<[number, number, number, number] | null> {
+    const bitmap = await createImageBitmap(blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+    try {
+        const g = new OffscreenCanvas(bitmap.width, bitmap.height).getContext('2d', { willReadFrequently: true })!;
+        g.drawImage(bitmap, 0, 0);
+        return sameColor(new Uint8Array(g.getImageData(0, 0, bitmap.width, bitmap.height).data.buffer));
+    } finally {
+        bitmap.close();
+    }
+}
+
 /** Draco models are small already; packing them would mean decoding them. */
 async function isDracoModel(blob: Blob): Promise<boolean> {
     return !!(await gltfExtensions(blob))?.includes('KHR_draco_mesh_compression');
 }
 
-const copyOf = (r: DerivedRecord): DerivedStatus['copy'] => ({ bytes: r.bytes, width: r.width, height: r.height, levels: r.levels, alpha: r.alpha, opts: r.opts, textures: r.textures });
+const copyOf = (r: DerivedRecord): DerivedStatus['copy'] => ({ bytes: r.bytes, width: r.width, height: r.height, levels: r.levels, alpha: r.alpha, opts: r.opts, textures: r.textures, flattened: r.flattened });
 
 /** The asset kind a copy for a role is made from. */
 const kindFor = (role: DerivedRole) => (role === 'model' ? 'model' : 'texture');
@@ -53,7 +66,7 @@ const kindFor = (role: DerivedRole) => (role === 'model' ? 'model' : 'texture');
  * wanted).
  */
 function jobKey(key: string, src: DerivedRecord['src'], opts: DerivedOptions): string {
-    return `${key}|${opts.codec}|${opts.maxSize}|${src.size}|${src.hash ?? ''}`;
+    return `${key}|${opts.codec}|${opts.maxSize}|${opts.quantize ? 'q' : ''}${opts.flat ? 'f' : ''}|${src.size}|${src.hash ?? ''}`;
 }
 
 export class DerivedAssets extends Emitter<{ status: string }> implements TextureSource {
@@ -116,11 +129,18 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
         this.packing.add(assetId);
         this.emit('status', assetId);
         try {
+            // A texture of one color becomes values in the materials using it (the file is still compressed, and tiny).
+            if (role !== 'model' && meta.compress?.flat !== false && usesAsMap(this.store.doc, assetId)) {
+                const color = await flatColorOf(blob).catch(() => null);
+                if (color && usesAsMap(this.store.doc, assetId)) {
+                    this.store.commit('Flat Texture to Values', (doc) => void flattenTexture(doc, assetId, color));
+                }
+            }
             const out = await this.queue.run(jobKey(derivedKey(meta.id, role), src, opts), { blob, role, opts }, PRIORITY.view, this.stopOf(meta.id));
             // Gone, replaced or compressed already while this ran.
             const latest = this.store.doc.assets.find((a) => a.id === assetId);
             if (!latest || latest.size !== src.size || (latest.hash ?? '') !== (src.hash ?? '') || shipsAsIs(latest)) return null;
-            if (role === 'model' && !shipsCopy({ role, bytes: out.data.byteLength, textures: out.textures }, latest)) return null;
+            if (role === 'model' && !shipsCopy({ role, bytes: out.data.byteLength, textures: out.textures, flattened: out.flattened }, latest)) return null;
             const stem = latest.name.replace(/\.[a-z0-9]+$/i, '');
             const name = stem + (role === 'model' ? '.glb' : '.ktx2');
             const stored = await putAsset(new Blob([out.data], { type: role === 'model' ? 'model/gltf-binary' : 'image/ktx2' }), name, meta.kind, meta.id);
@@ -257,6 +277,7 @@ export class DerivedAssets extends Emitter<{ status: string }> implements Textur
                 levels: out.levels,
                 alpha: out.alpha,
                 ...(out.textures === undefined ? {} : { textures: out.textures }),
+                ...(out.flattened === undefined ? {} : { flattened: out.flattened }),
                 made: now,
                 used: now,
             };

@@ -46,8 +46,9 @@ describe('compressed copies', () => {
         expect(derivedOptions('color', { maxSize: 512 })?.maxSize).toBe(512);
         expect(derivedOptions('normal', { mode: 'off' })).toBeNull();
         // A model's codec is that of its color textures.
-        expect(derivedOptions('model')).toEqual({ codec: 'etc1s', maxSize: DEFAULT_MAX_SIZE });
-        expect(derivedOptions('model', { mode: 'high', maxSize: 1024 })).toEqual({ codec: 'uastc', maxSize: 1024 });
+        expect(derivedOptions('model')).toEqual({ codec: 'etc1s', maxSize: DEFAULT_MAX_SIZE, quantize: true, flat: true });
+        expect(derivedOptions('model', { quantize: false, flat: false })).toMatchObject({ quantize: false, flat: false });
+        expect(derivedOptions('model', { mode: 'high', maxSize: 1024 })).toMatchObject({ codec: 'uastc', maxSize: 1024 });
         expect(derivedOptions('model', { mode: 'off' })).toBeNull();
     });
 

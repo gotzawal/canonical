@@ -6,7 +6,7 @@ import { readFileSync } from 'node:fs';
 import { expect, test, type Browser, type Page } from '@playwright/test';
 import { sharedEditor } from './editor';
 import { measure } from './measure';
-import { base64, png, pngGlb, unzip } from './fixtures';
+import { base64, png, pngGlb, solid, unzip } from './fixtures';
 
 const editor = sharedEditor();
 
@@ -335,7 +335,8 @@ test('packs models for games: their textures in KTX2 and their geometry with mes
     // The copy ships in place of the file.
     expect(game.files[asset]).toBeUndefined();
     const json = glbJson(zip.get(path)!);
-    expect(json.extensionsRequired).toEqual(expect.arrayContaining(['KHR_texture_basisu', 'EXT_meshopt_compression']));
+    // Normals quantized by default (meshopt's octahedral filter).
+    expect(json.extensionsRequired).toEqual(expect.arrayContaining(['KHR_texture_basisu', 'EXT_meshopt_compression', 'KHR_mesh_quantization']));
     expect(json.images.map((i: any) => i.mimeType)).toEqual(['image/ktx2']);
     expect(json.nodes.map((n: any) => n.name)).toEqual(['Part']);
     const names = Array.from(zip.keys());
@@ -451,6 +452,53 @@ test('compresses imported files and keeps only the compressed ones, which the ed
         const names = Array.from(zip.keys());
         expect(names.some((n) => /meshopt_decoder-.*\.js$/.test(n))).toBe(true);
         expect(names.some((n) => /basis_transcoder-.*\.wasm$/.test(n))).toBe(true);
+    } finally {
+        await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: false }));
+    }
+});
+
+test('turns textures of one color into values, in materials and in models', async () => {
+    test.setTimeout(300_000);
+    const page = editor.page();
+    await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: true }));
+    try {
+        // A flat orange texture on the card, and a model whose base color is flat orange.
+        const orange: [number, number, number, number] = [224, 128, 32, 255];
+        const texture = await page.evaluate(async (b64) => {
+            const ed = window.__editor;
+            ed.store.commit('Card', (d) => {
+                d.nodes = d.nodes.filter((n) => n.name === 'Ground');
+                d.nodes[0].mesh!.material.color = '#ffffff';
+            });
+            ed.store.select([ed.store.doc.nodes[0].id]);
+            await ed.importFiles([new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Orange.png', { type: 'image/png' })]);
+            return ed.store.doc.assets.find((a) => a.name === 'Orange.png')!.id;
+        }, base64(png(16, 16, solid(16, 16, orange))));
+        await expect.poll(() => page.evaluate(() => window.__editor.store.doc.nodes[0].mesh!.material.map), { timeout: 120_000 }).toBeNull();
+        expect(await page.evaluate(() => window.__editor.store.doc.nodes[0].mesh!.material.color)).toBe('#e08020');
+        await expect.poll(() => page.evaluate((id) => window.__editor.store.doc.assets.find((a) => a.id === id)?.packed?.from, texture), { timeout: 120_000 }).toBe('Orange.png');
+
+        const model = await page.evaluate(async (b64) => {
+            const ed = window.__editor;
+            await ed.importFiles([new File([Uint8Array.from(atob(b64), (c) => c.charCodeAt(0))], 'Orange.glb', { type: 'model/gltf-binary' })]);
+            return ed.store.doc.nodes.find((n) => n.model)!.id;
+        }, base64(pngGlb(png(16, 16, solid(16, 16, orange)))));
+        const asset = await page.evaluate((id) => window.__editor.store.node(id)!.model!.asset, model);
+        await expect.poll(() => page.evaluate((id) => !!window.__editor.store.doc.assets.find((a) => a.id === id)?.packed, asset), { timeout: 150_000 }).toBe(true);
+        await page.waitForFunction((id) => window.__editor.sync.modelState(id)?.status === 'ready', model, { polling: 100, timeout: 120_000 });
+        // The packed model has no texture: its base color factor holds the orange (in linear).
+        const shown = await page.evaluate(async (id) => {
+            const ed = window.__editor;
+            await ed.sync.whenLoaded();
+            const mat = ed.sync.modelInfo(id)?.slots[0]?.material as any;
+            const tex = mat?.shader.getTexture('baseMap');
+            const c = mat?.baseColor;
+            return { texture: tex?.name ?? null, color: c ? [c.r, c.g, c.b].map((v: number) => Math.round(v * 1000) / 1000) : null };
+        }, model);
+        console.log(`Flat model: ${JSON.stringify(shown)}`);
+        expect(shown.texture).not.toBe('PngColor');
+        const lin = (v: number) => Math.pow((v / 255 + 0.055) / 1.055, 2.4);
+        shown.color!.forEach((v, i) => expect(Math.abs(v - lin(orange[i]))).toBeLessThan(0.01));
     } finally {
         await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: false }));
     }
