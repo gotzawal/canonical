@@ -1,4 +1,5 @@
 import { PARTICLE_PRESETS } from './core/particles';
+import { TERRAIN_SHAPES } from './core/terrainGen';
 import { version as engineVersion } from '../../package.json';
 import type { Commands } from './commands';
 import type { Editor } from './editor';
@@ -6,7 +7,7 @@ import { createAssetMenu } from './ui/assetsPanel';
 import { buildInfo } from './ui/statusbar';
 import { h } from './ui/dom';
 import { mascotPose } from './ui/mascot';
-import { dialog, MenuItem } from './ui/overlays';
+import { dialog, MenuItem, toast } from './ui/overlays';
 import { showBehaviorReference } from './ui/behaviorReference';
 import { importFromLink, openFromLink, openLibraryDialog } from './ui/libraryDialog';
 import { showReference } from './ui/reference';
@@ -49,6 +50,16 @@ export function createMenu(editor: Editor): MenuItem[] {
         },
         { label: 'Grass', icon: 'grass', action: () => void editor.createGrass() },
         { label: 'Water', icon: 'mirror', action: () => void editor.createWater() },
+        {
+            label: 'Terrain',
+            icon: 'terrain',
+            submenu: TERRAIN_SHAPES.map((shape) => ({
+                label: shape.charAt(0).toUpperCase() + shape.slice(1),
+                icon: 'terrain',
+                action: () => void editor.createTerrain({ shape }).catch((e) => toast(e?.message || String(e), 'error')),
+            })),
+        },
+        { label: 'Scatter', icon: 'scatter', action: () => editor.newScatter() },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },

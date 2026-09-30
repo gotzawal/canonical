@@ -357,7 +357,8 @@ export class TransientTexturePool {
     }
 
     private _destroySlot(slot: PooledTexture): void {
-        const gpu = (slot.rt as unknown as { gpuTexture: GPUTexture | null }).gpuTexture;
+        // The field, not the getter: reading the getter makes the texture when it was never used.
+        const gpu = (slot.rt as unknown as { _gpuTexture: GPUTexture | null })._gpuTexture;
         if (gpu) Texture.delayDestroyTexture(this._ctx, gpu);
         (slot.rt as unknown as { gpuTexture: GPUTexture | null }).gpuTexture = null;
         (slot.rt as unknown as { view: GPUTextureView | null }).view = null;

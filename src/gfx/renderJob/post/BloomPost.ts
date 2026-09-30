@@ -221,7 +221,9 @@ export class BloomPost extends PostBase {
         let usage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.TEXTURE_BINDING;
 
         this.RT_threshold = new VirtualTexture(screenWidth, screenHeight, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, this._boundCtx!);
+        this.RT_threshold.name = 'bloomThreshold';
         this.RT_final = new VirtualTexture(screenWidth, screenHeight, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, this._boundCtx!);
+        this.RT_final.name = 'bloomOut';
 
         const N = setting.downSampleStep;
         {
@@ -230,6 +232,7 @@ export class BloomPost extends PostBase {
             let h = Math.ceil(screenHeight / 4);
             for (let i = 0; i < N; i++) {
                 this.RT_BloomDown[i] = new VirtualTexture(w, h, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, this._boundCtx!);
+                this.RT_BloomDown[i].name = `bloomDown${i}`;
                 w = Math.ceil(w / 2);
                 h = Math.ceil(h / 2);
             }
@@ -241,6 +244,7 @@ export class BloomPost extends PostBase {
                 let w = this.RT_BloomDown[N - 2 - i].width;
                 let h = this.RT_BloomDown[N - 2 - i].height;
                 this.RT_BloomUp[i] = new VirtualTexture(w, h, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, this._boundCtx!);
+                this.RT_BloomUp[i].name = `bloomUp${i}`;
             }
         }
 
@@ -291,7 +295,17 @@ export class BloomPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(
+            this.thresholdCompute, ...(this.downSampleComputes ?? []), ...(this.upSampleComputes ?? []), this.postCompute,
+            this.RT_threshold, this.RT_final, ...(this.RT_BloomDown ?? []), ...(this.RT_BloomUp ?? []), this.bloomSetting,
+        );
+        super.destroy(force);
+    }
+
     public onResize() {
+        // Its resources are made on its first frame.
+        if (!this.thresholdCompute) return;
         let cfg = this.setting.render.postProcessing.bloom;
 
         let [screenWidth, screenHeight] = this._boundCtx!.presentationSize;

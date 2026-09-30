@@ -172,6 +172,7 @@ function strict(s: z.ZodType): z.ZodType {
     if (s instanceof z.ZodCatch || s instanceof z.ZodOptional) out = strict(s.unwrap() as z.ZodType);
     else if (s instanceof z.ZodNullable) out = strict(s.unwrap() as z.ZodType).nullable();
     else if (s instanceof z.ZodObject) out = z.strictObject(Object.fromEntries(Object.entries(s.shape as Record<string, z.ZodType>).map(([k, f]) => [k, strict(f).optional()])));
+    else if (s instanceof z.ZodArray) out = z.array(strict(s.element as z.ZodType));
     else return s;
     // The description stays with the field.
     const m = z.globalRegistry.get(s);
@@ -214,9 +215,10 @@ function merge(a: unknown, b: unknown): unknown {
     return out;
 }
 
-/** snake_case keys to camelCase, in groups too; colors go through `hex`. */
+/** snake_case keys to camelCase, in groups and lists of objects too; colors go through `hex`. */
 function fromTool(s: z.ZodType, v: unknown, what: string, hex?: (v: unknown, what: string) => string): unknown {
     const i = inner(s);
+    if (i instanceof z.ZodArray && Array.isArray(v)) return v.map((x, k) => fromTool(i.element as z.ZodType, x, `${what}[${k}]`, hex));
     if (i instanceof z.ZodObject && isObj(v)) {
         const shape = i.shape as Record<string, z.ZodType>;
         const out: Record<string, unknown> = {};

@@ -13,6 +13,8 @@ import { Quaternion, VertexAttributeName, type Object3D, type RenderNode } from 
 import { compose, decompose, DEG, invert, mul, normalize, quatFromEuler, transformPoint, type Mat4, type Quat, type Vec3 } from '../core/math';
 import { Body } from '../core/model';
 import type { Store } from '../core/store';
+import type { ScatterSolid } from '../core/scatter';
+import type { TerrainSurface } from '../core/terrain';
 import type { BodyDoc, BodyType, GeometryDoc, NodeDoc, SceneDoc } from '../core/types';
 import type { SceneSync } from '../engine/sync';
 import { TransformWatch } from '../engine/transformWatch';
@@ -263,13 +265,25 @@ export class Physics implements PhysicsApi {
             const h = holder(m.id);
             if (h) held.set(h.id, [...(held.get(h.id) ?? []), m]);
         }
+        // Terrains stand as heightfields of their maps, whatever detail their chunks draw.
+        const lands = new Map(sync.terrains().filter((t) => t.collide).map((t) => [t.id, t.surface]));
         for (const n of shown) {
+            if (n.terrain) {
+                const land = lands.get(n.id);
+                if (land) this.addTerrain(n.id, sync.entries.get(n.id)!.obj, land);
+                continue;
+            }
             const owner = holder(n.id);
             if ((owner && owner !== n) || n.character) continue;
             const parts = n.body ? (held.get(n.id) ?? []) : [n];
             const obj = sync.entries.get(n.id)!.obj;
             if (this.add(obj, n.body ?? null, parts.flatMap((m) => sync.renderersOf(m.id)), n.mesh?.geometry)) for (const m of parts) this.nodes.set(m.id, this.items.get(obj)!);
             else if (n.body) console.warn(`[physics] ${n.name} has nothing to collide with.`);
+        }
+        // The solid copies of scatters (trees, rocks): trunks and boxes.
+        for (const { id, solids } of sync.scatterSolids()) {
+            const entry = sync.entries.get(id);
+            if (entry && !holder(id)) this.addSolids(id, entry.obj, solids);
         }
         for (const c of host.characters()) this.addCharacter(c);
     }
@@ -296,6 +310,39 @@ export class Physics implements PhysicsApi {
         }
         this.track({ obj, body: this.world.createRigidBody(bd), type, doc, pos: position, rot: rotation }, desc);
         return true;
+    }
+
+    /** A terrain's heights as a fixed heightfield (Rapier's: columns along +x, rows along +z, centered on the body). */
+    private addTerrain(id: string, obj: Object3D, s: TerrainSurface) {
+        const map = s.map;
+        if (!map) return;
+        const w = map.width;
+        const h = map.height;
+        const heights = new Float32Array(w * h);
+        for (let z = 0; z < h; z++) for (let x = 0; x < w; x++) heights[x * h + z] = map.data[z * w + x];
+        const f = s.frame;
+        const desc = this.R.ColliderDesc.heightfield(h - 1, w - 1, heights, { x: f.sizeX, y: f.height, z: f.sizeZ }, this.R.HeightFieldFlags.FIX_INTERNAL_EDGES);
+        const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(f.x, f.y, f.z));
+        this.track({ obj, body, type: 'fixed', doc: null, pos: [f.x, f.y, f.z], rot: [0, 0, 0, 1] }, desc);
+        this.nodes.set(id, this.items.get(obj)!);
+    }
+
+    /** A scatter's solid copies: the colliders of one fixed body (a trunk a cylinder, a box turned by its yaw). */
+    private addSolids(id: string, obj: Object3D, solids: readonly ScatterSolid[]) {
+        const R = this.R;
+        const it: Item = { obj, body: this.world.createRigidBody(R.RigidBodyDesc.fixed()), type: 'fixed', doc: null, pos: [0, 0, 0], rot: [0, 0, 0, 1] };
+        for (const s of solids) {
+            const [x, y, z] = s.center;
+            const desc = s.kind === 'trunk'
+                ? R.ColliderDesc.cylinder(Math.max(0.005, s.size[1] / 2), Math.max(0.005, s.size[0])).setTranslation(x, y + s.size[1] / 2, z)
+                : R.ColliderDesc.cuboid(Math.max(0.005, s.size[0]), Math.max(0.005, s.size[1]), Math.max(0.005, s.size[2]))
+                      .setTranslation(x, y, z)
+                      .setRotation({ x: 0, y: Math.sin(s.yaw / 2), z: 0, w: Math.cos(s.yaw / 2) });
+            const collider = this.world.createCollider(desc.setActiveEvents(R.ActiveEvents.COLLISION_EVENTS), it.body);
+            this.owners.set(collider.handle, it);
+        }
+        this.items.set(obj, it);
+        this.nodes.set(id, it);
     }
 
     /** A character's capsule: from just above its feet to the top of its head, REACH wider. */
@@ -338,8 +385,10 @@ export class Physics implements PhysicsApi {
         for (const it of this.chars) this.follow(it);
         for (const it of this.moves.moved) this.follow(it);
         this.moves.moved.clear();
+        // Steps of 1/60 s at most: below 10 frames a second the world slows down rather than
+        // take longer steps, which let bodies pass through thin ground (a terrain).
         const n = Math.min(MAX_STEPS, Math.ceil(dt * 60 - 1e-6));
-        this.world.timestep = dt / n;
+        this.world.timestep = Math.min(dt / n, 1 / 60);
         const heard: [Object3D, string, Object3D][] = [];
         for (let i = 0; i < n; i++) {
             this.world.step(this.queue);

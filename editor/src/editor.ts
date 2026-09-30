@@ -7,14 +7,15 @@ import { download as downloadFile, kindOfUrl, librarySource, urlFileName, type L
 import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
+import { covers } from './core/terrain';
 import {
     defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
-import { AudioSource, Grass, Mirror } from './core/model';
+import { AudioSource, Grass, Mirror, Scatter, ScatterSource } from './core/model';
 import { defaults } from './core/schema';
-import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
+import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
     keptAssets, projectFileNameFor, usedAssetIds,
@@ -23,7 +24,7 @@ import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
     AssetKind, AssetMeta, AssetSource, GeometryType, GrassDoc, LightType, MaterialOverride, MaterialSlotDoc, NodeDoc, ParamValue, PartOverride, PrefabDoc,
-    SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
+    ScatterDoc, SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
 import type { RenderGraphController } from './engine/renderGraph';
@@ -36,6 +37,7 @@ import type { CameraController } from './viewport/cameraController';
 import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
 import { useSwatch, type RoomSample } from './design/materialSlots';
+import { importHeightmap, newTerrain, TerrainStroke, type BrushSettings, type NewTerrain } from './design/terrainEdit';
 import { librarySwatch, type SwatchRecord } from './design/swatches';
 import { Pipeline } from './design/pipeline';
 import { isHdr, measureScene } from './engine/measure';
@@ -122,6 +124,8 @@ interface EditorEvents {
     'flush-edits': void;
     /** Show a behavior tree (or schema) in the Behavior tab of the dock. */
     'show-behavior': { tree?: string; schema?: string; node?: string };
+    /** The terrain brush changed (its tool, size, strength or layer). */
+    brush: BrushSettings;
 }
 
 // The dependencies are the editor's own fields (editor.store, editor.viewport...).
@@ -142,6 +146,8 @@ export class Editor extends Emitter<EditorEvents> {
     /** The document's structure version the isolation was made for. */
     private isolatedShape = -1;
     view: EditorView = 'scene';
+    /** The terrain brush: while it has a tool, dragging on the selected terrain in the view sculpts or paints it. */
+    readonly brush: BrushSettings = { tool: null, radius: 6, strength: 0.5, layer: 0 };
 
     constructor(deps: EditorDeps) {
         super();
@@ -254,10 +260,118 @@ export class Editor extends Emitter<EditorEvents> {
         return id;
     }
 
+    /** A scatter object with these rules, its area around `at` (where new objects go without one). Returns its id. */
+    createScatter(scatter: ScatterDoc, opts: { name?: string; at?: Vec3 } = {}): string {
+        const node: NodeDoc = { ...makeNode(this.uniqueName(opts.name ?? 'Scatter', null), null, tidy3(opts.at ?? this.viewport.spawnPoint(), 3)), scatter };
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
+    }
+
+    /**
+     * A terrain of a shape (an island, hills, mountains, plains or flat
+     * ground) with a new heightmap, centered where new objects go (or at
+     * `at`). An island's coast lies at `waterLevel`. Returns its id.
+     */
+    async createTerrain(o: NewTerrain & { at?: Vec3; name?: string } = { shape: 'island' }): Promise<string> {
+        const name = this.uniqueName(o.name ?? 'Terrain', null);
+        const at = o.at ?? this.viewport.spawnPoint();
+        const { node: made, meta } = await newTerrain(o, name, [round(at[0]), round(at[1]), round(at[2])]);
+        const node: NodeDoc = { ...makeNode(name, null), ...made };
+        this.store.transact('Create ' + name, () => {
+            this.store.update((doc) => doc.assets.push(meta));
+            this.insert([node], 'Create ' + name);
+        });
+        return node.id;
+    }
+
+    /** Starts a sculpting or painting stroke on a terrain (see TerrainStroke). */
+    terrainStroke(id: string): TerrainStroke {
+        return new TerrainStroke(this.store, this.sync, id);
+    }
+
+    /** Changes the terrain brush (the tool, its size, strength or painted layer). */
+    setBrush(patch: Partial<BrushSettings>) {
+        Object.assign(this.brush, patch);
+        this.emit('brush', this.brush);
+    }
+
+    /** Puts a heightmap file the user picks on a terrain. */
+    async importHeightmapDialog(id: string) {
+        const [file] = await pickFiles('.png,.r16,.raw', false);
+        if (!file) return;
+        try {
+            await importHeightmap(this.store, id, file);
+        } catch (e) {
+            toast((e as Error)?.message || String(e), 'error');
+        }
+    }
+
+    /**
+     * A scatter from the Create menu: of the models of the selected objects,
+     * over the selected terrain or the one where new objects go (all of it),
+     * else over 30 meters around that point. Returns its id.
+     */
+    newScatter(): string {
+        const selected = this.store.selection.map((id) => this.store.node(id)).filter((n): n is NodeDoc => !!n);
+        const at = this.viewport.spawnPoint();
+        const land = selected.find((n) => n.terrain) ?? this.store.node(this.sync.terrains().find((t) => covers(t.surface, at[0], at[2]))?.id ?? '');
+        const scatter = defaults(Scatter);
+        const models = [...new Set(selected.map((n) => n.model?.asset).filter((a): a is string => !!a))].slice(0, 8);
+        scatter.sources = models.map((model) => ({ ...defaults(ScatterSource), model }));
+        if (land?.terrain) {
+            scatter.ground = land.id;
+            scatter.size = [land.terrain.size[0], land.terrain.size[1]];
+        }
+        return this.createScatter(scatter, { at: land?.terrain ? land.position : at });
+    }
+
+    /**
+     * Turns a scatter's copies into objects of their own, to edit one by one:
+     * a group at the scene's root (drawn instanced) holding a model object
+     * where each copy stood; a copy of one piece of a set hides the other
+     * pieces. The scatter component goes. Returns the group, or null when
+     * the scatter has no copies (or its models are not loaded yet).
+     */
+    bakeScatter(id: string): string | null {
+        const node = this.store.node(id);
+        const doc = node?.scatter;
+        const placements = this.sync.scatterPlacements(id);
+        if (!node || !doc || !placements.length) return null;
+        const group: NodeDoc = { ...makeNode(this.uniqueName(`${node.name} Objects`, null), null), instancing: {} };
+        const copies: NodeDoc[] = [];
+        for (const [i, p] of placements.entries()) {
+            const asset = doc.sources[p.source]?.model;
+            const model = asset ? this.sync.scatterModelOf(asset) : null;
+            const piece = model?.piece(p.variant);
+            if (!asset || !model || !piece) continue;
+            // The copy, less the model's root, which the model object shows again.
+            const m = mul(mul(compose(p.position, p.rotation, [p.scale, p.scale, p.scale]), compose(piece.offset, [0, 0, 0, 1], [1, 1, 1])), invert(model.root) ?? mat4());
+            const t = decompose(m);
+            const own = new Set(piece.renderers);
+            const parts: Record<string, { visible: boolean }> = {};
+            if (model.pieces.length > 1) for (const [r, path] of model.paths) if (!own.has(r)) parts[path] = { visible: false };
+            const meta = this.store.doc.assets.find((a) => a.id === asset);
+            copies.push({
+                ...makeNode(`${(meta?.name ?? 'Copy').replace(/\.(glb|gltf)$/i, '')} ${i + 1}`, group.id, tidy3(t.position, 4)),
+                rotation: tidy3(eulerFromQuat(t.rotation), 3),
+                scale: tidy3(t.scale, 4),
+                model: { asset, ...(Object.keys(parts).length ? { parts } : {}) },
+            } as NodeDoc);
+        }
+        if (!copies.length) return null;
+        this.store.commit('Bake Scatter', (d) => {
+            d.nodes.push(group, ...copies);
+            const n = d.nodes.find((x) => x.id === id);
+            if (n) delete n.scatter;
+        });
+        this.store.select([group.id]);
+        return group.id;
+    }
+
     /** Grass for an object (Add Component): on its own meshes and covering them when it has some, else a flat field around it. */
     grassFor(node: NodeDoc): GrassDoc {
         const grass = defaults(Grass);
-        const box = node.mesh || node.model ? this.picker.bounds(node.id) : null;
+        const box = node.mesh || node.model || node.terrain ? this.picker.bounds(node.id) : null;
         if (!box) return grass;
         const size: [number, number] = [round(box.max[0] - box.min[0]), round(box.max[2] - box.min[2])];
         return { ...grass, ground: node.id, size, count: Math.round(Math.min(20000, Math.max(1000, size[0] * size[1] * 20))) };
@@ -375,7 +489,9 @@ export class Editor extends Emitter<EditorEvents> {
         const moves: { id: string; dy: number }[] = [];
         for (const id of ids) {
             const box = this.picker.bounds(id);
-            if (box) moves.push({ id, dy: -box.min[1] });
+            // Onto a terrain under its middle, else to height 0.
+            const land = box && !this.store.node(id)?.terrain ? this.sync.terrainHeightAt((box.min[0] + box.max[0]) / 2, (box.min[2] + box.max[2]) / 2) : null;
+            if (box) moves.push({ id, dy: (land ?? 0) - box.min[1] });
         }
         if (!moves.length) return;
         this.store.commit('Drop to Ground', (doc) => {

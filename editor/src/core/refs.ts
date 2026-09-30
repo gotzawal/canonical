@@ -99,6 +99,17 @@ export function refs(doc: SceneDoc): Ref[] {
         if (grass?.windMap) out.push({ kind: 'asset', id: grass.windMap, at: 'object', role: 'data', drop: () => (grass.windMap = null) });
         const audio = n.audio;
         if (audio?.clip) out.push({ kind: 'asset', id: audio.clip, at: 'object', role: 'audio', drop: () => (audio.clip = null) });
+        // A terrain's heights and paint ship as they are (no role: no compressed copies); its layers show swatches.
+        const terrain = n.terrain;
+        if (terrain?.heightmap) out.push({ kind: 'asset', id: terrain.heightmap, at: 'object', drop: () => (terrain.heightmap = null) });
+        if (terrain?.splatmap) out.push({ kind: 'asset', id: terrain.splatmap, at: 'object', drop: () => (terrain.splatmap = null) });
+        for (const layer of terrain?.layers ?? []) {
+            if (layer.albedo) out.push({ kind: 'asset', id: layer.albedo, at: 'object', role: 'color', drop: () => (layer.albedo = null) });
+            if (layer.normal) out.push({ kind: 'asset', id: layer.normal, at: 'object', role: 'normal', drop: () => (layer.normal = null) });
+        }
+        for (const source of n.scatter?.sources ?? []) {
+            if (source.model) out.push({ kind: 'asset', id: source.model, at: 'object', role: 'model', drop: () => (source.model = null) });
+        }
         for (const r of n.scripts ?? []) {
             out.push({
                 kind: 'script',

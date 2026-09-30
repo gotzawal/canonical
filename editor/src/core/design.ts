@@ -455,6 +455,23 @@ export function layoutSignature(doc: SceneDoc): string {
             if (n.model.parts) text(JSON.stringify(n.model.parts));
         }
         if (n.prefab) text(n.prefab);
+        // A terrain's heights and extent; what a scatter places and where.
+        const t = n.terrain;
+        if (t) {
+            text(t.heightmap ?? '');
+            for (const v of [...t.size, t.height]) num(v);
+        }
+        const sc = n.scatter;
+        if (sc) {
+            for (const v of [...sc.size, sc.count, sc.seed, sc.spacing, ...sc.slope, ...sc.height, sc.margin]) num(v);
+            text(sc.ground ?? '');
+            text(sc.avoid.join(','));
+            for (const src of sc.sources) {
+                text(src.model ?? '');
+                num(src.weight);
+                text(src.solid);
+            }
+        }
     }
     return `L${count}:${h.toString(36)}`;
 }
@@ -462,7 +479,13 @@ export function layoutSignature(doc: SceneDoc): string {
 /** A signature of the level's geometry: when it changes, a level check is stale. */
 export function levelSignature(doc: SceneDoc): string {
     let h = 5381;
-    const text = JSON.stringify(doc.nodes.map((n) => [n.id, n.parent, n.visible, n.position, n.rotation, n.scale, n.mesh?.geometry ?? null, n.model?.asset ?? null, n.model?.parts ?? null]));
+    const text = JSON.stringify(
+        doc.nodes.map((n) => [
+            n.id, n.parent, n.visible, n.position, n.rotation, n.scale, n.mesh?.geometry ?? null, n.model?.asset ?? null, n.model?.parts ?? null,
+            n.terrain ? [n.terrain.heightmap, n.terrain.size, n.terrain.height, n.terrain.collide] : null,
+            n.scatter ? [n.scatter.sources, n.scatter.size, n.scatter.count, n.scatter.seed, n.scatter.spacing, n.scatter.ground, n.scatter.slope, n.scatter.height, n.scatter.avoid, n.scatter.margin] : null,
+        ]),
+    );
     for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;
     return `${doc.nodes.length}:${h.toString(36)}`;
 }

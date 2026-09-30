@@ -133,7 +133,14 @@ export class GodRayPost extends PostBase {
         this.rtFrame = new RTFrame([this.godRayTexture], [gtaoDec]);
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(this.godRayCompute, this.godRayTexture, this.historyGodRayData, this.godRaySetting);
+        super.destroy(force);
+    }
+
     public onResize() {
+        // Its resources are made on its first frame.
+        if (!this.godRayCompute) return;
         let presentationSize = this._boundCtx!.presentationSize;
         let [w, h] = presentationSize;
         this.godRayTexture.resize(w, h);

@@ -3063,6 +3063,38 @@ kbd {
     font-weight: 600;
 }
 
+/* The terrain brush's tools (inspector): three a row, the chosen one lit. */
+.brush-tools {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 2px;
+    padding: 2px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--inset);
+}
+
+.brush-tools .seg-btn {
+    min-width: 0;
+    padding: 0 4px;
+}
+
+/* A terrain layer's title, with its move and remove buttons. */
+.terrain-layer-head {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 8px;
+    color: var(--text-strong);
+    font-size: 11.5px;
+    font-weight: 600;
+}
+
+.terrain-layer-head > span {
+    flex: 1;
+    min-width: 0;
+}
+
 /* Token usage of a project (ui/usageDialog.ts). */
 .dialog.usage-modal {
     width: min(920px, 100%);
@@ -6568,13 +6600,18 @@ input.text.bt-part-id {
     display: none;
 }
 
-/* The three steps the simple view shows instead of the pipeline bar. */
+/* The three steps the simple view shows instead of the pipeline bar, in the
+   top bar beside the scene's name. */
+.steps-slot {
+    display: flex;
+    min-width: 0;
+}
+
 .steps-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
+    min-width: 0;
     height: 36px;
-    padding: 0 10px;
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -7438,6 +7475,12 @@ input.text.bt-part-id {
         display: none;
     }
 
+    /* The steps beside the name: only the current one. */
+    .steps > li:not(:has(.step.current)),
+    .step-sub {
+        display: none;
+    }
+
     .statusbar .status-item.muted,
     .statusbar .status-item.mono {
         display: none;
@@ -7460,8 +7503,7 @@ input.text.bt-part-id {
    to the view; its stages and checklist are in the Design tab too. */
 @media (max-height: 500px) {
     /* The slot stays, holding its row of the page grid. */
-    .pipeline-bar,
-    .steps-bar {
+    .pipeline-bar {
         display: none;
     }
 }

@@ -18,10 +18,12 @@ import { materialTools } from './materialTools';
 import { reviewTools } from './reviewTools';
 import type { ToolDef } from '../openrouter/client';
 import { sceneTools } from './sceneTools';
+import { terrainTools } from './terrainTools';
 import { allowedGroups, definition, ToolError, type Json, type Tool, type ToolEnv, type ToolResult } from './toolUtil';
 
 export const TOOLS: Tool[] = [
     ...sceneTools, ...codeTools, ...designTools, ...greyboxTools, ...imageTools, ...materialTools, ...effectTools, ...behaviorTools, ...levelTools, ...libraryTools, ...reviewTools,
+    ...terrainTools,
 ];
 const BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 

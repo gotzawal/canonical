@@ -6,6 +6,7 @@ import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
 import type { ParamValue, ShaderDoc, ShaderKind, TextureRole } from '../core/types';
 import { hexToColor, normalizeHex } from './color';
+import { HeldTexture, uploadTexture } from './heldTexture';
 import type { Runtime } from './runtime';
 
 // Custom shaders are WGSL written against the engine's shader library. The
@@ -55,6 +56,8 @@ interface CompiledShader {
     hasVert: boolean;
     /** The code reads the reflection of a Mirror component (mirrorColor, mirrorUV). */
     usesMirror: boolean;
+    /** The code reads the terrain's height (terrainHeight, terrainDepth). */
+    usesTerrain: boolean;
 }
 
 interface ShaderEntry {
@@ -122,7 +125,7 @@ const ENGINE_FIELDS = `
 
 const RESERVED = new Set([
     ...ENGINE_FIELDS.split(/[\s,]+/).filter((s) => s.endsWith(':')).map((s) => s.slice(0, -1)),
-    'baseMap', 'mirrorMap', 'shadowBias', 'x', 'y', 'width', 'height',
+    'baseMap', 'mirrorMap', 'terrainHeightMap', 'terrainFrame', 'terrainLevel', 'shadowBias', 'x', 'y', 'width', 'height',
     'fn', 'let', 'var', 'const', 'struct', 'return', 'if', 'else', 'for', 'loop', 'while', 'true', 'false',
     'f32', 'i32', 'u32', 'bool', 'vec2', 'vec3', 'vec4', 'mat4x4', 'texture', 'sampler', 'discard',
 ]);
@@ -147,6 +150,8 @@ export interface ParsedShader {
     hasEntry: boolean;
     /** Material shaders: it reads the reflection of a Mirror component. */
     usesMirror: boolean;
+    /** Material shaders: it reads the terrain's height. */
+    usesTerrain: boolean;
 }
 
 /** Reads `// @property` declarations and prepares the code for wrapping. */
@@ -225,6 +230,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
 
     const hasVert = /\bfn\s+vert\s*\(/.test(body);
     const usesMirror = kind === 'material' && /\bmirror(Color|UV|Map)\b/.test(body);
+    const usesTerrain = kind === 'material' && /\bterrain(Height|Depth)\b/.test(body);
     const entry = kind === 'post' ? /\bfn\s+post\s*\(/ : /\bfn\s+frag\s*\(/;
     const hasEntry = entry.test(body);
     if (!hasEntry) {
@@ -235,7 +241,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
             message: kind === 'post' ? 'Missing "fn post(uv: vec2f) -> vec4f".' : 'Missing "fn frag()".',
         });
     }
-    return { props, errors, body, includes, hasVert, hasEntry, usesMirror };
+    return { props, errors, body, includes, hasVert, hasEntry, usesMirror, usesTerrain };
 }
 
 function structFields(props: ShaderProperty[]): string {
@@ -268,6 +274,39 @@ const MIRROR_CODE = [
     '}',
     'fn mirrorColor(offset: vec2f) -> vec4f {',
     '    return textureSampleLevel(mirrorMap, mirrorMapSampler, clamp(mirrorUV() + offset, vec2f(0.0), vec2f(1.0)), 0.0);',
+    '}',
+].join('\n');
+
+/**
+ * What material shaders that read the terrain get: its heights (a table of
+ * floats, 0 to 1 of the terrain's height) and where it lies. Without a
+ * terrain, or outside it, the ground is out of reach (-1e9).
+ */
+const TERRAIN_FIELDS = `
+    terrainFrame: vec4<f32>,
+    terrainLevel: vec4<f32>,`;
+const TERRAIN_CODE = [
+    '@group(1) @binding(auto) var terrainHeightMapSampler: sampler;',
+    '@group(1) @binding(auto) var terrainHeightMap: texture_2d<f32>;',
+    'fn terrainHeight(p: vec3f) -> f32 {',
+    '    let f = materialUniform.terrainFrame;',
+    '    let l = materialUniform.terrainLevel;',
+    '    let uv = vec2f((p.x - f.x) / f.z + 0.5, (p.z - f.y) / f.w + 0.5);',
+    '    if (l.z < 0.5 || any(uv < vec2f(0.0)) || any(uv > vec2f(1.0))) { return -1e9; }',
+    '    let size = vec2i(textureDimensions(terrainHeightMap));',
+    '    let s = uv * vec2f(size - 1);',
+    '    let i = vec2i(floor(s));',
+    '    let t = s - floor(s);',
+    '    let hi = size - 1;',
+    '    let a = textureLoad(terrainHeightMap, clamp(i, vec2i(0), hi), 0).r;',
+    '    let b = textureLoad(terrainHeightMap, clamp(i + vec2i(1, 0), vec2i(0), hi), 0).r;',
+    '    let c = textureLoad(terrainHeightMap, clamp(i + vec2i(0, 1), vec2i(0), hi), 0).r;',
+    '    let d = textureLoad(terrainHeightMap, clamp(i + vec2i(1, 1), vec2i(0), hi), 0).r;',
+    '    return l.x + mix(mix(a, b, t.x), mix(c, d, t.x), t.y) * l.y;',
+    '}',
+    'fn terrainDepth() -> f32 {',
+    '    let p = ORI_VertexVarying.vWorldPos.xyz;',
+    '    return p.y - terrainHeight(p);',
     '}',
 ].join('\n');
 
@@ -311,12 +350,14 @@ export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: P
         includes,
         'struct MaterialUniform {',
         ENGINE_FIELDS,
+        parsed.usesTerrain ? TERRAIN_FIELDS : '',
         structFields(parsed.props),
         '};',
         '@group(1) @binding(auto) var baseMapSampler: sampler;',
         '@group(1) @binding(auto) var baseMap: texture_2d<f32>;',
         textureBindings(parsed.props),
         parsed.usesMirror ? MIRROR_CODE : '',
+        parsed.usesTerrain ? TERRAIN_CODE : '',
         'fn getTime() -> f32 { return globalUniform.time * 0.001; }',
         parsed.hasVert ? '' : 'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
         USER_BEGIN,
@@ -341,6 +382,10 @@ export class ShaderManager extends Emitter<ShaderEvents> {
     private entries = new Map<string, ShaderEntry>();
     /** What material shaders read as the reflection without a Mirror component: transparent black. */
     private noMirror: Texture | null = null;
+    /** The terrain material shaders read (terrainHeight): its heights, where it lies, and the shaders reading it. */
+    private terrainHeights: HeldTexture | null = null;
+    private terrainValues = { frame: new Vector4(0, 0, 1, 1), level: new Vector4(0, 0, 0, 0) };
+    private terrainReaders = new Set<WeakRef<Shader>>();
 
     constructor(private runtime: Runtime, private store: Store) {
         super();
@@ -475,7 +520,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         const version = ++shaderSerial;
         const name = `morglay_shader_${id}_${version}`.replace(/[^A-Za-z0-9_]/g, '_');
         ShaderLib.register(name, source);
-        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert, usesMirror: parsed.usesMirror };
+        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert, usesMirror: parsed.usesMirror, usesTerrain: parsed.usesTerrain };
         e.status = { state: 'ok', messages, props: parsed.props, version };
         this.emit('compiled', id);
     }
@@ -502,31 +547,17 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         state.useLight = lit;
         for (const [k, v] of Object.entries(materialDefines(valid.lighting))) shader.setDefine(k, v);
 
-        shader.setUniformFloat('shadowBias', 0.00035);
-        shader.setUniformColor('baseColor', new Color(1, 1, 1, 1));
-        shader.setUniformColor('emissiveColor', new Color(0, 0, 0, 1));
-        shader.setUniformVector4('materialF0', new Vector4(0.04, 0.04, 0.04, 1));
-        shader.setUniformColor('specularColor', new Color(1, 1, 1, 1));
-        for (const [k, v] of Object.entries({
-            envIntensity: 1, normalScale: 1, roughness: 0.5, metallic: 0, ao: 1, roughness_min: 0, roughness_max: 1,
-            metallic_min: 0, metallic_max: 1, emissiveIntensity: 1, alphaCutoff: 0, ior: 1.5, clearcoatWeight: 0,
-            clearcoatFactor: 0, clearcoatRoughnessFactor: 0, clearcoatIor: 1.5, transmissionFactor: 0,
-            thicknessFactor: 0, attenuationDistance: 1e20, transmissionAlphaMode: 0,
-        })) {
-            shader.setUniformFloat(k, v);
-        }
-        shader.setUniformColor('clearcoatColor', new Color(1, 1, 1, 1));
-        shader.setUniformColor('attenuationColor', new Color(1, 1, 1, 1));
-        for (const k of ['baseMapOffsetSize', 'normalMapOffsetSize', 'emissiveMapOffsetSize', 'roughnessMapOffsetSize', 'metallicMapOffsetSize', 'aoMapOffsetSize']) {
-            shader.setUniformVector4(k, new Vector4(0, 0, 1, 1));
-        }
-        shader.setTexture('baseMap', res.whiteTexture);
-        shader.setTexture('normalMap', res.normalTexture);
-        shader.setTexture('maskMap', res.maskTexture);
+        setEngineDefaults(shader, ctx);
         // A Mirror component on the object binds its reflection here (and knows the material by it).
         if (valid.usesMirror) {
             this.noMirror ??= res.createTexture(32, 32, 0, 0, 0, 0, 'morglay-no-mirror');
             shader.setTexture('mirrorMap', this.noMirror);
+        }
+        if (valid.usesTerrain) {
+            shader.setTexture('terrainHeightMap', this.terrainTexture());
+            shader.setUniformVector4('terrainFrame', this.terrainValues.frame);
+            shader.setUniformVector4('terrainLevel', this.terrainValues.level);
+            this.terrainReaders.add(new WeakRef(shader));
         }
         applyProps(shader, valid.props, {}, ctx);
 
@@ -534,6 +565,42 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         mat.name = 'Custom Shader';
         mat.shader = shader;
         return mat;
+    }
+
+    /** The heights material shaders read (one texel of 0 until a terrain is set). */
+    private terrainTexture(): HeldTexture {
+        if (!this.terrainHeights) {
+            const ctx = this.runtime.engine.context3D;
+            this.terrainHeights = new HeldTexture(ctx, '2d', 'unfilterable-float', false);
+            this.terrainHeights.hold(uploadTexture(ctx, 1, 1, 'r32float', new Float32Array(1), 'terrain heights'));
+        }
+        return this.terrainHeights;
+    }
+
+    /**
+     * The terrain material shaders read with terrainHeight and terrainDepth
+     * (water over it): its heights (0 to 1 of `height`), its middle and
+     * size, its base and height; null for none.
+     */
+    setTerrain(t: { width: number; depth: number; data: Float32Array; x: number; z: number; sizeX: number; sizeZ: number; y: number; height: number } | null) {
+        const v = this.terrainValues;
+        if (t) {
+            const ctx = this.runtime.engine.context3D;
+            this.terrainTexture().hold(uploadTexture(ctx, t.width, t.depth, 'r32float', t.data, 'terrain heights'));
+            v.frame.set(t.x, t.z, t.sizeX, t.sizeZ);
+            v.level.set(t.y, t.height, 1, 0);
+        } else {
+            v.level.set(0, 0, 0, 0);
+        }
+        for (const ref of Array.from(this.terrainReaders)) {
+            const shader = ref.deref();
+            if (!shader) {
+                this.terrainReaders.delete(ref);
+                continue;
+            }
+            shader.setUniformVector4('terrainFrame', v.frame);
+            shader.setUniformVector4('terrainLevel', v.level);
+        }
     }
 
     /** A post effect instance for a post shader, or null when it has no valid version yet. */
@@ -547,6 +614,55 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         Object.defineProperty(Cls, 'name', { value: clsName });
         return new Cls(valid.name, valid.props, valid.version);
     }
+}
+
+/** Sets the engine's material uniforms (ENGINE_FIELDS) and maps of a new lit material shader to their defaults. */
+export function setEngineDefaults(shader: Shader, ctx: any) {
+    const res = Engine3D.resFor(ctx);
+    shader.setUniformFloat('shadowBias', 0.00035);
+    shader.setUniformColor('baseColor', new Color(1, 1, 1, 1));
+    shader.setUniformColor('emissiveColor', new Color(0, 0, 0, 1));
+    shader.setUniformVector4('materialF0', new Vector4(0.04, 0.04, 0.04, 1));
+    shader.setUniformColor('specularColor', new Color(1, 1, 1, 1));
+    for (const [k, v] of Object.entries({
+        envIntensity: 1, normalScale: 1, roughness: 0.5, metallic: 0, ao: 1, roughness_min: 0, roughness_max: 1,
+        metallic_min: 0, metallic_max: 1, emissiveIntensity: 1, alphaCutoff: 0, ior: 1.5, clearcoatWeight: 0,
+        clearcoatFactor: 0, clearcoatRoughnessFactor: 0, clearcoatIor: 1.5, transmissionFactor: 0,
+        thicknessFactor: 0, attenuationDistance: 1e20, transmissionAlphaMode: 0,
+    })) {
+        shader.setUniformFloat(k, v);
+    }
+    shader.setUniformColor('clearcoatColor', new Color(1, 1, 1, 1));
+    shader.setUniformColor('attenuationColor', new Color(1, 1, 1, 1));
+    for (const k of ['baseMapOffsetSize', 'normalMapOffsetSize', 'emissiveMapOffsetSize', 'roughnessMapOffsetSize', 'metallicMapOffsetSize', 'aoMapOffsetSize']) {
+        shader.setUniformVector4(k, new Vector4(0, 0, 1, 1));
+    }
+    shader.setTexture('baseMap', res.whiteTexture);
+    shader.setTexture('normalMap', res.normalTexture);
+    shader.setTexture('maskMap', res.maskTexture);
+}
+
+/**
+ * The full source of a lit material shader the editor writes itself (the
+ * terrain's): the engine's includes and uniform struct with `fields`
+ * after its own, `bindings`, and `body`, which defines frag().
+ */
+export function litMaterialSource(fields: string, bindings: string, body: string): string {
+    return [
+        '#include "Common_vert"',
+        '#include "Common_frag"',
+        '#include "BxDF_frag"',
+        '#include "PhysicMaterialUniform_frag"',
+        'struct MaterialUniform {',
+        ENGINE_FIELDS,
+        fields,
+        '};',
+        '@group(1) @binding(auto) var baseMapSampler: sampler;',
+        '@group(1) @binding(auto) var baseMap: texture_2d<f32>;',
+        bindings,
+        'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
+        body,
+    ].join('\n');
 }
 
 /**

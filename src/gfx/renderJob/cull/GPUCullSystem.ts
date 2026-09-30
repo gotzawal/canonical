@@ -86,6 +86,7 @@ export class GPUCullSystem {
         this._meshMetadataBuffer = null;
         this._visibilityBuffer = null;
         this._drawCmdsBuffer = null;
+        this._compute?.destroy();
         this._compute = null;
     }
 

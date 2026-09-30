@@ -5,7 +5,7 @@
 import type { Vec3 } from './math';
 import type {
     AnimationDoc, AudioSourceDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, GrassDoc, InstancingDoc, LightDoc, MeshDoc, MirrorDoc, ModelDoc, ParticlesDoc, PlayerDoc,
-    SpecsDoc,
+    ScatterDoc, SpecsDoc, TerrainDoc,
 } from './model';
 
 export type { Vec3 };
@@ -13,7 +13,8 @@ export type { Vec3 };
 // Components and settings defined by their schemas (core/model.ts).
 export type {
     AlphaMode, AnimationDoc, AudioSourceDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, GrassDoc, InstancingDoc, LightDoc, LightType,
-    MaterialDoc, MaterialOverride, MaterialType, MeshDoc, MirrorDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, SkyType, SlotShading, SpecsDoc,
+    MaterialDoc, MaterialOverride, MaterialType, MeshDoc, MirrorDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, ScatterDoc, ScatterSourceDoc, SkyType,
+    SlotShading, SpecsDoc, TerrainDoc, TerrainLayerDoc,
 } from './model';
 
 /** Value of a script property or a shader property. Colors are #rrggbb strings, vectors number arrays. */
@@ -60,6 +61,10 @@ export interface NodeDoc {
     grass?: GrassDoc;
     /** The meshes of the object's children are drawn instanced: one draw per shape and material. */
     instancing?: InstancingDoc;
+    /** A heightmap terrain around the object. */
+    terrain?: TerrainDoc;
+    /** Copies of models spread over an area around the object by rules. */
+    scatter?: ScatterDoc;
     /** A sound source: plays an audio asset in Play mode, heard from the object's place. */
     audio?: AudioSourceDoc;
     scripts?: ScriptRef[];

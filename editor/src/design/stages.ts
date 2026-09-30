@@ -246,7 +246,7 @@ export const STAGES: StageDef[] = [
         title: 'Level',
         long: 'Level (greybox)',
         description:
-            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Many copies of one thing (trees, rocks, fence posts) go under one group with Instancing, so they draw together. Frame a shot for every reference image, walk the route at eye height, then paint a reference image over each shot: the chosen one is what the look is compared with.',
+            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Many copies of one thing (trees, rocks, fence posts) go under one group with Instancing, so they draw together. An outdoor level stands on a terrain, sculpted with building sites and paths, with trees and large rocks scattered over it by rules. Frame a shot for every reference image, walk the route at eye height, then paint a reference image over each shot: the chosen one is what the look is compared with.',
         tools: ['read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts'],
         checks: [
             {
@@ -349,7 +349,7 @@ export const STAGES: StageDef[] = [
         title: 'Materials',
         long: 'Materials and lighting, pass 2',
         description:
-            'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Cover the ground with grass, and make water and mirrors (a Mirror component, the Water shader). Then correct light intensities and exposure for the new albedo.',
+            'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Give terrains their layers (by height and slope, or painted) and scatter small decoration over them, cover the ground with grass, and make water and mirrors (a Mirror component, the Water shader). Then correct light intensities and exposure for the new albedo.',
         compare: 'color',
         matchLabel: 'Colors match the target',
         tools: ['read', 'design', 'materials', 'lights', 'environment', 'capture', 'compare', 'images'],
@@ -362,6 +362,16 @@ export const STAGES: StageDef[] = [
                     const ok = m.filter((s) => !!s.swatch || s.flat).length;
                     return { done: m.length > 0 && ok === m.length, detail: m.length ? count(ok, m.length, 'slots') : 'no slots yet' };
                 },
+            },
+            {
+                id: 'material.terrain',
+                text: 'Every terrain has its surface layers',
+                auto: ({ doc }) => {
+                    const lands = doc.nodes.filter((n) => n.terrain);
+                    const bare = lands.filter((n) => !n.terrain!.layers.some((l) => l.slot || l.albedo));
+                    return { done: !bare.length, detail: lands.length ? (bare.length ? `${bare.map((n) => n.name).slice(0, 3).join(', ')} without` : undefined) : 'no terrains' };
+                },
+                hint: 'In the terrain\'s inspector, add layers from the material slots (the first covers everything).',
             },
             {
                 id: 'material.colors',

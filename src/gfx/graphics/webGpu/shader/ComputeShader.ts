@@ -297,14 +297,15 @@ export class ComputeShader extends ShaderPassBase {
 
         // One resize listener per shader, removed by destroy(): a listener
         // left behind keeps the shader and the buffers it binds alive.
+        // A resize only drops the bind groups; the next dispatch makes them
+        // again from the textures bound then. Making them here read the
+        // textures of shaders no longer dispatched as well, and a render
+        // graph texture read after the graph let go of it is allocated
+        // again: a full-screen texture per such shader on every resize.
         this._offResize?.();
         const ctx = this._boundCtx!;
         const onResize = () => {
-            for (let i = 0; i < shaderReflection.groups.length; ++i) {
-                let srvs = shaderReflection.groups[i];
-                this._groupsShaderReflectionVarInfos[i] = srvs;
-                this.genGroups(i, this._groupsShaderReflectionVarInfos, true);
-            }
+            for (let i = 0; i < this.bindGroups.length; i++) this.bindGroups[i] = null;
         };
         ctx.addEventListener(CResizeEvent.RESIZE, onResize, this);
         this._offResize = () => {

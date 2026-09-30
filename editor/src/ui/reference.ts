@@ -72,6 +72,7 @@ const MATERIAL: [string, string][] = [
     ['fn vert(inputData: VertexAttributes) -> VertexOutput', 'Optional. Change a copy of the input, then ORI_Vert(v); return ORI_VertexOut;'],
     ['Imported models', 'On a material slot of an imported model, baseMap is the model\'s color texture, and texture properties named normalMap, maskMap (roughness in G, metallic in B), emissiveMap and aoMap receive the model\'s own maps: // @property normalMap texture normal'],
     ['mirrorColor(offset), mirrorUV()', 'On an object with a Mirror component: the scene it reflects at this pixel, moved by offset (screen units, e.g. by waves), with alpha 0 without a mirror; mirrorUV() is the undistorted screen position. The Water template uses them.'],
+    ['terrainHeight(p), terrainDepth()', 'The height of the terrain under the world point p (the largest terrain shown), -1e9 where there is none; terrainDepth() is how far below this pixel it lies. The Water template uses it for shallow water and foam along the shore.'],
 ];
 
 const MATERIAL_TYPES: [string, string][] = [

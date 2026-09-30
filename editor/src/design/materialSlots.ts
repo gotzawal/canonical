@@ -8,7 +8,7 @@ import { uid } from '../core/ids';
 import { makeMaterialSlot } from '../core/design';
 import { OLD_TRIPLANAR_CODES, OLD_TRIPLANAR_MARKER, TRIPLANAR_CODE, TRIPLANAR_MARKER } from '../core/templates';
 import type { ChangeHint, Store } from '../core/store';
-import type { AssetMeta, MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc } from '../core/types';
+import type { AssetMeta, MaterialDoc, MaterialSlotDoc, NodeDoc, SceneDoc, ShaderDoc, TerrainLayerDoc } from '../core/types';
 import { getSwatch, swatchAsset, swatchSide, type SwatchMap } from './swatches';
 
 export const TRIPLANAR_NAME = 'Triplanar.wgsl';
@@ -59,6 +59,21 @@ export function applySlot(m: MaterialDoc, slot: MaterialSlotDoc, shaderId: strin
     m.slot = slot.id;
 }
 
+/** Puts a slot on a terrain layer: its swatch, normal map, tile size, color and roughness (the layer follows it from then on). */
+export function layerFromSlot(layer: TerrainLayerDoc, slot: MaterialSlotDoc) {
+    layer.slot = slot.id;
+    layer.albedo = slot.swatch ?? null;
+    layer.normal = slot.swatch ? slot.normal ?? null : null;
+    layer.tile = slot.tile;
+    layer.color = slot.color;
+    layer.roughness = slot.roughness;
+}
+
+/** Terrain layers that follow a slot. */
+function linkedLayers(doc: SceneDoc): TerrainLayerDoc[] {
+    return doc.nodes.flatMap((n) => (n.terrain?.layers ?? []).filter((l) => !!l.slot));
+}
+
 /** Every material that follows a slot: scene meshes and the parts of prefab templates. */
 function linkedMaterials(doc: SceneDoc): { m: MaterialDoc; owner: NodeDoc }[] {
     const out: { m: MaterialDoc; owner: NodeDoc }[] = [];
@@ -70,6 +85,12 @@ function linkedMaterials(doc: SceneDoc): { m: MaterialDoc; owner: NodeDoc }[] {
 /** Brings the linked materials in line with their slots (inside a commit); links to missing slots are dropped. */
 export function syncSlots(doc: SceneDoc, only?: string) {
     const slots = new Map(doc.design.materials.map((s) => [s.id, s]));
+    for (const layer of linkedLayers(doc)) {
+        if (only && layer.slot !== only) continue;
+        const slot = slots.get(layer.slot!);
+        if (slot) layerFromSlot(layer, slot);
+        else layer.slot = null;
+    }
     const linked = linkedMaterials(doc).filter(({ m }) => !only || m.slot === only);
     if (!linked.length) return;
     const shaderId = ensureTriplanar(doc);
@@ -80,9 +101,9 @@ export function syncSlots(doc: SceneDoc, only?: string) {
     }
 }
 
-/** Mesh nodes that follow a slot (scene nodes, prefab parts count once per instance). */
+/** Mesh nodes and terrains that follow a slot (scene nodes, prefab parts count once per instance). */
 export function slotUsers(doc: SceneDoc, slotId: string): NodeDoc[] {
-    return doc.nodes.filter((n) => n.mesh?.material.slot === slotId);
+    return doc.nodes.filter((n) => n.mesh?.material.slot === slotId || n.terrain?.layers.some((l) => l.slot === slotId));
 }
 
 export interface SlotPatch {
@@ -129,7 +150,8 @@ export function upsertSlot(store: Store, patch: SlotPatch & { id?: string }, lab
  * too, so the scene follows (a design-only hint skips the engine sync).
  */
 function slotChangeHint(store: Store, slotId: string): ChangeHint | undefined {
-    return slotId && linkedMaterials(store.doc).some(({ m }) => m.slot === slotId) ? undefined : { design: true };
+    const followed = linkedMaterials(store.doc).some(({ m }) => m.slot === slotId) || linkedLayers(store.doc).some((l) => l.slot === slotId);
+    return slotId && followed ? undefined : { design: true };
 }
 
 /**

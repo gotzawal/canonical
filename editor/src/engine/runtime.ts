@@ -30,6 +30,8 @@ export const VIEWPORT_FPS: { value: ViewportFps; label: string }[] = [
 
 /** The screen's pixels per CSS pixel, as the engine uses them (at most 2). */
 const screenRatio = () => Math.min(window.devicePixelRatio || 1, 2);
+/** How long a capture waits for the browser's frames before drawing them itself. */
+const FRAME_WAIT_MS = 2000;
 
 /**
  * The viewport's resolutions (View > Viewport Quality): the canvas's pixels
@@ -135,6 +137,11 @@ export class Runtime {
         this.view.scene = this.scene;
         this.view.camera = this.camera;
         engine.startRenderView(this.view);
+        // Motion vectors are for TAA and motion blur, the depth pyramid for GPU
+        // occlusion culling: none of them runs here, and both passes drew a
+        // full-screen texture every frame.
+        this.view.renderGraph?.remove('MotionVectorPass');
+        this.view.renderGraph?.remove('HiZPass');
         this.post = this.scene.addComponent(PostProcessingComponent);
         this.gi = new GIController(this);
     }
@@ -590,12 +597,19 @@ export class Runtime {
 
     private togglePost(cls: PostCtor, enable: boolean) {
         let post = this.post.getPost(cls as any) as PostBase | null;
+        if (!enable) {
+            // Switched off, an effect gives its textures and buffers back; switched on, it is made again.
+            if (post) {
+                this.post.removePost(cls as any);
+                post.destroy();
+            }
+            return;
+        }
         if (!post) {
-            if (!enable) return;
             post = this.post.addPost(cls as any) as PostBase;
             this.orderPosts();
         }
-        post.enable = enable;
+        post.enable = true;
     }
 
     /**
@@ -650,8 +664,9 @@ export class Runtime {
     /**
      * Runs `read` right after the engine drew the frame `frames` frames from
      * now, while the canvas still holds it. Hidden pages get no frame
-     * callbacks, so there the frames are drawn from here (the assistant may
-     * capture while the user is in another tab).
+     * callbacks, and a window behind others gets them seldom, so the frames
+     * are drawn from here when none came for a while (the assistant may
+     * capture while the user is in another tab or another window).
      */
     private afterFrames<T>(frames: number, read: () => T | Promise<T>, timeout = 20000): Promise<T> {
         return new Promise<T>((resolve, reject) => {
@@ -676,8 +691,9 @@ export class Runtime {
                 }
             });
             void (async () => {
+                const start = performance.now();
                 while (!done) {
-                    if (!document.hidden) {
+                    if (!document.hidden && performance.now() - start < FRAME_WAIT_MS) {
                         await new Promise((r) => setTimeout(r, 200));
                         continue;
                     }

@@ -5,6 +5,8 @@
 
 import type { Object3D } from '@orillusion/core';
 import { VertexAttributeName } from '@orillusion/core';
+import { solidTriangles } from '../core/scatter';
+import { terrainTriangles } from '../core/terrain';
 import type { SceneDoc } from '../core/types';
 import type { Store } from '../core/store';
 import type { SceneSync } from '../engine/sync';
@@ -49,6 +51,8 @@ export function navAgent(doc: SceneDoc, characters: readonly { radius: number; h
     };
 }
 
+const IDENTITY = [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1];
+
 /**
  * The static level in world space: every shown mesh that no moving body
  * holds (dynamic and kinematic bodies move, triggers are not in the way),
@@ -79,6 +83,24 @@ export function levelTriangles(store: Store, sync: SceneSync, skip: (id: string)
             verts += pos.length / 3;
             tris += Math.floor((idx ? idx.length : pos.length / 3) / 3);
         }
+    }
+    // Terrains from their maps, every few samples: a character needs no finer ground (about 250,000 triangles at most).
+    for (const land of sync.terrains()) {
+        if (!land.collide || skip(land.id) || !land.surface.map) continue;
+        const map = land.surface.map;
+        const step = Math.max(1, Math.ceil(Math.sqrt((map.width * map.height) / 125000)));
+        const { positions: pos, indices: idx } = terrainTriangles(land.surface, step);
+        chunks.push({ pos, idx, m: IDENTITY });
+        verts += pos.length / 3;
+        tris += idx.length / 3;
+    }
+    // Solid scatter copies stand in the way as prisms and boxes.
+    for (const { id, solids } of sync.scatterSolids()) {
+        if (skip(id) || sync.detached.has(id)) continue;
+        const { positions: pos, indices: idx } = solidTriangles(solids);
+        chunks.push({ pos, idx, m: IDENTITY });
+        verts += pos.length / 3;
+        tris += idx.length / 3;
     }
     const positions = new Float32Array(verts * 3);
     const indices = new Uint32Array(tris * 3);

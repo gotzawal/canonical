@@ -16,7 +16,8 @@ const KINDS: LibraryKind[] = ['model', 'material', 'hdri', 'audio', 'texture'];
 const KIND_GROUP: Record<string, ToolGroup> = { model: 'objects', audio: 'audio', material: 'materials', texture: 'materials', hdri: 'environment' };
 const KIND_WORDS: Record<string, string> = { model: 'Models', audio: 'Sounds', material: 'Materials', texture: 'Images', hdri: 'Skies' };
 
-async function allItems(env: ToolEnv): Promise<{ items: LibraryItem[]; errors: string[] }> {
+/** Every item of the catalogs the editor reads, and the catalogs it could not read. */
+export async function allItems(env: ToolEnv): Promise<{ items: LibraryItem[]; errors: string[] }> {
     const urls = catalogList(env.editor.store.prefs.libraryCatalogs);
     const results = await Promise.allSettled(urls.map((u) => loadCatalog(u)));
     const items: LibraryItem[] = [];

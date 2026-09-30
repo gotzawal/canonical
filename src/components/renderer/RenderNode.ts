@@ -1,3 +1,4 @@
+import type { BoundingBox } from '../../core/bound/BoundingBox';
 import { EditorInspector } from "../../util/SerializeDecoration";
 import { Engine3D } from "../../Engine3D";
 import { View3D } from "../../core/View3D";
@@ -43,6 +44,12 @@ export class RenderNode extends ComponentBase {
      * vertex-displaced meshes).
      */
     public frustumCulled: boolean = false;
+    /**
+     * Bounds in its object's space that hold everything it draws, when its
+     * geometry's do not (an instancer drawing other renderers): culling
+     * reads them in place of the geometry's.
+     */
+    public cullBounds: BoundingBox | null = null;
     public instanceID: string;
     public drawType: number = 0;
 

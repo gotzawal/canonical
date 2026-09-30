@@ -34,6 +34,8 @@ export interface LevelScan {
     cast(origin: Vec3, dir: Vec3, maxDist: number, ignore?: (id: string) => boolean): RayHit | null;
     /** Ids of the objects under an object. */
     descendants(id: string): string[];
+    /** The terrains (open ground by design: not counted as empty space). */
+    lands?: Set<string>;
 }
 
 export interface LevelCheckOptions {
@@ -115,6 +117,8 @@ export interface Cell {
     indoor: boolean;
     /** Distance to the nearest obstacle at knee height (sampled cells). */
     clear: number;
+    /** It stands on a terrain. */
+    land?: boolean;
 }
 
 /** The grid of the check and what it found, for the plan view (drawMap). */
@@ -138,10 +142,12 @@ export function scanLevel(editor: Editor, skip: Set<string>): LevelScan {
     const objects: LevelObject[] = [];
     for (const n of store.doc.nodes) {
         if (skip.has(n.id) || !sync.entries.get(n.id)?.visible) continue;
+        // A scatter's area is no object: its solid copies are in the rays.
+        if (n.scatter && !n.mesh && !n.model) continue;
         const box = picker.bounds(n.id, false);
         if (box) objects.push({ id: n.id, name: n.name, box, mesh: !!(n.mesh || n.model) });
     }
-    return { objects, cast: rays.cast, descendants: (id) => store.descendants(id).map((n) => n.id) };
+    return { objects, cast: rays.cast, descendants: (id) => store.descendants(id).map((n) => n.id), lands: new Set(sync.terrains().map((t) => t.id)) };
 }
 
 /** World box of what the objects cover, ground planes larger than `limit` left out. */
@@ -213,7 +219,7 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
                 // Overhead, the underside of something; its top seen from below means inside a solid.
                 if (up && known(up) && up.normal[1] > -0.3) continue;
                 const head = up ? up.distance + 0.02 : Infinity;
-                if (head >= 0.5) list.push({ ix, iz, x, z, y, head, walk: head >= body.height, reached: false, indoor: false, clear: Infinity });
+                if (head >= 0.5) list.push({ ix, iz, x, z, y, head, walk: head >= body.height, reached: false, indoor: false, clear: Infinity, land: !!level.lands?.has(hit.id) });
             }
             columns[iz * nx + ix] = list;
         }
@@ -354,10 +360,11 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
     const holes: { ix: number; iz: number; x: number; z: number; y: number }[] = [];
     const seen = new Set<string>();
     for (const c of cells) {
-        if (!c.walk) continue;
+        // A terrain has no holes: a column a little higher or lower on it is its slope.
+        if (!c.walk || c.land) continue;
         for (const [dx, dz] of DIRS4) {
             const ix = c.ix + dx, iz = c.iz + dz;
-            if (!at(ix, iz) || cellAt(ix, iz, c.y, 0.15)) continue;
+            if (!at(ix, iz) || cellAt(ix, iz, c.y, 0.15) || at(ix, iz)!.some((o) => o.land)) continue;
             const k = `${ix},${iz},${Math.round(c.y * 10)}`;
             if (seen.has(k)) continue;
             seen.add(k);
@@ -432,7 +439,8 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
     }
     const empty: LevelReport['empty'] = [];
     const emptyCells: Cell[] = [];
-    const wide = sample.filter((c) => c.clear >= (covered(c) ? EMPTY_INDOOR : EMPTY_OUTDOOR));
+    // Open terrain is a landscape by design, not a room left empty.
+    const wide = sample.filter((c) => !(c.land && !covered(c)) && c.clear >= (covered(c) ? EMPTY_INDOOR : EMPTY_OUTDOOR));
     for (const cl of cluster(wide, (a, b) => Math.abs(a.ix - b.ix) <= 2 && Math.abs(a.iz - b.iz) <= 2 && Math.abs(a.y - b.y) < 0.5 && covered(a) === covered(b))) {
         if (cl.length < 2) continue;
         emptyCells.push(...cl);

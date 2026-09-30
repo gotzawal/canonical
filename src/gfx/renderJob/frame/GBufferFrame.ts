@@ -50,7 +50,7 @@ export class GBufferFrame extends RTFrame {
      * is captured on the frame so the render pass state can pick up the MSAA
      * sample count without re-reading the engine setting.
      */
-    createGBuffer(ctx: Context3D, key: string, rtWidth: number, rtHeight: number, _autoResize: boolean = true, outColor: boolean = true, depthTexture?: RenderTexture, sampleCount: number = 0) {
+    createGBuffer(ctx: Context3D, key: string, rtWidth: number, rtHeight: number, autoResize: boolean = true, outColor: boolean = true, depthTexture?: RenderTexture, sampleCount: number = 0) {
         let attachments = this.renderTargets;
         let reDescriptors = this.rtDescriptors;
         this.sampleCount = sampleCount;
@@ -67,7 +67,9 @@ export class GBufferFrame extends RTFrame {
             reDescriptors.push(colorDec);
         }
 
-        this._compressGBufferTex = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.rgba32float, false, undefined, 1, 0, true, true, ctx);
+        // A G-buffer of a fixed size (the reflection probes') keeps it; the screen's follows the canvas.
+        this._compressGBufferTex = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.rgba32float, false, undefined, 1, 0, true, autoResize, ctx);
+        this._compressGBufferTex.name = key + `_gBuffer`;
         attachments.push(this._compressGBufferTex);
 
         if (depthTexture) {
@@ -81,7 +83,7 @@ export class GBufferFrame extends RTFrame {
             const depthFormat = ctx.engine?.setting.render.useStencil
                 ? GPUTextureFormat.depth24plus_stencil8
                 : GPUTextureFormat.depth32float;
-            this.depthTexture = new RenderTexture(rtWidth, rtHeight, depthFormat, false, undefined, 1, sampleCount, true, true, ctx);
+            this.depthTexture = new RenderTexture(rtWidth, rtHeight, depthFormat, false, undefined, 1, sampleCount, true, autoResize, ctx);
             this.depthTexture.name = key + `_depthTexture`;
         }
 
@@ -126,7 +128,8 @@ export class GBufferFrame extends RTFrame {
                 key,
                 fixedWidth == 0 ? size[0] : fixedWidth,
                 fixedHeight == 0 ? size[1] : fixedHeight,
-                fixedWidth != 0 && fixedHeight != 0,
+                // Follows the canvas unless it has a size of its own.
+                fixedWidth == 0 || fixedHeight == 0,
                 outColor,
                 depthTexture,
                 sampleCount

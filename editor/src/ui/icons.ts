@@ -13,6 +13,8 @@ const PATHS: Record<string, string> = {
     physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
     gauge: '<path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 17l4.5-6"/><circle cx="12" cy="17" r="1.2"/>',
     grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
+    terrain: '<path d="M2.5 19.5 8.5 9l3.2 5 2.8-4 7 9.5Z"/><path d="m6.6 12.3 1.9 1.2 1.6-1.4"/>',
+    scatter: '<path d="M3 20.5h18M8 20.5V17M4.5 17 8 9.5l3.5 7.5ZM16.5 20.5V16M13.5 16l3-6 3 6Z"/>',
     mirror: '<ellipse cx="12" cy="10" rx="6" ry="7.5"/><path d="M9.5 8.5 12 6M9.5 12l4.5-4.5M12 17.5V21M8.5 21h7"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
@@ -113,7 +115,19 @@ export function icon(name: string, size = 16, cls = ''): SVGSVGElement {
     return wrap.firstElementChild as SVGSVGElement;
 }
 
-export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: { type: string }; model?: unknown; camera?: unknown; prefab?: string; particles?: unknown; grass?: unknown; character?: unknown; audio?: unknown }): string {
+export function nodeIcon(node: {
+    mesh?: { geometry: { type: string } };
+    light?: { type: string };
+    model?: unknown;
+    camera?: unknown;
+    prefab?: string;
+    particles?: unknown;
+    grass?: unknown;
+    terrain?: unknown;
+    scatter?: unknown;
+    character?: unknown;
+    audio?: unknown;
+}): string {
     if (node.prefab) return 'prefab';
     if (node.character) return 'walk';
     if (node.particles) return 'sparkle';
@@ -125,6 +139,8 @@ export function nodeIcon(node: { mesh?: { geometry: { type: string } }; light?: 
         return t === 'box' ? 'cube' : t;
     }
     if (node.grass) return 'grass';
+    if (node.terrain) return 'terrain';
+    if (node.scatter) return 'scatter';
     if (node.audio) return 'speaker';
     return 'empty';
 }

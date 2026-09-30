@@ -5,6 +5,7 @@
 
 import { Engine3D, Object3D, RendererMask, Uint8ArrayTexture, Vector2, Vector3, VertexAttributeName, type RenderNode, type Texture } from '@orillusion/core';
 import { GrassComponent } from '@orillusion/geometry/grass';
+import { covers, groundHeight, groundNormal, type TerrainSurface } from '../core/terrain';
 import type { GrassDoc } from '../core/types';
 import { hexToColor } from './color';
 
@@ -55,7 +56,7 @@ export class GrassField {
      * fieldFrame), each standing on `ground` below it, or flat at the
      * object's height without one. `seed` keeps the layout the same.
      */
-    place(doc: GrassDoc, frame: FieldFrame, ground: GroundGrid | null, seed: number) {
+    place(doc: GrassDoc, frame: FieldFrame, ground: Ground | null, seed: number) {
         const nodes = this.renderer.nodes;
         const random = mulberry32(seed);
         const pos = new Vector3(), rot = new Vector3(), scale = new Vector3();
@@ -123,14 +124,60 @@ export function fieldArea(frame: FieldFrame, size: [number, number]): { minX: nu
     return { minX, maxX, minZ, maxZ };
 }
 
+/** What things stand on: the height of the ground at (x, z), or null where there is none or it is too steep. */
+export interface Ground {
+    height(x: number, z: number): number | null;
+}
+
+/** The ground at a point, however steep: its height and normal (unit, up). */
+export interface GroundPoint {
+    y: number;
+    normal: [number, number, number];
+}
+
+/**
+ * Ground made of meshes (a GroundGrid) and terrains: the highest of them
+ * at each point. Terrains answer from their heightmaps, whatever level of
+ * detail their chunks draw.
+ */
+export class LayeredGround implements Ground {
+    constructor(private meshes: GroundGrid | null, private lands: TerrainSurface[], private maxSlope = MAX_SLOPE) {}
+
+    height(x: number, z: number): number | null {
+        let best: number | null = this.meshes?.height(x, z) ?? null;
+        for (const s of this.lands) {
+            if (!covers(s, x, z)) continue;
+            if (groundNormal(s, x, z)[1] < this.maxSlope) continue;
+            const y = groundHeight(s, x, z);
+            if (best === null || y > best) best = y;
+        }
+        return best;
+    }
+
+    /** The highest ground at (x, z) with its normal, however steep; null where there is none. */
+    sample(x: number, z: number): GroundPoint | null {
+        let best = this.meshes?.sample(x, z) ?? null;
+        for (const s of this.lands) {
+            if (!covers(s, x, z)) continue;
+            const y = groundHeight(s, x, z);
+            if (!best || y > best.y) best = { y, normal: groundNormal(s, x, z) };
+        }
+        return best;
+    }
+}
+
 /**
  * The ground under a field: the triangles of its renderers in world space,
  * binned on a grid over the field's area, so each blade tests a few.
  */
-export class GroundGrid {
+export class GroundGrid implements Ground {
     private tris: number[] = [];
     /** Per triangle: the up component of its normal. */
     private ups: number[] = [];
+    /** Per triangle: its normal, turned up. */
+    private normals: number[] = [];
+    /** The height of the triangle top() found last. */
+    private hitY = 0;
     private cells: number[][];
     private readonly n = 64;
     private readonly minX: number;
@@ -178,6 +225,8 @@ export class GroundGrid {
             const id = this.ups.length;
             this.tris.push(ax, ay, az, bx, by, bz, cx, cy, cz);
             this.ups.push(Math.abs(ny) / len);
+            const up = ny < 0 ? -1 / len : 1 / len;
+            this.normals.push(nx * up, ny * up, nz * up);
             const i0 = this.cell(x0, this.minX, this.sx), i1 = this.cell(x1, this.minX, this.sx);
             const j0 = this.cell(z0, this.minZ, this.sz), j1 = this.cell(z1, this.minZ, this.sz);
             for (let i = i0; i <= i1; i++) for (let j = j0; j <= j1; j++) this.cells[j * this.n + i].push(id);
@@ -190,8 +239,20 @@ export class GroundGrid {
 
     /** Height of the highest ground at (x, z), or null where there is none or it is too steep. */
     height(x: number, z: number): number | null {
+        const id = this.top(x, z);
+        return id >= 0 && this.ups[id] >= MAX_SLOPE ? this.hitY : null;
+    }
+
+    /** The highest ground at (x, z) with its normal, however steep; null where there is none. */
+    sample(x: number, z: number): GroundPoint | null {
+        const id = this.top(x, z);
+        return id < 0 ? null : { y: this.hitY, normal: [this.normals[id * 3], this.normals[id * 3 + 1], this.normals[id * 3 + 2]] };
+    }
+
+    /** The highest triangle over (x, z), its height in hitY; -1 where there is none. */
+    private top(x: number, z: number): number {
         const list = this.cells[this.cell(z, this.minZ, this.sz) * this.n + this.cell(x, this.minX, this.sx)];
-        let best = -Infinity, up = 0;
+        let best = -Infinity, found = -1;
         const t = this.tris;
         for (const id of list) {
             const o = id * 9;
@@ -204,10 +265,11 @@ export class GroundGrid {
             const y = w0 * t[o + 1] + w1 * t[o + 4] + w2 * t[o + 7];
             if (y > best) {
                 best = y;
-                up = this.ups[id];
+                found = id;
             }
         }
-        return best > -Infinity && up >= MAX_SLOPE ? best : null;
+        this.hitY = best;
+        return found;
     }
 }
 

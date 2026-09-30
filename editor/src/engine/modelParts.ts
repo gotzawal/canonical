@@ -167,6 +167,33 @@ function safe<T>(fn: () => T): T | undefined {
 }
 
 /** Enumerates the renderers and materials of a loaded model instance. */
+/**
+ * The path of each part of a model (ModelDoc.parts keys): the names of the
+ * objects down to it ("~n" tells same-named siblings apart) and "#n" for a
+ * second, third... renderer of one object.
+ */
+export function partPaths(root: Object3D): Map<RenderNode, string> {
+    const out = new Map<RenderNode, string>();
+    const walk = (obj: Object3D, prefix: string) => {
+        const counts = new Map<string, number>();
+        for (const child of obj.entityChildren as Object3D[]) {
+            if (!(child instanceof Object3D)) continue;
+            const base = (child.name || 'node').replace(/\//g, '_');
+            const n = counts.get(base) ?? 0;
+            counts.set(base, n + 1);
+            const path = prefix ? `${prefix}/${n ? `${base}~${n}` : base}` : n ? `${base}~${n}` : base;
+            let k = 0;
+            child.components.forEach((c) => {
+                if (!(c instanceof RenderNode) || !c.geometry || !c.materials?.[0]) return;
+                out.set(c, k++ ? `${path}#${k - 1}` : path);
+            });
+            walk(child, path);
+        }
+    };
+    walk(root, '');
+    return out;
+}
+
 export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
     const white = Engine3D.resFor(ctx).whiteTexture;
     const parts: ModelPart[] = [];
@@ -190,6 +217,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
         return key;
     };
 
+    const paths = partPaths(root);
     const walk = (obj: Object3D, prefix: string) => {
         const counts = new Map<string, number>();
         for (const child of obj.entityChildren as Object3D[]) {
@@ -199,13 +227,12 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
             counts.set(base, n + 1);
             const seg = n ? `${base}~${n}` : base;
             const path = prefix ? `${prefix}/${seg}` : seg;
-            let k = 0;
             child.components.forEach((c) => {
                 if (!(c instanceof RenderNode)) return;
                 const r = c as RenderNode;
                 const mat = r.materials?.[0];
                 if (!r.geometry || !mat) return;
-                const p = k++ ? `${path}#${k - 1}` : path;
+                const p = paths.get(r)!;
                 const pos = r.geometry.getAttribute(VertexAttributeName.position)?.data;
                 const idx = r.geometry.getAttribute(VertexAttributeName.indices)?.data;
                 const key = slotKey(mat);

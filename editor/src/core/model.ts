@@ -355,6 +355,97 @@ export const Grass = z.object({
 });
 export type GrassDoc = z.output<typeof Grass>;
 
+// ------------------------------------------------------------------ terrain
+
+const nodeRef = (description: string) => z.string().min(1).nullable().catch(null).meta({ description });
+
+/**
+ * A layer of a terrain's surface: a material slot's swatch (its color and
+ * normal maps at the slot's tile size) where the layer's rules put it, or
+ * where it is painted. The first layer covers the whole terrain; each
+ * later one goes over those before it where its heights and slopes match.
+ */
+export const TerrainLayer = z.object({
+    slot: nodeRef('Material slot id: the layer shows its swatch, tile size, color and roughness, and follows it when it changes; null for its own.'),
+    albedo: asset({ description: 'Color map (texture asset id): the slot\'s swatch.' }),
+    normal: asset({ description: 'Normal map (texture asset id): the slot\'s.' }),
+    tile: num(4, 0.05, 1000, { step: 0.05, description: 'Meters one tile of the maps covers.' }),
+    color: color('#808080', { description: 'Multiplies the color map (white shows it as it is).' }),
+    roughness: unit(0.9),
+    height: range([-10000, 10000], -10000, 10000, { title: 'Heights', description: 'World heights [lowest, highest] in meters where the layer shows (a beach: up to a meter above the water).' }),
+    slope: range([0, 90], 0, 90, { title: 'Slopes', description: 'Slopes [least, steepest] in degrees where the layer shows (0 flat; rock on cliffs: [35, 90]).' }),
+    heightBlend: num(1, 0, 100, { step: 0.1, description: 'Meters over which the layer fades in at its height limits.' }),
+    slopeBlend: num(5, 0, 45, { step: 0.5, description: 'Degrees over which the layer fades in at its slope limits.' }),
+    onlyPainted: bool(false, { title: 'Only Where Painted', description: 'Shows only where it is painted (paths, fields), not by its rules.' }),
+});
+export type TerrainLayerDoc = z.output<typeof TerrainLayer>;
+
+/**
+ * A terrain: a heightmap stretched over `size` meters around the object
+ * (it keeps only the object's position), from the object's height up to
+ * `height` meters above it. It is drawn in chunks that get coarser far
+ * from the camera, and its surface blends up to four layers by height,
+ * slope and paint. In Play characters and bodies stand on it and the
+ * navigation mesh covers it.
+ */
+export const Terrain = z.object({
+    heightmap: asset({ description: 'Heightmap asset id: a 16-bit grayscale PNG (or raw .r16): white is `height` meters above the object, black level with it; null is flat.' }),
+    splatmap: asset({ title: 'Paint', description: 'Painted layers asset id (an RGBA PNG, a channel for each layer), made by painting; null for none.' }),
+    size: vec2([200, 200], { precision: 1, description: 'Extent [x, z] in meters, centered on the object.' }),
+    height: num(40, 0.1, 5000, { step: 0.1, description: 'Meters from the heightmap\'s lowest (black) to its highest (white) point.' }),
+    layers: z.array(TerrainLayer).max(4).catch((c) => (Array.isArray(c?.value) ? c.value.slice(0, 4).map((l: unknown) => TerrainLayer.parse(l && typeof l === 'object' ? l : {})) : []))
+        .meta({ description: 'Up to four surface layers, the first covering everything; each later one over those before it where its rules match or it is painted.' }),
+    detail: num(1, 0.25, 4, { step: 0.05, description: 'How far from the camera the full detail reaches: 1 by default, higher is finer far away and costlier.' }),
+    collide: bool(true, { description: 'Characters and bodies stand on it in Play, and the navigation mesh covers it.' }),
+    castShadow: bool(true, { title: 'Cast Shadows' }),
+});
+export type TerrainDoc = z.output<typeof Terrain>;
+
+// ------------------------------------------------------------------ scatter
+
+export const SCATTER_SOLIDS = ['none', 'trunk', 'box'] as const;
+
+/** A kind of copy a scatter places: a model, how often it is picked and how large. */
+export const ScatterSource = z.object({
+    model: asset({ description: 'Model asset id (a tree, rock, bush).' }),
+    weight: num(1, 0, 100, { step: 0.1, description: 'How often it is picked, relative to the other sources.' }),
+    scale: range([0.8, 1.2], 0.01, 100, { precision: 2, step: 0.01, description: 'Scale [smallest, largest] each copy picks from.' }),
+    solid: oneOf(SCATTER_SOLIDS, 'none', {
+        labels: { none: 'Not Solid', trunk: 'Trunk', box: 'Box' },
+        description: 'In Play: none lets characters walk through (bushes, flowers); trunk blocks with a thin cylinder at the middle (trees); box blocks with the model\'s box (rocks, crates). Solid copies are holes in the navigation mesh.',
+    }),
+});
+export type ScatterSourceDoc = z.output<typeof ScatterSource>;
+
+/**
+ * Copies of models spread over an area by rules: the document keeps only
+ * the rules, and the same copies are made again from the seed each time.
+ * They stand on the ground object (a terrain or meshes) where its slope
+ * and height allow, keep their spacing and stay out of the areas of the
+ * objects to avoid. A model that is a set of pieces side by side (a rock
+ * set) gives each copy one piece. They are drawn instanced in cells, so
+ * the cells out of view (or beyond the draw distance) cost nothing.
+ */
+export const Scatter = z.object({
+    sources: z.array(ScatterSource).max(8).catch((c) => (Array.isArray(c?.value) ? c.value.slice(0, 8).map((x: unknown) => ScatterSource.parse(x && typeof x === 'object' ? x : {})) : []))
+        .meta({ description: 'Up to eight models to place, picked by weight.' }),
+    size: vec2([30, 30], { precision: 1, description: 'Area [x, z] in meters, centered on the object.' }),
+    count: int(200, 0, 20000, { description: 'Copies to place (fewer where the rules or the spacing leave no room).' }),
+    seed: int(1, 0, 999999, { description: 'Another seed places the copies anew.' }),
+    spacing: num(1.5, 0, 100, { step: 0.1, description: 'Least distance between copies in meters.' }),
+    ground: nodeRef('Object the copies stand on (a terrain, a floor or a group of them), by id; null places them flat at the object\'s height.'),
+    height: range([-10000, 10000], -10000, 10000, { title: 'Heights', description: 'World heights [lowest, highest] in meters where copies may stand.' }),
+    slope: range([0, 30], 0, 90, { title: 'Slopes', description: 'Slopes [least, steepest] in degrees where copies may stand.' }),
+    avoid: z.array(z.string().min(1)).max(64).catch((c) => (Array.isArray(c?.value) ? c.value.filter((x: unknown) => typeof x === 'string' && x).slice(0, 64) : []))
+        .meta({ description: 'Objects whose ground area stays clear (buildings, paths, the play area), by id.' }),
+    margin: num(1, 0, 100, { step: 0.1, description: 'Meters kept clear around the objects to avoid.' }),
+    align: unit(0, { description: 'How much copies lean with the ground: 0 upright (trees), 1 along the slope (rocks, grass tufts).' }),
+    sink: num(0, 0, 10, { step: 0.01, description: 'Meters the copies sink into the ground (so roots and rock bottoms do not float on slopes).' }),
+    distance: num(0, 0, 100000, { step: 1, title: 'Draw Distance', description: 'Copies farther than this from the camera are not drawn (a part of the area at a time); 0 draws them at any distance. Small copies (grass tufts, pebbles, flowers) can go at 40 to 80 m.' }),
+    castShadow: bool(true, { title: 'Cast Shadows' }),
+});
+export type ScatterDoc = z.output<typeof Scatter>;
+
 /**
  * A sound source (the engine's PositionAudio, or StaticAudio when not 3D)
  * that plays an audio asset in Play: ambience, music, a machine's hum, a

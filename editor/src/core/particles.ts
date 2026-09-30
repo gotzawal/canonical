@@ -67,6 +67,18 @@ export const PARTICLE_PRESETS: ParticlePreset[] = [
         values: { rate: 6, max: 400, life: [6, 10], size: [1.5, 2.5], sizeEnd: 2, shape: 'box', box: [6, 0.3, 6], velocityMin: [-0.1, 0, -0.1], velocityMax: [0.1, 0.1, 0.1], gravity: [0, 0, 0], colorStart: '#dfe6ee', colorEnd: '#dfe6ee', alphaStart: 0.18, alphaEnd: 0, blend: 'alpha', prewarm: 10 },
     },
     {
+        id: 'steam',
+        label: 'Steam',
+        hint: 'White puffs rising from a vent or hot water that widen and fade (dryers, pipes, cups).',
+        values: { rate: 14, max: 300, life: [1.5, 2.5], size: [0.12, 0.2], sizeEnd: 4, shape: 'circle', radius: 0.08, velocityMin: [-0.08, 0.6, -0.08], velocityMax: [0.08, 1, 0.08], gravity: [0, 0.15, 0], colorStart: '#eef2f5', colorEnd: '#e2e8ec', alphaStart: 0.35, alphaEnd: 0, blend: 'alpha', prewarm: 3 },
+    },
+    {
+        id: 'spray',
+        label: 'Sea spray',
+        hint: 'Droplets thrown up where waves hit rocks, falling back as they spread; place it at the waterline.',
+        values: { rate: 80, max: 800, life: [0.6, 1.2], size: [0.03, 0.07], sizeEnd: 2.5, shape: 'box', box: [2, 0.2, 0.6], velocityMin: [-1, 2.5, -1], velocityMax: [1, 5, 1], gravity: [0, -9.8, 0], colorStart: '#f4f8fa', colorEnd: '#d8e4ea', alphaStart: 0.7, alphaEnd: 0, blend: 'alpha', prewarm: 1 },
+    },
+    {
         id: 'magic',
         label: 'Magic sparkles',
         hint: 'Colorful sparkles around a point.',
