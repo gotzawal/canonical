@@ -124,6 +124,7 @@ export function menuDefinitions(
                 { label: 'Helpers', checked: () => store.prefs.helpers, action: () => store.setPrefs({ helpers: !store.prefs.helpers }) },
                 { label: 'Snapping', checked: () => store.prefs.snap, action: () => store.setPrefs({ snap: !store.prefs.snap }) },
                 { label: 'Glass Effects', checked: () => glassOn(store.prefs), action: () => store.setPrefs({ glass: !glassOn(store.prefs) }) },
+                { label: 'Navigation Mesh', checked: () => store.prefs.navMesh, action: () => store.setPrefs({ navMesh: !store.prefs.navMesh }) },
                 { separator: true },
                 ...viewportMenu(store),
                 { separator: true },

@@ -76,7 +76,8 @@ function shared() {
  * files their code names, the favicon). `ai` lists the files only agents
  * with models use (the inference worker, ONNX Runtime and its WebAssembly),
  * which games without Ask or Recall leave out; `physics` those of Rapier,
- * which games without physics bodies leave out; `ktx2`, `draco` and
+ * which games without physics bodies leave out; `navmesh` the path finding,
+ * which games without walking NPCs leave out; `ktx2`, `draco` and
  * `meshopt` the decoders of compressed textures and models, which games
  * without such assets leave out.
  */
@@ -147,6 +148,8 @@ function playerManifest() {
                 files: Array.from(files).sort(),
                 ai: only('/play/ai/services.ts'),
                 physics: only('/@dimforge/rapier3d-compat/'),
+                // Path finding (recast-navigation and its worker) for walking NPCs.
+                navmesh: only('/play/navmeshRuntime.ts'),
                 // Decoders the engine loads only for assets that need them.
                 ktx2: only('/src/textures/ktx2/_KTX2Assets.ts'),
                 draco: only('/extends/_DracoAssets.ts'),

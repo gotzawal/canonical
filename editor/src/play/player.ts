@@ -2,7 +2,7 @@ import { Camera3D, Color, LitMaterial, MeshRenderer, Object3D, RenderNode } from
 import { defaultGeometry } from '../core/defaults';
 import { Emitter } from '../core/events';
 import type { Checkpoint, Store } from '../core/store';
-import type { NodeDoc, SceneDoc, ScriptDoc, ShaderDoc } from '../core/types';
+import type { NodeDoc, SceneDoc, ScriptDoc, ShaderDoc, Vec3 } from '../core/types';
 import { hexToColor } from '../engine/color';
 import { cloneMaterial } from '../engine/modelParts';
 import type { Picker } from '../engine/picking';
@@ -17,6 +17,7 @@ import { Animations, type AnimatorApi } from './animation';
 import { AudioSystem, type AudioApi, type SoundHandle, type SoundOptions } from './audio';
 import { Characters, type Character } from './character';
 import { bodyOf, loadPhysics, physicsLoaded, preloadPhysics, usesPhysics, Physics, type BodyApi, type PhysicsApi } from './physics';
+import { navAgent, navigationFor, levelTriangles, usesNavigation, type LevelNav } from './navmesh';
 import { PlayControls } from './playControls';
 import { PlayerController } from './playerController';
 import {
@@ -124,6 +125,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private audio: AudioSystem | null = null;
     /** Play without sound (the assistant's play tests). */
     private muted = false;
+    /** When each character last made a footstep sound. */
+    private steps = new WeakMap<Character, number>();
+    /** The level's navigation mesh (play/navmesh.ts), once it is ready. */
+    private nav: LevelNav | null = null;
     /** Stops so far: a Play waiting for Rapier starts only when no Stop came in between. */
     private runs = 0;
     private controller: PlayerController | null = null;
@@ -210,6 +215,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         }
         // Agents near the player get their questions answered first (a script may name another object).
         if (this.controller) this.agents.player = this.controller.character.obj;
+        this.setupNavigation();
         this.bindInput();
         this.last = performance.now();
         this.offFrame = this.runtime.onBeforeFrame(() => this.tick());
@@ -234,6 +240,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.speech.cancelAll();
         this.audio?.dispose();
         this.audio = null;
+        this.nav?.destroy();
+        this.nav = null;
         for (const c of this.chats) c.abort();
         this.chats.clear();
         for (const inst of this.instances) {
@@ -386,6 +394,32 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         if (players.length > 1) this.warn(`One player plays at a time: ${players[0].name} does; ${players.slice(1).map((n) => n.name).join(', ')} stand(s) still.`);
     }
 
+    /**
+     * Walking NPCs (and scripts that ask for paths) get the level's
+     * navigation mesh: baked in a worker while the scene already plays
+     * (they walk straight until then), or at once when this level was baked
+     * before in this session. Then characters walk to their targets around walls.
+     */
+    private setupNavigation() {
+        if (!usesNavigation(this.store.doc)) return;
+        const run = this.runs;
+        const level = levelTriangles(this.store, this.sync);
+        const agent = navAgent(this.store.doc, this.characters?.list.map((c) => c.doc) ?? []);
+        navigationFor(level, agent).then(
+            (nav) => {
+                if (!nav) return;
+                if (run !== this.runs || this.state === 'stopped') return nav.destroy();
+                this.nav = nav;
+                this.agents.nav = nav;
+                const plan = (from: Vec3, to: Vec3) => nav.path(from, to);
+                for (const c of this.characters?.list ?? []) c.planner = plan;
+            },
+            (e) => {
+                if (run === this.runs) this.warn(`The level has no navigation mesh (${e?.message || e}), so characters walk straight at their targets.`);
+            },
+        );
+    }
+
     /** Shown objects with an Audio component play their clips (Play on Start ones at once). */
     private setupAudio() {
         const nodes = this.store.doc.nodes.filter((n) => n.audio && this.sync.entries.get(n.id)?.visible && !this.sync.detached.has(n.id));
@@ -498,6 +532,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         this.runTimers();
         this.agents.frame();
         this.characters?.update(dt);
+        if (this.agents.listening) this.footsteps();
         this.world?.step(dt);
         for (const inst of this.instances.slice()) {
             if (!inst.broken && !inst.destroyed) this.call(inst, 'lateUpdate', dt);
@@ -510,6 +545,17 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             for (const d of due) this.destroy(d.owner, d.obj);
         }
         this.input.endFrame();
+    }
+
+    /** Walking and running characters make sounds the agents' hearing notices (a step every 0.4 s, heard farther when running). */
+    private footsteps() {
+        const now = this.time.elapsed;
+        for (const c of this.characters?.list ?? []) {
+            if (c.mode !== 'walk' && c.mode !== 'run') continue;
+            if (now - (this.steps.get(c) ?? -Infinity) < 0.4) continue;
+            this.steps.set(c, now);
+            this.agents.hear({ at: [c.feet[0], c.feet[1], c.feet[2]], range: c.mode === 'run' ? 12 : 5, source: c.obj });
+        }
     }
 
     private runTimers() {
@@ -919,6 +965,10 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         return this.agents.loadMemories(items);
     }
 
+    navigation(): LevelNav | null {
+        return this.nav;
+    }
+
     audioOf(target: Object3D | string): AudioApi | null {
         const obj = typeof target === 'string' ? this.findObject(target) : target;
         return this.audio?.api(obj) ?? null;
@@ -930,6 +980,54 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
             return null;
         }
         return this.audio.play(String(clip ?? ''), opts, owner.object3D ?? null);
+    }
+
+    // ------------------------------------------------- agents' senses, tasks
+
+    castLevel(origin: Vec3, dir: Vec3, max: number, own: Set<string>): number | null {
+        // Without characters the senses get the level on their own (it follows what moves).
+        this.characters ??= new Characters(this.picker, this.sync, this.store);
+        return this.characters.rays.cast(origin, dir, max, (id) => own.has(id))?.distance ?? null;
+    }
+
+    characterObjects(): Object3D[] {
+        return this.characters?.list.map((c) => c.obj) ?? [];
+    }
+
+    objectsNamed(pattern: string): Object3D[] {
+        const p = String(pattern ?? '').trim();
+        if (!p.endsWith('*')) return this.findAll(p);
+        const start = p.slice(0, -1);
+        const out: Object3D[] = [];
+        for (const node of this.store.doc.nodes) {
+            if (!node.name.startsWith(start) || this.sync.detached.has(node.id)) continue;
+            const e = this.sync.entries.get(node.id);
+            if (e) out.push(e.obj);
+        }
+        for (const obj of this.spawnedAll) if (obj.name.startsWith(start)) out.push(obj);
+        return out;
+    }
+
+    marker(name: string): Object3D {
+        const obj = new Object3D();
+        obj.name = name;
+        // Added to the scene root: Stop removes it with everything else Play added there.
+        this.runtime.scene.addChild(obj);
+        return obj;
+    }
+
+    playSoundAt(obj: Object3D, clip: string, volume: number, range: number): SoundHandle | null {
+        if (!this.audio) return null;
+        return this.audio.play(clip, { volume, at: obj, far: range }, obj);
+    }
+
+    playClip(obj: Object3D, clip: string, fade?: number): boolean {
+        return this.animations?.of(obj)?.play(clip, fade) ?? false;
+    }
+
+    ownNodes(obj: Object3D): string[] {
+        const id = this.sync.nodeIdOf(obj);
+        return id ? [id, ...this.store.descendants(id).map((d) => d.id)] : [];
     }
 
     /** Tells the agents' hearing about a sound the object made (footsteps, a door) without playing one. */

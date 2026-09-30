@@ -126,7 +126,7 @@ export class Outliner {
         });
         const tags = h('span', { class: 'bt-tags' });
         (n.decorators ?? []).forEach((d, i) => {
-            const t = h('span', { class: 'bt-tag deco', title: decoratorType(d.type)?.summary ?? d.type }, icon(d.type === 'condition' ? 'filter' : 'history', 11), h('span', { text: decoratorType(d.type)?.brief(d, keys) ?? d.type }));
+            const t = h('span', { class: 'bt-tag deco', title: decoratorType(d.type)?.summary ?? d.type }, icon(decoratorType(d.type)?.icon ?? 'filter', 11), h('span', { text: decoratorType(d.type)?.brief(d, keys) ?? d.type }));
             t.addEventListener('click', (e) => {
                 e.stopPropagation();
                 this.select([n.id], { kind: 'decorator', index: i });
@@ -143,7 +143,7 @@ export class Outliner {
             tags.appendChild(t);
         }
         const last = dbg?.last[n.id];
-        const running = dbg?.running === n.id;
+        const running = !!dbg?.running.includes(n.id);
         const cls = [
             'tree-row',
             'bt-row',
@@ -328,7 +328,7 @@ export class Outliner {
                 enabled: locked,
                 submenu: DECORATOR_TYPES.map((d) => ({
                     label: d.label,
-                    icon: d.type === 'condition' ? 'filter' : 'history',
+                    icon: d.icon,
                     action: () => {
                         const index = n.decorators?.length ?? 0;
                         if (this.host.apply([{ op: 'add_decorator', tree: tree.id, node: n.id, decorator: this.defaultDecorator(d.type) }], `Add ${d.label}`)) this.select([n.id], { kind: 'decorator', index });
@@ -354,7 +354,7 @@ export class Outliner {
             label: 'Wrap In',
             icon: 'layers',
             enabled: () => locked() && (siblings || roots.length === 0),
-            submenu: (['selector', 'sequence'] as const).map((type) => ({
+            submenu: (['selector', 'sequence', 'parallel', 'random'] as const).map((type) => ({
                 label: nodeType(type)!.label,
                 icon: nodeType(type)!.icon,
                 action: () => {

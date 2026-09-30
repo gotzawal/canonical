@@ -73,6 +73,8 @@ export interface Prefs {
     editMode: boolean;
     /** Asset catalogs added by URL, listed in the Library after the editor's own (core/library.ts). */
     libraryCatalogs: string[];
+    /** Show the navigation mesh the characters walk on (View > Navigation Mesh). */
+    navMesh: boolean;
 }
 
 /**
@@ -183,6 +185,7 @@ function defaultPrefs(): Prefs {
         compressImports: true,
         editMode: false,
         libraryCatalogs: [],
+        navMesh: false,
     };
 }
 
@@ -213,6 +216,7 @@ function loadPrefs(): Prefs {
     prefs.editMode = prefs.editMode === true;
     prefs.backgroundCompression = prefs.backgroundCompression !== false;
     prefs.compressImports = prefs.compressImports !== false;
+    prefs.navMesh = prefs.navMesh === true;
     prefs.libraryCatalogs = Array.isArray(prefs.libraryCatalogs) ? prefs.libraryCatalogs.filter((u) => typeof u === 'string' && u.length > 0) : [];
     return prefs;
 }

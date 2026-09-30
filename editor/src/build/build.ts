@@ -8,6 +8,7 @@ import { sceneModelsNeeded } from '../core/behavior/format';
 import { shipsCopy, type DerivedRecord, type DerivedRole } from '../core/derived';
 import { usedAssetIds } from '../core/persistence';
 import { assetRoles } from '../core/refs';
+import { usesNavigation } from '../play/navmesh';
 import { usesPhysics } from '../play/physics';
 import type { AssetMeta, CameraState, SceneDoc, TextureRole } from '../core/types';
 import { GAME_FILE, PLAYER_MANIFEST, type GameFile, type PlayerManifest } from './gameFile';
@@ -40,6 +41,7 @@ export interface BuildTextures {
 interface PlayerUses {
     ai: boolean;
     physics: boolean;
+    navmesh: boolean;
     ktx2: boolean;
     draco: boolean;
     meshopt: boolean;
@@ -94,7 +96,7 @@ async function playerFiles(title: string, uses: PlayerUses): Promise<ZipEntry[]>
     if (!manifest?.html || !Array.isArray(manifest.files)) throw new Error(`${PLAYER_MANIFEST} is not valid.`);
     const root = new URL(manifest.base ?? '', manifestUrl);
     const skip = new Set<string>();
-    for (const group of ['ai', 'physics', 'ktx2', 'draco', 'meshopt'] as const) if (!uses[group]) for (const f of manifest[group] ?? []) skip.add(f);
+    for (const group of ['ai', 'physics', 'navmesh', 'ktx2', 'draco', 'meshopt'] as const) if (!uses[group]) for (const f of manifest[group] ?? []) skip.add(f);
     const out: ZipEntry[] = [];
     for (const file of manifest.files) {
         if (skip.has(file)) continue;
@@ -159,7 +161,7 @@ export async function buildGame(source: SceneDoc, opts: BuildOptions, log: (text
     const paths: Record<string, string> = {};
     const derived: Record<string, string> = {};
     const assetFiles: ZipEntry[] = [];
-    const uses: PlayerUses = { ai, physics: usesPhysics(doc), ktx2: false, draco: false, meshopt: false };
+    const uses: PlayerUses = { ai, physics: usesPhysics(doc), navmesh: usesNavigation(doc), ktx2: false, draco: false, meshopt: false };
     const roles = assetRoles(doc);
     let kept = 0;
     const packed = { textures: 0, models: 0, bytes: 0, original: 0 };

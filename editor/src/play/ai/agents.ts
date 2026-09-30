@@ -18,8 +18,8 @@ import type { Camera3D, Object3D } from '@orillusion/core';
 import { modelsNeeded, schemaOf } from '../../core/behavior/format';
 import { Emitter } from '../../core/events';
 import type {
-    AiModelDoc, AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, InferTaskDoc,
-    MemoryItemDoc, RecallServiceDoc, SceneDoc, ScriptTaskDoc,
+    AiModelDoc, AskPriority, AskServiceDoc, AskTaskDoc, BehaviorTreeDoc, BlackboardSchemaDoc, BlackboardValue, HearingServiceDoc, InferTaskDoc,
+    MemoryItemDoc, RecallServiceDoc, SceneDoc, ScriptTaskDoc, SightServiceDoc, Vec3,
 } from '../../core/types';
 import type { HeardSound } from '../audio';
 import type { Script } from '../script';
@@ -30,7 +30,8 @@ import { InferRunner, type InferHandle } from './infer';
 import { DecisionLog } from './log';
 import { decodeVector, MemoryIndex, norm, type MemoryEntry } from './memory';
 import type { Scheduler } from './scheduler';
-import { TreeInstance, type AskHandle, type TaskHandle, type TreeDebug, type TreeHost, type Walker } from './tree';
+import { hear, see, type Senser } from './sensors';
+import { TreeInstance, type AskHandle, type SoundPlaying, type TaskHandle, type TreeDebug, type TreeHost, type Walker } from './tree';
 
 /** Seconds between two ticks of one agent (10 Hz). */
 export const TICK_INTERVAL = 0.1;
@@ -52,8 +53,34 @@ export interface AgentHost {
     warn(text: string): void;
     /** Speaks a line for an object (a Model task with Speak). */
     speak?(text: string, obj: Object3D): void;
-    /** The character of an object (Move To). */
-    character(obj: Object3D): Walker | null;
+    /** The character of an object (the walking tasks, Look At). */
+    character(obj: Object3D): (Walker & { readonly doc: { eyeHeight: number; height: number } }) | null;
+    /** Distance along a ray to the first level object that is not one of `own` (node ids), or null (the senses). */
+    castLevel?(origin: Vec3, dir: Vec3, max: number, own: Set<string>): number | null;
+    /** The player's character object (Sight). */
+    playerObject?: Object3D | null;
+    /** Every character's object (Sight). */
+    characterObjects?(): Object3D[];
+    /** Objects with a name; a trailing * matches the start of names (Find Nearest, Sight). */
+    objectsNamed?(pattern: string): Object3D[];
+    /** A new object without a mesh, removed when Play stops (the senses' position markers). */
+    marker?(name: string): Object3D;
+    /** Plays a sound from an object (Play Sound). */
+    playSoundAt?(obj: Object3D, clip: string, volume: number, range: number): SoundPlaying | null;
+    /** Plays a clip of an object's model; false for an unknown clip (Play Animation). */
+    playClip?(obj: Object3D, clip: string, fade?: number): boolean;
+    /** Node ids of an object and the objects under it. */
+    ownNodes?(obj: Object3D): string[];
+}
+
+/** Path finding on the level's navigation mesh (play/navmesh.ts), once there is one. */
+export interface NavQuery {
+    /** A reachable point within `radius` of `center`, or null. */
+    randomPoint(center: Vec3, radius: number): Vec3 | null;
+    /** The nearest point on the mesh within `within` meters, or null. */
+    closest(p: Vec3, within: number): Vec3 | null;
+    /** Corner points from `from` to `to` (to the nearest reachable point), or null when there is no way. */
+    path(from: Vec3, to: Vec3): Vec3[] | null;
 }
 
 /** The models of the scene (they outlive Play sessions). */
@@ -113,8 +140,12 @@ export interface AgentDebug {
 
 const PRIORITY_FACTOR: Record<AskPriority, number> = { high: 0.25, normal: 1, low: 4 };
 
-export class Agent implements TreeHost {
+export class Agent implements TreeHost, Senser {
     readonly tree: TreeInstance;
+    /** Where it stood when Play started. */
+    private start: Vec3;
+    private own: Set<string> | null = null;
+    private markers = new Map<string, Object3D>();
     /** Play time of the next tick. */
     nextTick = 0;
     /** Its object was destroyed or Play stopped: results for it are dropped. */
@@ -132,6 +163,7 @@ export class Agent implements TreeHost {
         readonly treeDoc: BehaviorTreeDoc,
         readonly blackboard: Blackboard,
     ) {
+        this.start = this.position();
         this.tree = new TreeInstance(treeDoc, this);
     }
 
@@ -181,6 +213,177 @@ export class Agent implements TreeHost {
         return this.sys.host.character(this.obj);
     }
 
+    position(): Vec3 {
+        const w = this.obj.transform.worldPosition;
+        return [w.x, w.y, w.z];
+    }
+
+    home(): Vec3 {
+        return [...this.start] as Vec3;
+    }
+
+    turn(point: Vec3 | null): boolean {
+        const c = this.sys.host.character(this.obj);
+        if (!point) {
+            if (c) c.face = null;
+            return true;
+        }
+        const p = this.position();
+        if (Math.hypot(point[0] - p[0], point[2] - p[2]) < 1e-3) return true;
+        const yaw = ((Math.atan2(point[0] - p[0], point[2] - p[2]) * 180) / Math.PI + 360) % 360;
+        if (c) {
+            c.face = yaw;
+            return Math.abs(((((yaw - c.facing) % 360) + 540) % 360) - 180) < 8;
+        }
+        // Not a character: its object turns at once.
+        this.obj.rotationY = yaw;
+        return true;
+    }
+
+    randomPoint(center: Vec3, radius: number): Vec3 | null {
+        const nav = this.sys.nav;
+        if (nav) return nav.randomPoint(center, radius);
+        // Without a navigation mesh: a point in the ring around the center (walls make the walk fail).
+        const a = this.random() * Math.PI * 2;
+        const r = radius * (0.35 + 0.65 * Math.sqrt(this.random()));
+        return [center[0] + Math.sin(a) * r, center[1], center[2] + Math.cos(a) * r];
+    }
+
+    fleePoint(from: Vec3, distance: number): Vec3 | null {
+        const p = this.position();
+        let dx = p[0] - from[0];
+        let dz = p[2] - from[2];
+        const len = Math.hypot(dx, dz);
+        if (len < 1e-3) {
+            const a = this.random() * Math.PI * 2;
+            [dx, dz] = [Math.sin(a), Math.cos(a)];
+        } else [dx, dz] = [dx / len, dz / len];
+        const reach = Math.max(1, distance - len + 2);
+        const nav = this.sys.nav;
+        let best: Vec3 | null = null;
+        let bestScore = -Infinity;
+        // Straight away first, then more and more to the sides: the way that ends farthest from the threat.
+        for (const deg of [0, 35, -35, 70, -70, 110, -110]) {
+            const r = (deg * Math.PI) / 180;
+            const ux = dx * Math.cos(r) + dz * Math.sin(r);
+            const uz = -dx * Math.sin(r) + dz * Math.cos(r);
+            let to: Vec3 | null = [p[0] + ux * reach, p[1], p[2] + uz * reach];
+            if (nav) to = nav.closest(to, 3);
+            else {
+                const eye = this.eyes();
+                const hit = this.castLevel(eye, [ux, 0, uz], reach);
+                if (hit !== null) to = hit > 1.5 ? [p[0] + ux * (hit - 0.8), p[1], p[2] + uz * (hit - 0.8)] : null;
+            }
+            if (!to) continue;
+            const score = Math.hypot(to[0] - from[0], to[2] - from[2]) - Math.abs(deg) / 200;
+            if (score > bestScore) {
+                bestScore = score;
+                best = to;
+            }
+        }
+        return best;
+    }
+
+    findNearest(name: string, radius: number, visible: boolean): Object3D | null {
+        const host = this.sys.host;
+        const eye = this.eyes();
+        let best: Object3D | null = null;
+        let bestDist = radius;
+        for (const o of host.objectsNamed?.(name) ?? []) {
+            if (o === this.obj) continue;
+            const p = this.aimPoint(o);
+            const d = Math.hypot(p[0] - eye[0], p[1] - eye[1], p[2] - eye[2]);
+            if (d > bestDist) continue;
+            if (visible && d > 0.3) {
+                const hit = this.castLevel(eye, [(p[0] - eye[0]) / d, (p[1] - eye[1]) / d, (p[2] - eye[2]) / d], d);
+                if (hit !== null && hit < d - 0.3) continue;
+            }
+            best = o;
+            bestDist = d;
+        }
+        return best;
+    }
+
+    playSound(clip: string, volume: number, range: number): SoundPlaying | null {
+        const h = this.sys.host.playSoundAt?.(this.obj, clip, volume, range) ?? null;
+        if (!h) this.warn(`sound:${clip}`, `There is no sound "${clip}" to play (import it, or add one from the Library).`);
+        return h;
+    }
+
+    playAnimation(clip: string, fade: number): boolean {
+        return this.sys.host.playClip?.(this.obj, clip, fade < 0 ? undefined : fade) ?? false;
+    }
+
+    sense(doc: SightServiceDoc | HearingServiceDoc) {
+        if (doc.type === 'sight') see(this, doc);
+        else hear(this, doc);
+    }
+
+    // -------------------------------------------------------------- Senser
+
+    eyes(): Vec3 {
+        const p = this.position();
+        const c = this.sys.host.character(this.obj);
+        // A character's origin may be above its feet: its eyes are eye height above them.
+        if (c && 'feet' in c) {
+            const f = (c as unknown as { feet: Vec3 }).feet;
+            return [f[0], f[1] + c.doc.eyeHeight, f[2]];
+        }
+        return p;
+    }
+
+    facing(): number {
+        const c = this.sys.host.character(this.obj);
+        if (c) return c.facing;
+        const m = this.obj.transform.worldMatrix.rawData;
+        return (Math.atan2(m[8], m[10]) * 180) / Math.PI;
+    }
+
+    aimPoint(obj: Object3D): Vec3 {
+        const c = this.sys.host.character(obj);
+        if (c && 'feet' in c) {
+            const f = (c as unknown as { feet: Vec3 }).feet;
+            return [f[0], f[1] + c.doc.height * 0.75, f[2]];
+        }
+        const w = obj.transform.worldPosition;
+        return [w.x, w.y, w.z];
+    }
+
+    castLevel(origin: Vec3, dir: Vec3, max: number): number | null {
+        const host = this.sys.host;
+        if (!host.castLevel) return null;
+        this.own ??= new Set(host.ownNodes?.(this.obj) ?? [this.id]);
+        return host.castLevel(origin, dir, max, this.own);
+    }
+
+    candidates(doc: SightServiceDoc): Object3D[] {
+        const host = this.sys.host;
+        if (doc.targets === 'player') return host.playerObject ? [host.playerObject] : [];
+        if (doc.targets === 'characters') return host.characterObjects?.() ?? [];
+        return host.objectsNamed?.(doc.name) ?? [];
+    }
+
+    noises() {
+        return this.sys.noises;
+    }
+
+    marker(id: string): Object3D {
+        let m = this.markers.get(id);
+        if (!m) {
+            m = this.sys.host.marker!(`${this.name} ${id}`);
+            this.markers.set(id, m);
+        }
+        return m;
+    }
+
+    writeFact(sensor: string, key: string, value: unknown) {
+        try {
+            this.blackboard.write(key, value, 'fact');
+        } catch (e: any) {
+            this.warn(sensor, e?.message || String(e));
+        }
+    }
+
     warn(node: string, message: string) {
         const key = `${node}|${message}`;
         if (this.warned.has(key)) return;
@@ -228,6 +431,10 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     private spreadPending = false;
     /** Sounds of the last second, for the hearing sensors (play/ai/sensors.ts). */
     noises: (HeardSound & { time: number })[] = [];
+    /** Some agent's tree listens (a Hearing service): characters' footsteps count as sounds then. */
+    listening = false;
+    /** The navigation mesh, once Play has one (walking tasks follow its paths). */
+    nav: NavQuery | null = null;
     private queryCache = new Map<string, Promise<Float32Array | null>>();
     /** Vectors of the queries embedded so far (by the same keys). */
     private queryVectors = new Map<string, Float32Array>();
@@ -306,6 +513,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
                 this.host.warn(`[${a.tree.name} on ${a.name}] The agent could not start: ${e?.message || e}`);
             }
         }
+        this.listening = this.agents.some((a) => JSON.stringify(a.treeDoc.root).includes('"hearing"'));
         // Spread the agents over the tick period (again in their first frame, see frame()).
         this.agents.forEach((agent, i) => (agent.nextTick = this.time + (i / Math.max(1, this.agents.length)) * TICK_INTERVAL));
         this.spreadPending = true;
@@ -334,6 +542,8 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         this.agents.length = 0;
         this.inbox = [];
         this.noises = [];
+        this.listening = false;
+        this.nav = null;
         this.running = false;
         this.session++;
         this.services()?.scheduler.clear();

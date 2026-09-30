@@ -20,6 +20,8 @@ export interface PlayerManifest {
     ai?: string[];
     /** Files of `files` only physics uses (Rapier). */
     physics?: string[];
+    /** Files of `files` only path finding uses (recast-navigation and its worker). */
+    navmesh?: string[];
     /** Files of `files` only KTX2 textures use (the Basis transcoder). */
     ktx2?: string[];
     /** Files of `files` only Draco-compressed models use (the Draco decoder). */

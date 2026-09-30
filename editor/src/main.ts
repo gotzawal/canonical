@@ -1,7 +1,7 @@
 import './styles.css';
 import { newScene } from './core/defaults';
 import { readLocal, writeLocal } from './core/local';
-import { captureConsole } from './core/log';
+import { captureConsole, logInfo } from './core/log';
 import { messages } from './core/messages';
 import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
@@ -32,6 +32,7 @@ import { StartScreen } from './ui/startScreen';
 import { StepsBar } from './ui/stepsBar';
 import { openVersionHistory } from './ui/versionHistory';
 import { draggedLibraryItem } from './ui/libraryDialog';
+import { NavOverlay } from './viewport/navOverlay';
 import { ShotView } from './ui/shotView';
 import { Dock } from './ui/dock';
 import { h } from './ui/dom';
@@ -558,6 +559,11 @@ async function main() {
         // The game view has no editor grid.
         runtime.setGridVisible(!playing && store.prefs.grid);
     });
+    // View > Navigation Mesh: what the characters walk on, in the editor and in Play.
+    const navOverlay = new NavOverlay(runtime, store, sync, (text) => logInfo(text));
+    const updateNavOverlay = () => navOverlay.setVisible(store.prefs.navMesh);
+    store.on('prefs', updateNavOverlay);
+    updateNavOverlay();
     // GI probe spheres are an editor view aid: hidden while playing.
     const updateProbeHelpers = () => runtime.gi.setHelpersVisible(store.prefs.giProbes && !store.playing);
     store.on('prefs', updateProbeHelpers);

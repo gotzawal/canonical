@@ -4,7 +4,7 @@
 // the node type definitions.
 
 import type { BehaviorTreeDoc, BlackboardSchemaDoc, BtNodeDoc, SceneDoc } from '../types';
-import { schemaOf } from './format';
+import { isCompositeDoc, schemaOf } from './format';
 import {
     COMPARE_OPS, DECORATOR_TYPES, decoratorType, formatValue, KEY_OWNERS, KEY_TYPES, NODE_TYPES, nodeType, SERVICE_TYPES,
     serviceType, type FieldDef, type ItemTypeDef, type KeyLookup,
@@ -47,7 +47,7 @@ export function treeOutline(tree: BehaviorTreeDoc, schemas: BlackboardSchemaDoc[
         for (const s of n.services ?? []) {
             lines.push(`${pad}  service ${s.id}: ${serviceType(s.type)?.brief(s, keys) ?? s.type}${s.note ? `  # ${s.note}` : ''}${marks(s.id)}`);
         }
-        if (n.type === 'selector' || n.type === 'sequence') for (const c of n.children) visit(c, depth + 1);
+        if (isCompositeDoc(n)) for (const c of n.children) visit(c, depth + 1);
     };
     visit(tree.root, 0);
     // Tree problems without a node, and problems of the objects running the tree (their starting values).
@@ -65,7 +65,7 @@ export function behaviorOverview(doc: SceneDoc): string {
         let count = 0;
         const walk = (n: BtNodeDoc) => {
             count++;
-            if (n.type === 'selector' || n.type === 'sequence') n.children.forEach(walk);
+            if (isCompositeDoc(n)) n.children.forEach(walk);
         };
         walk(t.root);
         lines.push(`tree ${t.name} (id ${t.id}, schema ${doc.blackboards.find((s) => s.id === t.schema)?.name ?? t.schema}): ${count} nodes, runs on ${agents.map((n) => `${n.name} (${n.id})${n.agent!.enabled ? '' : ' disabled'}`).join(', ') || 'no object'}`);

@@ -2,7 +2,7 @@ import * as core from '@orillusion/core';
 import type { Camera3D, Engine3D, Object3D, Scene3D, Transform } from '@orillusion/core';
 import { invert, transformPoint } from '../core/math';
 import type { BodyDoc, Vec3 } from '../core/types';
-import type { BlackboardApi } from './ai/agents';
+import type { BlackboardApi, NavQuery } from './ai/agents';
 import type { AnimatorApi } from './animation';
 import type { AudioApi, SoundHandle, SoundOptions } from './audio';
 import type { SayOptions } from './ai/speech';
@@ -100,6 +100,7 @@ export interface PlayApi {
     physics(): PhysicsApi | null;
     animator(target: Object3D | string): AnimatorApi | null;
     audioOf(target: Object3D | string): AudioApi | null;
+    navigation(): NavQuery | null;
     playSound(owner: Script, clip: string, opts?: SoundOptions): SoundHandle | null;
     noise(owner: Script, range: number, at?: Object3D | [number, number, number]): void;
     remember(text: string, tags: string[]): string | null;
@@ -354,6 +355,23 @@ export class Script {
     }
 
     /**
+     * The level's navigation mesh in Play (null until it is ready, and in
+     * scenes without walking characters or scripts that use it):
+     * path(from, to) gives the corners of the way around walls,
+     * randomPoint(center, radius) a reachable point, closest(point, within?)
+     * the nearest point on it. Points are [x, y, z] or objects.
+     */
+    get nav(): NavApi | null {
+        const q = this.api.navigation();
+        if (!q) return null;
+        return {
+            path: (from, to) => q.path(pointOf(from), pointOf(to)),
+            randomPoint: (center, radius) => q.randomPoint(pointOf(center), Number(radius) || 0),
+            closest: (p, within = 2) => q.closest(pointOf(p), Number(within) || 2),
+        };
+    }
+
+    /**
      * Tells agents with hearing that this object made a sound that carries
      * `range` meters (at its place, or at `at`) without playing one:
      * footsteps, a door, a thrown stone landing.
@@ -420,6 +438,21 @@ export class Script {
     chat(prompt: ChatRequest['prompt'], opts: Omit<ChatRequest, 'prompt'> = {}): Promise<string> {
         return this.api.chat(this, { ...opts, prompt });
     }
+}
+
+type Point = Object3D | [number, number, number];
+
+/** Path finding for scripts (this.nav). */
+export interface NavApi {
+    path(from: Point, to: Point): Vec3[] | null;
+    randomPoint(center: Point, radius: number): Vec3 | null;
+    closest(p: Point, within?: number): Vec3 | null;
+}
+
+function pointOf(p: Point): Vec3 {
+    if (Array.isArray(p)) return [p[0], p[1], p[2]];
+    const w = (p as Object3D).transform.worldPosition;
+    return [w.x, w.y, w.z];
 }
 
 /** Lifecycle method names a script class may implement. */

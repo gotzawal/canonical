@@ -292,11 +292,11 @@ export interface BlackboardSchemaDoc {
     keys: BlackboardKeyDoc[];
 }
 
-export type BtCompositeType = 'selector' | 'sequence';
-export type BtTaskType = 'script' | 'wait' | 'set_key' | 'move_to' | 'ask' | 'infer';
+export type BtCompositeType = 'selector' | 'sequence' | 'parallel' | 'random';
+export type BtTaskType = 'script' | 'wait' | 'set_key' | 'move_to' | 'look_at' | 'wander' | 'flee' | 'find' | 'play_sound' | 'play_animation' | 'ask' | 'infer';
 export type BtNodeType = BtCompositeType | BtTaskType;
-export type BtDecoratorType = 'condition' | 'cooldown';
-export type BtServiceType = 'recall' | 'ask';
+export type BtDecoratorType = 'condition' | 'cooldown' | 'invert' | 'force' | 'repeat' | 'retry' | 'time_limit';
+export type BtServiceType = 'recall' | 'ask' | 'sight' | 'hearing';
 
 /** eq / ne: equal, not equal; ge / le: at least, at most; set: has a value (see the reference). */
 export type CompareOp = 'eq' | 'ne' | 'ge' | 'le' | 'set';
@@ -316,7 +316,37 @@ export interface CooldownDecoratorDoc {
     seconds: number;
 }
 
-export type BtDecoratorDoc = ConditionDecoratorDoc | CooldownDecoratorDoc;
+/** Success becomes failure and failure success. */
+export interface InvertDecoratorDoc {
+    type: 'invert';
+}
+
+/** The node ends with this result, whatever it did. */
+export interface ForceDecoratorDoc {
+    type: 'force';
+    result: 'success' | 'failure';
+}
+
+/** Runs the node again when it succeeds, `count` runs in all (0: until it fails). */
+export interface RepeatDecoratorDoc {
+    type: 'repeat';
+    count: number;
+}
+
+/** Runs the node again when it fails, `count` tries in all (0: until it succeeds). */
+export interface RetryDecoratorDoc {
+    type: 'retry';
+    count: number;
+}
+
+/** A run of the node that takes longer than this is aborted and fails. */
+export interface TimeLimitDecoratorDoc {
+    type: 'time_limit';
+    seconds: number;
+}
+
+export type BtDecoratorDoc =
+    | ConditionDecoratorDoc | CooldownDecoratorDoc | InvertDecoratorDoc | ForceDecoratorDoc | RepeatDecoratorDoc | RetryDecoratorDoc | TimeLimitDecoratorDoc;
 
 export type AskPriority = 'low' | 'normal' | 'high';
 export type AskTrigger = 'activate' | 'facts' | 'interval';
@@ -368,6 +398,24 @@ export interface SequenceNodeDoc extends BtNodeBase {
     children: BtNodeDoc[];
 }
 
+/**
+ * Runs its children at the same time. all: succeeds when every child
+ * succeeded, fails when one fails; one: succeeds when one succeeds, fails
+ * when every child failed; first: ends with its first child, the others
+ * running beside it (again when they finish) until then.
+ */
+export interface ParallelNodeDoc extends BtNodeBase {
+    type: 'parallel';
+    policy: 'all' | 'one' | 'first';
+    children: BtNodeDoc[];
+}
+
+/** A Selector that tries its children in a random order. */
+export interface RandomNodeDoc extends BtNodeBase {
+    type: 'random';
+    children: BtNodeDoc[];
+}
+
 export interface ScriptTaskDoc extends BtNodeBase {
     type: 'script';
     /** Method of a script on the agent's object. */
@@ -390,6 +438,59 @@ export interface MoveToTaskDoc extends BtNodeBase {
     /** Arrived this close, meters. */
     radius: number;
     run: boolean;
+}
+
+/** Turns the agent to face the object in an object key. */
+export interface LookAtTaskDoc extends BtNodeBase {
+    type: 'look_at';
+    target: string;
+}
+
+/** Walks to a random reachable point within `radius` of the object in `around` (else of where the agent started). */
+export interface WanderTaskDoc extends BtNodeBase {
+    type: 'wander';
+    radius: number;
+    around: string;
+    run: boolean;
+}
+
+/** Walks away from the object in `from` until at least `distance` meters from it. */
+export interface FleeTaskDoc extends BtNodeBase {
+    type: 'flee';
+    from: string;
+    distance: number;
+    run: boolean;
+}
+
+/** Finds the nearest object with a name (a trailing * matches the start of names) within `radius` and writes it to a tree key. */
+export interface FindTaskDoc extends BtNodeBase {
+    type: 'find';
+    name: string;
+    radius: number;
+    /** Only objects the agent can see (nothing of the level between them). */
+    visible: boolean;
+    output: string;
+}
+
+/** Plays a sound asset at the agent (agents with hearing notice it). */
+export interface PlaySoundTaskDoc extends BtNodeBase {
+    type: 'play_sound';
+    clip: string;
+    volume: number;
+    /** Heard up to this many meters. */
+    range: number;
+    /** Runs until the sound ends. */
+    wait: boolean;
+}
+
+/** Plays an animation clip of the agent's model. */
+export interface PlayAnimationTaskDoc extends BtNodeBase {
+    type: 'play_animation';
+    clip: string;
+    /** Crossfade seconds (negative: the model's own). */
+    fade: number;
+    /** Runs this many seconds (0: succeeds at once). */
+    seconds: number;
 }
 
 export interface SetKeyTaskDoc extends BtNodeBase {
@@ -429,8 +530,11 @@ export interface InferTaskDoc extends BtNodeBase {
     timeout: number;
 }
 
-export type BtNodeDoc = SelectorNodeDoc | SequenceNodeDoc | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | MoveToTaskDoc | AskTaskDoc | InferTaskDoc;
-export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc;
+export type BtNodeDoc =
+    | SelectorNodeDoc | SequenceNodeDoc | ParallelNodeDoc | RandomNodeDoc
+    | ScriptTaskDoc | WaitTaskDoc | SetKeyTaskDoc | MoveToTaskDoc | LookAtTaskDoc | WanderTaskDoc | FleeTaskDoc | FindTaskDoc | PlaySoundTaskDoc | PlayAnimationTaskDoc
+    | AskTaskDoc | InferTaskDoc;
+export type BtCompositeDoc = SelectorNodeDoc | SequenceNodeDoc | ParallelNodeDoc | RandomNodeDoc;
 
 interface BtServiceBase {
     /** Readable name, unique in the tree (shared with the nodes). */
@@ -459,7 +563,46 @@ export interface AskServiceDoc extends BtServiceBase, AskSettingsDoc {
     triggers: AskTrigger[];
 }
 
-export type BtServiceDoc = RecallServiceDoc | AskServiceDoc;
+/**
+ * Sight: sees the player, the other characters or objects with a name
+ * within a range and a field of view, with nothing of the level between
+ * them, and writes what it sees to fact keys.
+ */
+export interface SightServiceDoc extends BtServiceBase {
+    type: 'sight';
+    targets: 'player' | 'characters' | 'named';
+    /** targets = named: the object name (a trailing * matches the start of names). */
+    name: string;
+    range: number;
+    /** Degrees around where the agent faces (360: all around). */
+    fov: number;
+    /** Walls and other level objects block the view. */
+    lineOfSight: boolean;
+    /** Seconds the seen object stays in `output` after it went out of sight. */
+    memory: number;
+    /** Fact keys (empty: not written): the nearest seen object, whether one is in sight now, its distance, and a marker at where it was last seen. */
+    output: string;
+    visible: string;
+    distance: string;
+    position: string;
+}
+
+/** Hearing: notices the sounds played in 3D and scripts' noises that carry to the agent (walls muffle them). */
+export interface HearingServiceDoc extends BtServiceBase {
+    type: 'hearing';
+    /** Multiplies how far sounds carry to this agent. */
+    sensitivity: number;
+    /** Walls halve how far a sound carries. */
+    walls: boolean;
+    /** Seconds `heard` stays true after the last sound. */
+    memory: number;
+    /** Fact keys (empty: not written): whether it heard something, the object that made the sound, and a marker at where it was heard. */
+    heard: string;
+    source: string;
+    position: string;
+}
+
+export type BtServiceDoc = RecallServiceDoc | AskServiceDoc | SightServiceDoc | HearingServiceDoc;
 
 export interface BehaviorTreeDoc {
     id: string;
