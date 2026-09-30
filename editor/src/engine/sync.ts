@@ -240,6 +240,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** The terrains, and their map and paint loads still running (whenLoaded waits for them). */
     private terrainStates = new Set<TerrainState>();
     private terrainLoads = new Set<Promise<unknown>>();
+    /** The terrain material shaders read (terrainHeight), by id and version. */
+    private sharedTerrain = '';
     /** Scatter source models by asset id (taken apart once), and those loaded. */
     private scatterModels = new Map<string, Promise<ScatterModel | null>>();
     private scatterModelsLoaded = new Map<string, ScatterModel | null>();
@@ -1133,6 +1135,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.runtime.gi.invalidate();
         this.placeGrass();
         this.schedulePlaceScatters();
+        this.shareTerrain();
         this.emit('terrain', entry.id);
     }
 
@@ -1239,7 +1242,31 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.terrain = null;
         this.placeGrass();
         this.schedulePlaceScatters();
+        this.shareTerrain();
         this.emit('terrain', entry.id);
+    }
+
+    /** Hands the largest shown terrain to the material shaders that read its heights (water over it). */
+    private shareTerrain() {
+        let best: TerrainState | null = null;
+        let area = 0;
+        for (const t of this.terrainStates) {
+            if (!this.entries.get(t.view.id)?.visible) continue;
+            const a = t.view.frame.sizeX * t.view.frame.sizeZ;
+            if (a > area) {
+                area = a;
+                best = t;
+            }
+        }
+        const key = best ? `${best.view.id}|${best.version}` : '';
+        if (key === this.sharedTerrain) return;
+        this.sharedTerrain = key;
+        if (!best) {
+            this.shaders.setTerrain(null);
+            return;
+        }
+        const { map, frame: f } = best.view;
+        this.shaders.setTerrain({ width: map.width, depth: map.height, data: map.data, x: f.x, z: f.z, sizeX: f.sizeX, sizeZ: f.sizeZ, y: f.y, height: f.height });
     }
 
     /** The terrains shown, with their heights (flat while their map loads): for rays, ground, physics and navigation. */

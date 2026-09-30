@@ -470,12 +470,15 @@ fn frag() {
     {
         id: 'water',
         label: 'Water',
-        description: 'Waves, a fresnel reflection of the sky and, with a Mirror component on the object, of the scene, and the sun\'s glint.',
+        description: 'Waves, a fresnel reflection of the sky and, with a Mirror component on the object, of the scene, the sun\'s glint, and over a terrain shallow water and foam along the shore.',
         kind: 'material',
         lighting: 'lit',
         code: `// Water for a flat surface (a plane). mirrorColor(offset) is the scene a
 // Mirror component on the object reflects, moved by offset (screen units);
 // its alpha is 0 without one, and the sky is reflected instead.
+// terrainDepth() is how far below the water the terrain lies here (very
+// deep without one): the water is lighter where it is shallow, and foam
+// runs along the shore.
 // @property deepColor color #0b2a36
 // @property shallowColor color #1f5e66
 // @property waveScale float 1 0.05 5
@@ -483,6 +486,9 @@ fn frag() {
 // @property waveHeight float 0.15 0 1
 // @property distortion float 0.03 0 0.2
 // @property reflectivity float 1 0 1
+// @property depthScale float 3 0.1 50
+// @property foamColor color #e4eeec
+// @property foamWidth float 0.8 0 5
 
 // Slopes of three waves across the surface.
 fn waveSlope(p: vec2f, t: f32) -> vec2f {
@@ -495,7 +501,8 @@ fn waveSlope(p: vec2f, t: f32) -> vec2f {
 
 fn frag() {
     let p = ORI_VertexVarying.vWorldPos.xyz;
-    let slope = waveSlope(p.xz, getTime() * materialUniform.waveSpeed);
+    // Waves calm with distance: far away they are finer than a pixel and would flicker in stripes.
+    let slope = waveSlope(p.xz, getTime() * materialUniform.waveSpeed) / (1.0 + distance(globalUniform.CameraPos.xyz, p) * 0.03);
     let n = normalize(vec3f(-slope.x, 1.0, -slope.y));
     let v = normalize(globalUniform.CameraPos.xyz - p);
     let nv = max(dot(n, v), 0.0);
@@ -505,11 +512,20 @@ fn frag() {
     // The mirrored scene where there is one, else the sky.
     let mirror = mirrorColor(n.xz * materialUniform.distortion);
     let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, r, 0.0).rgb * globalUniform.skyExposure;
-    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity;
     let sun = lightBuffer[0];
-    let glint = pow(max(dot(r, -normalize(sun.direction)), 0.0), 600.0) * sun.lightColor.rgb * sun.intensity * 8.0;
 
-    ORI_ShadingInput.BaseColor = vec4f(mix(materialUniform.deepColor.rgb, materialUniform.shallowColor.rgb, sqrt(nv)) * (1.0 - fresnel), 1.0);
+    // Shallow over the ground near the shore, deep away from it (and without a terrain).
+    let depth = max(terrainDepth(), 0.0);
+    let deep = 1.0 - exp(-depth / materialUniform.depthScale);
+    let body = mix(materialUniform.shallowColor.rgb, mix(materialUniform.deepColor.rgb, materialUniform.shallowColor.rgb, sqrt(nv)), deep);
+    // Foam where the water meets the shore, in bands that run in with the waves.
+    let edge = 1.0 - smoothstep(0.0, max(materialUniform.foamWidth, 0.001), depth);
+    let bands = 0.5 + 0.5 * sin(depth * 9.0 - getTime() * 2.0 * materialUniform.waveSpeed + (slope.x + slope.y) * 6.0);
+    let foam = clamp(edge * (0.55 + 0.45 * bands), 0.0, 1.0);
+    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity * (1.0 - foam);
+    let glint = pow(max(dot(r, -normalize(sun.direction)), 0.0), 600.0) * sun.lightColor.rgb * sun.intensity * 8.0 * (1.0 - foam);
+
+    ORI_ShadingInput.BaseColor = vec4f(mix(body * (1.0 - fresnel), materialUniform.foamColor.rgb, foam), 1.0);
     // Rough, so the lighting adds no reflection of its own over this one.
     ORI_ShadingInput.Roughness = 1.0;
     ORI_ShadingInput.Metallic = 0.0;
