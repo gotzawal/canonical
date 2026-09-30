@@ -777,6 +777,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         mr.material = mat;
         mr.castShadow = true;
         mr.receiveShadow = true;
+        // Its bounds hold what it draws: views and shadow maps can leave it out, and a shadow redraws only when it moves.
+        mr.frustumCulled = true;
         mr.castGI = true;
         const [px, py, pz] = opts.position ?? [0, 0, 0];
         const [rx, ry, rz] = opts.rotation ?? [0, 0, 0];

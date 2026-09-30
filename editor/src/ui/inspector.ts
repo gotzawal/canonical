@@ -1,7 +1,7 @@
 import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, Material, Mirror, Particles, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player } from '../core/model';
 import { defaults } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
@@ -84,6 +84,7 @@ const MAX_PARTS = 150;
 /** Components whose inspector fields come from their schemas, and where they are in a node. */
 const COMPONENTS = {
     light: [Light, (n: NodeDoc) => n.light],
+    lightShadow: [LightShadow, (n: NodeDoc) => n.light?.shadow],
     camera: [Camera, (n: NodeDoc) => n.camera],
     particles: [Particles, (n: NodeDoc) => n.particles],
     character: [Character, (n: NodeDoc) => n.character],
@@ -162,7 +163,8 @@ export class InspectorPanel {
             n.id,
             this.store.selection.length,
             n.mesh ? n.mesh.geometry.type + ':' + mat!.type + ':' + (mat!.alphaMode ?? '') + ':' + shaderId + ':' + this.propsKey(shaderId) : '-',
-            n.light ? n.light.type : '-',
+            // Shadow settings show while the light casts, the cascades with them.
+            n.light ? n.light.type + (n.light.castShadow ? ':shadow:' + n.light.shadow?.coverage : '') : '-',
             n.particles ? 'fx:' + n.particles.shape : '-',
             n.camera ? 'cam' : '-',
             (n.character ? 'char' : '-') + (n.player ? ':player:' + n.player.view : ''),
@@ -785,6 +787,12 @@ export class InspectorPanel {
         // Range and radius belong to point and spot lights, the cones to spot lights: lights of this type get them.
         const own = [...(l.type !== 'directional' ? ['range', 'radius'] : []), ...(l.type === 'spot' ? ['outerAngle', 'innerAngle'] : [])];
         const rows = [row('Type', type.el), ...this.componentRows('light', ['color', 'intensity', 'castShadow']), ...this.componentRows('light', own, (n) => n.light?.type === l.type)];
+        // Its shadow map: size and redraws for every light; what it covers for directional ones.
+        if (l.castShadow) {
+            const dir = l.type === 'directional';
+            const shadow = ['resolution', 'update', ...(dir ? ['coverage', 'range'] : []), ...(dir && l.shadow?.coverage === 'cascades' ? ['cascades'] : [])];
+            rows.push(...this.componentRows('lightShadow', shadow, (n) => !!n.light?.castShadow && (!dir || n.light.type === 'directional')));
+        }
         const remove = iconButton('trash', 'Remove light', () => this.hooks<null>('Remove Light', has, (n) => delete n.light).commit!(null));
         return section('light', 'Light', l.type === 'directional' ? 'sun' : l.type === 'point' ? 'bulb' : 'spot', rows, [remove]);
     }

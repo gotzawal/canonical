@@ -22,7 +22,7 @@ import {
 import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
-    AssetKind, AssetMeta, AssetSource, GeometryType, GrassDoc, LightType, MaterialOverride, NodeDoc, ParamValue, PartOverride, PrefabDoc,
+    AssetKind, AssetMeta, AssetSource, GeometryType, GrassDoc, LightType, MaterialOverride, MaterialSlotDoc, NodeDoc, ParamValue, PartOverride, PrefabDoc,
     SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
@@ -35,8 +35,10 @@ import type { Player } from './play/player';
 import type { CameraController } from './viewport/cameraController';
 import { dropRefs, uses } from './core/refs';
 import type { ModelServices } from './play/ai/services';
-import type { RoomSample } from './design/materialSlots';
+import { useSwatch, type RoomSample } from './design/materialSlots';
+import { librarySwatch, type SwatchRecord } from './design/swatches';
 import { Pipeline } from './design/pipeline';
+import { isHdr, measureScene } from './engine/measure';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
 import type { DerivedAssets } from './derive/derivedAssets';
@@ -145,7 +147,7 @@ export class Editor extends Emitter<EditorEvents> {
         super();
         Object.assign(this, deps);
         const { store, sync } = deps;
-        this.pipeline = new Pipeline({ ...deps, blocked: () => this.viewBlock() });
+        this.pipeline = new Pipeline({ ...deps, blocked: () => this.viewBlock(), measure: () => measureScene(this.store.doc, this.derived) });
         this.usage = new UsageLog(store);
         // Parts added while a prefab instance is edited on its own stay visible.
         store.on('change', () => {
@@ -489,7 +491,7 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     /** With Prefs.compressImports, an imported file is compressed and replaces its original once that is done (the view shows the file meanwhile). */
-    private compressImported(assetId: string) {
+    compressImported(assetId: string) {
         if (!this.store.prefs.compressImports) return;
         void this.derived.packFile(assetId).then((packed) => {
             if (packed?.packed) toast(`Compressed ${packed.packed.from}: ${formatBytes(packed.packed.size)} to ${formatBytes(packed.size)}.`, 'info');
@@ -576,12 +578,39 @@ export class Editor extends Emitter<EditorEvents> {
     // ------------------------------------------------------------ downloads
 
     /**
-     * Copies a Library item into the project and, for a model, places it
-     * (see importUrl). A file copied from the same item before is used again.
+     * Copies a Library model (placed, see importUrl), image, sound or HDRI
+     * (an .hdr image the sky can show; `sky` puts it on the sky) into the
+     * project; a file copied from the same item before is used again. A
+     * material is a swatch instead (addLibraryMaterial).
      */
-    addFromLibrary(item: LibraryItem, opts: ImportUrlOptions = {}): Promise<ImportedUrl> {
+    async addFromLibrary(item: LibraryItem, opts: ImportUrlOptions & { sky?: boolean } = {}): Promise<ImportedUrl> {
+        if (item.kind === 'material') throw new Error(`${item.name} is a material: it becomes a swatch for a material slot.`);
         const ext = item.file.match(/\.[a-z0-9]+$/i)?.[0] ?? '';
-        return this.importUrl(item.url, { ...opts, name: item.name + ext, kind: item.kind, source: librarySource(item) });
+        const kind = item.kind === 'hdri' ? 'texture' : item.kind;
+        const res = await this.importUrl(item.url, { ...opts, name: item.name + ext, kind, source: librarySource(item) });
+        if (item.kind === 'hdri' && opts.sky) this.useHdriSky(res.asset.id);
+        return res;
+    }
+
+    /** Shows an HDRI (an .hdr image asset) as the sky, lighting the scene with it. */
+    useHdriSky(assetId: string) {
+        this.store.commit('HDRI Sky', (doc) => {
+            doc.environment.sky = 'hdri';
+            doc.environment.skyHdri = assetId;
+        }, { env: true });
+    }
+
+    /**
+     * Adds a Library material to the swatch library (once) and, given a
+     * slot, puts it on the slot: its textures are copied in, sized for the
+     * surface and compressed (see useSwatch).
+     */
+    async addLibraryMaterial(item: LibraryItem, slot?: string, signal?: AbortSignal): Promise<{ swatch: SwatchRecord; added: boolean; slot?: MaterialSlotDoc }> {
+        const { rec, added } = await librarySwatch(item, (url) => downloadFile(url, { signal }));
+        if (!slot) return { swatch: rec, added };
+        const used = await useSwatch(this.store, slot, rec.id);
+        for (const asset of used.added) this.compressImported(asset);
+        return { swatch: rec, added, slot: used };
     }
 
     /**
@@ -611,9 +640,11 @@ export class Editor extends Emitter<EditorEvents> {
                 // A GLB under another name: the engine picks its parser by the extension.
                 name += '.glb';
             }
-            const kind: AssetKind | null = opts.kind ?? kindOfUrl(name, blob.type);
+            const kind: AssetKind | null = opts.kind ?? (/\.hdr$/i.test(name) ? 'texture' : kindOfUrl(name, blob.type));
             if (kind !== 'model' && kind !== 'texture' && kind !== 'audio') throw new Error(`${name} is not a model (.glb, .gltf), image or sound file.`);
             asset = await putAsset(blob, name, kind, undefined, { source });
+            // An HDR image stays as it is: it is the sky's, which reads its full range.
+            if (/\.hdr$/i.test(name)) asset.compress = { mode: 'off' };
         }
         const meta = asset;
         let node: string | undefined;
@@ -624,7 +655,7 @@ export class Editor extends Emitter<EditorEvents> {
                 this.store.update((doc) => doc.assets.push(meta));
                 if (place) node = this.addModel(meta.id, opts.at, opts.frame ?? !opts.at);
             });
-            if (meta.kind !== 'audio') this.compressImported(meta.id);
+            if (meta.kind !== 'audio' && meta.compress?.mode !== 'off') this.compressImported(meta.id);
         } else if (place) node = this.addModel(meta.id, opts.at, opts.frame ?? !opts.at);
         return { asset: meta, node, reused };
     }
@@ -1636,7 +1667,8 @@ export class Editor extends Emitter<EditorEvents> {
      */
     setTextureCompression(assetId: string, patch: Partial<TextureCompression>) {
         const meta = this.store.doc.assets.find((a) => a.id === assetId);
-        if (!meta || (meta.kind !== 'texture' && meta.kind !== 'model')) return;
+        // An HDR image (the HDRI sky's) ships as it is: the sky reads its full range.
+        if (!meta || (meta.kind !== 'texture' && meta.kind !== 'model') || isHdr(meta)) return;
         const next: TextureCompression = { ...meta.compress, ...patch };
         if (next.mode === 'auto' || !next.mode) delete next.mode;
         if (!next.maxSize) delete next.maxSize;

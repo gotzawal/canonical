@@ -106,7 +106,10 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
             d.nodes.find((n) => n.name === 'Sphere')!.parent = 'pool';
         });
     });
-    await setEnv(page, { ssr: { enable: true }, shadow: { cascades: true } });
+    await setEnv(page, { ssr: { enable: true } });
+    await page.evaluate(() => window.__editor.store.commit('Cascades', (d) => {
+        d.nodes.find((n) => n.name === 'Sun')!.light!.shadow.coverage = 'cascades';
+    }));
     expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 
     const seen = () => page.evaluate(() => {

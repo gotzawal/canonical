@@ -249,7 +249,7 @@ export const sceneTools = tools({
     },
     set_environment: {
         groups: ['environment'],
-        description: 'Change sky, exposure, shadows, fog and post processing settings. sky: atmospheric (fast, the default), physical (physically based: deeper sunsets and dusk, optional clouds; slower to change) or color; sun_x/sun_y place the sky\'s sun (keep it where the sun light comes from: apply_key_light does), atmosphere sets the sun disc (sun_size, sun_brightness, show_sun), the viewer\'s altitude and the physical sky\'s clouds. Directional shadows cover shadow.range meters around the Sun object (put it over the play area), or around the camera with shadow.follow (levels larger than the range); shadow.cascades splits the sun\'s shadows into four maps from the camera out to the range, sharp up close: turn it on for large outdoor levels (islands, terrain) instead of stretching one map. ssr adds screen space reflections to smooth surfaces (polished floors, wet streets, metal; only what is on screen). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
+        description: 'Change sky, exposure, shadows, fog and post processing settings. sky: atmospheric (fast, the default), physical (physically based: deeper sunsets and dusk, optional clouds; slower to change) or color; sun_x/sun_y place the sky\'s sun (keep it where the sun light comes from: apply_key_light does), atmosphere sets the sun disc (sun_size, sun_brightness, show_sun), the viewer\'s altitude and the physical sky\'s clouds. shadow.softness blurs every shadow\'s edges; what each shadow map covers, its size and redraws are the light\'s own (light.shadow in update_objects). ssr adds screen space reflections to smooth surfaces (polished floors, wet streets, metal; only what is on screen). fog.mode: linear (clear at near, full at far), exponential (density per meter past near) or height (thick low down, thinning up by height_falloff per meter: valleys, mist). god_rays needs a directional light that casts shadows; volumetric_fog is sunlit haze without shafts; ao grounds objects in their surroundings. quality is the graphics tier of built games (auto picks per device).',
         params: environmentFields(),
         run({ args, ed, store, doc }) {
             const { scene_name: name, ...rest } = args;
@@ -514,7 +514,11 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
         delete g.type;
         out.geometry = g;
     }
-    if (n.light) out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { outer_angle: n.light.outerAngle } : {}) };
+    if (n.light) {
+        const sh = n.light.shadow;
+        const shadow = n.light.castShadow && sh ? (n.light.type === 'directional' ? { resolution: sh.resolution, update: sh.update, coverage: sh.coverage, range: sh.range, ...(sh.coverage === 'cascades' ? { cascades: sh.cascades } : {}) } : { resolution: sh.resolution, update: sh.update }) : undefined;
+        out.light = { color: n.light.color, intensity: n.light.intensity, cast_shadow: n.light.castShadow, ...(shadow ? { shadow } : {}), ...(n.light.type !== 'directional' ? { range: n.light.range } : {}), ...(n.light.type === 'spot' ? { outer_angle: n.light.outerAngle } : {}) };
+    }
     if (n.camera) out.camera = { ...n.camera };
     if (n.character) {
         const c = n.character;

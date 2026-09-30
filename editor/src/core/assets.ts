@@ -62,6 +62,11 @@ export async function putAsset(blob: Blob, name: string, kind: AssetKind, id = u
         const hash = await fingerprint(blob);
         if (hash) meta.hash = hash;
     }
+    // A texture's pixel size, for what it ships at and takes on the GPU.
+    if (kind === 'texture' && !meta.width) {
+        const size = await textureSize(blob, name).catch(() => null);
+        if (size) Object.assign(meta, size);
+    }
     const record: AssetRecord = { ...meta, blob };
     memory.set(id, record);
     forgetUrl(id);
@@ -89,6 +94,20 @@ export async function imageSize(blob: Blob): Promise<{ width: number; height: nu
     const out = { width: bmp.width, height: bmp.height };
     bmp.close();
     return out;
+}
+
+/** A texture file's pixel size: from the header of a KTX2 or Radiance HDR file, else by decoding the image. */
+export async function textureSize(blob: Blob, name: string): Promise<{ width: number; height: number } | null> {
+    if (/\.ktx2$/i.test(name)) {
+        const head = new DataView(await blob.slice(0, 28).arrayBuffer());
+        return head.byteLength === 28 ? { width: head.getUint32(20, true), height: Math.max(1, head.getUint32(24, true)) } : null;
+    }
+    if (/\.hdr$/i.test(name)) {
+        // The resolution line ends the header, e.g. "-Y 512 +X 1024".
+        const m = /[-+]Y (\d+) [-+]X (\d+)/.exec(await blob.slice(0, 4096).text());
+        return m ? { width: Number(m[2]), height: Number(m[1]) } : null;
+    }
+    return imageSize(blob);
 }
 
 function forgetUrl(id: string) {

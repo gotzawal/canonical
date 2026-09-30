@@ -208,7 +208,7 @@ export interface RenderGraphDoc {
 }
 
 /** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents), 3 the scene's AI models. */
-export const SCENE_VERSION = 3;
+export const SCENE_VERSION = 4;
 
 /** The name of a scene nobody has named yet (the assistant names it when it learns what the scene is). */
 export const UNTITLED_SCENE = 'Untitled Scene';
@@ -892,6 +892,10 @@ export interface MaterialSlotDoc {
     description: string;
     /** Albedo swatch texture asset, or null while the slot is empty. */
     swatch?: string | null;
+    /** The swatch's normal map (OpenGL convention), a texture asset, if it has one. */
+    normal?: string | null;
+    /** The swatch's occlusion, roughness and metallic map (in R, G, B), if it has one: roughness and metallic multiply it. */
+    arm?: string | null;
     color: string;
     roughness: number;
     metallic: number;
@@ -963,7 +967,8 @@ export interface DesignDoc {
     play: PlayDoc;
     effects: EffectItemDoc[];
     materials: MaterialSlotDoc[];
-    budget: { shadowLights: number; fps: number };
+    /** Most shadow-casting lights, GPU memory of their shadow maps (MiB, at the high tier) and frames per second to keep. */
+    budget: { shadowLights: number; shadowMemory: number; fps: number };
     questions: QuestionDoc[];
     shots: ShotDoc[];
     stage: StageId;

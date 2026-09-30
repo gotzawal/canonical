@@ -467,7 +467,8 @@ export class DesignPanel {
         rows.push(h('div', { class: 'group-label', text: 'Budget' }));
         const shadows = new NumberField({ value: d.budget.shadowLights, step: 0.1, min: 0, precision: 0, commit: (v) => this.edit('Shadow Light Budget', (dd) => (dd.budget.shadowLights = Math.round(v))) });
         const fps = new NumberField({ value: d.budget.fps, step: 0.5, min: 1, precision: 0, commit: (v) => this.edit('Frame Rate Budget', (dd) => (dd.budget.fps = Math.round(v))) });
-        rows.push(row('Shadow Lights', shadows.el, 'Most lights that cast shadows'), row('Frame Rate', fps.el, 'Frames per second to keep'));
+        const shadowMemory = new NumberField({ value: d.budget.shadowMemory, step: 1, min: 1, precision: 0, commit: (v) => this.edit('Shadow Memory Budget', (dd) => (dd.budget.shadowMemory = Math.min(4096, Math.max(1, Math.round(v))))) });
+        rows.push(row('Shadow Lights', shadows.el, 'Most lights that cast shadows'), row('Shadow Memory', shadowMemory.el, 'MiB the shadow maps may take at the high tier'), row('Frame Rate', fps.el, 'Frames per second to keep'));
 
         // Questions.
         if (d.questions.length) {

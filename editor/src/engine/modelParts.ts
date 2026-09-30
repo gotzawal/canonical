@@ -482,11 +482,11 @@ export class ModelOverrides {
         } else om.maps.set(BASE_MAP, o.map);
     }
 
-    private loadParamTextures(om: OverrideMaterial, assets: { name: string; asset: string }[]) {
-        for (const { name, asset } of assets) {
+    private loadParamTextures(om: OverrideMaterial, assets: { name: string; asset: string; role: TextureRole }[]) {
+        for (const { name, asset, role } of assets) {
             if (om.paramAssets[name] === asset) continue;
             om.paramAssets[name] = asset;
-            void this.deps.loadTexture(asset).then((tex) => {
+            void this.deps.loadTexture(asset, role).then((tex) => {
                 if (tex && om.paramAssets[name] === asset) om.material.shader.setTexture(name, tex);
             });
         }

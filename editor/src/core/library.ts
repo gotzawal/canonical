@@ -1,6 +1,6 @@
-// The asset library: catalogs of open-source files (models, sounds, images)
-// that a project copies in when one is picked, so a scene never depends on
-// a link that may go away. The editor's own catalog is library/catalog.json
+// The asset library: catalogs of open-source files (models, sounds, images,
+// realistic PBR materials and HDRI skies) that a project copies in when one
+// is picked, so a scene never depends on a link that may go away. The editor's own catalog is library/catalog.json
 // next to it: CC0 packs mirrored into the repository (editor/library, made
 // by scripts/mirror-library.mjs). Other catalogs of the same format can be
 // added by URL (prefs.libraryCatalogs), e.g. a mirror of one's own on GitHub.
@@ -8,9 +8,14 @@
 import { kindOf } from './assets';
 import type { AssetKind, AssetSource } from './types';
 
-export type LibraryKind = Extract<AssetKind, 'model' | 'texture' | 'audio'>;
+/**
+ * model, texture (an image) and audio are copied in as assets; a material
+ * (color, normal and ARM maps with its real tile size) becomes a swatch for
+ * material slots; an hdri (.hdr) a sky that lights the scene.
+ */
+export type LibraryKind = 'model' | 'texture' | 'audio' | 'material' | 'hdri';
 
-export const LIBRARY_KINDS: LibraryKind[] = ['model', 'audio', 'texture'];
+export const LIBRARY_KINDS: LibraryKind[] = ['model', 'material', 'hdri', 'audio', 'texture'];
 
 export interface LibrarySource {
     id: string;
@@ -40,14 +45,23 @@ export interface LibraryItemDoc {
     thumb?: string;
     /** Sounds: length in seconds. */
     seconds?: number;
-    /** Images: width and height. */
+    /** Images, materials and HDRIs: width and height. */
     pixels?: [number, number];
+    /** Materials: the normal (OpenGL) and ARM (occlusion, roughness, metallic) maps, next to the color file. */
+    maps?: { normal?: string; arm?: string };
+    /** Materials: meters one tile of the texture covers in the world. */
+    tile?: number;
+    /** Who made it, and its page (when the pack credits each asset). */
+    author?: string;
+    origin?: string;
 }
 
 export interface LibraryItem extends LibraryItemDoc {
     /** The file, and its thumbnail (images are their own). */
     url: string;
     thumbUrl?: string;
+    /** Materials: where their other maps are. */
+    mapUrls?: { normal?: string; arm?: string };
     /** The catalog it is from. */
     catalog: string;
     sourceInfo?: LibrarySource;
@@ -108,12 +122,14 @@ async function fetchCatalog(url: string): Promise<LibraryCatalog> {
     for (const it of raw.items as LibraryItemDoc[]) {
         if (!it || typeof it.id !== 'string' || typeof it.file !== 'string' || !LIBRARY_KINDS.includes(it.kind)) continue;
         const file = new URL(it.file, url).href;
+        const maps = it.maps && typeof it.maps === 'object' ? it.maps : undefined;
         items.push({
             ...it,
             name: typeof it.name === 'string' && it.name ? it.name : it.id,
             tags: Array.isArray(it.tags) ? it.tags.filter((t) => typeof t === 'string') : [],
             url: file,
-            thumbUrl: it.thumb ? new URL(it.thumb, url).href : it.kind === 'texture' ? file : undefined,
+            thumbUrl: it.thumb ? new URL(it.thumb, url).href : it.kind === 'texture' || it.kind === 'material' ? file : undefined,
+            ...(maps ? { mapUrls: { ...(maps.normal ? { normal: new URL(maps.normal, url).href } : {}), ...(maps.arm ? { arm: new URL(maps.arm, url).href } : {}) } } : {}),
             catalog: url,
             sourceInfo: byId.get(it.source),
         });
@@ -153,6 +169,9 @@ export function librarySource(item: LibraryItem): AssetSource {
         url: item.url,
         item: item.id,
         ...(s ? { license: s.license, author: s.author, origin: s.url } : {}),
+        // The asset's own credit, where the pack gives one.
+        ...(item.author ? { author: item.author } : {}),
+        ...(item.origin ? { origin: item.origin } : {}),
     };
 }
 

@@ -44,6 +44,46 @@ export interface CheckContext {
     fps?: number;
     /** The viewport's frame rate limit (0 or missing: none), which caps what `fps` can show. */
     fpsLimit?: number;
+    /** GPU memory the scene's shadow maps take at the high tier, bytes (engine/shadows.ts); missing: not measured. */
+    shadowBytes?: number;
+    /** Textures the scene draws, how many have no compressed copy, and how many are larger than they need (their surface's tile times the texel density, or 2048). */
+    textures?: { total: number; uncompressed: number; oversized: number };
+}
+
+const MIB = 1048576;
+const mib = (bytes: number) => (bytes >= 10 * MIB ? Math.round(bytes / MIB) : Math.round((bytes / MIB) * 10) / 10);
+
+/** The shadow maps are within the memory budget (measured by the editor). */
+function shadowMemoryCheck({ design, shadowBytes }: CheckContext): CheckResult {
+    if (shadowBytes === undefined) return { done: false, detail: 'not measured' };
+    return { done: shadowBytes <= design.budget.shadowMemory * MIB, detail: `${mib(shadowBytes)} of ${design.budget.shadowMemory} MiB at the high tier` };
+}
+
+/** Copies an instancing group would draw together: at least this many of one shape and material, or of one model. */
+export const INSTANCING_MIN = 10;
+
+/**
+ * Objects repeated often outside instancing groups: the same primitive
+ * shape and material, or the same model asset (without part overrides),
+ * shown, not under an instancing group, not a prefab's generated part.
+ * Largest first.
+ */
+export function instancingCandidates(doc: SceneDoc, min = INSTANCING_MIN): { name: string; count: number; key: string }[] {
+    const byId = new Map(doc.nodes.map((n) => [n.id, n]));
+    const grouped = (n: NodeDoc) => {
+        for (let p = n.parent ? byId.get(n.parent) : undefined; p; p = p.parent ? byId.get(p.parent) : undefined) if (p.instancing) return true;
+        return false;
+    };
+    const groups = new Map<string, { name: string; count: number }>();
+    for (const n of doc.nodes) {
+        if (!n.visible || n.prefabChild || n.mirror || n.grass || grouped(n)) continue;
+        const key = n.mesh ? 'mesh:' + JSON.stringify(n.mesh.geometry) + JSON.stringify(n.mesh.material) : n.model && !n.model.parts && !n.model.materials ? 'model:' + n.model.asset : '';
+        if (!key) continue;
+        const g = groups.get(key) ?? { name: n.name.replace(/[\s_-]*\d+$/, '') || n.name, count: 0 };
+        g.count++;
+        groups.set(key, g);
+    }
+    return Array.from(groups, ([key, g]) => ({ key, ...g })).filter((g) => g.count >= min).sort((a, b) => b.count - a.count);
 }
 
 export interface CheckDef {
@@ -271,7 +311,7 @@ export const STAGES: StageDef[] = [
         title: 'Lighting',
         long: 'Lighting, pass 1',
         description:
-            'Every surface is still gray, so only light is judged. Set the time of day (the sun) and the sky\'s brightness, key and fill lights, interior lights, exposure, shadows (cascades keep the sun\'s sharp over large outdoor levels) and GI. Compare each shot with its reference image in grayscale.',
+            'Every surface is still gray, so only light is judged. Plan the key, fill and practical lights, then set the time of day (the sun) and the sky\'s brightness, the lights, exposure, shadows (each light its own: its size, when it is drawn again and, for the sun, one map, one around the camera or cascades for large outdoor levels) and GI. Compare each shot with its reference image in grayscale.',
         compare: 'gray',
         matchLabel: 'Values match the target',
         tools: ['read', 'design', 'lights', 'environment', 'capture', 'compare'],
@@ -290,6 +330,17 @@ export const STAGES: StageDef[] = [
                     const n = shadowLights(doc);
                     return { done: n <= design.budget.shadowLights, detail: `${n} of ${design.budget.shadowLights}` };
                 },
+            },
+            {
+                id: 'light.plan',
+                text: 'Each shadow earns its cost: its resolution, redraws and coverage fit the light\'s role',
+                hint: 'review_lighting shows what each light\'s shadow reaches and takes, with advice.',
+            },
+            {
+                id: 'light.shadowMemory',
+                text: 'Shadow maps are within the memory budget',
+                hint: 'Lower resolutions, fewer cascades or fewer shadow-casting lights bring it down (review_lighting).',
+                auto: shadowMemoryCheck,
             },
         ],
     },
@@ -358,11 +409,48 @@ export const STAGES: StageDef[] = [
         id: 'finish',
         title: 'Finish',
         long: 'Finish',
-        description: 'Final lighting pass and polish, then color grading (lift, gamma, gain and saturation as a post effect). Compare every shot with its reference image one last time and approve it.',
+        description: 'Final lighting pass and polish, then color grading (lift, gamma, gain and saturation as a post effect), and a review of what the scene costs: frame rate, shadow maps, textures, instancing, draws, effects and download size. Compare every shot with its reference image one last time and approve it.',
         compare: 'color',
         tools: [...ALL_TOOL_GROUPS],
         checks: [
             { id: 'finish.light', text: 'Final lighting pass and polish' },
+            {
+                id: 'finish.fps',
+                text: 'The frame rate is within the budget',
+                hint: 'Measured in the editor\'s viewport; the Profiler tab shows what a frame costs.',
+                auto: ({ fps, fpsLimit, design }) => {
+                    if (!fps) return { done: false, detail: 'not measured' };
+                    const limited = !!fpsLimit && fpsLimit < design.budget.fps;
+                    if (limited) return { done: false, detail: `the viewport is limited to ${fpsLimit} fps (View > Viewport Frame Rate), budget ${design.budget.fps}` };
+                    return { done: fps >= design.budget.fps * 0.95, detail: `${Math.round(fps)} of ${design.budget.fps} fps` };
+                },
+            },
+            { id: 'finish.shadowMemory', text: 'Shadow maps are within the memory budget', auto: shadowMemoryCheck },
+            {
+                id: 'finish.textures',
+                text: 'Every texture is compressed and no larger than it needs to be',
+                hint: 'review_performance lists them; set_texture_options compresses one or caps its size.',
+                auto: ({ textures }) => {
+                    if (!textures) return { done: false, detail: 'not measured' };
+                    const { total, uncompressed, oversized } = textures;
+                    const left = [uncompressed ? `${uncompressed} not compressed` : '', oversized ? `${oversized} larger than needed` : ''].filter(Boolean);
+                    return { done: !uncompressed && !oversized, detail: total ? (left.join(', ') || `${total} compressed`) : 'no textures' };
+                },
+            },
+            {
+                id: 'finish.instancing',
+                text: 'Objects repeated many times are drawn instanced',
+                hint: `Put ${INSTANCING_MIN} or more copies of one shape and material (or one model) under a group with instancing.`,
+                auto: ({ doc }) => {
+                    const c = instancingCandidates(doc);
+                    return { done: !c.length, detail: c.length ? c.slice(0, 3).map((g) => `${g.count} ${g.name}`).join(', ') + ' outside instancing' : undefined };
+                },
+            },
+            {
+                id: 'finish.review',
+                text: 'Optimization review done: shadows, textures, draws, effects and download size',
+                hint: 'review_performance measures them all and says what to change; tick it with a note on what you changed.',
+            },
             {
                 id: 'finish.grade',
                 text: 'Color grading is set up',

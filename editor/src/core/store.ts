@@ -5,7 +5,7 @@ import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, 
 import { sanitizeDesign } from './design';
 import { migrateScene } from './migrate';
 import { isMobileDevice } from './quality';
-import { Animation, AudioSource, Body, Camera, Character, Environment, Grass, Instancing, Mesh, Mirror, Model, Params, Particles, Player } from './model';
+import { Animation, AudioSource, Body, Camera, Character, Environment, Grass, Instancing, Light, Mesh, Mirror, Model, Params, Particles, Player } from './model';
 import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
     SCENE_VERSION, UNTITLED_SCENE, type BuildDoc, type CameraState, type NodeDoc, type ParamValue, type PostDoc, type PrefabDoc, type RenderGraphDoc,
@@ -1085,6 +1085,7 @@ function sanitizeComponents(node: NodeDoc, scriptIds: Set<string>) {
     };
     set('mesh', isObj(node.mesh) && isObj(node.mesh.material) ? Mesh.parse(node.mesh) : undefined);
     set('model', repair(Model, node.model));
+    set('light', repair(Light, node.light));
     set('camera', repair(Camera, node.camera));
     set('particles', repair(Particles, node.particles));
     set('body', repair(Body, node.body));

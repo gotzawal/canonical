@@ -14,6 +14,9 @@ import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { castGI } from './gi';
+import { setLightShadow } from './shadows';
+import { QUALITY } from '../core/quality';
+import { movesInPlay } from '../core/motion';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, plainBlades } from './grass';
 import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
@@ -196,6 +199,11 @@ export class SceneSync extends Emitter<SyncEvents> {
     constructor(private runtime: Runtime, private store: Store, readonly shaders: ShaderManager, private textureSource: TextureSource | null = null, opts: { textureMaxSize?: number } = {}) {
         super();
         this.textureMaxSize = opts.textureMaxSize ?? Infinity;
+        // The HDRI sky's image comes from the project's assets.
+        runtime.assetUrl = async (id) => {
+            const meta = this.store.doc.assets.find((a) => a.id === id);
+            return meta ? getAssetUrl(meta) : null;
+        };
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
@@ -234,6 +242,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
             this.placeGrass(hint.nodes);
             this.flushGroups();
+            if (!hint.transform) this.shadowsChanged();
             return;
         }
         const alive = new Set<string>();
@@ -254,6 +263,28 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.placeGrass();
         this.flushGroups();
         this.sweep();
+        this.shadowsChanged();
+    }
+
+    /**
+     * After an edit that is not only a move: marks which renderers stand
+     * still in Play (a light whose shadow redraws for static objects only
+     * draws those), and draws the shadow maps again, as a material may cut
+     * out something else now (moves the shadow passes see themselves).
+     */
+    private shadowsChanged() {
+        const canMove = movesInPlay(this.store.doc);
+        for (const [id, entry] of this.entries) {
+            const mode = canMove(id) ? 'auto' : 'static';
+            for (const r of this.renderersOf(id)) r.shadowCacheMode = mode;
+            if (entry.grass) entry.grass.renderer.shadowCacheMode = mode;
+            // Its copies move without it: a copy that can move makes it change every frame it moves.
+            if (entry.instancer) {
+                const members = this.groupMembers.get(id) ?? [];
+                entry.instancer.shadowCacheMode = canMove(id) || members.some((m) => canMove(m.id)) ? 'dynamic' : 'static';
+            }
+        }
+        this.runtime.redrawShadows();
     }
 
     /** Frees the shapes and materials no object shows any more. */
@@ -690,10 +721,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             sh.setUniformColor('emissiveColor', hexToColor(md.emissive));
             sh.setUniformFloat('emissiveIntensity', Math.max(0, md.emissiveIntensity));
             const assets = applyProps(sh, this.shaders.props(md.shader!), md.params ?? {}, this.runtime.engine.context3D);
-            for (const { name, asset } of assets) {
+            for (const { name, asset, role } of assets) {
                 if (rec.paramAssets[name] === asset) continue;
                 rec.paramAssets[name] = asset;
-                this.loadTexture(asset).then((tex) => {
+                this.loadTexture(asset, role).then((tex) => {
                     if (tex && rec.paramAssets[name] === asset) sh.setTexture(name, tex);
                 });
             }
@@ -730,6 +761,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         l.lightColor = hexToColor(light.color);
         l.intensity = Math.max(0, light.intensity);
         l.castShadow = !!light.castShadow;
+        setLightShadow(l, light.shadow);
         if (l instanceof PointLight || l instanceof SpotLight) {
             l.range = Math.max(0.01, light.range);
             l.radius = Math.max(0, light.radius);
@@ -1230,6 +1262,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                     tex = new CompressedTexture2D(this.runtime.engine.context3D, role === 'color' ? 'srgb' : 'linear');
                     tex.name = meta.name;
                     tex.maxSize = this.textureMaxSize;
+                    tex.maxAnisotropy = QUALITY[this.runtime.qualityLevel].anisotropy;
                     // Known before it has data, so a refresh meanwhile runs after this fill.
                     this.assetTextures.set(key, tex);
                 }

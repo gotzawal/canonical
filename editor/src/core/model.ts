@@ -146,6 +146,33 @@ export type ModelDoc = z.output<typeof Model>;
 // -------------------------------------------------------------------- light
 
 export const LIGHT_TYPES = ['directional', 'point', 'spot'] as const;
+export const SHADOW_RESOLUTIONS = ['low', 'medium', 'high'] as const;
+export const SHADOW_UPDATES = ['auto', 'static', 'every_frame'] as const;
+export const SHADOW_COVERAGES = ['area', 'follow', 'cascades'] as const;
+
+/**
+ * A light's shadow map: how large it is, when it is drawn again and, for a
+ * directional light, what it covers (see engine/shadows.ts for the sizes).
+ */
+export const LightShadow = group({
+    resolution: oneOf(SHADOW_RESOLUTIONS, 'medium', {
+        labels: { low: 'Low', medium: 'Medium', high: 'High' },
+        description: 'Size of the shadow map at the high graphics tier (lower tiers halve it). Directional: low 1024, medium 2048, high 4096 texels, each map or cascade 4, 16 or 64 MiB. Point and spot: each face 256, 512 or 1024 (a point light has six faces, a spot light only those its cone reaches), 0.25, 1 or 4 MiB a face. Give the key light and lights over the play area more, small, dim and far ones less.',
+    }),
+    update: oneOf(SHADOW_UPDATES, 'auto', {
+        title: 'Redraw',
+        labels: { auto: 'When Something Moves', static: 'Static Objects Only', every_frame: 'Every Frame' },
+        description: 'auto: drawn again only when the light, or something its shadow reaches, moves or changes (animated models while they play); static: only objects that never move in Play cast it, drawn again only when the level is edited (cheapest: lamps where the shadows of moving characters do not matter); every_frame: always (for vertex animation it cannot see).',
+    }),
+    coverage: oneOf(SHADOW_COVERAGES, 'area', {
+        labels: { area: 'Around the Light', follow: 'Around the Camera', cascades: 'Cascades' },
+        description: 'Directional lights: area covers Range meters around the light object (put it over the play area of a small level); follow covers Range meters around the camera (a level larger than the range); cascades splits it into maps from the camera out to Range, sharp near and coarser far (large outdoor levels). follow and cascades are drawn again whenever the camera moves.',
+    }),
+    cascades: int(4, 2, 4, { description: 'Directional lights with cascades: how many maps. Two draw half as much as four; four keep the far shadows sharper.' }),
+    range: num(60, 5, 1000, { step: 1, precision: 0, description: 'Directional lights: meters the shadow covers. A larger range is blurrier (with cascades only far away).' }),
+});
+export type LightShadowDoc = z.output<typeof LightShadow>;
+
 export const Light = z.object({
     type: oneOf(LIGHT_TYPES, 'point'),
     color: color('#ffffff'),
@@ -159,6 +186,8 @@ export const Light = z.object({
     innerAngle: angle(60, 0, 100, { title: 'Inner Cone %', description: 'Spot lights: inner cone as a percentage of the cone angle.' }),
     /** Spot only: full cone angle in degrees. */
     outerAngle: angle(60, 1, 179, { title: 'Cone Angle', description: 'Spot lights: full cone angle in degrees.' }),
+    /** Its shadow map, when it casts shadows. */
+    shadow: LightShadow,
 });
 export type LightDoc = z.output<typeof Light>;
 export type LightType = LightDoc['type'];
@@ -404,20 +433,22 @@ export const GI = group({
 }).overwrite((g) => ({ ...g, counts: clampGIGrid(g.counts) }));
 export type GIDoc = z.output<typeof GI>;
 
-export const SKY_TYPES = ['atmospheric', 'physical', 'color'] as const;
+export const SKY_TYPES = ['atmospheric', 'physical', 'color', 'hdri'] as const;
 
 export const Environment = z.object({
     /** The sky's physical model (chosen in the Effects stage; the sun's position belongs to the lighting). */
     sky: oneOf(SKY_TYPES, 'atmospheric', {
         title: 'Sky Model',
-        labels: { atmospheric: 'Single Scattering', physical: 'Multiple Scattering', color: 'Solid Color' },
+        labels: { atmospheric: 'Single Scattering', physical: 'Multiple Scattering', color: 'Solid Color', hdri: 'HDRI Image' },
         description:
             'The physical model of the sky, which also lights the scene. atmospheric: single scattering (sunlight scattered once by air, haze and ozone, ray marched with the Chapman approximation): '
             + 'quick to redraw and right for day skies; sunsets and dusk come out darker and flatter. physical: multiple scattering (Hillaire 2020: light scattered many times, '
             + 'from precomputed transmittance and scattering tables): deep sunsets, dusk and twilight glow, optional clouds; each change takes longer to redraw. '
-            + 'color: one flat color without a sun (interiors, stylized scenes).',
+            + 'color: one flat color without a sun (interiors, stylized scenes). '
+            + 'hdri: a photographed sky and surroundings (sky_hdri, an .hdr image asset such as a Library HDRI) shown around the scene and lighting it: the most realistic light; point the key light where its sun is.',
     }),
     skyColor: color('#3a4250'),
+    skyHdri: asset({ title: 'HDRI', description: 'HDRI sky: the .hdr image asset shown around the scene and lighting it (a Library HDRI).' }),
     /** Sky sun azimuth and elevation, 0..1. */
     sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light.' }),
     sunY: unit(0.6, { title: 'Sun Height', step: 0.005, precision: 3, description: 'Sky sun elevation 0..1: 0.5 on the horizon, 1 straight up.' }),
@@ -459,12 +490,9 @@ export const Environment = z.object({
         sunScatter: unit(1, { title: 'Sun Glow', description: 'The fog glows looking toward the sun.' }),
         sunFocus: num(2.7, 1, 40, { title: 'Sun Glow Focus', step: 0.1, slider: true, description: 'Higher keeps the glow closer around the sun.' }),
     }),
-    /** Directional shadows. */
+    /** Every shadow's edges; what each light's shadow map covers is the light's (Light.shadow). */
     shadow: group({
-        range: num(60, 5, 1000, { step: 1, precision: 0, description: 'Meters the directional shadows cover: around the directional light object, around the camera with Follow Camera, or from the camera out with Cascades. A larger range covers more with blurrier shadows (with Cascades only the far ones blur).' }),
         softness: num(1, 0.25, 4, { step: 0.05, slider: true, description: 'Width of the blur at shadow edges, in shadow texels.' }),
-        follow: bool(false, { title: 'Follow Camera', description: 'Shadows cover their range around the camera instead of around the light object: for levels larger than the range.' }),
-        cascades: bool(false, { description: 'The sun\'s shadows in four cascades from the camera out to Range: sharp up close and coarser far away, instead of one shadow map stretched over the whole range. For large outdoor levels (islands, terrain); the shadows are drawn four times. Replaces Follow Camera.' }),
     }),
     godRays: group({
         enable: enabled({ description: 'Light shafts: the sun (the first directional light that casts shadows) shining through gaps between shadows.' }),
@@ -504,6 +532,11 @@ export const Specs = z.object({
     doorHeight: num(2.2, 0.1, 100),
     stepHeight: num(0.3, 0, 10, { description: 'Highest step the player climbs without jumping.' }),
     maxSlope: num(40, 0, 89, { description: 'Steepest walkable slope, degrees.' }),
+    texelDensity: num(512, 64, 2048, {
+        step: 1,
+        precision: 0,
+        description: 'Texture pixels per meter the surfaces need where the camera comes closest: 512 for first person (walls within reach), 256 for third person, 128 for top-down or distant views. A tiling texture is sized to its tile times this (a 2 m tile at 512: 1024) and compressed at that size when it is put on a slot.',
+    }),
     notes: text('', 8000),
 });
 export type SpecsDoc = z.output<typeof Specs>;

@@ -11,10 +11,14 @@ export type QualityLevel = (typeof QUALITY_LEVELS)[number];
 export type QualitySetting = 'auto' | QualityLevel;
 
 export interface QualityTier {
-    /** Directional shadow map size, pixels (chosen when the engine starts). */
+    /** A directional light's shadow map at medium resolution, pixels (low halves it, high doubles it). */
     shadowMapSize: number;
-    /** Point and spot light shadow cube face size, pixels (chosen when the engine starts). */
+    /** Directional shadow maps are at most this size. */
+    shadowMapMax: number;
+    /** A point or spot light's shadow face at high resolution, pixels (medium halves it, low quarters it). */
     pointShadowSize: number;
+    /** The point and spot lights' faces share an atlas at most this wide (faces halve to fit). */
+    shadowAtlasMax: number;
     /** Directional shadows cover at most this many meters. */
     shadowRangeMax: number;
     /** Shadows are drawn again every this many frames. */
@@ -35,13 +39,28 @@ export interface QualityTier {
     ssrScale: number;
     /** Games load textures at most this large (the longer side, pixels): larger ones skip their top mips. */
     textureMaxSize: number;
+    /** Anisotropic filtering of textures: surfaces seen at a grazing angle (floors, roads) stay sharp. */
+    anisotropy: number;
 }
 
 export const QUALITY: Record<QualityLevel, QualityTier> = {
-    low: { shadowMapSize: 1024, pointShadowSize: 256, shadowRangeMax: 80, shadowEvery: 2, cascades: false, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, ssrScale: 0, textureMaxSize: 1024 },
-    medium: { shadowMapSize: 1024, pointShadowSize: 512, shadowRangeMax: 200, shadowEvery: 1, cascades: true, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, ssrScale: 0.5, textureMaxSize: 2048 },
-    high: { shadowMapSize: 2048, pointShadowSize: 1024, shadowRangeMax: Infinity, shadowEvery: 1, cascades: true, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, ssrScale: 1, textureMaxSize: Infinity },
+    low: { shadowMapSize: 1024, shadowMapMax: 1024, pointShadowSize: 256, shadowAtlasMax: 2048, shadowRangeMax: 80, shadowEvery: 2, cascades: false, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, ssrScale: 0, textureMaxSize: 1024, anisotropy: 2 },
+    medium: { shadowMapSize: 1024, shadowMapMax: 2048, pointShadowSize: 512, shadowAtlasMax: 4096, shadowRangeMax: 200, shadowEvery: 1, cascades: true, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, ssrScale: 0.5, textureMaxSize: 2048, anisotropy: 4 },
+    high: { shadowMapSize: 2048, shadowMapMax: 4096, pointShadowSize: 1024, shadowAtlasMax: 4096, shadowRangeMax: Infinity, shadowEvery: 1, cascades: true, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, ssrScale: 1, textureMaxSize: Infinity, anisotropy: 8 },
 };
+
+/**
+ * A light's shadow map size at a tier, pixels: a directional light's map
+ * (each cascade), or each face of a point or spot light's.
+ */
+export function lightShadowSize(type: 'directional' | 'point' | 'spot', resolution: 'low' | 'medium' | 'high', tier: QualityTier): number {
+    if (type === 'directional') {
+        const s = resolution === 'low' ? tier.shadowMapSize / 2 : resolution === 'high' ? tier.shadowMapSize * 2 : tier.shadowMapSize;
+        return Math.max(512, Math.min(tier.shadowMapMax, s));
+    }
+    const s = resolution === 'high' ? tier.pointShadowSize : resolution === 'medium' ? tier.pointShadowSize / 2 : tier.pointShadowSize / 4;
+    return Math.max(64, s);
+}
 
 export const isQualityLevel = (v: unknown): v is QualityLevel => QUALITY_LEVELS.includes(v as QualityLevel);
 

@@ -30,6 +30,8 @@ export function openLibraryDialog(editor: Editor, opts: { kind?: LibraryKind | n
 const KINDS: { kind: LibraryKind | null; label: string }[] = [
     { kind: null, label: 'All' },
     { kind: 'model', label: 'Models' },
+    { kind: 'material', label: 'Materials' },
+    { kind: 'hdri', label: 'Skies' },
     { kind: 'audio', label: 'Sounds' },
     { kind: 'texture', label: 'Images' },
 ];
@@ -157,15 +159,19 @@ class LibraryDialog {
             if (item.tris) facts.push(`${item.tris} tris`);
             if (item.animations?.length) facts.push(`${item.animations.length} clips`);
         } else if (item.kind === 'audio' && item.seconds) facts.push(`${item.seconds} s`);
+        else if (item.kind === 'material' && item.tile) facts.push(`${item.tile} m tile`, ...(item.mapUrls?.normal ? ['normal'] : []), ...(item.mapUrls?.arm ? ['ARM'] : []));
         else if (item.pixels) facts.push(`${item.pixels[0]} x ${item.pixels[1]}`);
         facts.push(formatBytes(item.bytes));
         const src = item.sourceInfo;
-        const title = [item.name, src ? `${src.name} by ${src.author}, ${src.license}` : '', item.tags.length ? `Tags: ${item.tags.join(', ')}` : '', item.animations?.length ? `Clips: ${item.animations.join(', ')}` : '']
+        const title = [item.name, src ? `${src.name}${item.author ? `, by ${item.author}` : ` by ${src.author}`}, ${src.license}` : '', item.tags.length ? `Tags: ${item.tags.join(', ')}` : '', item.animations?.length ? `Clips: ${item.animations.join(', ')}` : '']
             .filter(Boolean)
             .join('\n');
         const inProject = this.inProject(item);
-        const add = button(inProject ? (item.kind === 'model' ? 'Place' : 'In project') : 'Add', () => void this.add(item, tile), 'small' + (inProject ? '' : ' primary'), item.kind === 'model' ? 'plus' : 'check');
-        if (inProject && item.kind !== 'model') add.disabled = true;
+        // A material goes on the selected object's slot (else into the swatches); an HDRI onto the sky.
+        const label = item.kind === 'material' ? (this.selectedSlot() ? 'Use on Slot' : 'Add to Swatches') : item.kind === 'hdri' ? 'Use as Sky' : inProject ? (item.kind === 'model' ? 'Place' : 'In project') : 'Add';
+        const reusable = item.kind === 'model' || item.kind === 'material' || item.kind === 'hdri';
+        const add = button(label, () => void this.add(item, tile), 'small' + (inProject && !reusable ? '' : ' primary'), item.kind === 'model' ? 'plus' : 'check');
+        if (inProject && !reusable) add.disabled = true;
         const listen = item.kind === 'audio' ? iconButton(this.previewing === item.url ? 'stop' : 'play', 'Listen', () => this.listen(item)) : null;
         const tile = h(
             'div',
@@ -175,7 +181,7 @@ class LibraryDialog {
             h('div', { class: 'muted small lib-facts', text: facts.join(' · ') }),
             h('div', { class: 'po-tile-actions' }, add, h('span', { class: 'muted small lib-pack', text: src?.name ?? '' })),
         );
-        if (item.kind !== 'texture') {
+        if (item.kind === 'model' || item.kind === 'audio') {
             tile.addEventListener('dragstart', (e) => {
                 dragged.set(key, item);
                 e.dataTransfer!.setData(ASSET_MIME, `library:${key}`);
@@ -192,15 +198,28 @@ class LibraryDialog {
         this.adding.add(key);
         tile.classList.add('running');
         try {
-            const { asset, reused } = await this.editor.addFromLibrary(item);
-            const what = asset.kind === 'model' ? 'Placed' : 'Added';
-            toast(`${what} ${item.name}${reused ? '' : ` (${formatBytes(asset.size)} copied into the project)`}.${asset.kind === 'audio' ? ' Play it with an Audio component or from a script.' : ''}`, 'success');
+            if (item.kind === 'material') {
+                const slot = this.selectedSlot();
+                const res = await this.editor.addLibraryMaterial(item, slot?.id);
+                toast(res.slot ? `${res.slot.name} uses ${item.name} now, sized and compressed for its surfaces.` : `${item.name} is in the swatches: put it on a material slot (Design tab, Materials).`, 'success');
+                return;
+            }
+            const { asset, reused } = await this.editor.addFromLibrary(item, { sky: item.kind === 'hdri' });
+            const what = item.kind === 'hdri' ? 'The sky shows' : asset.kind === 'model' ? 'Placed' : 'Added';
+            toast(`${what} ${item.name}${reused ? '' : ` (${formatBytes(asset.size)} copied into the project)`}.${asset.kind === 'audio' ? ' Play it with an Audio component or from a script.' : item.kind === 'hdri' ? ' Point the key light where its sun is.' : ''}`, 'success');
         } catch (e: any) {
             toast(e?.message || String(e), 'error');
         } finally {
             this.adding.delete(key);
             if (!this.modal.closed) this.render();
         }
+    }
+
+    /** The material slot of the selected object, if it follows one. */
+    private selectedSlot() {
+        const store = this.editor.store;
+        const id = store.primary?.mesh?.material.slot;
+        return id ? store.doc.design.materials.find((s) => s.id === id) : undefined;
     }
 
     private listen(item: LibraryItem) {

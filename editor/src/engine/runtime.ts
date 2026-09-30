@@ -1,6 +1,6 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, CSM, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
-    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, SSRPost,
+    AtmosphericComponent, BloomPost, Camera3D, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowPass, PointShadowPass, LightBase, SkyRenderer, SolidColorSky, SSRPost,
     Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
@@ -11,6 +11,7 @@ import type { EnvironmentDoc } from '../core/types';
 import { hexToColor } from './color';
 import { GIController, giEngineSetting } from './gi';
 import { installGpuStats, type GpuStats } from './gpuStats';
+import { fitLightShadow } from './shadows';
 
 type PostCtor = new () => PostBase;
 
@@ -65,10 +66,6 @@ export class Runtime {
     /** A tier previewed instead of the document's (View > Graphics Quality, ?quality=). */
     private qualityOverride: QualityLevel | null = null;
     private qualitySetting: QualitySetting = 'auto';
-    /** Directional shadows: meters covered, whether around the camera, and whether the sun's are cascaded. */
-    private shadowRange = 60;
-    private shadowFollow = false;
-    private shadowCascades = false;
     private lastEnvDoc: EnvironmentDoc | null = null;
 
     fps = 0;
@@ -93,6 +90,11 @@ export class Runtime {
     private physical: PhysicalSkyComponent | null = null;
     private solidSky: SkyRenderer | null = null;
     private solidSkyTexture: SolidColorSky | null = null;
+    /** The HDRI sky's image asset, and its cube texture once loaded. */
+    private hdriAsset: string | null = null;
+    private hdriTexture: Texture | null = null;
+    /** An object URL for an image asset (the scene sync sets it): the HDRI sky loads through it. */
+    assetUrl: ((asset: string) => Promise<string | null>) | null = null;
     private post: PostProcessingComponent;
     private lastEnv = '';
     /** Environment waiting for a sky component to finish starting. */
@@ -120,8 +122,14 @@ export class Runtime {
         this.grid.name = 'EditorGrid';
         this.grid.y = 0.002;
         this.scene.addChild(this.grid);
-        // Mirrors leave it out, as they leave each other out.
-        this.grid.traverse((o: Object3D) => o.getComponent(MeshRenderer)?.addMask(MirrorComponent.MIRROR_MASK));
+        // Mirrors leave it out, as they leave each other out; it casts no
+        // shadow (it would be drawn into every shadow map, every frame).
+        this.grid.traverse((o: Object3D) => {
+            const mr = o.getComponent(MeshRenderer);
+            if (!mr) return;
+            mr.addMask(MirrorComponent.MIRROR_MASK);
+            mr.castShadow = false;
+        });
 
         this.view = new View3D();
         this.view.scene = this.scene;
@@ -148,14 +156,17 @@ export class Runtime {
             setting: {
                 // The editor does its own ray picking against the document.
                 pick: { enable: false },
-                // The map size has to be the size the shadows are filtered and biased for.
+                // Each light sizes its own shadow map (engine/shadows.ts), up
+                // to the device tier's largest; the engine allocates them as
+                // lights cast.
                 shadow: {
                     type: 'PCF',
                     shadowBound: 60,
                     shadowSize: tier.shadowMapSize,
-                    maxShadowMapWidth: tier.shadowMapSize,
-                    maxShadowMapHeight: tier.shadowMapSize,
-                    pointShadowSize: tier.pointShadowSize,
+                    maxShadowMapWidth: tier.shadowMapMax,
+                    maxShadowMapHeight: tier.shadowMapMax,
+                    pointShadowSize: tier.pointShadowSize / 2,
+                    pointShadowAtlasMax: tier.shadowAtlasMax,
                 },
                 gi: giEngineSetting(),
                 // Imported models keep the node matrices of their files
@@ -305,48 +316,28 @@ export class Runtime {
     }
 
     /**
-     * Directional shadows cover `shadowRange` meters around their light
-     * (or the camera), and as far toward the light as that, so tall
-     * casters do not lose their tops. With cascades the sun (the first
-     * directional light that casts shadows) covers the range from the
-     * camera out in cascades instead, while its cascades and the other
-     * lights fit the shadow map's layers. Lights that start later get it
-     * on the next frame; the setters do nothing when nothing changed.
+     * Fits every shadow-casting light's map to the tier drawn: its size,
+     * when it is drawn again and what a directional light's covers (see
+     * engine/shadows.ts). Lights that start later get it on the next frame;
+     * the setters do nothing when nothing changed.
      */
     private fitShadowLights() {
-        const lights = ShadowLightsCollect.directionLightList?.get(this.scene);
-        if (!lights?.length) return;
-        const r = this.shadowRange;
-        const cascaded = this.shadowCascades && lights.length - 1 + CSM.Cascades <= this.engine.setting.shadow.maxShadowMapNum;
-        lights.forEach((l, i) => {
-            if (!(l instanceof DirectLight)) return;
-            const csm = cascaded && i === 0;
-            if (l.enableCSM !== csm) {
-                l.csmSplitFunction = this.cascadeSplit;
-                l.enableCSM = csm;
-            }
-            if (csm) return;
-            l.shadowBoundWidth = r;
-            l.shadowBoundHeight = r;
-            l.shadowBoundNear = -r;
-            l.shadowBoundFar = r;
-            l.shadowFollow = this.shadowFollow;
-        });
+        const tier = QUALITY[this.qualityLevel];
+        for (const l of EntityCollect.instance.getLights(this.scene)) {
+            if (l instanceof LightBase && l.castShadow) fitLightShadow(l, tier);
+        }
     }
 
     /**
-     * Where the sun's cascades end (`index` counts their bounds, 0 at the
-     * camera's near plane): from the camera out to the shadow range,
-     * mostly on a logarithmic scale so the near ones are small and sharp,
-     * partly even so the far ones do not grow too wide.
+     * Draws every shadow map again next frame: the maps are drawn again on
+     * their own when a light or a caster moves, not when a material
+     * changes what a caster cuts out.
      */
-    private cascadeSplit = (near: number, far: number, index: number, bounds: number): number => {
-        if (index <= 0) return near;
-        const from = Math.max(near, 0.1);
-        const end = Math.max(from + 1, Math.min(far, this.shadowRange));
-        const t = index / (bounds - 1);
-        return 0.75 * from * Math.pow(end / from, t) + 0.25 * (from + (end - from) * t);
-    };
+    redrawShadows() {
+        const graph = this.view.renderGraph;
+        graph?.getPass<ShadowPass>('ShadowPass')?.forceUpdate();
+        graph?.getPass<PointShadowPass>('PointShadowPass')?.forceUpdate();
+    }
 
     private tick() {
         this.stats?.endFrame(performance.now() - this.engineStart);
@@ -473,13 +464,9 @@ export class Runtime {
         this.togglePost(GodRayPost, gr.enable && tier.godRaySteps > 0);
 
         const shadow = setting.shadow;
-        this.shadowRange = Math.min(env.shadow.range, tier.shadowRangeMax);
-        // Cascades cover the range from the camera; a tier without them keeps one map around the camera.
-        this.shadowCascades = env.shadow.cascades && tier.cascades;
-        this.shadowFollow = env.shadow.follow || env.shadow.cascades;
-        shadow.shadowBound = this.shadowRange;
         shadow.pcfKernelScale = env.shadow.softness;
         shadow.updateFrameRate = tier.shadowEvery;
+        shadow.pointShadowAtlasMax = tier.shadowAtlasMax;
         this.fitShadowLights();
 
         const fxaa = this.postList()?.get('FXAAPost');
@@ -508,7 +495,7 @@ export class Runtime {
             this.scene.removeComponent(PhysicalSkyComponent);
             this.physical = null;
         }
-        if (sky !== 'color' && this.solidSky) {
+        if (sky !== 'color' && sky !== 'hdri' && this.solidSky) {
             if (!this.solidSky.geometry) return false;
             this.scene.removeComponent(SkyRenderer);
             this.solidSky = null;
@@ -545,7 +532,9 @@ export class Runtime {
             c.displaySun = p.displaySun;
             c.exposure = p.exposure;
         } else {
+            // A flat color, or the HDRI image once it has loaded (the color until then).
             const color = hexToColor(env.skyColor);
+            const made = !this.solidSky;
             if (!this.solidSky) {
                 this.solidSky = this.scene.addComponent(SkyRenderer);
                 this.solidSkyTexture = new SolidColorSky(color, this.engine.context3D);
@@ -554,9 +543,41 @@ export class Runtime {
             } else {
                 this.solidSkyTexture!.color = color;
             }
+            const hdri = sky === 'hdri' ? env.skyHdri ?? null : null;
+            if (hdri !== this.hdriAsset) {
+                this.hdriAsset = hdri;
+                this.hdriTexture = null;
+                this.showSkyMap(this.solidSkyTexture!);
+                if (hdri) void this.loadHdri(hdri);
+            } else if (made && this.hdriTexture) {
+                // Back from another sky: the image loaded before shows again.
+                this.showSkyMap(this.hdriTexture);
+            }
             this.solidSky.exposure = env.skyExposure;
         }
         return true;
+    }
+
+    /** Shows a sky texture around the scene, and lights the scene with it. */
+    private showSkyMap(tex: Texture) {
+        if (!this.solidSky) return;
+        this.solidSky.map = tex as any;
+        this.scene.envMap = tex as any;
+        this.gi.invalidate();
+    }
+
+    /** Loads the HDRI sky's image into a cube texture and shows it, if it is still the one asked for. */
+    private async loadHdri(asset: string) {
+        try {
+            const url = await this.assetUrl?.(asset);
+            if (!url || this.hdriAsset !== asset) return;
+            const tex = await Engine3D.resFor(this.engine.context3D).loadHDRTextureCube(url);
+            if (this.hdriAsset !== asset || !tex) return;
+            this.hdriTexture = tex;
+            this.showSkyMap(tex);
+        } catch (e) {
+            console.warn('[editor] the HDRI sky could not be loaded', e);
+        }
     }
 
     private postPass(): any {

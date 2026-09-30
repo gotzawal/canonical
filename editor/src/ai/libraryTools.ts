@@ -1,13 +1,20 @@
 // The assistant's Library tools: search the asset catalogs (core/library.ts,
 // CC0 packs mirrored into the repository and catalogs the user added), copy
-// an item into the project, or download a file from a link. Files are
-// copied in, so the scene keeps them when a link goes away.
+// an item into the project (a material onto a material slot, an HDRI onto
+// the sky), or download a file from a link. Files are copied in, so the
+// scene keeps them when a link goes away.
 
 import { contactSheet } from '../core/images';
 import { catalogList, kindOfUrl, loadCatalog, searchLibrary, urlFileName, type LibraryItem, type LibraryKind } from '../core/library';
+import type { ToolGroup } from '../design/stages';
+import { findSlot, slotSummary } from './materialTools';
 import { allowedGroups, num, optStr, str, ToolError, tools, v3, type ToolEnv } from './toolUtil';
 
-const KINDS: LibraryKind[] = ['model', 'audio', 'texture'];
+const KINDS: LibraryKind[] = ['model', 'material', 'hdri', 'audio', 'texture'];
+
+/** The stage work each kind goes in with. */
+const KIND_GROUP: Record<string, ToolGroup> = { model: 'objects', audio: 'audio', material: 'materials', texture: 'materials', hdri: 'environment' };
+const KIND_WORDS: Record<string, string> = { model: 'Models', audio: 'Sounds', material: 'Materials', texture: 'Images', hdri: 'Skies' };
 
 async function allItems(env: ToolEnv): Promise<{ items: LibraryItem[]; errors: string[] }> {
     const urls = catalogList(env.editor.store.prefs.libraryCatalogs);
@@ -21,11 +28,9 @@ async function allItems(env: ToolEnv): Promise<{ items: LibraryItem[]; errors: s
     return { items, errors };
 }
 
-/** A model, sound or image goes in with the stage that uses it (when the AI settings limit tools by stage). */
+/** An item goes in with the stage that uses it (when the AI settings limit tools by stage). */
 function checkStage(env: ToolEnv, kind: string) {
-    const allowed = allowedGroups(env);
-    const group = kind === 'model' ? 'objects' : kind === 'audio' ? 'audio' : 'materials';
-    if (!allowed.has(group)) throw new ToolError(`${kind === 'model' ? 'Models' : kind === 'audio' ? 'Sounds' : 'Images'} cannot be added while the AI settings limit your tools to this stage.`);
+    if (!allowedGroups(env).has(KIND_GROUP[kind] ?? 'materials')) throw new ToolError(`${KIND_WORDS[kind] ?? 'Images'} cannot be added while the AI settings limit your tools to this stage.`);
 }
 
 function brief(item: LibraryItem, n: number) {
@@ -40,17 +45,20 @@ function brief(item: LibraryItem, n: number) {
         ...(item.animations?.length ? { clips: item.animations } : {}),
         ...(item.seconds ? { seconds: item.seconds } : {}),
         ...(item.pixels ? { pixels: item.pixels } : {}),
+        ...(item.tile ? { tile_m: item.tile } : {}),
+        ...(item.maps ? { maps: ['color', ...(item.maps.normal ? ['normal'] : []), ...(item.maps.arm ? ['arm'] : [])] } : {}),
         kb: Math.round(item.bytes / 1024),
         pack: item.sourceInfo?.name,
+        ...(item.author ? { author: item.author } : {}),
         license: item.sourceInfo?.license,
     };
 }
 
 export const libraryTools = tools({
     search_library: {
-        groups: ['objects', 'materials', 'audio'],
+        groups: ['objects', 'materials', 'audio', 'environment'],
         description:
-            'Search the asset Library: open-source (CC0) models, sounds and images that can be copied into the project, e.g. low-poly buildings, roads, trees, props, vehicles, characters with animation clips, footsteps and pickup sounds. Words match names, tags and pack names. Sizes are as authored (many packs are 1 unit per tile: scale them to the design specs). A contact sheet of the model and image results is attached, numbered like the list. Check here before building a prop from primitives.',
+            'Search the asset Library: open-source (CC0) files that can be copied into the project. Models: realistic scanned props, furniture, rocks and plants, and low-poly packs (buildings, roads, trees, vehicles, characters with animation clips). Materials: realistic scanned surfaces (brick, plaster, wood, concrete, ground, rock) with color, normal and ARM maps and their real tile size, for material slots. Skies (kind hdri): HDRI photos of real skies that light the scene. Also sounds (footsteps, pickups) and images. Words match names, tags and pack names. Model sizes are as authored (many low-poly packs are 1 unit per tile: scale them to the design specs). A contact sheet of the results with a picture is attached, numbered like the list. Check here before building a prop from primitives or generating a swatch.',
         params: {
             query: { type: 'string', description: 'Words, e.g. "building", "road corner", "tree", "coin", "jump".' },
             kind: { type: 'string', enum: KINDS },
@@ -84,14 +92,16 @@ export const libraryTools = tools({
         },
     },
     add_from_library: {
-        groups: ['objects', 'materials', 'audio'],
+        groups: ['objects', 'materials', 'audio', 'environment'],
         description:
-            'Copy a Library item into the project. A model is placed too (at position, else where new objects go) and the new object id is returned: scale it with update_object (sizes are as authored). A sound or image becomes an asset for Audio components, scripts or materials. An item the project has already is not downloaded again.',
+            'Copy a Library item into the project. A model is placed too (at position, else where new objects go) and the new object id is returned: scale it with update_object (sizes are as authored). A material becomes a swatch and, given a slot, goes on that material slot like use_swatch (its maps, real tile size, textures sized for the surface and compressed). A sky (hdri) becomes the sky, lighting the scene; sky false only adds the file. A sound or image becomes an asset for Audio components, scripts or materials. An item the project has already is not downloaded again.',
         params: {
             item: { type: 'string', description: 'Item id from search_library, e.g. "kenney-city/building-small-a".' },
             position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
             name: { type: 'string', description: 'Name of the placed object.' },
             place: { type: 'boolean', description: 'false adds a model\'s file without placing it.' },
+            slot: { type: 'string', description: 'Materials: the material slot (id or name) to put it on.' },
+            sky: { type: 'boolean', description: 'Skies: false adds the file without showing it on the sky.' },
         },
         required: ['item'],
         async run({ env, args, ed }) {
@@ -100,15 +110,37 @@ export const libraryTools = tools({
             const item = items.find((it) => it.id === id) ?? items.find((it) => it.name.toLowerCase() === id.toLowerCase());
             if (!item) throw new ToolError(`No Library item "${id}". Use an id from search_library.`);
             checkStage(env, item.kind);
+            const failed = (e: any) => {
+                if (e?.name === 'AbortError') throw e;
+                throw new ToolError(e?.message || String(e));
+            };
+            if (item.kind === 'material') {
+                const slot = args.slot !== undefined ? findSlot(env, args.slot) : undefined;
+                const res = await ed.addLibraryMaterial(item, slot?.id, env.signal).catch(failed);
+                return {
+                    data: {
+                        swatch: res.swatch.id,
+                        added_to_swatches: res.added,
+                        ...(res.slot ? { slot: slotSummary(env, res.slot) } : { note: 'In the swatch library now; use_swatch (or slot here) puts it on a material slot.' }),
+                    },
+                    summary: res.slot ? `${item.name} on ${res.slot.name}` : item.name,
+                };
+            }
             const res = await ed
-                .addFromLibrary(item, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, place: args.place !== false, frame: false, signal: env.signal })
-                .catch((e) => {
-                    if (e?.name === 'AbortError') throw e;
-                    throw new ToolError(e?.message || String(e));
-                });
+                .addFromLibrary(item, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, place: args.place !== false, frame: false, signal: env.signal, sky: args.sky !== false })
+                .catch(failed);
             if (res.node && args.name) ed.rename(res.node, String(args.name));
+            const sky = item.kind === 'hdri' && args.sky !== false;
             return {
-                data: { asset: res.asset.id, asset_name: res.asset.name, kind: res.asset.kind, ...(res.node ? { object: res.node } : {}), reused: res.reused, ...(item.extent ? { size_m: item.extent } : {}) },
+                data: {
+                    asset: res.asset.id,
+                    asset_name: res.asset.name,
+                    kind: res.asset.kind,
+                    ...(res.node ? { object: res.node } : {}),
+                    reused: res.reused,
+                    ...(item.extent ? { size_m: item.extent } : {}),
+                    ...(sky ? { note: 'The sky shows it and it lights the scene. Turn the sun (the key directional light) to match where the sun is in the photo, and set its color and intensity to match.' } : {}),
+                },
                 summary: item.name,
             };
         },
