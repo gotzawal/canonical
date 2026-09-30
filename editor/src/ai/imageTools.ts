@@ -9,6 +9,8 @@ import type { ShotDoc } from '../core/types';
 import { conceptPrompt, generateConcepts, type ConceptView } from '../design/concepts';
 import { defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot } from '../design/paintover';
 import { describeSpec, listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages } from '../openrouter/images';
+import { drawParams } from '../openrouter/imageQuality';
+import { aiSettings } from '../openrouter/settings';
 import { num, optStr, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
 export const imageTools = tools({
@@ -21,7 +23,7 @@ export const imageTools = tools({
             prompt: { type: 'string', description: 'Instruction for the image model. Leave it out for the default (keep the composition, take style and mood from the concept and the plan).' },
             count: { type: 'integer', minimum: 1, maximum: MAX_IMAGES, description: 'Images to make (default 1).' },
             seed: { type: 'integer' },
-            options: { type: 'object', description: 'Image model options such as aspect_ratio or resolution (image_model_info lists them). Leave it out for the defaults; the aspect ratio follows the shot.' },
+            options: { type: 'object', description: 'Image model options such as aspect_ratio (image_model_info lists them). Leave it out for the defaults; the aspect ratio follows the shot, and resolution and quality follow the image quality the user set.' },
             references: { type: 'array', items: { type: 'string' }, description: 'More reference image asset ids (other concepts or paintovers), sent after the capture and the concept.' },
         },
         required: ['shot'],
@@ -35,7 +37,9 @@ export const imageTools = tools({
                 if (!ed.store.doc.assets.some((a) => a.id === r && a.kind === 'image')) throw new ToolError(`"${r}" is not an image asset.`);
             }
             const options = args.options && typeof args.options === 'object' && !Array.isArray(args.options) ? (args.options as Json) : {};
-            const params = { ...optionsForShot(info, shot, lastOptions(model).params), ...options };
+            // The user's image quality decides the size and quality the model draws at.
+            const quality = aiSettings.value.drawQuality;
+            const params = { ...optionsForShot(info, shot, lastOptions(model).params), ...options, ...drawParams(info, quality) };
             const count = args.count !== undefined ? Math.max(1, Math.min(MAX_IMAGES, Math.round(num(args.count, 'count')))) : 1;
             const prompt = optStr(args.prompt, 'prompt', 4000)?.trim() || defaultPaintoverPrompt(ed.store.doc.design, shot);
             const res = await generatePaintovers(ed, shot.id, {
@@ -46,11 +50,12 @@ export const imageTools = tools({
                 params,
                 stream: false,
                 extra,
-            }, { signal: env.signal });
+                quality,
+            }, { signal: env.signal, usage: env.usage });
             const images: string[] = [];
             if (env.screenshots()) {
                 for (const p of res.paintovers) {
-                    const url = await assetImageDataUrl(p.asset, 1024);
+                    const url = await assetImageDataUrl(p.asset, env.imageSize());
                     if (url) images.push(url);
                 }
             }
@@ -99,11 +104,11 @@ export const imageTools = tools({
                 if (!ed.store.doc.assets.some((a) => a.id === r && a.kind === 'image')) throw new ToolError(`"${r}" is not an image asset.`);
             }
             const capture = typeof args.capture === 'string' && args.capture.trim() ? (args.capture.trim() === 'view' ? 'view' : findShot(env, args.capture).id) : null;
-            const res = await generateConcepts(ed, { area, view, prompt, count, references, capture, signal: env.signal });
+            const res = await generateConcepts(ed, { area, view, prompt, count, references, capture, signal: env.signal, usage: env.usage });
             const images: string[] = [];
             if (env.screenshots()) {
                 for (const c of res.concepts) {
-                    const url = await assetImageDataUrl(c.asset, 1024);
+                    const url = await assetImageDataUrl(c.asset, env.imageSize());
                     if (url) images.push(url);
                 }
             }
@@ -171,6 +176,7 @@ export const imageTools = tools({
                     seed: !!specs.seed,
                     images_per_request: specs.n?.type === 'range' ? Math.min(MAX_IMAGES, specs.n.max) : 1,
                     options,
+                    image_quality: aiSettings.value.drawQuality,
                     generation_allowed: env.allowImages(),
                 },
                 summary: model,

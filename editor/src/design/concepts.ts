@@ -9,7 +9,9 @@ import { assetImageDataUrl, blobToDataUrl, compactImage, imageExt } from '../cor
 import type { AreaDoc, AssetMeta, ConceptDoc, DesignDoc, ParamValue } from '../core/types';
 import type { Editor } from '../editor';
 import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
+import { drawParams, REFERENCE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
+import type { UsageTask } from '../ai/usage';
 import { imageModelId } from './paintover';
 
 export type ConceptView = 'exterior' | 'interior' | 'overview' | 'plan';
@@ -57,7 +59,11 @@ export interface ConceptSettings {
     references: string[];
     /** A capture of the greybox to paint from first: the current view, or a shot's id. */
     capture: 'view' | string | null;
+    /** How sharp the references and the concepts are (default: the AI settings' drawQuality). */
+    quality?: ImageQuality;
     signal?: AbortSignal;
+    /** Counts the credits spent. */
+    usage?: UsageTask;
 }
 
 /** Draws concepts and adds them to the plan as proposed concepts of the area. */
@@ -71,22 +77,24 @@ export async function generateConcepts(editor: Editor, s: ConceptSettings): Prom
     const store = editor.store;
     const dropped: string[] = [];
     const aspect = s.view === 'plan' ? 1 : 16 / 9;
+    const quality = s.quality ?? aiSettings.value.drawQuality;
+    const size = REFERENCE_PIXELS[quality];
 
     // A capture of the greybox as it is comes first: the concept keeps its shapes and composition.
     let capture: string | null = null;
     if (s.capture) {
         const shot = s.capture === 'view' ? null : editor.pipeline.shot(s.capture);
         if (s.capture !== 'view' && !shot) throw new Error(`No shot "${s.capture}".`);
-        const blob = shot ? await editor.pipeline.captureShot(shot.id, 1280) : await editor.pipeline.captureCamera(editor.pipeline.viewAsShot(aspect), aspect, 1280);
+        const blob = shot ? await editor.pipeline.captureShot(shot.id, size) : await editor.pipeline.captureCamera(editor.pipeline.viewAsShot(aspect), aspect, size);
         capture = await blobToDataUrl(blob);
     }
     const refs = [...new Set(s.references)].filter((id) => store.doc.assets.some((a) => a.id === id && a.kind === 'image'));
     let references: string[] = [];
     if ((capture || refs.length) && info && !takesImages(info)) dropped.push(`reference images (${info.name || info.id} draws from the text only)`);
-    else references = [...(capture ? [capture] : []), ...(await Promise.all(refs.map((id) => assetImageDataUrl(id, 1536)))).filter((u): u is string => !!u)];
+    else references = [...(capture ? [capture] : []), ...(await Promise.all(refs.map((id) => assetImageDataUrl(id, size)))).filter((u): u is string => !!u)];
     if (s.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
 
-    const raw: Record<string, ParamValue> = {};
+    const raw: Record<string, ParamValue> = drawParams(info, quality);
     const specs = modelParams(info);
     if (specs.aspect_ratio?.type === 'enum') {
         const v = closestAspect(specs.aspect_ratio.values, aspect);
@@ -98,6 +106,7 @@ export async function generateConcepts(editor: Editor, s: ConceptSettings): Prom
     const checked = checkParams(info, raw);
     dropped.push(...checked.dropped);
     const result = await generateImages(key, info, { model, prompt: s.prompt, references, count: s.count, params: checked.params }, { signal: s.signal });
+    s.usage?.images(model, result.images.length, result.cost, quality);
 
     const stem = (s.area?.name ?? 'scene').normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'scene';
     const metas: AssetMeta[] = [];

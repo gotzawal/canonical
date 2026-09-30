@@ -149,7 +149,7 @@ export const materialTools = tools({
             const prompt = optStr(args.prompt, 'prompt', 4000)?.trim() || swatchPrompt(slot, refs.length > 0);
             const res = await generateSwatches(
                 { prompt, refs, count, model: imageModelId(), params: {}, seed: null, name: slot.name, tags: tagsFrom(`${slot.name} ${slot.description}`), tile: slot.tile, roughness: slot.roughness, metallic: slot.metallic },
-                { signal: env.signal },
+                { signal: env.signal, usage: env.usage },
             );
             const images = res.swatches.length && env.screenshots() ? [await contactSheet(res.swatches.map((s) => s.blob))] : [];
             return {

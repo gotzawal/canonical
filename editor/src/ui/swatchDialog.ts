@@ -3,6 +3,7 @@ import { getAssetUrl } from '../core/assets';
 import { pickFiles } from '../core/persistence';
 import type { MaterialSlotDoc, ParamValue } from '../core/types';
 import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
+import { drawParams, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
 import { useSwatch } from '../design/materialSlots';
 import { imageModelId } from '../design/paintover';
@@ -10,7 +11,7 @@ import {
     deleteSwatch, generateSwatches, importSwatches, searchSwatches, swatchIdOf, swatchPrompt, tagsFrom, updateSwatch, type SwatchRecord,
 } from '../design/swatches';
 import { clear, h } from './dom';
-import { optionField } from './imageOptions';
+import { optionField, qualityField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, toast, type Modal } from './overlays';
 import { button, iconButton, suggestions } from './widgets';
@@ -46,6 +47,8 @@ class SwatchDialog {
     private optionsEl: HTMLElement;
     private count: HTMLInputElement;
     private params: Record<string, ParamValue> = {};
+    /** Sets the resolution and quality options and the size of the references (chosen per generation). */
+    private quality: ImageQuality = aiSettings.value.drawQuality;
     private models: ImageModel[] = [];
     private status: HTMLElement;
     private genBtn: HTMLButtonElement;
@@ -107,6 +110,10 @@ class SwatchDialog {
             h('div', { class: 'group-label', text: 'Image model' }),
             this.modelInput,
             modelList,
+            qualityField(this.quality, (q) => {
+                this.quality = q;
+                this.renderOptions();
+            }),
             this.optionsEl,
             h('div', { class: 'po-row' }, field('Images', this.count)),
             h('p', { class: 'muted small', text: 'Billed to your OpenRouter account; failed or cancelled generations are not charged.' }),
@@ -192,6 +199,7 @@ class SwatchDialog {
         clear(this.optionsEl);
         const specs = modelParams(model);
         for (const k of Object.keys(this.params)) if (model && !specs[k]) delete this.params[k];
+        Object.assign(this.params, drawParams(model, this.quality));
         for (const [k, spec] of Object.entries(specs)) {
             if (OWN_PARAMS.has(k) || k === 'aspect_ratio' || k === 'size') continue;
             this.optionsEl.appendChild(optionField(k, spec, this.params));
@@ -327,6 +335,8 @@ class SwatchDialog {
         const run = { abort: new AbortController(), status: `Generating 0/${count}...` };
         job = run;
         current?.jobChanged();
+        const name = this.nameInput.value.trim() || 'Swatch';
+        const usage = this.editor.usage.begin('images', `Swatches: ${name}`);
         try {
             const res = await generateSwatches(
                 {
@@ -336,13 +346,15 @@ class SwatchDialog {
                     model,
                     params: { ...this.params },
                     seed: null,
-                    name: this.nameInput.value.trim() || 'Swatch',
+                    name,
+                    quality: this.quality,
                     tags: this.tagsInput.value.split(',').map((t) => t.trim()).filter(Boolean),
                     tile: Math.max(0.05, Number(this.tileInput.value) || 2),
                     ...(slot ? { roughness: slot.roughness, metallic: slot.metallic } : {}),
                 },
                 {
                     signal: run.abort.signal,
+                    usage,
                     onProgress: (done, total) => {
                         run.status = `Generating ${done}/${total}...`;
                         current?.jobChanged();
@@ -367,6 +379,7 @@ class SwatchDialog {
             if (e?.name === 'AbortError') toast('Generation cancelled (not charged).', 'info');
             else toast(`Generation failed: ${e?.message || e}`, 'error');
         } finally {
+            usage.end();
             job = null;
             current?.jobChanged();
         }

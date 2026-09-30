@@ -6,6 +6,7 @@ import { pickFiles } from '../core/persistence';
 import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../openrouter/client';
+import { DRAW_HINTS, IMAGE_QUALITIES, QUALITY_NAMES, SEE_HINTS, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
 import { continuePrompt, startPrompt } from '../design/prompts';
 import { nextStage, stageDef, stepOf } from '../design/stages';
@@ -17,7 +18,8 @@ import { highlight } from './codeEditor';
 import { clear, h } from './dom';
 import { icon } from './icons';
 import { mascotAvatar, mascotPose, setMascotMood, type MascotMood, type MascotPose } from './mascot';
-import { dialog, toast } from './overlays';
+import { dialog, popover, toast } from './overlays';
+import { openUsageDialog, tokens } from './usageDialog';
 import { CheckboxField, NumberField, SliderField, button, iconButton, row, suggestions } from './widgets';
 
 const SUGGESTIONS = [
@@ -48,7 +50,10 @@ export class AIPanel {
     private input: HTMLTextAreaElement;
     private sendBtn: HTMLButtonElement;
     private modelLabel: HTMLElement;
-    private usageLabel: HTMLElement;
+    /** The project's tokens and credits; opens their statistics. */
+    private usageLabel: HTMLButtonElement;
+    /** How sharp the images are that go to the models and come from them. */
+    private qualityBtn: HTMLButtonElement;
     private views = new Map<number, HTMLElement>();
     private models: OpenRouterModel[] = [];
     private modelsLoad: Promise<void> | null = null;
@@ -75,7 +80,10 @@ export class AIPanel {
         });
         this.sendBtn = h('button', { class: 'btn primary ai-send', attrs: { type: 'button' } });
         this.modelLabel = h('button', { class: 'ai-model', attrs: { type: 'button' }, title: 'Model (click to change)' });
-        this.usageLabel = h('span', { class: 'ai-usage' });
+        this.usageLabel = h('button', { class: 'ai-usage', attrs: { type: 'button' } });
+        this.usageLabel.addEventListener('click', () => openUsageDialog(editor));
+        this.qualityBtn = h('button', { class: 'ai-quality', attrs: { type: 'button' } });
+        this.qualityBtn.addEventListener('click', () => this.openQuality());
         this.modelLabel.addEventListener('click', () => void this.openSettings());
         this.attachStrip = h('div', { class: 'ai-attachments', attrs: { hidden: true } });
         this.compactBtn = iconButton('history', 'Compact the conversation: summarize the earlier messages', () => void this.agent.compact());
@@ -108,7 +116,7 @@ export class AIPanel {
                 { class: 'ai-composer' },
                 this.attachStrip,
                 this.input,
-                h('div', { class: 'ai-composer-row' }, attachBtn, h('span', { class: 'ai-hint', text: 'Edits of one request undo together.' }), h('div', { class: 'spacer' }), this.sendBtn),
+                h('div', { class: 'ai-composer-row' }, attachBtn, this.qualityBtn, h('span', { class: 'ai-hint', text: 'Edits of one request undo together.', title: 'Edits of one request undo together.' }), h('div', { class: 'spacer' }), this.sendBtn),
             ),
         );
         this.input.addEventListener('paste', (e) => {
@@ -158,6 +166,7 @@ export class AIPanel {
             this.renderNext();
         });
         editor.pipeline.on('busy', () => this.refreshApprovals());
+        editor.usage.on('change', () => this.renderUsage());
         aiSettings.on('change', () => {
             this.renderControls();
             this.render();
@@ -318,18 +327,61 @@ export class AIPanel {
         const model = this.models.find((m) => m.id === s.model);
         this.modelLabel.textContent = s.model ? model?.name ?? s.model : 'Choose a model';
         this.modelLabel.title = s.model ? `${s.model}${model && !supportsTools(model) ? ' (does not support tools)' : ''}` : 'Choose a model';
-        const u = this.agent.usage;
-        const hit = u.prompt ? Math.round((u.cached / u.prompt) * 100) : 0;
-        this.usageLabel.textContent = u.requests ? `${((u.prompt + u.completion) / 1000).toFixed(1)}k tok${u.cached ? ` · ${hit}% cached` : ''}${u.cost ? ` · $${u.cost.toFixed(4)}` : ''}` : '';
-        this.usageLabel.title = u.requests
-            ? `${u.requests} requests, ${u.prompt} prompt + ${u.completion} completion tokens${u.cached ? `, ${u.cached} prompt tokens read from the cache (${hit}%)` : ', no prompt tokens read from a cache yet'}${u.written ? `, ${u.written} written to it` : ''}`
-            : '';
+        this.renderUsage();
+        const see = s.seeQuality, draw = s.drawQuality;
+        this.qualityBtn.replaceChildren(icon('image', 13), h('span', { text: see === draw ? QUALITY_NAMES[see] : `${QUALITY_NAMES[see]} / ${QUALITY_NAMES[draw]}` }));
+        this.qualityBtn.title = `Image quality: ${QUALITY_NAMES[see].toLowerCase()} for the images the assistant sees, ${QUALITY_NAMES[draw].toLowerCase()} for the images it draws. Lower spends fewer tokens and credits.`;
         const running = this.agent.running;
         this.sendBtn.replaceChildren(icon(running ? 'stop' : 'send', 14), h('span', { text: running ? 'Stop' : 'Send' }));
         this.sendBtn.title = running ? 'Stop the assistant (Esc)' : 'Send (Enter)';
         this.compactBtn.disabled = running || !this.agent.hasHistory;
         this.input.disabled = false;
         this.renderMood();
+    }
+
+    /** The project's tokens (and credits) in the header, from its usage log. */
+    private renderUsage() {
+        const t = this.editor.usage.totals();
+        const all = t.prompt + t.completion;
+        const hit = t.prompt ? Math.round((t.cached / t.prompt) * 100) : 0;
+        const parts = [all ? `${tokens(all)} tok` : '', t.cached ? `${hit}% cached` : '', t.cost ? `$${t.cost.toFixed(4)}` : ''].filter(Boolean);
+        this.usageLabel.textContent = parts.join(' · ') || 'Usage';
+        this.usageLabel.title = t.count
+            ? `This project: ${t.calls} model calls, ${t.prompt.toLocaleString()} prompt + ${t.completion.toLocaleString()} completion tokens${t.cached ? `, ${t.cached.toLocaleString()} prompt tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}. Click for the statistics per piece of work.`
+            : 'Token usage of this project, per piece of work';
+    }
+
+    /** Picks how sharp the images are that the assistant sees and has drawn, for the next ones. */
+    private openQuality() {
+        const body = h('div', { class: 'ai-quality-pop' });
+        const choice = (title: string, what: string, key: 'seeQuality' | 'drawQuality', hints: Record<ImageQuality, string>) => {
+            const cur = aiSettings.value[key];
+            const seg = h('div', { class: 'seg', attrs: { role: 'radiogroup', 'aria-label': title } });
+            for (const q of IMAGE_QUALITIES) {
+                const b = h('button', { class: 'seg-btn' + (q === cur ? ' on' : ''), text: QUALITY_NAMES[q], attrs: { type: 'button', role: 'radio', 'aria-checked': String(q === cur) } });
+                b.addEventListener('click', () => {
+                    aiSettings.set({ [key]: q });
+                    render();
+                });
+                seg.appendChild(b);
+            }
+            return h('div', { class: 'ai-quality-row' }, h('div', { class: 'ai-quality-title', text: title }), h('div', { class: 'muted small', text: what }), seg, h('div', { class: 'muted small', text: hints[cur] }));
+        };
+        const render = () => {
+            clear(body);
+            body.append(
+                h('div', { class: 'pipeline-popover-title', text: 'Image quality' }),
+                choice('Images the assistant sees', 'Screenshots, captures and the images you attach', 'seeQuality', SEE_HINTS),
+                choice('Images it draws', 'Reference images, paintovers and swatches', 'drawQuality', DRAW_HINTS),
+                h('p', { class: 'muted small', text: 'Lower quality spends fewer tokens and credits. A change applies from the next image, also while a request runs.' }),
+                button('Token usage...', () => {
+                    close();
+                    openUsageDialog(this.editor);
+                }, 'small subtle', 'list'),
+            );
+        };
+        render();
+        const close = popover(this.qualityBtn, body, 'ai-quality-popover');
     }
 
     /** The heron's mood: asleep without a key, thinking while it works, pleased or troubled for a moment after. */

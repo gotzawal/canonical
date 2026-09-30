@@ -37,6 +37,7 @@ import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInsta
 import type { Viewport } from './viewport/viewport';
 import type { DerivedAssets } from './derive/derivedAssets';
 import { exampleGuard, exampleShowcase } from './examples';
+import { UsageLog } from './ai/usage';
 
 /** What the editor works with; main.ts makes them. */
 export interface EditorDeps {
@@ -100,6 +101,8 @@ export class Editor extends Emitter<EditorEvents> {
     focusedPart: { node: string; path: string } | null = null;
     /** Stage gates, checklists, shots and snapshots of the planning pipeline. */
     readonly pipeline: Pipeline;
+    /** Tokens and credits the models spent on the project, per piece of work. */
+    readonly usage: UsageLog;
     /** Root of the prefab instance being edited on its own (everything else hidden). */
     isolated: string | null = null;
     /** Objects under the edited instance that were not generated parts when the edit started. */
@@ -113,6 +116,7 @@ export class Editor extends Emitter<EditorEvents> {
         Object.assign(this, deps);
         const { store, sync } = deps;
         this.pipeline = new Pipeline({ ...deps, blocked: () => this.viewBlock() });
+        this.usage = new UsageLog(store);
         // Parts added while a prefab instance is edited on its own stay visible.
         store.on('change', () => {
             if (!this.isolated) return;

@@ -389,7 +389,7 @@ export function replaceChildren(el: HTMLElement, ...nodes: Node[]) {
 
 let openPopover: { el: HTMLElement; close: () => void } | null = null;
 
-/** A floating panel under `anchor`; closes on outside clicks and Escape. */
+/** A floating panel under `anchor` (over it when there is no room below); closes on outside clicks and Escape. */
 export function popover(anchor: HTMLElement, content: HTMLElement, cls = '', onClose?: () => void): () => void {
     openPopover?.close();
     closeMenus();
@@ -398,7 +398,8 @@ export function popover(anchor: HTMLElement, content: HTMLElement, cls = '', onC
     const r = anchor.getBoundingClientRect();
     const pr = el.getBoundingClientRect();
     el.style.left = Math.max(6, Math.min(r.left, window.innerWidth - pr.width - 6)) + 'px';
-    el.style.top = Math.min(r.bottom + 4, window.innerHeight - pr.height - 6) + 'px';
+    const below = r.bottom + 4 + pr.height <= window.innerHeight - 6;
+    el.style.top = (below ? r.bottom + 4 : Math.max(6, Math.min(r.top - pr.height - 4, window.innerHeight - pr.height - 6))) + 'px';
     let closed = false;
     const close = () => {
         if (closed) return;

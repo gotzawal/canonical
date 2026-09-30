@@ -1,4 +1,5 @@
 import { Emitter } from '../core/events';
+import { isImageQuality, type ImageQuality } from './imageQuality';
 
 export interface AISettings {
     model: string;
@@ -25,6 +26,10 @@ export interface AISettings {
     imageModel: string;
     /** Claude: keep the prompt cache for an hour instead of five minutes (cache writes cost more). */
     cacheLong: boolean;
+    /** How sharp the images are that the assistant sees (screenshots, captures, attachments): fewer pixels, fewer tokens. */
+    seeQuality: ImageQuality;
+    /** How sharp the images are that the assistant has drawn (concepts, paintovers, swatches): smaller ones cost fewer credits. */
+    drawQuality: ImageQuality;
 }
 
 const SETTINGS_KEY = 'canonical-editor/ai';
@@ -43,6 +48,8 @@ function defaults(): AISettings {
         allowImages: true,
         imageModel: '',
         cacheLong: false,
+        seeQuality: 'medium',
+        drawQuality: 'medium',
     };
 }
 
@@ -59,6 +66,8 @@ class SettingsStore extends Emitter<{ change: AISettings }> {
             delete saved.stageTools;
             this.value = { ...defaults(), ...saved };
         } catch { /* ignore */ }
+        if (!isImageQuality(this.value.seeQuality)) this.value.seeQuality = 'medium';
+        if (!isImageQuality(this.value.drawQuality)) this.value.drawQuality = 'medium';
         try {
             this.key = localStorage.getItem(API_KEY) || sessionStorage.getItem(API_KEY) || '';
         } catch { /* ignore */ }

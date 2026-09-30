@@ -4,10 +4,11 @@
 // their own lines.
 
 import type { ChatRequest as ScriptChatRequest } from '../play/script';
-import { chat, type ChatMessage } from '../openrouter/client';
+import { chat, type ChatMessage, type Usage } from '../openrouter/client';
 import { aiSettings } from '../openrouter/settings';
 
-export async function scriptChat(req: ScriptChatRequest): Promise<string> {
+/** `spent` hears what each call cost (the project's usage log). */
+export async function scriptChat(req: ScriptChatRequest, spent?: (model: string, usage: Usage | null) => void): Promise<string> {
     const key = aiSettings.apiKey;
     if (!key) throw new Error('this.chat() needs an OpenRouter key: add one in the AI panel.');
     const model = (typeof req.model === 'string' && req.model.trim()) || aiSettings.value.model;
@@ -32,6 +33,7 @@ export async function scriptChat(req: ScriptChatRequest): Promise<string> {
         },
         { signal: req.signal },
     );
+    spent?.(model, r.usage);
     const c = r.message.content;
     return typeof c === 'string' ? c : Array.isArray(c) ? c.map((p) => (p.type === 'text' ? p.text : '')).join('') : '';
 }
