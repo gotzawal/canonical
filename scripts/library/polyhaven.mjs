@@ -74,12 +74,18 @@ async function thumbnail(info, out, width, height) {
     return true;
 }
 
-/** The ids a rule picks: of its type and every one of its categories, most downloaded first. */
+/** A texture captured from the air (a drone scan): tens of meters a tile, not for the ground underfoot. */
+const aerial = (id, a) => !!a.attributes?.aerial || /^aerial[_-]/i.test(id) || (a.tags ?? []).includes('aerial');
+
+/**
+ * The ids a rule picks: of its type and every one of its categories, most
+ * downloaded first; aerial textures only when the rule asks (aerial: true).
+ */
 function candidates(list, rule, taken) {
     const cats = rule.categories ?? [];
     const exclude = new Set(rule.exclude ?? []);
     return Object.entries(list)
-        .filter(([id, a]) => !taken.has(id) && !exclude.has(id) && cats.every((c) => (a.categories ?? []).includes(c)))
+        .filter(([id, a]) => !taken.has(id) && !exclude.has(id) && cats.every((c) => (a.categories ?? []).includes(c)) && (rule.aerial || !aerial(id, a)))
         .sort((a, b) => (b[1].download_count ?? 0) - (a[1].download_count ?? 0))
         .map(([id]) => id);
 }
