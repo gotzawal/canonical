@@ -51,6 +51,13 @@ export interface TextureInfo {
     cls: TextureClass;
 }
 
+/** A live buffer, for the report. */
+export interface BufferInfo {
+    label: string;
+    bytes: number;
+    cls: BufferClass;
+}
+
 /** What one render graph pass (or the work around the graph) did in a frame. */
 export interface PassStats {
     name: string;
@@ -177,6 +184,8 @@ interface Resource {
     alive: boolean;
     /** Textures: what the list shows. */
     info?: Omit<TextureInfo, 'bytes' | 'cls'>;
+    /** Buffers: their label. */
+    label?: string;
 }
 
 /** The class of a new texture, from its descriptor. */
@@ -341,6 +350,13 @@ export class GpuStats {
         return out.sort((a, b) => b.bytes - a.bytes);
     }
 
+    /** Every live buffer but staging ones, the largest first. */
+    buffers(): BufferInfo[] {
+        const out: BufferInfo[] = [];
+        for (const r of this.live) if (r.kind === 'buffer' && r.cls !== 'staging') out.push({ label: r.label ?? '', bytes: r.bytes, cls: r.cls as BufferClass });
+        return out.sort((a, b) => b.bytes - a.bytes);
+    }
+
     /** The most of each count over the last `frames` frames. */
     peak(frames = RECENT): FrameCounts {
         const out = zero();
@@ -366,7 +382,7 @@ export class GpuStats {
         t.bytes += r.bytes;
         t.count++;
         if (r.cls !== 'staging') this.memory.stable += r.bytes;
-        if (r.kind === 'texture') this.live.add(r);
+        if (r.kind === 'texture' || r.cls !== 'staging') this.live.add(r);
     }
 
     /** @internal Takes a destroyed (or collected) resource out, once. */
@@ -447,7 +463,7 @@ export function installGpuStats(g: any = globalThis): GpuStats {
     };
 
     wrap(g.GPUDevice, 'createBuffer', (_d, [desc], buf) => {
-        remember(buf, { kind: 'buffer', cls: bufferClass(Number(desc?.usage) || 0), bytes: Number(desc?.size) || 0, alive: true });
+        remember(buf, { kind: 'buffer', cls: bufferClass(Number(desc?.usage) || 0), bytes: Number(desc?.size) || 0, alive: true, label: String(desc?.label ?? '') });
     });
     wrap(g.GPUDevice, 'createTexture', (_d, [desc], tex) => {
         const s = desc?.size;

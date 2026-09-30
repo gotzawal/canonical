@@ -99,6 +99,8 @@ async function main() {
     const right = h('aside', { class: 'side right' });
     const menuSlot = h('div', { class: 'menu-slot' });
     const pipelineSlot = h('div', { class: 'pipeline-slot' });
+    // The simple view's steps sit beside the scene's name, not on a row of their own.
+    const stepsSlot = h('div', { class: 'steps-slot' });
     const sceneName = sceneNameField(store);
     const statusSlot = h('div', { class: 'status-slot' });
     const bell = h('button', { class: 'icon-btn', title: 'Notifications', attrs: { type: 'button', 'aria-label': 'Notification settings' } }, icon('bell', 16));
@@ -119,6 +121,7 @@ async function main() {
             menuSlot,
             h('div', { class: 'spacer' }),
             sceneName.el,
+            stepsSlot,
             h('div', { class: 'spacer' }),
             modeToggle,
             bell,
@@ -445,7 +448,8 @@ async function main() {
     applyMode();
     /** The chat is on the screen: what it shows needs no card of its own. */
     const chatInView = () => document.visibilityState === 'visible' && !aiPanel.el.hidden && aiPanel.el.offsetParent !== null;
-    pipelineSlot.append(new StepsBar(editor, () => showTab('design', true)).el, new PipelineBar(editor, { design: () => showTab('design', true), chatInView }).el);
+    stepsSlot.append(new StepsBar(editor, () => showTab('design', true)).el);
+    pipelineSlot.append(new PipelineBar(editor, { design: () => showTab('design', true), chatInView }).el);
 
     // Checkpoints refresh the assistant's memo and save versions; a notice tells when the assistant finished out of sight.
     new Checkpoints(editor, aiPanel.agent);

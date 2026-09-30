@@ -24,6 +24,35 @@ export const TEXTURE_KINDS: Record<TextureClass, string> = {
     other: 'Compute outputs (post effects, depth pyramid, GI)',
 };
 
+/**
+ * What a texture is for, by its name: the effect or part of the renderer
+ * that made it. The first pattern that matches names it.
+ */
+const OWNERS: [RegExp, string][] = [
+    [/^gtao/i, 'Ambient occlusion'],
+    [/^ssr/i, 'Screen space reflections'],
+    [/^fogTex/, 'Fog'],
+    [/^VolumetricFog/, 'Volumetric fog'],
+    [/^godRay/, 'God rays'],
+    [/^bloom/, 'Bloom'],
+    [/^(irradiance|giLighting|giBounce|giProbe)/, 'Global illumination probes'],
+    [/^reflection/i, 'Reflection probes'],
+    [/^terrain/, 'Terrain layers'],
+    [/^_MotionVector/, 'Motion vectors'],
+    [/^_HiZPyramid/, 'Depth pyramid'],
+    [/^_SceneColorPyramid/, 'Scene color for see-through materials'],
+    [/^(ColorPassGBuffer|zPreDepth)/, 'Scene color, depth and G-buffer'],
+    [/^(FXAAPost|TonemapPost)/, 'Anti-aliasing and tone mapping'],
+];
+
+/** What uses a texture: its class for scene textures, shadows and skies, else the effect that made it. */
+export function textureOwner(t: Pick<TextureInfo, 'label' | 'width' | 'height' | 'format' | 'cls'>): string {
+    if (t.cls === 'image' || t.cls === 'data' || t.cls === 'shadow' || t.cls === 'environment') return TEXTURE_KINDS[t.cls];
+    const name = textureName(t);
+    for (const [re, owner] of OWNERS) if (re.test(name)) return owner;
+    return t.cls === 'target' ? 'Other render targets' : 'Other compute outputs';
+}
+
 const PASS_NAMES: Record<string, string> = {
     'Outside the graph': 'Engine updates (outside the graph)',
 };
@@ -158,15 +187,26 @@ export class ProfilerPanel {
             },
         );
         const shown = textures.filter((t) => this.filter === 'all' || t.cls === this.filter);
+        // The screen's buffers and the effects' textures, by what made them.
+        const owners = new Map<string, [number, number]>();
+        for (const t of textures) {
+            if (t.cls === 'image' || t.cls === 'data') continue;
+            const o = owners.get(textureOwner(t)) ?? [0, 0];
+            owners.set(textureOwner(t), [o[0] + 1, o[1] + t.bytes]);
+        }
+        const byOwner = [...owners].sort((a, b) => b[1][1] - a[1][1]);
+        const mostOwner = Math.max(1, ...byOwner.map(([, [, bytes]]) => bytes));
         this.memoryCol.append(
             h('div', { class: 'group-label', text: 'GPU memory' }),
             h('div', { class: 'muted small', text: `${formatBytes(m.stable)} the editor asked for (an estimate: drivers pad textures, and the browser allocates for itself).` }),
             table(['Kind', 'Count', 'Size', ''], rows.map(([name, count, bytes]) => [name, count.toLocaleString('en-US'), formatBytes(bytes), bar(bytes / most)]), 1),
+            h('div', { class: 'group-label', text: 'Render targets, effects and shadows' }),
+            table(['Used by', 'Textures', 'Size', ''], byOwner.map(([name, [count, bytes]]) => [name, count.toLocaleString('en-US'), formatBytes(bytes), bar(bytes / mostOwner)]), 1),
             h('div', { class: 'profiler-filter' }, h('div', { class: 'group-label', text: `Textures (${shown.length})` }), filter.el),
             table(
                 ['Texture', 'Size', 'Format', 'Memory'],
                 shown.slice(0, TEXTURE_ROWS).map((t) => [
-                    h('span', { class: 'profiler-name', text: textureName(t), title: `${TEXTURE_KINDS[t.cls]}\n${t.label || '(no label)'}` }),
+                    h('span', { class: 'profiler-name', text: textureName(t), title: `${textureOwner(t)}\n${TEXTURE_KINDS[t.cls]}\n${t.label || '(no label)'}` }),
                     `${t.width} x ${t.height}${t.layers > 1 ? ` x ${t.layers}` : ''}${t.mips > 1 ? `, ${t.mips} mips` : ''}${t.samples > 1 ? `, ${t.samples}x` : ''}`,
                     t.format,
                     formatBytes(t.bytes),
@@ -236,7 +276,8 @@ export class ProfilerPanel {
             fps: Math.round(this.editor.runtime.fps * 10) / 10,
             frame: s ? { cpuMs: { median: s.cpu.median, p95: s.cpu.p95 }, counts: s.peak, gpuTimed: stats!.gpuTimed, passes: stats!.passes(60) } : null,
             memory: s?.memory ?? null,
-            textures: stats?.textures().map((t) => ({ ...t, name: textureName(t), kind: TEXTURE_KINDS[t.cls] })) ?? [],
+            textures: stats?.textures().map((t) => ({ ...t, name: textureName(t), kind: TEXTURE_KINDS[t.cls], usedBy: textureOwner(t) })) ?? [],
+            buffers: stats?.buffers() ?? [],
             assets: await assetSizes(doc),
         };
         const stem = doc.name.normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'scene';

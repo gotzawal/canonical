@@ -6568,13 +6568,18 @@ input.text.bt-part-id {
     display: none;
 }
 
-/* The three steps the simple view shows instead of the pipeline bar. */
+/* The three steps the simple view shows instead of the pipeline bar, in the
+   top bar beside the scene's name. */
+.steps-slot {
+    display: flex;
+    min-width: 0;
+}
+
 .steps-bar {
     display: flex;
     align-items: center;
-    justify-content: center;
+    min-width: 0;
     height: 36px;
-    padding: 0 10px;
     overflow-x: auto;
     scrollbar-width: none;
 }
@@ -7438,6 +7443,12 @@ input.text.bt-part-id {
         display: none;
     }
 
+    /* The steps beside the name: only the current one. */
+    .steps > li:not(:has(.step.current)),
+    .step-sub {
+        display: none;
+    }
+
     .statusbar .status-item.muted,
     .statusbar .status-item.mono {
         display: none;
@@ -7460,8 +7471,7 @@ input.text.bt-part-id {
    to the view; its stages and checklist are in the Design tab too. */
 @media (max-height: 500px) {
     /* The slot stays, holding its row of the page grid. */
-    .pipeline-bar,
-    .steps-bar {
+    .pipeline-bar {
         display: none;
     }
 }
