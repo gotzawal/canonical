@@ -56,6 +56,8 @@ export class Texture implements GPUSamplerDescriptor {
     protected get gpuTexture(): GPUTexture {
         if (!this._gpuTexture && this.textureDescriptor) {
             this._ensureBound();
+            // Named after the descriptor was made (render textures get their name from the caller): label it by the name it has now.
+            if (this.name && this.textureDescriptor.label !== undefined) this.textureDescriptor.label = `${this.name + this.width + this.height + this.format}`;
             this._gpuTexture = this._boundCtx!.device.createTexture(this.textureDescriptor);
             this.uploadInitialData(this._gpuTexture);
             // Auto-mipmap only for single-layer 2D textures. Cube / 2d-array

@@ -347,7 +347,7 @@ export class AIPanel {
         const parts = [all ? `${tokens(all)} tok` : '', t.cached ? `${hit}% cached` : '', t.cost ? `$${t.cost.toFixed(4)}` : ''].filter(Boolean);
         this.usageLabel.textContent = parts.join(' · ') || 'Usage';
         this.usageLabel.title = t.count
-            ? `This project: ${t.calls} model calls, ${t.prompt.toLocaleString()} prompt + ${t.completion.toLocaleString()} completion tokens${t.cached ? `, ${t.cached.toLocaleString()} prompt tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}. Click for the statistics per piece of work.`
+            ? `This project: ${t.calls} model calls, ${(t.prompt - t.imageTokens).toLocaleString()} text + about ${t.imageTokens.toLocaleString()} image input tokens, ${t.completion.toLocaleString()} output tokens${t.cached ? `, ${t.cached.toLocaleString()} input tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}. Click for the statistics per piece of work.`
             : 'Token usage of this project, per piece of work';
     }
 

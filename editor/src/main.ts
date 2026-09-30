@@ -395,9 +395,10 @@ async function main() {
     editor.on('ai-prompt', () => showTab('ai'));
     editor.on('show-ai', () => showTab('ai'));
     editor.on('show-design', () => showTab('design', true));
-    editor.on('show-scene', () => {
+    editor.on('show-scene', (key) => {
         showTab('scene', true);
         setPanel('right', true);
+        if (key) scenePanel.reveal(key);
     });
 
     /**

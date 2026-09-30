@@ -62,8 +62,12 @@ export interface Usage {
     total_tokens?: number;
     /** Credits spent, when OpenRouter reports it. */
     cost?: number;
-    /** Prompt tokens read from (cached_tokens) and written to (cache_write_tokens) the provider's cache. */
-    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number };
+    /**
+     * Prompt tokens read from (cached_tokens) and written to
+     * (cache_write_tokens) the provider's cache, and those of images where a
+     * route reports them.
+     */
+    prompt_tokens_details?: { cached_tokens?: number; cache_write_tokens?: number; image_tokens?: number };
     /** The same in Anthropic's shape, when a route reports it that way. */
     cache_read_input_tokens?: number;
     cache_creation_input_tokens?: number;

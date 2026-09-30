@@ -10,7 +10,7 @@ import {
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
-import { Grass } from './core/model';
+import { Grass, Mirror } from './core/model';
 import { defaults } from './core/schema';
 import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
@@ -72,6 +72,8 @@ interface EditorEvents {
     'ai-prompt': { text: string; send: boolean };
     /** Show the render graph tab of the dock. */
     'show-graph': void;
+    /** Shows the Profiler tab of the dock. */
+    'show-profiler': void;
     /** The scene (Ctrl+S) or the whole project was written to a file. */
     saved: 'scene' | 'project';
     /** Show the Design tab (pipeline, brief, shots): the full editor. */
@@ -79,7 +81,8 @@ interface EditorEvents {
     /** Show the chat with the assistant. */
     'show-ai': void;
     /** Show the Scene tab (sky, exposure, post effects, GI). */
-    'show-scene': void;
+    /** Shows the Scene tab, at a section (by its key) when given. */
+    'show-scene': string | void;
     /** A prefab instance is edited on its own (id of its root), or editing ended (null). */
     isolate: string | null;
     /** The viewport's view changed (setView). */
@@ -201,6 +204,27 @@ export class Editor extends Emitter<EditorEvents> {
         node.position = [round(at[0]), round(at[1]), round(at[2])];
         this.insert([node], 'Create ' + node.name);
         return node.id;
+    }
+
+    /**
+     * A water surface in front of the view: a plane with a mirror and the
+     * Water material shader (the scene's own, or made from the template).
+     */
+    createWater(): string {
+        let id = '';
+        this.store.transact('Create Water', () => {
+            const shader = this.store.doc.shaders.find((s) => s.kind === 'material' && /^Water\d*\.wgsl$/.test(s.name)) ?? this.createShader({ template: 'water', open: false });
+            const node = makeMeshNode('plane');
+            node.name = this.uniqueName('Water', null);
+            node.mesh.material = { ...node.mesh.material, type: 'shader', shader: shader.id };
+            node.mesh.castShadow = false;
+            node.mirror = defaults(Mirror);
+            const p = this.viewport.spawnPoint();
+            node.position = [round(p[0]), round(p[1]), round(p[2])];
+            this.insert([node], 'Create ' + node.name);
+            id = node.id;
+        });
+        return id;
     }
 
     /** Grass for an object (Add Component): on its own meshes and covering them when it has some, else a flat field around it. */

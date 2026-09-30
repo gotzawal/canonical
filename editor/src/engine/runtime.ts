@@ -1,7 +1,7 @@
 import {
     AtmosphericComponent, BloomPost, Camera3D, CSM, DirectLight, Engine3D, GTAOPost, GlobalFog, GodRayPost, GridObject,
-    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, SSRPost, Texture,
-    View3D, VolumetricFogPost,
+    MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowLightsCollect, SkyRenderer, SolidColorSky, SSRPost,
+    Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
 import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
@@ -139,6 +139,8 @@ export class Runtime {
     static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean; quality?: QualityLevel } = {}): Promise<Runtime> {
         let runtime: Runtime | null = null;
         const stats = opts.stats === false ? null : installGpuStats();
+        // The Profiler's CPU time, draws and GPU time per pass.
+        if (stats) RenderGraph.passHook = { begin: (name) => stats.passBegin(name), end: (name) => stats.passEnd(name) };
         const quality = opts.quality ?? 'high';
         const tier = QUALITY[quality];
         const engine = await Engine3D.init({
@@ -259,6 +261,7 @@ export class Runtime {
     private beforeTick() {
         this.stats?.beginFrame();
         this.fitShadowLights();
+        const start = performance.now();
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -267,6 +270,8 @@ export class Runtime {
             }
         }
         this.engineStart = performance.now();
+        // Play (scripts, behavior trees, physics) and the walk camera run here.
+        if (this.beforeListeners.size) this.stats?.addCpu('Play and walk', this.engineStart - start);
     }
 
     /** The camera the view renders through: the editor camera, or a scene camera in Play mode. */

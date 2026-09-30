@@ -35,6 +35,8 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
     fpsTitle();
     // What a frame costs: draw calls and the GPU memory the editor asked for (a span: the fps button stays the only button here).
     const cost = h('span', { class: 'status-item muted mono gpu-cost', attrs: { hidden: !editor.runtime.stats } });
+    // A click opens the Profiler, which breaks both down.
+    cost.addEventListener('click', () => editor.emit('show-profiler', undefined));
     const gpu = h('span', { class: 'status-item muted ellipsis', text: editor.runtime.adapterInfo, title: 'WebGPU adapter' });
     // Textures and models being compressed for the game in the background (derive/).
     const compressing = h('span', { class: 'status-item muted compressing', attrs: { hidden: true } });
@@ -129,7 +131,8 @@ export function statusbar(editor: Editor, openLocation: (file: string, line: num
             cost.textContent = `${count(f.draws)} draws · ${formatBytes(m.stable)}`;
             cost.title = [
                 `Per frame: ${count(f.draws)} draw calls in ${count(f.renderPasses)} render passes, ${count(f.triangles)} triangles, ${count(f.pipelines + f.bindGroups)} pipeline and bind group changes, ${s.cpu.median.toFixed(1)} ms of CPU for the engine (median).`,
-                `GPU memory the editor asked for (an estimate): ${formatBytes(m.stable)}. Images ${formatBytes(m.textures.image.bytes)} (${m.textures.image.count}), render targets and shadow maps ${formatBytes(m.textures.target.bytes)} (${m.textures.target.count}), other textures ${formatBytes(m.textures.other.bytes)}, buffers ${formatBytes(m.buffers.vertex.bytes + m.buffers.index.bytes + m.buffers.uniform.bytes + m.buffers.storage.bytes + m.buffers.other.bytes)}.`,
+                `GPU memory the editor asked for (an estimate): ${formatBytes(m.stable)}. Scene textures ${formatBytes(m.textures.image.bytes + m.textures.data.bytes)}, shadow maps ${formatBytes(m.textures.shadow.bytes)}, sky and environment maps ${formatBytes(m.textures.environment.bytes)}, render targets ${formatBytes(m.textures.target.bytes)}, compute outputs ${formatBytes(m.textures.other.bytes)}, buffers ${formatBytes(m.buffers.vertex.bytes + m.buffers.index.bytes + m.buffers.uniform.bytes + m.buffers.storage.bytes + m.buffers.other.bytes)}.`,
+                'Click to open the Profiler: time per pass, every texture and the download size.',
             ].join('\n');
         }
     }, 500);

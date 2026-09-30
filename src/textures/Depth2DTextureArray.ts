@@ -46,6 +46,7 @@ export class Depth2DTextureArray extends Texture implements ITexture {
             size: { width: this.width, height: this.height, depthOrArrayLayers: this.numberLayer },
             dimension: '2d',
             usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.TEXTURE_BINDING,
+            label: 'shadowMapArray',
         }
         this.gpuTexture = this.getGPUTexture();
     }

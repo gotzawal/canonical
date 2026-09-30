@@ -205,7 +205,7 @@ export const STAGES: StageDef[] = [
         title: 'Level',
         long: 'Level (greybox)',
         description:
-            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Frame a shot for every reference image, walk the route at eye height, then paint a reference image over each shot: the chosen one is what the look is compared with.',
+            'Block out the level in one mid gray material: buildings and rooms closed by construction, primitives and prefabs, ramps and stairs, and the player to walk it in Play. The level check makes sure buildings are closed, the route is walkable and nothing floats. Many copies of one thing (trees, rocks, fence posts) go under one group with Instancing, so they draw together. Frame a shot for every reference image, walk the route at eye height, then paint a reference image over each shot: the chosen one is what the look is compared with.',
         tools: ['read', 'design', 'objects', 'prefabs', 'shots', 'capture', 'images', 'concepts'],
         checks: [
             {
@@ -270,7 +270,7 @@ export const STAGES: StageDef[] = [
         title: 'Lighting',
         long: 'Lighting, pass 1',
         description:
-            'Every surface is still gray, so only light is judged. Set the sky and time of day, key and fill lights, interior lights, exposure and GI. Compare each shot with its reference image in grayscale.',
+            'Every surface is still gray, so only light is judged. Set the time of day (the sun) and the sky\'s brightness, key and fill lights, interior lights, exposure, shadows (cascades keep the sun\'s sharp over large outdoor levels) and GI. Compare each shot with its reference image in grayscale.',
         compare: 'gray',
         matchLabel: 'Values match the target',
         tools: ['read', 'design', 'lights', 'environment', 'capture', 'compare'],
@@ -297,7 +297,7 @@ export const STAGES: StageDef[] = [
         title: 'Materials',
         long: 'Materials and lighting, pass 2',
         description:
-            'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Then correct light intensities and exposure for the new albedo.',
+            'Fill every material slot with a swatch: search the shared library first and generate one only when nothing fits. Swatches are applied in world space (triplanar) with one roughness and metallic value per material. Cover the ground with grass, and make water and mirrors (a Mirror component, the Water shader). Then correct light intensities and exposure for the new albedo.',
         compare: 'color',
         matchLabel: 'Colors match the target',
         tools: ['read', 'design', 'materials', 'lights', 'environment', 'capture', 'compare', 'images'],
@@ -324,7 +324,8 @@ export const STAGES: StageDef[] = [
         id: 'effects',
         title: 'Effects',
         long: 'Effects',
-        description: 'Particles and post effects (fog, bloom, vignette). Compare the shots with their reference images again, also in grayscale so the effects keep the value structure.',
+        description:
+            'The sky\'s physical model (single scattering, or multiple scattering for deep sunsets, dusk and clouds), particles and post effects (fog, bloom, screen space reflections, vignette). Compare the shots with their reference images again, also in grayscale so the effects keep the value structure.',
         compare: 'gray',
         matchLabel: 'Value structure still holds',
         tools: ['read', 'design', 'effects', 'environment', 'lights', 'code', 'play', 'capture', 'compare'],
@@ -344,7 +345,12 @@ export const STAGES: StageDef[] = [
                 hint: 'Compare each shot in grayscale again and mark it.',
                 auto: shotsMatched('effects'),
             },
-            { id: 'effects.perf', text: 'Within the performance budget', hint: 'Check the frame rate in the status bar against the budget.' },
+            {
+                id: 'effects.sky',
+                text: 'The sky model suits the mood (single or multiple scattering, clouds)',
+                hint: 'Scene tab > Sky Model: multiple scattering for sunsets, dusk and clouds. A solid color sky (interiors) needs no model.',
+            },
+            { id: 'effects.perf', text: 'Within the performance budget', hint: 'Check the frame rate in the status bar against the budget; the Profiler tab shows what a frame costs.' },
         ],
     },
     {

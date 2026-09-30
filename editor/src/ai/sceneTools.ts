@@ -165,7 +165,7 @@ export const sceneTools = tools({
             if (!specs.length) throw new ToolError('objects is empty.');
             const policy = new StagePolicy(env);
             for (const spec of specs) {
-                const err = policy.create(String(spec.type)) || (spec.material ? policy.update({ name: spec.name ?? spec.type } as NodeDoc, { material: spec.material }) : '');
+                const err = policy.create(String(spec.type), spec) || (spec.material ? policy.update({ name: spec.name ?? spec.type } as NodeDoc, { material: spec.material }) : '');
                 if (err) throw new ToolError(err);
             }
             const created: NodeDoc[] = [];
@@ -773,9 +773,11 @@ class StagePolicy {
         return '';
     }
 
-    create(type: string): string {
+    create(type: string, spec: Json = {}): string {
         if (type.endsWith('_light')) return this.any('lights', 'objects') ? '' : `Lights cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
-        if (type === 'grass') return this.any('objects', 'effects') ? '' : `Grass cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        // Grass, water and mirrors dress the level in the Materials stage.
+        if (type === 'grass') return this.any('objects', 'materials', 'effects') ? '' : `Grass cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
+        if (spec.mirror && this.any('materials')) return '';
         if (type === 'camera') return this.any('objects', 'lights', 'shots') ? '' : `Cameras cannot be added while the AI settings limit your tools to the ${this.stage} stage.`;
         if (!this.allowed.has('objects')) return `Objects cannot be placed while the AI settings limit your tools to the ${this.stage} stage.`;
         this.layout({});

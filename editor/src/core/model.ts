@@ -389,9 +389,15 @@ export type GIDoc = z.output<typeof GI>;
 export const SKY_TYPES = ['atmospheric', 'physical', 'color'] as const;
 
 export const Environment = z.object({
+    /** The sky's physical model (chosen in the Effects stage; the sun's position belongs to the lighting). */
     sky: oneOf(SKY_TYPES, 'atmospheric', {
-        labels: { atmospheric: 'Atmospheric', physical: 'Physical Sky', color: 'Solid Color' },
-        description: 'atmospheric: a fast sky with a sun; physical: a physically based sky (light scattered many times, deep sunsets, optional clouds; each change takes longer to redraw); color: one flat color. The sky also lights the scene.',
+        title: 'Sky Model',
+        labels: { atmospheric: 'Single Scattering', physical: 'Multiple Scattering', color: 'Solid Color' },
+        description:
+            'The physical model of the sky, which also lights the scene. atmospheric: single scattering (sunlight scattered once by air, haze and ozone, ray marched with the Chapman approximation): '
+            + 'quick to redraw and right for day skies; sunsets and dusk come out darker and flatter. physical: multiple scattering (Hillaire 2020: light scattered many times, '
+            + 'from precomputed transmittance and scattering tables): deep sunsets, dusk and twilight glow, optional clouds; each change takes longer to redraw. '
+            + 'color: one flat color without a sun (interiors, stylized scenes).',
     }),
     skyColor: color('#3a4250'),
     /** Sky sun azimuth and elevation, 0..1. */
@@ -404,7 +410,7 @@ export const Environment = z.object({
         sunBrightness: num(1, 0, 10, { step: 0.01, slider: true, description: 'Brightness of the sun disc (not of the light).' }),
         showSun: bool(true, { title: 'Show Sun', description: 'Draw the sun disc.' }),
         altitude: num(1500, 0, 10000, { step: 10, precision: 0, description: 'Height of the viewer in the air, meters: higher sees a darker, clearer sky.' }),
-        clouds: bool(false, { description: 'Physical sky only: a cloud layer 3-5 km up. The clouds do not move, and each sky change takes much longer to redraw with them.' }),
+        clouds: bool(false, { description: 'Multiple scattering sky only: a cloud layer 3-5 km up. The clouds do not move, and each sky change takes much longer to redraw with them.' }),
     }),
     /** Tonemap exposure. */
     exposure: num(1, 0, 4, { step: 0.01, slider: true }),

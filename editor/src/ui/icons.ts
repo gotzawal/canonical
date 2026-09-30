@@ -11,6 +11,7 @@ const PATHS: Record<string, string> = {
     stairs: '<path d="M3 20v-4h4.5v-4H12V8h4.5V4H21v16Z"/>',
     capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
     physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
+    gauge: '<path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 17l4.5-6"/><circle cx="12" cy="17" r="1.2"/>',
     grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
     mirror: '<ellipse cx="12" cy="10" rx="6" ry="7.5"/><path d="M9.5 8.5 12 6M9.5 12l4.5-4.5M12 17.5V21M8.5 21h7"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
