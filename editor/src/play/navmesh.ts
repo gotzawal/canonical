@@ -5,6 +5,7 @@
 
 import type { Object3D } from '@orillusion/core';
 import { VertexAttributeName } from '@orillusion/core';
+import { solidTriangles } from '../core/scatter';
 import { terrainTriangles } from '../core/terrain';
 import type { SceneDoc } from '../core/types';
 import type { Store } from '../core/store';
@@ -89,6 +90,14 @@ export function levelTriangles(store: Store, sync: SceneSync, skip: (id: string)
         const map = land.surface.map;
         const step = Math.max(1, Math.ceil(Math.sqrt((map.width * map.height) / 125000)));
         const { positions: pos, indices: idx } = terrainTriangles(land.surface, step);
+        chunks.push({ pos, idx, m: IDENTITY });
+        verts += pos.length / 3;
+        tris += idx.length / 3;
+    }
+    // Solid scatter copies stand in the way as prisms and boxes.
+    for (const { id, solids } of sync.scatterSolids()) {
+        if (skip(id) || sync.detached.has(id)) continue;
+        const { positions: pos, indices: idx } = solidTriangles(solids);
         chunks.push({ pos, idx, m: IDENTITY });
         verts += pos.length / 3;
         tris += idx.length / 3;

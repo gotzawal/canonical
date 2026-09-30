@@ -13,6 +13,7 @@ import { Quaternion, VertexAttributeName, type Object3D, type RenderNode } from 
 import { compose, decompose, DEG, invert, mul, normalize, quatFromEuler, transformPoint, type Mat4, type Quat, type Vec3 } from '../core/math';
 import { Body } from '../core/model';
 import type { Store } from '../core/store';
+import type { ScatterSolid } from '../core/scatter';
 import type { TerrainSurface } from '../core/terrain';
 import type { BodyDoc, BodyType, GeometryDoc, NodeDoc, SceneDoc } from '../core/types';
 import type { SceneSync } from '../engine/sync';
@@ -279,6 +280,11 @@ export class Physics implements PhysicsApi {
             if (this.add(obj, n.body ?? null, parts.flatMap((m) => sync.renderersOf(m.id)), n.mesh?.geometry)) for (const m of parts) this.nodes.set(m.id, this.items.get(obj)!);
             else if (n.body) console.warn(`[physics] ${n.name} has nothing to collide with.`);
         }
+        // The solid copies of scatters (trees, rocks): trunks and boxes.
+        for (const { id, solids } of sync.scatterSolids()) {
+            const entry = sync.entries.get(id);
+            if (entry && !holder(id)) this.addSolids(id, entry.obj, solids);
+        }
         for (const c of host.characters()) this.addCharacter(c);
     }
 
@@ -319,6 +325,24 @@ export class Physics implements PhysicsApi {
         const body = this.world.createRigidBody(this.R.RigidBodyDesc.fixed().setTranslation(f.x, f.y, f.z));
         this.track({ obj, body, type: 'fixed', doc: null, pos: [f.x, f.y, f.z], rot: [0, 0, 0, 1] }, desc);
         this.nodes.set(id, this.items.get(obj)!);
+    }
+
+    /** A scatter's solid copies: the colliders of one fixed body (a trunk a cylinder, a box turned by its yaw). */
+    private addSolids(id: string, obj: Object3D, solids: readonly ScatterSolid[]) {
+        const R = this.R;
+        const it: Item = { obj, body: this.world.createRigidBody(R.RigidBodyDesc.fixed()), type: 'fixed', doc: null, pos: [0, 0, 0], rot: [0, 0, 0, 1] };
+        for (const s of solids) {
+            const [x, y, z] = s.center;
+            const desc = s.kind === 'trunk'
+                ? R.ColliderDesc.cylinder(Math.max(0.005, s.size[1] / 2), Math.max(0.005, s.size[0])).setTranslation(x, y + s.size[1] / 2, z)
+                : R.ColliderDesc.cuboid(Math.max(0.005, s.size[0]), Math.max(0.005, s.size[1]), Math.max(0.005, s.size[2]))
+                      .setTranslation(x, y, z)
+                      .setRotation({ x: 0, y: Math.sin(s.yaw / 2), z: 0, w: Math.cos(s.yaw / 2) });
+            const collider = this.world.createCollider(desc.setActiveEvents(R.ActiveEvents.COLLISION_EVENTS), it.body);
+            this.owners.set(collider.handle, it);
+        }
+        this.items.set(obj, it);
+        this.nodes.set(id, it);
     }
 
     /** A character's capsule: from just above its feet to the top of its head, REACH wider. */

@@ -7,8 +7,10 @@ import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type {
-    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, TerrainDoc, TextureRole,
+    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, ScatterDoc, TerrainDoc,
+    TextureRole,
 } from '../core/types';
+import { placeScatter, type AvoidBox, type Placement, type ScatterSolid } from '../core/scatter';
 import { covers, groundHeight, type TerrainFrame, type TerrainSurface } from '../core/terrain';
 import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
@@ -20,6 +22,8 @@ import { QUALITY } from '../core/quality';
 import { movesInPlay } from '../core/motion';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
+import { ScatterModel, ScatterView } from './scatter';
+import { rendererWorldBox } from './picking';
 import type { MaterialLayer } from './terrainMaterial';
 import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
@@ -87,7 +91,22 @@ export interface Entry {
     group: string;
     /** Its terrain: chunks, material and what they were made from. */
     terrain: TerrainState | null;
+    /** Its scatter: the copies and what they were placed from. */
+    scatter: ScatterState | null;
 }
+
+/** A scatter's engine side (engine/scatter.ts), and what its copies were placed from. */
+interface ScatterState {
+    view: ScatterView;
+    /** Its rules, place, ground, what it avoids and the models loaded when it was last placed. */
+    placed: string;
+    placements: Placement[];
+    /** The solid copies, as trunks and boxes. */
+    solids: ScatterSolid[];
+}
+
+/** Scatters are placed again this long after the last change (a drag changes things many times a second). */
+const SCATTER_DELAY = 120;
 
 /** A terrain's engine side (engine/terrain.ts) and what it shows. */
 interface TerrainState {
@@ -132,6 +151,8 @@ interface SyncEvents {
     model: string;
     /** A terrain's heights or place changed (its map loaded, it was sculpted or moved). */
     terrain: string;
+    /** A scatter's copies were placed anew (or went). */
+    scatter: string;
 }
 
 const LIGHT_CLASSES: Record<LightType, new () => LightBase> = {
@@ -219,6 +240,14 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** The terrains, and their map and paint loads still running (whenLoaded waits for them). */
     private terrainStates = new Set<TerrainState>();
     private terrainLoads = new Set<Promise<unknown>>();
+    /** Scatter source models by asset id (taken apart once), and those loaded. */
+    private scatterModels = new Map<string, Promise<ScatterModel | null>>();
+    private scatterModelsLoaded = new Map<string, ScatterModel | null>();
+    /** Scatters in the scene; a placement waiting to run, and what resolves once it ran. */
+    private scatterStates = new Set<ScatterState>();
+    private scatterTimer = 0;
+    private scatterPending: Promise<void> | null = null;
+    private scatterRan: (() => void) | null = null;
 
     /** Textures load at most this large (the longer side): games on a low quality tier skip the top mips. */
     private readonly textureMaxSize: number;
@@ -238,13 +267,14 @@ export class SceneSync extends Emitter<SyncEvents> {
         runtime.onBeforeFrame(() => this.eachFrame());
     }
 
-    /** Terrain levels of detail for the camera, once a frame. */
+    /** Terrain levels of detail and scatter draw distances for the camera, once a frame. */
     private eachFrame() {
-        if (!this.terrainStates.size) return;
+        if (!this.terrainStates.size && !this.scatterStates.size) return;
         const eye = this.runtime.activeCamera?.transform.worldPosition;
         if (!eye) return;
         const at = [eye.x, eye.y, eye.z];
         for (const t of this.terrainStates) t.view.update(at);
+        for (const s of this.scatterStates) s.view.update(at);
     }
 
     // ---------------------------------------------------------------- sync
@@ -281,6 +311,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                 this.sweep();
             }
             this.placeGrass(hint.nodes);
+            this.schedulePlaceScatters();
             this.flushGroups();
             if (!hint.transform) this.shadowsChanged();
             return;
@@ -301,6 +332,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.updateVisibility();
         for (const e of this.entries.values()) if (e.instancer) this.dirtyGroups.add(e.id);
         this.placeGrass();
+        this.schedulePlaceScatters();
         this.flushGroups();
         this.sweep();
         this.shadowsChanged();
@@ -386,6 +418,8 @@ export class SceneSync extends Emitter<SyncEvents> {
      */
     reloadAsset(id: string) {
         this.prefabs.delete(id);
+        this.scatterModels.delete(id);
+        this.scatterModelsLoaded.delete(id);
         // Group copies are made again too; the models showing them let go as they reload.
         for (const key of Array.from(this.groupPrefabs.keys())) if (key.endsWith(`|${id}`)) this.groupPrefabs.delete(key);
         // Textures take the new data in place.
@@ -474,6 +508,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             instancer: null,
             group: '',
             terrain: null,
+            scatter: null,
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -517,6 +552,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.grass?.remove((res) => this.disposeLater(res));
         entry.grass = null;
         if (entry.terrain) this.dropTerrain(entry);
+        if (entry.scatter) this.dropScatter(entry);
         entry.obj.removeFromParent();
         entry.obj.destroy();
     }
@@ -537,6 +573,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyGrass(entry, node.grass);
         this.applyInstancing(entry, node.instancing);
         this.applyTerrain(entry, node);
+        this.applyScatter(entry, node.scatter);
     }
 
     /** Emitters are built again when their settings change (the simulator bakes its particles). */
@@ -862,9 +899,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                 this.applyAnimation(entry, this.store.node(entry.id)?.animation);
                 this.setEnabled(entry, entry.visible, true);
                 this.runtime.gi.invalidate();
-                // Its group draws it with the others, and a field of grass may stand on it.
+                // Its group draws it with the others, and a field of grass or a scatter may stand on it.
                 this.flushGroups();
                 this.placeGrass();
+                this.schedulePlaceScatters();
                 this.emit('model', entry.id);
             })
             .catch((err) => {
@@ -1094,6 +1132,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.terrain) entry.terrain.version++;
         this.runtime.gi.invalidate();
         this.placeGrass();
+        this.schedulePlaceScatters();
         this.emit('terrain', entry.id);
     }
 
@@ -1199,6 +1238,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.terrainStates.delete(t);
         entry.terrain = null;
         this.placeGrass();
+        this.schedulePlaceScatters();
         this.emit('terrain', entry.id);
     }
 
@@ -1227,6 +1267,162 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** A terrain's engine side, for sculpting it live. */
     terrainView(id: string): TerrainView | null {
         return this.entries.get(id)?.terrain?.view ?? null;
+    }
+
+    // -------------------------------------------------------------- scatter
+
+    /** A scatter's copies are placed (again) shortly, once its source models are there. */
+    private applyScatter(entry: Entry, doc: ScatterDoc | undefined) {
+        if (!doc) {
+            if (entry.scatter) this.dropScatter(entry);
+            return;
+        }
+        if (!entry.scatter) {
+            const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
+            view.setVisible(entry.visible);
+            entry.scatter = { view, placed: '', placements: [], solids: [] };
+            this.scatterStates.add(entry.scatter);
+        }
+        entry.scatter.view.setDrawDistance(doc.distance);
+        for (const s of doc.sources) if (s.model) void this.scatterModel(s.model);
+        this.schedulePlaceScatters();
+    }
+
+    private dropScatter(entry: Entry) {
+        entry.scatter!.view.dispose((res) => this.disposeLater(res));
+        this.scatterStates.delete(entry.scatter!);
+        entry.scatter = null;
+        this.runtime.redrawShadows();
+        this.emit('scatter', entry.id);
+    }
+
+    /** A source model taken apart (loaded once per asset); null when it could not be loaded. */
+    private scatterModel(assetId: string): Promise<ScatterModel | null> {
+        let p = this.scatterModels.get(assetId);
+        if (!p) {
+            const made = this.loadPrefab(assetId).then(
+                (prefab) => new ScatterModel(prefab),
+                (e) => {
+                    console.warn('[editor] a scatter model could not be loaded', e);
+                    return null;
+                },
+            );
+            p = made;
+            this.scatterModels.set(assetId, made);
+            void made.then((m) => {
+                if (this.scatterModels.get(assetId) !== made) return;
+                this.scatterModelsLoaded.set(assetId, m);
+                this.schedulePlaceScatters();
+            });
+        }
+        return p;
+    }
+
+    /** Places the scatters again a moment after the last change: a drag moves their ground many times a second. */
+    private schedulePlaceScatters() {
+        if (!this.scatterStates.size) return;
+        clearTimeout(this.scatterTimer);
+        this.scatterPending ??= new Promise<void>((resolve) => (this.scatterRan = resolve));
+        this.scatterTimer = window.setTimeout(() => {
+            const ran = this.scatterRan;
+            this.scatterPending = null;
+            this.scatterRan = null;
+            try {
+                this.placeScatters();
+            } catch (e) {
+                console.error('[editor] scatter placement failed', e);
+            } finally {
+                ran?.();
+            }
+        }, SCATTER_DELAY);
+    }
+
+    /**
+     * Places the copies of the scatters whose placement changed: their
+     * rules, their object's place, their ground (moved, reshaped, loaded),
+     * what they avoid, or their source models (loaded).
+     */
+    private placeScatters() {
+        for (const entry of this.entries.values()) {
+            const st = entry.scatter;
+            const doc = st ? this.store.node(entry.id)?.scatter : undefined;
+            if (!st || !doc) continue;
+            const models = doc.sources.map((s) => (s.model ? (this.scatterModelsLoaded.get(s.model) ?? null) : null));
+            const m = entry.obj.transform.worldMatrix.rawData;
+            const ground = doc.ground ? this.groundRenderers(doc.ground) : null;
+            const lands = doc.ground ? this.groundTerrains(doc.ground) : [];
+            const avoid = this.avoidBoxes(doc.avoid);
+            const round = (v: number) => +v.toFixed(3);
+            const key = JSON.stringify([
+                { ...doc, distance: 0 }, Array.from(m, round),
+                ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, round)]),
+                lands.map((l) => [l.id, l.version]),
+                avoid.map((b) => [b.minX, b.maxX, b.minZ, b.maxZ].map(round)),
+                models.map((x) => !!x),
+            ]);
+            if (key === st.placed) continue;
+            st.placed = key;
+            const frame = fieldFrame(m);
+            const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
+            const layered = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : null;
+            // With a ground object copies stand only where it is; without one, flat at the object's height.
+            const query = doc.ground ? (x: number, z: number) => layered?.sample(x, z) ?? null : null;
+            st.placements = placeScatter(doc, frame, query, avoid, hashString(entry.id));
+            st.view.build(st.placements, models, doc.castShadow, (res) => this.disposeLater(res));
+            st.solids = scatterSolids(doc, st.placements, models);
+            this.runtime.gi.invalidate();
+            this.runtime.redrawShadows();
+            this.emit('scatter', entry.id);
+        }
+    }
+
+    /** The x-z boxes of the shown meshes of objects to avoid (and of the objects under them). */
+    private avoidBoxes(ids: readonly string[]): AvoidBox[] {
+        const out: AvoidBox[] = [];
+        for (const id of ids) {
+            for (const nid of [id, ...this.store.descendants(id).map((n) => n.id)]) {
+                if (!this.entries.get(nid)?.visible) continue;
+                for (const r of this.renderersOf(nid)) {
+                    const b = rendererWorldBox(r);
+                    if (b) out.push({ minX: b.min[0], maxX: b.max[0], minZ: b.min[2], maxZ: b.max[2] });
+                }
+                const f = this.terrainView(nid)?.frame;
+                if (f) out.push({ minX: f.x - f.sizeX / 2, maxX: f.x + f.sizeX / 2, minZ: f.z - f.sizeZ / 2, maxZ: f.z + f.sizeZ / 2 });
+            }
+        }
+        return out;
+    }
+
+    /** The shown scatters, for picking. */
+    scatterViews(): { id: string; view: ScatterView }[] {
+        const out: { id: string; view: ScatterView }[] = [];
+        for (const e of this.entries.values()) if (e.scatter && e.visible && !this.detached.has(e.id)) out.push({ id: e.id, view: e.scatter.view });
+        return out;
+    }
+
+    /** A scatter's engine side. */
+    scatterView(id: string): ScatterView | null {
+        return this.entries.get(id)?.scatter?.view ?? null;
+    }
+
+    /** Where a scatter's copies stand (to turn them into objects). */
+    scatterPlacements(id: string): readonly Placement[] {
+        return this.entries.get(id)?.scatter?.placements ?? [];
+    }
+
+    /** A scatter source model taken apart, once loaded. */
+    scatterModelOf(assetId: string): ScatterModel | null {
+        return this.scatterModelsLoaded.get(assetId) ?? null;
+    }
+
+    /** The solid copies of the shown scatters: what characters, bodies and the navigation mesh run into. */
+    scatterSolids(): { id: string; solids: ScatterSolid[] }[] {
+        const out: { id: string; solids: ScatterSolid[] }[] = [];
+        for (const e of this.entries.values()) {
+            if (!e.scatter?.solids.length || !e.visible || this.detached.has(e.id)) continue;
+            out.push({ id: e.id, solids: e.scatter.solids });
+        }
+        return out;
     }
 
     // ------------------------------------------------------------ instancing
@@ -1445,6 +1641,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.mirror) entry.mirror.enable = visible;
         entry.grass?.setVisible(visible);
         entry.terrain?.view.setVisible(visible);
+        entry.scatter?.view.setVisible(visible);
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);
@@ -1461,7 +1658,10 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** Resolves once every model and texture requested so far has loaded or failed. */
     async whenLoaded(): Promise<void> {
-        const all = () => [...this.prefabs.values(), ...Array.from(this.groupPrefabs.values(), (g) => g.prefab), ...this.textures.values(), ...this.terrainLoads];
+        const all = () => [
+            ...this.prefabs.values(), ...Array.from(this.groupPrefabs.values(), (g) => g.prefab), ...this.textures.values(), ...this.terrainLoads,
+            ...this.scatterModels.values(), ...(this.scatterPending ? [this.scatterPending] : []),
+        ];
         for (;;) {
             const pending = all();
             await Promise.allSettled(pending);
@@ -1629,6 +1829,42 @@ async function decodeImage(blob: Blob, maxSize = Infinity): Promise<ImageBitmap>
     if (width === bmp.width && height === bmp.height) return bmp;
     const out = await createImageBitmap(bmp, { resizeWidth: width, resizeHeight: height, resizeQuality: 'high', premultiplyAlpha: 'none' });
     bmp.close();
+    return out;
+}
+
+/**
+ * The solid copies of a scatter: a trunk stands where its model reaches the
+ * ground, as tall as the model; a box is the model's box, turned with the
+ * copy (a copy leaning with the ground keeps its box upright).
+ */
+function scatterSolids(doc: ScatterDoc, placements: readonly Placement[], models: readonly (ScatterModel | null)[]): ScatterSolid[] {
+    const out: ScatterSolid[] = [];
+    for (const p of placements) {
+        const kind = doc.sources[p.source]?.solid;
+        const m = models[p.source]?.piece(p.variant);
+        if (!m || !kind || kind === 'none' || !(m.max[1] >= m.min[1])) continue;
+        const s = p.scale;
+        const c = Math.cos(p.yaw), n = Math.sin(p.yaw);
+        // A point of the model's x-z plane, turned by the copy's yaw.
+        const turn = (x: number, z: number) => [c * x + n * z, -n * x + c * z];
+        if (kind === 'trunk') {
+            const [dx, dz] = turn(m.trunk.x * s, m.trunk.z * s);
+            out.push({
+                kind: 'trunk',
+                center: [p.position[0] + dx, p.position[1] + m.min[1] * s, p.position[2] + dz],
+                size: [m.trunk.radius * s, (m.max[1] - m.min[1]) * s, m.trunk.radius * s],
+                yaw: 0,
+            });
+        } else {
+            const [dx, dz] = turn(((m.min[0] + m.max[0]) / 2) * s, ((m.min[2] + m.max[2]) / 2) * s);
+            out.push({
+                kind: 'box',
+                center: [p.position[0] + dx, p.position[1] + ((m.min[1] + m.max[1]) / 2) * s, p.position[2] + dz],
+                size: [((m.max[0] - m.min[0]) / 2) * s, ((m.max[1] - m.min[1]) / 2) * s, ((m.max[2] - m.min[2]) / 2) * s],
+                yaw: p.yaw,
+            });
+        }
+    }
     return out;
 }
 

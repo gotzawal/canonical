@@ -47,9 +47,10 @@ export function loadCullPlanes(camera: Camera3D, mode: FrustumCullMode): number 
 }
 
 /**
- * The renderer's world box this frame, from its geometry's bounds and its
- * world matrix, as [cx, cy, cz, ex, ey, ez]; ex < 0 when unknown. The array
- * is kept per renderer: read it before asking for another frame.
+ * The renderer's world box this frame, from its bounds (its cull bounds, or
+ * its geometry's) and its world matrix, as [cx, cy, cz, ex, ey, ez]; ex < 0
+ * when unknown. The array is kept per renderer: read it before asking for
+ * another frame.
  */
 export function worldBox(node: RenderNode, frame: number): Float64Array {
     let rec = boxes.get(node);
@@ -60,7 +61,7 @@ export function worldBox(node: RenderNode, frame: number): Float64Array {
     if (rec.frame === frame) return rec.box;
     rec.frame = frame;
     const box = rec.box;
-    const b = node.geometry?.bounds;
+    const b = node.cullBounds ?? node.geometry?.bounds;
     const lo = b?.min, hi = b?.max;
     if (!lo || !hi || !(lo.x <= hi.x && lo.y <= hi.y && lo.z <= hi.z)) {
         box[3] = -1;

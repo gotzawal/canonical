@@ -422,8 +422,9 @@ export type ScatterSourceDoc = z.output<typeof ScatterSource>;
  * the rules, and the same copies are made again from the seed each time.
  * They stand on the ground object (a terrain or meshes) where its slope
  * and height allow, keep their spacing and stay out of the areas of the
- * objects to avoid. They are drawn instanced in cells, so the cells out
- * of view cost nothing.
+ * objects to avoid. A model that is a set of pieces side by side (a rock
+ * set) gives each copy one piece. They are drawn instanced in cells, so
+ * the cells out of view (or beyond the draw distance) cost nothing.
  */
 export const Scatter = z.object({
     sources: z.array(ScatterSource).max(8).catch((c) => (Array.isArray(c?.value) ? c.value.slice(0, 8).map((x: unknown) => ScatterSource.parse(x && typeof x === 'object' ? x : {})) : []))
@@ -440,6 +441,7 @@ export const Scatter = z.object({
     margin: num(1, 0, 100, { step: 0.1, description: 'Meters kept clear around the objects to avoid.' }),
     align: unit(0, { description: 'How much copies lean with the ground: 0 upright (trees), 1 along the slope (rocks, grass tufts).' }),
     sink: num(0, 0, 10, { step: 0.01, description: 'Meters the copies sink into the ground (so roots and rock bottoms do not float on slopes).' }),
+    distance: num(0, 0, 100000, { step: 1, title: 'Draw Distance', description: 'Copies farther than this from the camera are not drawn (a part of the area at a time); 0 draws them at any distance. Small copies (grass tufts, pebbles, flowers) can go at 40 to 80 m.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
 });
 export type ScatterDoc = z.output<typeof Scatter>;

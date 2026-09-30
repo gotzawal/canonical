@@ -5,6 +5,7 @@
 import type { Object3D, RenderNode } from '@orillusion/core';
 import { add, invert, normalize, rayBox, scale, type Mat4, type Ray, type RayHit } from '../core/math';
 import type { ChangeHint, Store } from '../core/store';
+import { raySolid, solidBounds, type ScatterSolid } from '../core/scatter';
 import { groundNormal, rayTerrain } from '../core/terrain';
 import type { Vec3 } from '../core/types';
 import { worldBoxInto, type Box, type Picker } from './picking';
@@ -52,6 +53,10 @@ export class LevelRays {
     private huge: number[] = [];
     private stamp = new Uint32Array(0);
     private tick = 0;
+    /** Solid copies of scatters (trunks, boxes), on a grid of their own. */
+    private solids: { id: string; s: ScatterSolid }[] = [];
+    private solidGrid = new Map<number, number[]>();
+    private solidStamp = new Uint32Array(0);
     private age = Infinity;
     private readonly cell: number;
     /** Tracking: the objects of the items, keyed by item index. */
@@ -70,7 +75,7 @@ export class LevelRays {
                 this.stale = true;
             };
             const invalidate = () => (this.stale = true);
-            this.offs.push(store.on('change', onChange), store.on('load', invalidate), sync.on('model', invalidate));
+            this.offs.push(store.on('change', onChange), store.on('load', invalidate), sync.on('model', invalidate), sync.on('scatter', invalidate));
         }
     }
 
@@ -154,6 +159,31 @@ export class LevelRays {
         }
         this.stamp = new Uint32Array(this.items.length);
         this.watch?.moved.clear();
+        this.collectSolids();
+    }
+
+    /** The solid copies of the shown scatters no body leaves out, filed by the cells their boxes cover. */
+    private collectSolids() {
+        this.solids = [];
+        this.solidGrid.clear();
+        for (const { id, solids } of this.sync.scatterSolids()) {
+            if (this.skip(id) || this.gone(id)) continue;
+            for (const s of solids) {
+                const i = this.solids.length;
+                this.solids.push({ id, s });
+                const b = solidBounds(s);
+                const c = (v: number) => Math.floor(v / this.cell);
+                for (let x = c(b.min[0]); x <= c(b.max[0]); x++) {
+                    for (let z = c(b.min[2]); z <= c(b.max[2]); z++) {
+                        const k = (x + 32768) * 65536 + (z + 32768);
+                        let list = this.solidGrid.get(k);
+                        if (!list) this.solidGrid.set(k, (list = []));
+                        list.push(i);
+                    }
+                }
+            }
+        }
+        this.solidStamp = new Uint32Array(this.solids.length);
     }
 
     /** Destroyed by a script, or under something that was. */
@@ -259,6 +289,7 @@ export class LevelRays {
         if ((x1 - x0 + 1) * (z1 - z0 + 1) > 256) {
             // A long ray: every item.
             for (let i = 0; i < this.items.length; i++) test(i);
+            for (let i = 0; i < this.solids.length; i++) best = this.solidHit(i, origin, d, maxDist, best, ignore);
             return this.terrainHit(origin, d, maxDist, best, ignore);
         }
         const t = ++this.tick;
@@ -278,8 +309,30 @@ export class LevelRays {
                 }
             }
         }
+        if (this.solids.length) {
+            for (let x = x0; x <= x1; x++) {
+                for (let z = z0; z <= z1; z++) {
+                    const list = this.solidGrid.get((x + 32768) * 65536 + (z + 32768));
+                    if (!list) continue;
+                    for (const i of list) {
+                        if (this.solidStamp[i] === t) continue;
+                        this.solidStamp[i] = t;
+                        best = this.solidHit(i, origin, d, maxDist, best, ignore);
+                    }
+                }
+            }
+        }
         return this.terrainHit(origin, d, maxDist, best, ignore);
     };
+
+    /** The hit, or a solid copy's when the ray (`d` unit length) meets it first. */
+    private solidHit(i: number, origin: Vec3, d: Vec3, maxDist: number, best: RayHit | null, ignore?: (id: string) => boolean): RayHit | null {
+        const { id, s } = this.solids[i];
+        if (ignore?.(id)) return best;
+        const hit = raySolid(s, origin, d, Math.min(maxDist, best?.distance ?? Infinity));
+        if (!hit) return best;
+        return { distance: hit.t, point: add(origin, scale(d, hit.t)), id, normal: hit.normal };
+    }
 
     /** The hit, or a terrain one meets first (from its heightmap; terrains that do not collide are left out). */
     private terrainHit(origin: Vec3, d: Vec3, maxDist: number, best: RayHit | null, ignore?: (id: string) => boolean): RayHit | null {

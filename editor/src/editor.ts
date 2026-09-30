@@ -14,7 +14,7 @@ import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
 import { AudioSource, Grass, Mirror } from './core/model';
 import { defaults } from './core/schema';
-import { DEG, add, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
+import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
     AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
     keptAssets, projectFileNameFor, usedAssetIds,
@@ -275,6 +275,49 @@ export class Editor extends Emitter<EditorEvents> {
     /** Starts a sculpting or painting stroke on a terrain (see TerrainStroke). */
     terrainStroke(id: string): TerrainStroke {
         return new TerrainStroke(this.store, this.sync, id);
+    }
+
+    /**
+     * Turns a scatter's copies into objects of their own, to edit one by one:
+     * a group at the scene's root (drawn instanced) holding a model object
+     * where each copy stood; a copy of one piece of a set hides the other
+     * pieces. The scatter component goes. Returns the group, or null when
+     * the scatter has no copies (or its models are not loaded yet).
+     */
+    bakeScatter(id: string): string | null {
+        const node = this.store.node(id);
+        const doc = node?.scatter;
+        const placements = this.sync.scatterPlacements(id);
+        if (!node || !doc || !placements.length) return null;
+        const group: NodeDoc = { ...makeNode(this.uniqueName(`${node.name} Objects`, null), null), instancing: {} };
+        const copies: NodeDoc[] = [];
+        for (const [i, p] of placements.entries()) {
+            const asset = doc.sources[p.source]?.model;
+            const model = asset ? this.sync.scatterModelOf(asset) : null;
+            const piece = model?.piece(p.variant);
+            if (!asset || !model || !piece) continue;
+            // The copy, less the model's root, which the model object shows again.
+            const m = mul(mul(compose(p.position, p.rotation, [p.scale, p.scale, p.scale]), compose(piece.offset, [0, 0, 0, 1], [1, 1, 1])), invert(model.root) ?? mat4());
+            const t = decompose(m);
+            const own = new Set(piece.renderers);
+            const parts: Record<string, { visible: boolean }> = {};
+            if (model.pieces.length > 1) for (const [r, path] of model.paths) if (!own.has(r)) parts[path] = { visible: false };
+            const meta = this.store.doc.assets.find((a) => a.id === asset);
+            copies.push({
+                ...makeNode(`${(meta?.name ?? 'Copy').replace(/\.(glb|gltf)$/i, '')} ${i + 1}`, group.id, tidy3(t.position, 4)),
+                rotation: tidy3(eulerFromQuat(t.rotation), 3),
+                scale: tidy3(t.scale, 4),
+                model: { asset, ...(Object.keys(parts).length ? { parts } : {}) },
+            } as NodeDoc);
+        }
+        if (!copies.length) return null;
+        this.store.commit('Bake Scatter', (d) => {
+            d.nodes.push(group, ...copies);
+            const n = d.nodes.find((x) => x.id === id);
+            if (n) delete n.scatter;
+        });
+        this.store.select([group.id]);
+        return group.id;
     }
 
     /** Grass for an object (Add Component): on its own meshes and covering them when it has some, else a flat field around it. */

@@ -141,8 +141,12 @@ export class FakeSync extends Emitter<{ model: string }> {
         return r.enable;
     }
 
-    /** No terrains in these levels. */
+    /** No terrains or scatters in these levels. */
     terrains(): [] {
+        return [];
+    }
+
+    scatterSolids(): [] {
         return [];
     }
 

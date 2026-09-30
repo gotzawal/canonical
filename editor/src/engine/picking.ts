@@ -119,7 +119,21 @@ export class Picker {
                 }
             }
         }
+        best = this.scatterHit(ray, best?.distance ?? Infinity) ?? best;
         return this.terrainHit(ray, best?.distance ?? Infinity) ?? best;
+    }
+
+    /** The nearest copy of a shown scatter a ray meets within `maxDist` (the scatter is what is hit). */
+    scatterHit(ray: Ray, maxDist: number, skip?: (id: string) => boolean): Hit | null {
+        let best: Hit | null = null;
+        for (const { id, view } of this.sync.scatterViews()) {
+            if (skip?.(id)) continue;
+            const h = view.hit(ray, Math.min(maxDist, best?.distance ?? Infinity), (r, local) => this.intersectRenderer(r, local));
+            if (!h) continue;
+            const t = h.distance;
+            best = { id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: h.renderer };
+        }
+        return best;
     }
 
     /**
@@ -258,6 +272,7 @@ export class Picker {
                 }
             }
         }
+        best = this.scatterHit(ray, Math.min(maxDist, best?.distance ?? Infinity), skip) ?? best;
         return this.terrainHit(ray, Math.min(maxDist, best?.distance ?? Infinity), skip) ?? best;
     }
 
@@ -284,6 +299,12 @@ export class Picker {
                 grow([f.x - f.sizeX / 2, f.y, f.z - f.sizeZ / 2]);
                 grow([f.x + f.sizeX / 2, f.y + f.height, f.z + f.sizeZ / 2]);
             }
+            // A scatter, what its copies fill.
+            const copies = this.sync.scatterView(nid)?.bounds();
+            if (copies) {
+                grow(copies.min);
+                grow(copies.max);
+            }
             for (const r of this.sync.renderersOf(nid)) {
                 const b = r.geometry?.bounds;
                 if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) continue;
@@ -307,9 +328,14 @@ export class Picker {
         return box;
     }
 
-    /** Oriented box corners (8 world points) for each renderer of a node. */
+    /** Oriented box corners (8 world points) for each renderer of a node (one box around a scatter's copies). */
     localBoxes(id: string): Vec3[][] {
         const out: Vec3[][] = [];
+        const copies = this.sync.scatterView(id)?.bounds();
+        if (copies) {
+            const { min, max } = copies;
+            out.push(Array.from({ length: 8 }, (_, i): Vec3 => [i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]]));
+        }
         for (const r of this.sync.renderersOf(id)) {
             const b = r.geometry?.bounds;
             if (!b || !r.object3D || !Number.isFinite(b.min.x) || !Number.isFinite(b.max.x)) continue;
