@@ -251,7 +251,14 @@ export class GlobalFog extends PostBase {
 
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(this.fogCompute, this.fogOpTexture, this.fogUniform);
+        super.destroy(force);
+    }
+
     public onResize() {
+        // Its resources are made on its first frame.
+        if (!this.fogCompute) return;
         let [w, h] = this._boundCtx!.presentationSize;
         this.fogOpTexture.resize(w, h);
         this.fogCompute.workerSizeX = Math.ceil(this.fogOpTexture.width / 8);

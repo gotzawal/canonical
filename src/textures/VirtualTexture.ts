@@ -62,11 +62,8 @@ export class VirtualTexture extends Texture {
      */
     public resize(width, height) {
         let device = this._boundCtx!.device;
-        if (this.gpuTexture) {
-            Texture.delayDestroyTexture(this._boundCtx!, this.gpuTexture);
-            this.gpuTexture = null;
-            this.view = null;
-        }
+        this.dropGPUTextureLater();
+        this.view = null;
 
         this.width = width;
         this.height = height;

@@ -302,6 +302,14 @@ export class SSRPost extends PostBase {
         this.SSR_RayTraceCompute.bindGroups[0] = null as any;
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(
+            this.SSR_RayTraceCompute, this.SSR_IS_Compute, this.SSR_Blend_Compute, this.isRetTexture, this.finalTexture,
+            this.ssrUniformBuffer, this.rayTraceData, this.ssrColorData, this.historyPosition,
+        );
+        super.destroy(force);
+    }
+
     public onResize(): void {
         if (!this.finalTexture) return;
         let [w, h] = this._boundCtx!.presentationSize;

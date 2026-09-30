@@ -24,22 +24,22 @@ export class ProbeGBufferFrame extends RTFrame {
         let attachments = this.renderTargets;
         let rtDescriptors = this.rtDescriptors;
         let positionMap = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.rgba16float, false, undefined, 1, 0, true, autoResize, ctx);
-        positionMap.name = `positionMap`;
+        positionMap.name = `giProbePosition`;
         let posDec = new RTDescriptor();
         posDec.loadOp = `load`;
 
         let normalMap = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.rgba16float, false, undefined, 1, 0, true, autoResize, ctx);
-        normalMap.name = `normalMap`;
+        normalMap.name = `giProbeNormal`;
         let normalDec = new RTDescriptor();
         normalDec.loadOp = `load`;
 
         let colorMap = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.rgba16float, false, undefined, 1, 0, true, autoResize, ctx);
-        colorMap.name = `colorMap`;
+        colorMap.name = `giProbeColor`;
         let colorDec = new RTDescriptor();
         colorDec.loadOp = `load`;
 
         let depthTexture = new RenderTexture(rtWidth, rtHeight, GPUTextureFormat.depth32float, false, undefined, 1, 0, true, autoResize, ctx);
-        depthTexture.name = `depthTexture`;
+        depthTexture.name = `giProbeDepth`;
         let depthDec = new RTDescriptor();
         depthDec.loadOp = `load`;
 

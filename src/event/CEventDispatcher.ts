@@ -19,6 +19,9 @@ export class CEventDispatcher {
     /**
      *
      * Dispatch an event to all registered objects with a specific type of listener.
+     * A listener that throws is reported and the others still hear the event
+     * (as DOM events do): a throwing resize listener used to leave every
+     * listener after it at the old size.
      * @param event3D the event is dispatched.
      */
     public dispatchEvent(event: CEvent) {
@@ -36,8 +39,7 @@ export class CEventDispatcher {
                         }
                         listener.handler.call(listener.thisObject, event);
                     } catch (error) {
-                        import.meta.env.DEV && console.error(error.stack);
-                        throw error;
+                        console.error(error);
                     }
                     if (event.isStopImmediatePropagation) {
                         break;

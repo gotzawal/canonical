@@ -74,12 +74,17 @@ export class ReflectionPass extends RenderGraphPass {
         this._cubeCamera = new CubeCamera(0.01, 5000);
         this._cubeCamera.bindCtx(ctx);
 
-        this.gBuffer = GBufferFrame.getGBufferFrame(GBufferFrame.reflections_GBuffer, ctx, this.sizeW, this.sizeH, false);
+        // The probes' G-buffer is one texel too until the first probe (60 MiB at
+        // the defaults: the render pass state made below allocates it).
+        this.gBuffer = GBufferFrame.getGBufferFrame(GBufferFrame.reflections_GBuffer, ctx, 1, 1, false);
         this._rendererPassState = WebGPUDescriptorCreator.createRendererPassState(ctx, this.gBuffer);
         this._renderContext = new RenderContext(ctx, this.gBuffer);
 
+        // One texel until a scene has a reflection probe: the full atlas
+        // (probeSize * mipCount by probeSize * probeCount, 32 MiB at the
+        // defaults) is made for the first one (see _render).
         const usage = GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING;
-        this.outTexture = new VirtualTexture(this.probeSize * this.mipCount, this.sizeH, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, ctx);
+        this.outTexture = new VirtualTexture(1, 1, GPUTextureFormat.rgba16float, false, usage, 1, 0, 1, ctx);
         this.outTexture.name = 'reflection_outTexture';
 
         this._preFilteredUniform = new UniformGPUBuffer(4 + this.probeCount * 4);
@@ -125,10 +130,20 @@ export class ReflectionPass extends RenderGraphPass {
     }
 
     protected _render(view: View3D, occlusion: OcclusionSystem): void {
+        const reflections = EntityCollect.instance.getReflections(view.scene);
+        if (reflections.length > 0 && this.outTexture.width === 1) {
+            // The first probe: the atlas at its size, bound anew where the placeholder was.
+            this.outTexture.resize(this.probeSize * this.mipCount, this.sizeH);
+            // Texture.noticeChange is protected (texture classes of the packages override it).
+            (this.outTexture as unknown as { noticeChange(): void }).noticeChange();
+            // And the G-buffer the probes are drawn into, with the pass state that draws into it.
+            const ctx = view.engine3D.context3D;
+            for (const rt of [...this.gBuffer.renderTargets, this.gBuffer.depthTexture]) rt?.resize(this.sizeW, this.sizeH);
+            this._rendererPassState = WebGPUDescriptorCreator.createRendererPassState(ctx, this.gBuffer);
+            this._renderContext = new RenderContext(ctx, this.gBuffer);
+        }
         this._renderContext.gpu = view.engine3D.context3D.gpuContext;
         this._renderContext.clean();
-
-        const reflections = EntityCollect.instance.getReflections(view.scene);
         const space = this.probeSize;
         const cluster = view.renderGraph?.getPass<ClusterLightingPass>('ClusterLightingPass')?.clusterLightingBuffer;
 

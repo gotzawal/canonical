@@ -25,6 +25,7 @@ import { FXAAPost } from './gfx/renderJob/post/FXAAPost';
 import { PostProcessingComponent } from './components/post/PostProcessingComponent';
 import { GBufferFrame } from './gfx/renderJob/frame/GBufferFrame';
 import { Camera3D } from './core/Camera3D';
+import { Texture } from './gfx/graphics/webGpu/core/texture/Texture';
 
 /** Recursive partial — allows passing any subset of EngineSetting to
  *  `Engine3D.init({ setting: ... })`. Functions and class instances
@@ -380,12 +381,13 @@ export class Engine3D {
         // Eagerly create this device's default textures / BRDF LUT /sky cube.
         void Engine3D.resFor(this.context3D);
 
-        // Pre-compute reflection GBuffer (scoped to this engine's context).
+        // Pre-compute reflection GBuffer (scoped to this engine's context): one
+        // texel until the first reflection probe, when ReflectionPass sizes it.
         GBufferFrame.getGBufferFrame(
             GBufferFrame.reflections_GBuffer,
             this.context3D,
-            this.setting.reflectionSetting.width,
-            this.setting.reflectionSetting.height,
+            1,
+            1,
             false
         );
 
@@ -690,6 +692,9 @@ export class Engine3D {
         runViewMap(ComponentCollect.componentsLateUpdateList);
 
         if (this._lateRender) await this._lateRender();
+
+        // Textures replaced this frame go once the GPU is done with it.
+        Texture.destroyTexturesWhenDone(this.context3D);
     }
 }
 

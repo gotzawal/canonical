@@ -207,9 +207,10 @@ export function castsChangingShadow(node: RenderNode): boolean {
     return !node.frustumCulled || node.alwaysRender;
 }
 
-/** Adds a caster to a shadow map's signature: which one, and where. */
+/** Adds a caster to a shadow map's signature: which one, where, and the level of detail it draws. */
 export function hashCaster(h: number, node: RenderNode): number {
     const t = node.transform;
     h = Math.imul(h ^ (t.index | 0), 16777619);
+    h = Math.imul(h ^ (node.lodLevel | 0), 16777619);
     return hashFloats(h, t.worldMatrix.rawData, 16);
 }

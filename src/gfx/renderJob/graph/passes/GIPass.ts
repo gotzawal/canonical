@@ -106,9 +106,9 @@ export class GIPass extends RenderGraphPass {
         this._cubeCamera.bindCtx(ctx);
 
         const usage = GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.COPY_SRC | GPUTextureUsage.COPY_DST;
-        this.irradianceDepthMap = new RenderTexture(giSetting.octRTMaxSize, giSetting.octRTMaxSize, GPUTextureFormat.rgba16float, false, usage, 1, 0, true, true, ctx);
+        this.irradianceDepthMap = new RenderTexture(giSetting.octRTMaxSize, giSetting.octRTMaxSize, GPUTextureFormat.rgba16float, false, usage, 1, 0, true, false, ctx);
         this.irradianceDepthMap.name = 'irradianceDepthMap';
-        this.irradianceColorMap = new RenderTexture(giSetting.octRTMaxSize, giSetting.octRTMaxSize, GPUTextureFormat.rgba16float, false, usage, 1, 0, true, true, ctx);
+        this.irradianceColorMap = new RenderTexture(giSetting.octRTMaxSize, giSetting.octRTMaxSize, GPUTextureFormat.rgba16float, false, usage, 1, 0, true, false, ctx);
         this.irradianceColorMap.name = 'irradianceColorMap';
 
         this._probeGBufferFrame = new ProbeGBufferFrame(this.sizeW, this.sizeH, false, ctx);

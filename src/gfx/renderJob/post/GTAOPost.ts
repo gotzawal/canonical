@@ -15,6 +15,7 @@ import { RTDescriptor } from '../../graphics/webGpu/descriptor/RTDescriptor';
 import { GBufferFrame } from '../frame/GBufferFrame';
 import { RTFrame } from '../frame/RTFrame';
 import { GTAO_cs } from '../../../assets/shader/compute/GTAO_cs';
+import { bindCtx } from '../../graphics/webGpu/Context3D';
 
 /**
  * Ground base Ambient Occlusion
@@ -229,7 +230,14 @@ export class GTAOPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(this.gtaoCompute, this.gtaoTexture, this.aoBuffer, this.directionsBuffer, this.gtaoSetting);
+        super.destroy(force);
+    }
+
     public onResize() {
+        // Its resources are made on its first frame.
+        if (!this.gtaoCompute) return;
         let [w, h] = this._boundCtx!.presentationSize;
         this.gtaoTexture.resize(w, h);
         // The history of the last frame has one value per pixel: a larger view needs a larger buffer.
@@ -237,6 +245,9 @@ export class GTAOPost extends PostBase {
         if (this.aoBuffer && this.aoBuffer.byteSize < pixels * 4) {
             this.aoBuffer.destroy();
             this.aoBuffer = new StorageGPUBuffer(pixels);
+            // Bound before the shader sees it: an unbound buffer threw here, and the
+            // throw stopped the resize listeners after this one (other effects kept their size).
+            bindCtx(this.aoBuffer, this._boundCtx!);
             this.gtaoCompute.setStorageBuffer('aoBuffer', this.aoBuffer);
             // Bind groups rebuild at the next dispatch.
             this.gtaoCompute.bindGroups.fill(null);

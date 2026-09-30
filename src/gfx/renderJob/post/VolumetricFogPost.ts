@@ -112,6 +112,11 @@ export class VolumetricFogPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
     }
 
+    public destroy(force?: boolean) {
+        this.destroyOwned(this._compute, this._outTex, this._settingsBuffer);
+        super.destroy(force);
+    }
+
     public onResize() {
         const [w, h] = this._boundCtx!.presentationSize;
         if (this._outTex) this._outTex.resize(w, h);

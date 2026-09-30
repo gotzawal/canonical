@@ -795,6 +795,35 @@ export class Texture implements GPUSamplerDescriptor {
     }
 
     /**
+     * Queues its GPU texture, when one was made, for deferred destruction and
+     * forgets it (a resize makes the next one). Reading `gpuTexture` to find
+     * out would make one just to destroy it.
+     */
+    protected dropGPUTextureLater() {
+        if (this._gpuTexture && this._boundCtx) Texture.delayDestroyTexture(this._boundCtx, this._gpuTexture);
+        this.gpuTexture = null;
+    }
+
+    /**
+     * Destroys the textures queued so far once the GPU has finished the work
+     * submitted up to now, the last that may use them. The engine calls it
+     * after every frame: the textures a render graph compile or a post
+     * effect replaced used to wait for the next canvas resize.
+     * @param ctx the context whose queued textures are destroyed
+     */
+    public static destroyTexturesWhenDone(ctx: Context3D) {
+        const list = this._texs(ctx);
+        if (list.length === 0 || ctx.lost || !ctx.device) return;
+        const batch = list.splice(0, list.length);
+        ctx.device.queue.onSubmittedWorkDone().then(
+            () => {
+                for (const tex of batch) tex.destroy();
+            },
+            () => { /* device lost: its textures went with it */ },
+        );
+    }
+
+    /**
      * Destroy all GPU textures queued for deferred destruction on the context.
      * @param ctx the context whose queued textures are destroyed
      */

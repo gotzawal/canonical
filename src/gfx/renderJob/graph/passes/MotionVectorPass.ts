@@ -115,7 +115,7 @@ export class MotionVectorPass extends RenderGraphPass {
         // wrapper's GPUTexture may have been recreated under us. Watch
         // for the identity flip and force re-bind when it happens.
         const dirty = this._watcher.update([{ key: 'mv', tex: mv }]);
-        if (dirty) this._compute = null;
+        if (dirty) this._dropCompute();
         this._ensureCompute(ctx, mv);
 
         // Capture current viewProj BEFORE updating prev so the first
@@ -136,5 +136,21 @@ export class MotionVectorPass extends RenderGraphPass {
         // Roll: this frame's viewProj becomes next frame's prev.
         this._prevViewProj.copy(this._scratch);
         this._currViewProj.copy(this._scratch);
+    }
+
+    /**
+     * Destroys the compute shader bound to the old texture. Left alive, it
+     * kept following canvas resizes and read that texture again after the
+     * pool let go of it, allocating a new one each time.
+     */
+    protected _dropCompute(): void {
+        this._compute?.destroy();
+        this._compute = null;
+    }
+
+    public destroy(): void {
+        this._dropCompute();
+        this._mvData?.destroy();
+        this._mvData = null;
     }
 }

@@ -160,6 +160,21 @@ export class PostBase {
 
     public render(view: View3D, command: GPUCommandEncoder) {}
 
+    /**
+     * Destroys resources the effect made itself (its textures, compute
+     * shaders and buffers), never ones it only reads (the G-buffer, the
+     * sky): an effect that is switched off gives its memory back.
+     */
+    protected destroyOwned(...items: ({ destroy(force?: boolean): void } | null | undefined)[]) {
+        for (const item of items) {
+            try {
+                item?.destroy(true);
+            } catch (e) {
+                console.warn(`${this.constructor.name}: a resource could not be destroyed`, e);
+            }
+        }
+    }
+
     public destroy(force?: boolean) {
         this.postRenderer = null;
         // Drop the RESIZE listener registered on the Context3D in bindView.
