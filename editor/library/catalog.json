@@ -82,19 +82,9 @@
      "origin": "https://polyhaven.com/a/brown_photostudio_02"
     },
     {
-     "id": "polyhaven/coast-sand-rocks-02",
-     "author": "Rob Tuytel",
-     "origin": "https://polyhaven.com/a/coast_sand_rocks_02"
-    },
-    {
      "id": "polyhaven/brown-mud-leaves-01",
      "author": "Rob Tuytel",
      "origin": "https://polyhaven.com/a/brown_mud_leaves_01"
-    },
-    {
-     "id": "polyhaven/aerial-rocks-02",
-     "author": "Rob Tuytel",
-     "origin": "https://polyhaven.com/a/aerial_rocks_02"
     },
     {
      "id": "polyhaven/asphalt-02",
@@ -102,14 +92,29 @@
      "origin": "https://polyhaven.com/a/asphalt_02"
     },
     {
-     "id": "polyhaven/aerial-grass-rock",
+     "id": "polyhaven/forrest-ground-01",
      "author": "Rob Tuytel",
-     "origin": "https://polyhaven.com/a/aerial_grass_rock"
+     "origin": "https://polyhaven.com/a/forrest_ground_01"
     },
     {
-     "id": "polyhaven/aerial-rocks-04",
+     "id": "polyhaven/snow-02",
      "author": "Rob Tuytel",
-     "origin": "https://polyhaven.com/a/aerial_rocks_04"
+     "origin": "https://polyhaven.com/a/snow_02"
+    },
+    {
+     "id": "polyhaven/rock-face-03",
+     "author": "Dario Barresi and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/rock_face_03"
+    },
+    {
+     "id": "polyhaven/forest-ground-04",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/forest_ground_04"
+    },
+    {
+     "id": "polyhaven/snow-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/snow_01"
     },
     {
      "id": "polyhaven/red-brick",
@@ -147,9 +152,9 @@
      "origin": "https://polyhaven.com/a/beige_wall_001"
     },
     {
-     "id": "polyhaven/aerial-asphalt-01",
+     "id": "polyhaven/sandstone-cracks",
      "author": "Rob Tuytel",
-     "origin": "https://polyhaven.com/a/aerial_asphalt_01"
+     "origin": "https://polyhaven.com/a/sandstone_cracks"
     },
     {
      "id": "polyhaven/metal-plate",
@@ -1984,123 +1989,6 @@
    "thumb": "kenney-racing/thumbs/vehicle-truck-yellow.png"
   },
   {
-   "id": "polyhaven/aerial-asphalt-01",
-   "name": "Aerial Asphalt 01",
-   "kind": "material",
-   "file": "polyhaven/aerial-asphalt-01/color.jpg",
-   "bytes": 511347,
-   "source": "polyhaven",
-   "tags": [
-    "road",
-    "street",
-    "flat",
-    "cracked"
-   ],
-   "author": "Rob Tuytel",
-   "origin": "https://polyhaven.com/a/aerial_asphalt_01",
-   "maps": {
-    "normal": "polyhaven/aerial-asphalt-01/normal.jpg",
-    "arm": "polyhaven/aerial-asphalt-01/arm.jpg"
-   },
-   "tile": 30,
-   "pixels": [
-    1024,
-    1024
-   ],
-   "thumb": "polyhaven/thumbs/aerial-asphalt-01.png"
-  },
-  {
-   "id": "polyhaven/aerial-grass-rock",
-   "name": "Aerial Grass Rock",
-   "kind": "material",
-   "file": "polyhaven/aerial-grass-rock/color.jpg",
-   "bytes": 681579,
-   "source": "polyhaven",
-   "tags": [
-    "ground",
-    "terrain",
-    "natural",
-    "moss",
-    "grass",
-    "cliff",
-    "cave",
-    "rock face"
-   ],
-   "author": "Rob Tuytel",
-   "origin": "https://polyhaven.com/a/aerial_grass_rock",
-   "maps": {
-    "normal": "polyhaven/aerial-grass-rock/normal.jpg",
-    "arm": "polyhaven/aerial-grass-rock/arm.jpg"
-   },
-   "tile": 15,
-   "pixels": [
-    1024,
-    1024
-   ],
-   "thumb": "polyhaven/thumbs/aerial-grass-rock.png"
-  },
-  {
-   "id": "polyhaven/aerial-rocks-02",
-   "name": "Aerial Rocks 02",
-   "kind": "material",
-   "file": "polyhaven/aerial-rocks-02/color.jpg",
-   "bytes": 831872,
-   "source": "polyhaven",
-   "tags": [
-    "ground",
-    "terrain",
-    "natural",
-    "rocks",
-    "rough",
-    "moss",
-    "cliff",
-    "rock face",
-    "cave"
-   ],
-   "author": "Rob Tuytel",
-   "origin": "https://polyhaven.com/a/aerial_rocks_02",
-   "maps": {
-    "normal": "polyhaven/aerial-rocks-02/normal.jpg",
-    "arm": "polyhaven/aerial-rocks-02/arm.jpg"
-   },
-   "tile": 50,
-   "pixels": [
-    1024,
-    1024
-   ],
-   "thumb": "polyhaven/thumbs/aerial-rocks-02.png"
-  },
-  {
-   "id": "polyhaven/aerial-rocks-04",
-   "name": "Aerial Rocks 04",
-   "kind": "material",
-   "file": "polyhaven/aerial-rocks-04/color.jpg",
-   "bytes": 918009,
-   "source": "polyhaven",
-   "tags": [
-    "rock",
-    "natural",
-    "rough",
-    "rocks",
-    "moss",
-    "cliff",
-    "rock face",
-    "cave"
-   ],
-   "author": "Rob Tuytel",
-   "origin": "https://polyhaven.com/a/aerial_rocks_04",
-   "maps": {
-    "normal": "polyhaven/aerial-rocks-04/normal.jpg",
-    "arm": "polyhaven/aerial-rocks-04/arm.jpg"
-   },
-   "tile": 80,
-   "pixels": [
-    1024,
-    1024
-   ],
-   "thumb": "polyhaven/thumbs/aerial-rocks-04.png"
-  },
-  {
    "id": "polyhaven/asphalt-02",
    "name": "Asphalt 02",
    "kind": "material",
@@ -2248,39 +2136,6 @@
    "thumb": "polyhaven/thumbs/camera-01.png"
   },
   {
-   "id": "polyhaven/coast-sand-rocks-02",
-   "name": "Coast Sand Rocks 02",
-   "kind": "material",
-   "file": "polyhaven/coast-sand-rocks-02/color.jpg",
-   "bytes": 751098,
-   "source": "polyhaven",
-   "tags": [
-    "ground",
-    "terrain",
-    "natural",
-    "grass",
-    "rock face",
-    "rock",
-    "moss",
-    "rough",
-    "uneven",
-    "weathered",
-    "stones"
-   ],
-   "author": "Rob Tuytel",
-   "origin": "https://polyhaven.com/a/coast_sand_rocks_02",
-   "maps": {
-    "normal": "polyhaven/coast-sand-rocks-02/normal.jpg",
-    "arm": "polyhaven/coast-sand-rocks-02/arm.jpg"
-   },
-   "tile": 15,
-   "pixels": [
-    1024,
-    1024
-   ],
-   "thumb": "polyhaven/thumbs/coast-sand-rocks-02.png"
-  },
-  {
    "id": "polyhaven/concrete-floor-02",
    "name": "Concrete Floor 02",
    "kind": "material",
@@ -2366,6 +2221,71 @@
     1024
    ],
    "thumb": "polyhaven/thumbs/factory-wall.png"
+  },
+  {
+   "id": "polyhaven/forest-ground-04",
+   "name": "Forest Ground 04",
+   "kind": "material",
+   "file": "polyhaven/forest-ground-04/color.jpg",
+   "bytes": 876823,
+   "source": "polyhaven",
+   "tags": [
+    "rock",
+    "natural",
+    "rough",
+    "uneven",
+    "stones",
+    "ground",
+    "forest",
+    "dry",
+    "brown",
+    "gravel"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/forest_ground_04",
+   "maps": {
+    "normal": "polyhaven/forest-ground-04/normal.jpg",
+    "arm": "polyhaven/forest-ground-04/arm.jpg"
+   },
+   "tile": 3.15,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/forest-ground-04.png"
+  },
+  {
+   "id": "polyhaven/forrest-ground-01",
+   "name": "Forest Ground 01",
+   "kind": "material",
+   "file": "polyhaven/forrest-ground-01/color.jpg",
+   "bytes": 1010232,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "grass",
+    "twigs",
+    "forest",
+    "leaves",
+    "sticks",
+    "foliage",
+    "dead grass",
+    "plant litter"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/forrest_ground_01",
+   "maps": {
+    "normal": "polyhaven/forrest-ground-01/normal.jpg",
+    "arm": "polyhaven/forrest-ground-01/arm.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/forrest-ground-01.png"
   },
   {
    "id": "polyhaven/grass-bermuda-01",
@@ -2695,6 +2615,39 @@
    "thumb": "polyhaven/thumbs/red-brick-03.png"
   },
   {
+   "id": "polyhaven/rock-face-03",
+   "name": "Rock Face 03",
+   "kind": "material",
+   "file": "polyhaven/rock-face-03/color.jpg",
+   "bytes": 670525,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "rough",
+    "rock",
+    "cliff",
+    "uneven",
+    "weathered",
+    "wall",
+    "cracked",
+    "stone"
+   ],
+   "author": "Dario Barresi and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/rock_face_03",
+   "maps": {
+    "normal": "polyhaven/rock-face-03/normal.jpg",
+    "arm": "polyhaven/rock-face-03/arm.jpg"
+   },
+   "tile": 2.7,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/rock-face-03.png"
+  },
+  {
    "id": "polyhaven/rock-moss-set-02",
    "name": "Rock Moss Set 02",
    "kind": "model",
@@ -2719,6 +2672,100 @@
     3.41
    ],
    "thumb": "polyhaven/thumbs/rock-moss-set-02.png"
+  },
+  {
+   "id": "polyhaven/sandstone-cracks",
+   "name": "Sandstone Cracks",
+   "kind": "material",
+   "file": "polyhaven/sandstone-cracks/color.jpg",
+   "bytes": 845461,
+   "source": "polyhaven",
+   "tags": [
+    "road",
+    "street",
+    "rough",
+    "dirt",
+    "ground",
+    "sandstone",
+    "cracked",
+    "plaster"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/sandstone_cracks",
+   "maps": {
+    "normal": "polyhaven/sandstone-cracks/normal.jpg",
+    "arm": "polyhaven/sandstone-cracks/arm.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/sandstone-cracks.png"
+  },
+  {
+   "id": "polyhaven/snow-01",
+   "name": "Snow 01",
+   "kind": "material",
+   "file": "polyhaven/snow-01/color.jpg",
+   "bytes": 699802,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "snow",
+    "winter",
+    "rough",
+    "uneven",
+    "footprints",
+    "powdery",
+    "trail",
+    "snowfield"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/snow_01",
+   "maps": {
+    "normal": "polyhaven/snow-01/normal.jpg",
+    "arm": "polyhaven/snow-01/arm.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/snow-01.png"
+  },
+  {
+   "id": "polyhaven/snow-02",
+   "name": "Snow 02",
+   "kind": "material",
+   "file": "polyhaven/snow-02/color.jpg",
+   "bytes": 490185,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "snow",
+    "uneven",
+    "smooth",
+    "powdery",
+    "frosty",
+    "snowfield",
+    "soft",
+    "wintery"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/snow_02",
+   "maps": {
+    "normal": "polyhaven/snow-02/normal.jpg",
+    "arm": "polyhaven/snow-02/arm.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/snow-02.png"
   },
   {
    "id": "polyhaven/sofa-02",

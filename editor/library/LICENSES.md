@@ -17,12 +17,13 @@ The credits are kept all the same.
   - polyhaven/wide-street-01 by Sergej Majboroda: https://polyhaven.com/a/wide_street_01
   - polyhaven/moonless-golf by Greg Zaal: https://polyhaven.com/a/moonless_golf
   - polyhaven/brown-photostudio-02 by Sergej Majboroda: https://polyhaven.com/a/brown_photostudio_02
-  - polyhaven/coast-sand-rocks-02 by Rob Tuytel: https://polyhaven.com/a/coast_sand_rocks_02
   - polyhaven/brown-mud-leaves-01 by Rob Tuytel: https://polyhaven.com/a/brown_mud_leaves_01
-  - polyhaven/aerial-rocks-02 by Rob Tuytel: https://polyhaven.com/a/aerial_rocks_02
   - polyhaven/asphalt-02 by Rob Tuytel: https://polyhaven.com/a/asphalt_02
-  - polyhaven/aerial-grass-rock by Rob Tuytel: https://polyhaven.com/a/aerial_grass_rock
-  - polyhaven/aerial-rocks-04 by Rob Tuytel: https://polyhaven.com/a/aerial_rocks_04
+  - polyhaven/forrest-ground-01 by Rob Tuytel: https://polyhaven.com/a/forrest_ground_01
+  - polyhaven/snow-02 by Rob Tuytel: https://polyhaven.com/a/snow_02
+  - polyhaven/rock-face-03 by Dario Barresi and Rico Cilliers: https://polyhaven.com/a/rock_face_03
+  - polyhaven/forest-ground-04 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/forest_ground_04
+  - polyhaven/snow-01 by Rob Tuytel: https://polyhaven.com/a/snow_01
   - polyhaven/red-brick by Rob Tuytel: https://polyhaven.com/a/red_brick
   - polyhaven/red-brick-03 by Rob Tuytel: https://polyhaven.com/a/red_brick_03
   - polyhaven/plywood by Rob Tuytel: https://polyhaven.com/a/plywood
@@ -30,7 +31,7 @@ The credits are kept all the same.
   - polyhaven/concrete-floor-worn-001 by Dimitrios Savva and Rico Cilliers: https://polyhaven.com/a/concrete_floor_worn_001
   - polyhaven/concrete-floor-02 by Rob Tuytel: https://polyhaven.com/a/concrete_floor_02
   - polyhaven/beige-wall-001 by Dimitrios Savva and Rico Cilliers: https://polyhaven.com/a/beige_wall_001
-  - polyhaven/aerial-asphalt-01 by Rob Tuytel: https://polyhaven.com/a/aerial_asphalt_01
+  - polyhaven/sandstone-cracks by Rob Tuytel: https://polyhaven.com/a/sandstone_cracks
   - polyhaven/metal-plate by Rob Tuytel: https://polyhaven.com/a/metal_plate
   - polyhaven/factory-wall by Rob Tuytel: https://polyhaven.com/a/factory_wall
   - polyhaven/grass-medium-01 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/grass_medium_01
