@@ -5,7 +5,8 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player } from '../core/model';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player, Terrain } from '../core/model';
+import { layersOf } from './terrainTools';
 import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
@@ -66,6 +67,11 @@ const objectFields = {
         ...toolSchema(AudioSource, 'A sound source: in Play the object plays an audio asset (clip: id or name; search_library kind audio finds sounds), heard from its place (spatial: louder near it, full volume within near meters, fading out up to far) or everywhere (spatial false: music). loop for ambience and music, autoplay off to start it from a script (this.audio.play()). Scripts play one-off sounds with this.playSound(name). null removes it.'),
         type: ['object', 'null'],
     },
+    terrain: {
+        ...toolSchema(Terrain, 'A terrain (create_terrain makes one; sculpt_terrain changes its heights and paint): size and height stretch its heightmap, detail is how far its full detail reaches, collide and cast_shadow; layers (a new list of up to four: slot, heights, slopes, height_blend, slope_blend, only_painted) are its surface, the first covering everything and each next one going over those before it where its rules hold. null removes it.'),
+        type: ['object', 'null'],
+    },
+    scatter: { type: 'null', description: 'null removes the object\'s scatter (the scatter tool makes and changes scatters).' },
     instancing: {
         ...toolSchema(Instancing, 'Instanced drawing for placing many copies (trees, rocks, fence posts, crates): the meshes of this object and of every object under it that share a shape and a material (primitives, prefab instances, the same imported model) draw in one draw call per shape and material. Put the copies under one group with instancing ({}); moving them is free, adding or restyling regroups them. Skinned or animated meshes, transparent materials and mirrors draw on their own. null removes it.'),
         type: ['object', 'null'],
@@ -466,6 +472,8 @@ function nodeType(n: NodeDoc): string {
     if (n.mesh) return n.mesh.geometry.type;
     if (n.particles) return 'particles';
     if (n.grass) return 'grass';
+    if (n.terrain) return 'terrain';
+    if (n.scatter) return 'scatter';
     if (n.audio) return 'sound';
     return 'empty';
 }
@@ -544,6 +552,28 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     if (n.grass) {
         const g = n.grass;
         out.grass = { count: g.count, size: g.size, ground: g.ground, height: g.height, colors: [g.bottomColor, g.topColor], wind: g.wind };
+    }
+    if (n.terrain) {
+        const t = n.terrain;
+        out.terrain = {
+            size: t.size,
+            height: t.height,
+            layers: t.layers.map((l) => ({ slot: doc.design.materials.find((s) => s.id === l.slot)?.name ?? l.slot, heights: l.height, slopes: l.slope, ...(l.onlyPainted ? { only_painted: true } : {}) })),
+            ...(t.splatmap ? { painted: true } : {}),
+            ...(t.collide ? {} : { collide: false }),
+        };
+    }
+    if (n.scatter) {
+        const s = n.scatter;
+        out.scatter = {
+            sources: s.sources.map((x) => ({ model: doc.assets.find((a) => a.id === x.model)?.name ?? x.model, weight: x.weight, solid: x.solid })),
+            count: s.count,
+            size: s.size,
+            spacing: s.spacing,
+            ground: s.ground,
+            ...(s.avoid.length ? { avoid: s.avoid } : {}),
+            ...(s.distance ? { distance: s.distance } : {}),
+        };
     }
     if (n.instancing) out.instancing = true;
     if (n.audio) {
@@ -672,6 +702,16 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (windMap !== undefined) g.windMap = textureId(doc, windMap, 'grass.wind_map');
         n.grass = g;
     }
+    if (spec.terrain === null) delete n.terrain;
+    else if (spec.terrain) {
+        if (!n.terrain) throw new ToolError('terrain: create_terrain makes terrains.');
+        const { layers, ...fields } = spec.terrain as Json;
+        const t = patch(Terrain, n.terrain, fields, 'terrain', hex);
+        if (layers !== undefined) t.layers = layersOf(env, layers);
+        n.terrain = t;
+    }
+    if (spec.scatter === null) delete n.scatter;
+    else if (spec.scatter !== undefined) throw new ToolError('scatter: the scatter tool makes and changes scatters (null removes one).');
     if (spec.instancing === null) delete n.instancing;
     else if (spec.instancing) n.instancing = defaults(Instancing);
     if (spec.audio === null) delete n.audio;
@@ -833,6 +873,7 @@ class StagePolicy {
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed ${limited}.`;
         if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed ${limited}.`;
         if ((spec.mirror !== undefined || spec.grass !== undefined) && !this.any('objects', 'materials', 'effects')) return `Mirrors and grass cannot be changed ${limited}.`;
+        if ((spec.terrain !== undefined || spec.scatter !== undefined) && !this.any('objects', 'materials')) return `Terrains and scatters cannot be changed ${limited}.`;
         if (spec.instancing !== undefined && !this.allowed.has('objects')) return `Instancing cannot be changed ${limited}.`;
         if (spec.audio !== undefined && !this.any('objects', 'audio')) return `Sounds cannot be changed ${limited}.`;
         if (this.stage === 'Level' && spec.material) {

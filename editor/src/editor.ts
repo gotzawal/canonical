@@ -23,7 +23,7 @@ import type { Store, Tool } from './core/store';
 import { className, SCRIPT_TEMPLATES, SHADER_TEMPLATES } from './core/templates';
 import type {
     AssetKind, AssetMeta, AssetSource, GeometryType, GrassDoc, LightType, MaterialOverride, MaterialSlotDoc, NodeDoc, ParamValue, PartOverride, PrefabDoc,
-    SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
+    ScatterDoc, SceneDoc, ScriptDoc, ShaderDoc, ShaderKind, TextureCompression, Vec3,
 } from './core/types';
 import type { Picker } from './engine/picking';
 import type { RenderGraphController } from './engine/renderGraph';
@@ -253,6 +253,13 @@ export class Editor extends Emitter<EditorEvents> {
             id = node.id;
         });
         return id;
+    }
+
+    /** A scatter object with these rules, its area around `at` (where new objects go without one). Returns its id. */
+    createScatter(scatter: ScatterDoc, opts: { name?: string; at?: Vec3 } = {}): string {
+        const node: NodeDoc = { ...makeNode(this.uniqueName(opts.name ?? 'Scatter', null), null, tidy3(opts.at ?? this.viewport.spawnPoint(), 3)), scatter };
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
     }
 
     /**
