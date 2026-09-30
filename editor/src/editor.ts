@@ -6,7 +6,7 @@ import { deleteDerivedOf } from './core/derived';
 import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import {
-    defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, newScene, uid,
+    defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
@@ -1341,9 +1341,9 @@ export class Editor extends Emitter<EditorEvents> {
         return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
     }
 
-    async newScene(kind: 'default' | 'empty' | 'showcase' | 'guard' = 'default') {
+    async newScene(kind: 'empty' | 'showcase' | 'guard' = 'empty') {
         if (!(await this.confirmReplace('New scene', 'Discard'))) return;
-        const doc = kind === 'empty' ? emptyScene() : kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : newScene();
+        const doc = kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : emptyScene();
         const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
         this.loadDoc(doc, camera);
         if (kind === 'guard') this.showBehavior({ tree: doc.behaviors[0]?.id });

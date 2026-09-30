@@ -68,8 +68,7 @@ export function menuDefinitions(
         {
             label: 'File',
             items: (): MenuItem[] => [
-                { label: 'New Scene', icon: 'plus', action: () => void editor.newScene('default') },
-                { label: 'New Empty Scene', action: () => void editor.newScene('empty') },
+                { label: 'New Empty Scene', icon: 'plus', action: () => void editor.newScene('empty') },
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
                 { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
                 { separator: true },
