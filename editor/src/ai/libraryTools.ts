@@ -101,7 +101,7 @@ export const libraryTools = tools({
             if (!item) throw new ToolError(`No Library item "${id}". Use an id from search_library.`);
             checkStage(env, item.kind);
             const res = await ed
-                .addFromLibrary(item, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, place: args.place !== false, signal: env.signal })
+                .addFromLibrary(item, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, place: args.place !== false, frame: false, signal: env.signal })
                 .catch((e) => {
                     if (e?.name === 'AbortError') throw e;
                     throw new ToolError(e?.message || String(e));
@@ -127,7 +127,7 @@ export const libraryTools = tools({
             const url = str(args.url, 'url', 2000).trim();
             const kind = kindOfUrl(urlFileName(url));
             if (kind) checkStage(env, kind);
-            const res = await ed.importUrl(url, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, signal: env.signal }).catch((e) => {
+            const res = await ed.importUrl(url, { at: args.position !== undefined ? v3(args.position, 'position') : undefined, frame: false, signal: env.signal }).catch((e) => {
                 if (e?.name === 'AbortError') throw e;
                 throw new ToolError(e?.message || String(e));
             });

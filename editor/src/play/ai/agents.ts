@@ -429,8 +429,9 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
     modelLost = false;
     /** The agents' tick offsets are set in the first frame of a session. */
     private spreadPending = false;
-    /** Sounds of the last second, for the hearing sensors (play/ai/sensors.ts). */
-    noises: (HeardSound & { time: number })[] = [];
+    /** Sounds of the last second, for the hearing sensors (play/ai/sensors.ts), numbered in the order they were made. */
+    noises: (HeardSound & { time: number; seq: number })[] = [];
+    private noiseSeq = 0;
     /** Some agent's tree listens (a Hearing service): characters' footsteps count as sounds then. */
     listening = false;
     /** The navigation mesh, once Play has one (walking tasks follow its paths). */
@@ -618,7 +619,7 @@ export class AgentSystem extends Emitter<{ started: void; stopped: void }> {
         if (!this.running || !(s.range > 0)) return;
         const now = this.time;
         this.noises = this.noises.filter((n) => now - n.time <= 1);
-        this.noises.push({ ...s, time: now });
+        this.noises.push({ ...s, time: now, seq: ++this.noiseSeq });
     }
 
     /** An agent's object was destroyed by a script: its tree stops. */

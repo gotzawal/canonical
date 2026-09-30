@@ -36,6 +36,12 @@ export class ParticleSystem extends RenderNode {
         ShaderLib.register('ParticleDataStruct', ParticleDataStructShader);
     }
 
+    public destroy(force?: boolean) {
+        // The simulation's compute shaders and buffers go with the emitter.
+        this.particleSimulator?.destroy();
+        super.destroy(force);
+    }
+
     /**
      * material
      */

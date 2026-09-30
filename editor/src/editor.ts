@@ -67,6 +67,8 @@ export interface ImportUrlOptions {
     at?: Vec3;
     /** false adds a model's file without placing it. */
     place?: boolean;
+    /** Frame the placed model in the view (default: when it goes where new objects go). */
+    frame?: boolean;
     /** The asset's name (default: the link's file name). */
     name?: string;
     kind?: AssetKind;
@@ -620,10 +622,10 @@ export class Editor extends Emitter<EditorEvents> {
         if (!reused) {
             this.store.transact(label, () => {
                 this.store.update((doc) => doc.assets.push(meta));
-                if (place) node = this.addModel(meta.id, opts.at, !opts.at);
+                if (place) node = this.addModel(meta.id, opts.at, opts.frame ?? !opts.at);
             });
             if (meta.kind !== 'audio') this.compressImported(meta.id);
-        } else if (place) node = this.addModel(meta.id, opts.at, !opts.at);
+        } else if (place) node = this.addModel(meta.id, opts.at, opts.frame ?? !opts.at);
         return { asset: meta, node, reused };
     }
 

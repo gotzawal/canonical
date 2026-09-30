@@ -283,13 +283,32 @@ export class ComputeShader extends ShaderPassBase {
             this.genGroups(i, this._groupsShaderReflectionVarInfos);
         }
 
-        this._boundCtx!.addEventListener(CResizeEvent.RESIZE, (e) => {
+        // One resize listener per shader, removed by destroy(): a listener
+        // left behind keeps the shader and the buffers it binds alive.
+        this._offResize?.();
+        const ctx = this._boundCtx!;
+        const onResize = () => {
             for (let i = 0; i < shaderReflection.groups.length; ++i) {
                 let srvs = shaderReflection.groups[i];
                 this._groupsShaderReflectionVarInfos[i] = srvs;
                 this.genGroups(i, this._groupsShaderReflectionVarInfos, true);
             }
-        }, this);
+        };
+        ctx.addEventListener(CResizeEvent.RESIZE, onResize, this);
+        this._offResize = () => {
+            ctx.removeEventListener(CResizeEvent.RESIZE, onResize, this);
+            this._offResize = null;
+        };
+    }
+
+    private _offResize: (() => void) | null = null;
+
+    /** Stops following canvas resizes and lets go of the pipeline and bind groups. */
+    public destroy(force?: boolean) {
+        this._offResize?.();
+        this._computePipeline = null;
+        this.bindGroups = [];
+        super.destroy(force);
     }
 
     protected preCompileShader(shader: string) {

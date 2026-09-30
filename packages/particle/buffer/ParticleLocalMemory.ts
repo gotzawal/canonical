@@ -23,9 +23,12 @@ export class ParticleLocalMemory extends ParticleBuffer {
         }
         let singleCount = this.particlesData.length > 0 ? this.particlesData[0].totalCount : 0;
 
-        let byteSize = Math.max(singleCount * count * 4, 32);
-        if (this.byteSize == undefined || this.byteSize < byteSize) {
-            this.createBuffer(GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, byteSize);
+        // createBuffer takes 4-byte words. The slots are rounded up to whole
+        // workgroups of 64: the simulation runs a thread for every slot of a
+        // workgroup, and the last ones must stay inside the buffer.
+        let words = Math.max(singleCount * Math.ceil(count / 64) * 64, 8);
+        if (this.byteSize == undefined || this.byteSize < words * 4) {
+            this.createBuffer(GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST | GPUBufferUsage.COPY_SRC, words);
         }
         this.reset();
 

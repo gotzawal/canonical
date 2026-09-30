@@ -34,6 +34,8 @@ export class FXAAPost extends PostBase {
     public onResize() {
         let [w, h] = this._boundCtx!.presentationSize;
         this.renderTexture.resize(w, h);
+        // The edge search steps one pixel: its size changes with the view.
+        this.postQuad?.quadShader.setUniform("u_texel", new Vector2(1.0 / w, 1.0 / h));
     }
 
     /**

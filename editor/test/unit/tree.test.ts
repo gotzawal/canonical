@@ -3,8 +3,9 @@
 // tick through script tasks the test finishes.
 import { describe, expect, it } from 'vitest';
 import { Blackboard } from '../../src/play/ai/blackboard';
+import { hear, see, type Senser } from '../../src/play/ai/sensors';
 import { TreeInstance, type TaskHandle, type TreeHost } from '../../src/play/ai/tree';
-import type { BehaviorTreeDoc, BtNodeDoc } from '../../src/core/types';
+import type { BehaviorTreeDoc, BtNodeDoc, HearingServiceDoc, SightServiceDoc, Vec3 } from '../../src/core/types';
 
 type Behavior = 'ok' | 'no' | 'run';
 
@@ -120,5 +121,60 @@ describe('behavior tree runtime', () => {
         expect(first.calls.at(-1)).toBe('c');
         expect(second.calls.at(-1)).toBe('c');
         expect(first.calls.join()).not.toBe(second.calls.join());
+    });
+});
+
+describe('senses', () => {
+    const obj = (x: number, z: number) => ({ name: `at ${x}`, transform: { worldPosition: { x, y: 0, z } } }) as any;
+    const senser = (wall: number | null) => {
+        const facts: Record<string, unknown> = {};
+        const noises: { at: Vec3; range: number; source: any; seq: number }[] = [];
+        const self = obj(0, 0);
+        const s: Senser = {
+            obj: self,
+            name: 'Guard',
+            now: () => 1,
+            eyes: () => [0, 1.6, 0],
+            facing: () => 0,
+            aimPoint: (o: any) => [o.transform.worldPosition.x, 1.2, o.transform.worldPosition.z],
+            // A wall across the x axis at `wall` meters (rays toward +x meet it).
+            castLevel: (o, d, max) => (wall !== null && d[0] > 0 ? Math.min(max + 1, (wall - o[0]) / d[0]) : null),
+            candidates: () => [target],
+            noises: () => noises,
+            marker: () => obj(0, 0),
+            writeFact: (_s, key, v) => (facts[key] = v),
+        };
+        const target = obj(0, 8);
+        return { s, facts, noises, target };
+    };
+    const sight = { id: 'eyes', type: 'sight', targets: 'named', name: '', range: 10, fov: 90, lineOfSight: true, memory: 2, output: 'seen', visible: 'sees', distance: 'dist', position: '' } as SightServiceDoc;
+    const hearing = { id: 'ears', type: 'hearing', sensitivity: 1, walls: true, memory: 2, heard: 'heard', source: 'src', position: '' } as HearingServiceDoc;
+
+    it('Sight sees what is in its field of view, in range and not behind a wall', () => {
+        const a = senser(null);
+        see(a.s, sight);
+        expect(a.facts).toMatchObject({ sees: true, dist: 8 });
+        a.target.transform.worldPosition = { x: 8, y: 0, z: 0 };
+        see(a.s, sight);
+        expect(a.facts.sees).toBe(false);
+        const b = senser(4);
+        b.target.transform.worldPosition = { x: 6, y: 0, z: 6 };
+        see(b.s, { ...sight, fov: 360 });
+        expect(b.facts.sees).toBe(false);
+    });
+
+    it('Hearing takes sounds made since it last listened, halved by walls', () => {
+        const a = senser(3);
+        hear(a.s, hearing);
+        expect(a.facts.heard).toBe(false);
+        // Made after it listened in the same frame: still heard next time.
+        a.noises.push({ at: [0, 0, 5], range: 6, source: a.target, seq: 1 });
+        hear(a.s, hearing);
+        expect(a.facts).toMatchObject({ heard: true, src: a.target });
+        // Behind the wall at x = 3 a 6 m sound carries 3 m: from 5 m away it is not heard.
+        const b = senser(3);
+        b.noises.push({ at: [5, 0, 0], range: 6, source: null, seq: 1 });
+        hear(b.s, hearing);
+        expect(b.facts.heard).toBe(false);
     });
 });

@@ -5,10 +5,10 @@
 //
 // Sight looks from the agent's eyes at the player, the other characters or
 // named objects within its range and field of view; with line of sight a
-// level object between them hides the target. Hearing takes the sounds of
-// the last second (AgentSystem.noises: 3D sounds that were played, the
-// characters' footsteps, scripts' this.noise) that carry to the agent;
-// level objects between halve how far a sound carries.
+// level object between them hides the target. Hearing takes the sounds
+// made since it last listened (AgentSystem.noises: 3D sounds that were
+// played, the characters' footsteps, scripts' this.noise) that carry to
+// the agent; level objects between halve how far a sound carries.
 
 import type { Object3D } from '@orillusion/core';
 import type { HearingServiceDoc, SightServiceDoc, Vec3 } from '../../core/types';
@@ -27,8 +27,8 @@ export interface Senser {
     /** Distance to the first level object along a ray (the agent's own objects left out), or null. */
     castLevel(origin: Vec3, dir: Vec3, max: number): number | null;
     candidates(doc: SightServiceDoc): Object3D[];
-    /** Sounds heard in the last second. */
-    noises(): readonly { at: Vec3; range: number; source: Object3D | null; time: number }[];
+    /** Sounds of the last second, numbered in the order they were made. */
+    noises(): readonly { at: Vec3; range: number; source: Object3D | null; seq: number }[];
     /** A marker object of the agent (created on first use). */
     marker(id: string): Object3D;
     /** Writes a fact key; a key that does not take the value is reported once. */
@@ -41,7 +41,8 @@ interface SightState {
 }
 
 interface HearingState {
-    lastCheck: number;
+    /** The last sound it went through (a sound made later in the same frame is still new). */
+    lastSeq: number;
     lastHeard: number;
 }
 
@@ -116,14 +117,15 @@ export function see(s: Senser, d: SightServiceDoc) {
 
 export function hear(s: Senser, d: HearingServiceDoc) {
     const now = s.now();
-    const st = stateOf(hearing, s, d.id, () => ({ lastCheck: now - 1, lastHeard: -Infinity }));
-    const since = st.lastCheck;
-    st.lastCheck = now;
+    const st = stateOf(hearing, s, d.id, () => ({ lastSeq: 0, lastHeard: -Infinity }));
+    const since = st.lastSeq;
     const ear = s.eyes();
     let best: { at: Vec3; source: Object3D | null } | null = null;
     let bestShare = Infinity;
     for (const n of s.noises()) {
-        if (n.time <= since || n.source === s.obj) continue;
+        if (n.seq <= since) continue;
+        st.lastSeq = Math.max(st.lastSeq, n.seq);
+        if (n.source === s.obj) continue;
         let range = n.range * d.sensitivity;
         const dist = Math.hypot(n.at[0] - ear[0], n.at[1] - ear[1], n.at[2] - ear[2]);
         if (range <= 0 || dist > range) continue;

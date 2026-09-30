@@ -137,6 +137,14 @@ export class ParticleSimulator {
     protected initPipeline() {
     }
 
+    /** Frees the compute shaders and the particle buffers (the emitter is gone). */
+    public destroy() {
+        for (const c of this._computes ?? []) c.destroy();
+        this._computes = [];
+        this.particleLocalMemory?.destroy();
+        this.particleGlobalMemory?.destroy();
+    }
+
     public compute(view: View3D, command: GPUCommandEncoder) {
         if (this._computes && this._computes.length > 0) {
             view.engine3D.context3D.gpuContext.computeCommand(command, this._computes);
