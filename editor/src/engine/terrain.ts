@@ -232,8 +232,9 @@ export class TerrainView {
         this.clearChunks();
         this.root.removeFromParent();
         this.root.destroy();
-        Reference.getInstance().detached(this.material.material, this);
-        this.material.material.destroy(true);
+        // Its layer and paint textures are its own (not the material's to destroy).
         this.material.dispose();
+        Reference.getInstance().detached(this.material.material, this);
+        this.material.material.destroy(false);
     }
 }
