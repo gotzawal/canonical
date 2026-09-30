@@ -16,6 +16,8 @@ import { assetImageDataUrl, canvas, canvasBlob } from '../core/images';
 import type { Store } from '../core/store';
 import type { AssetMeta, MaterialSlotDoc, ParamValue } from '../core/types';
 import { checkParams, closestAspect, generateImages, listImageModels, modelParams, takesImages, type ImageModel } from '../openrouter/images';
+import { drawParams, REFERENCE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
+import type { UsageTask } from '../ai/usage';
 import { aiSettings } from '../openrouter/settings';
 
 export interface SwatchRecord {
@@ -344,23 +346,29 @@ export interface SwatchGeneration {
     tile: number;
     roughness?: number;
     metallic?: number;
+    /** How sharp the references and the swatches are, where `params` leaves it open (default: the AI settings' drawQuality). */
+    quality?: ImageQuality;
 }
 
 /** Generates swatches with the image model, processes them and adds them to the library. */
-export async function generateSwatches(gen: SwatchGeneration, opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void } = {}): Promise<{ swatches: SwatchRecord[]; cost: number | null; errors: string[]; dropped: string[] }> {
+export async function generateSwatches(
+    gen: SwatchGeneration,
+    opts: { signal?: AbortSignal; onProgress?: (done: number, total: number) => void; usage?: UsageTask } = {},
+): Promise<{ swatches: SwatchRecord[]; cost: number | null; errors: string[]; dropped: string[] }> {
     const key = aiSettings.apiKey;
     if (!key) throw new Error('Add an OpenRouter key in the AI settings first.');
     const models = await listImageModels().catch(() => [] as ImageModel[]);
     const model = models.find((m) => m.id === gen.model);
     if (models.length && !model) throw new Error(`"${gen.model}" is not an image model on OpenRouter.`);
     const refs = model && !takesImages(model) ? [] : gen.refs;
+    const quality = gen.quality ?? aiSettings.value.drawQuality;
     const references: string[] = [];
     for (const id of refs) {
-        const url = await assetImageDataUrl(id, 1024);
+        const url = await assetImageDataUrl(id, REFERENCE_PIXELS[quality]);
         if (url) references.push(url);
     }
     const specs = modelParams(model);
-    const params: Record<string, ParamValue> = { ...gen.params };
+    const params: Record<string, ParamValue> = { ...drawParams(model, quality), ...gen.params };
     // Square output where the model has a choice.
     if (specs.aspect_ratio?.type === 'enum' && params.aspect_ratio === undefined) {
         const v = closestAspect(specs.aspect_ratio.values, 1);
@@ -371,6 +379,7 @@ export async function generateSwatches(gen: SwatchGeneration, opts: { signal?: A
     }
     const checked = checkParams(model, params);
     const res = await generateImages(key, model, { model: gen.model, prompt: gen.prompt, references, count: gen.count, seed: gen.seed, params: checked.params }, { signal: opts.signal, onProgress: opts.onProgress });
+    opts.usage?.images(gen.model, res.images.length, res.cost, quality);
     const swatches: SwatchRecord[] = [];
     const created = new Date().toISOString();
     for (const img of res.images) {

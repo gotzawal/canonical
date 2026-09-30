@@ -26,7 +26,7 @@ export interface CacheControl {
 
 export type ContentPart =
     | { type: 'text'; text: string; cache_control?: CacheControl }
-    | { type: 'image_url'; image_url: { url: string } };
+    | { type: 'image_url'; image_url: { url: string; detail?: 'low' | 'high' | 'auto' } };
 
 export interface ToolCall {
     id: string;

@@ -185,7 +185,7 @@ async function main() {
         autosave.schedule();
     });
     // The player controller's joystick and hints go over the view.
-    const player = new Player(runtime, store, sync, picker, compiler, { controls: viewportEl, aiServices: (): ModelServices => models, chat: scriptChat });
+    const player = new Player(runtime, store, sync, picker, compiler, { controls: viewportEl, aiServices: (): ModelServices => models, chat: (req) => scriptChat(req, (model, usage) => editor.usage.script(model, usage)) });
     // Agent models: the editor loads cached copies by itself and asks before downloading.
     const models = new ModelServices(runtime, player.speech, () => store.doc.aiModels, { policy: 'ask', backend: savedBackend() });
     const graph = new RenderGraphController(runtime, store, shaders, sync);

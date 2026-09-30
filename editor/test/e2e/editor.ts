@@ -26,7 +26,9 @@ export function sharedEditor(setup?: (page: Page) => Promise<void>, opts: { simp
         await page.addInitScript((edit) => {
             const prefs = JSON.parse(localStorage.getItem('canonical-editor/prefs') || '{}');
             // Compression runs only where a test asks for it: it is CPU work SwiftShader competes with, and tests look at the files they import.
-            localStorage.setItem('canonical-editor/prefs', JSON.stringify({ backgroundCompression: false, compressImports: false, ...prefs, editMode: edit }));
+            // The viewport draws as on a phone (30 fps, low quality): SwiftShader draws on the CPU.
+            const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'low' };
+            localStorage.setItem('canonical-editor/prefs', JSON.stringify({ ...pinned, ...prefs, editMode: edit }));
         }, !opts.simple);
         await setup?.(page);
         await page.goto('/');
@@ -61,6 +63,9 @@ export async function playFrames(page: Page, frames: number) {
     await page.waitForFunction((n) => window.__editor.player.time.frame >= n, frames, { polling: 100, timeout: 120_000 });
 }
 
+/** What every answer of the scripted assistant reports it cost. */
+export const USAGE = { prompt_tokens: 1500, completion_tokens: 40, prompt_tokens_details: { cached_tokens: 1000 }, cost: 0.002 };
+
 /** A tool call of a scripted assistant turn. */
 export interface ScriptedCall {
     name: string;
@@ -69,8 +74,9 @@ export interface ScriptedCall {
 
 /**
  * Stands in for OpenRouter: every request of the assistant gets the next
- * turn of `turns` (tool calls, or a text that ends the request). `sent`
- * collects the request bodies (their tools and the tool results).
+ * turn of `turns` (tool calls, or a text that ends the request), and
+ * reports USAGE. `sent` collects the request bodies (their tools and the
+ * tool results). The model sees images; screenshots are off.
  */
 export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedCall[] | string)[]; sent: any[] }> {
     const state = { turns: [] as (ScriptedCall[] | string)[], sent: [] as any[] };
@@ -82,9 +88,7 @@ export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedC
         route.fulfill({
             json: {
                 data: [
-                    { id: 'test/model', name: 'Test Model', context_length: 200000, supported_parameters: ['tools'], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
-                    { id: 'acme/fast', name: 'Acme Fast', context_length: 100000, supported_parameters: ['tools'], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
-                    { id: 'acme/plain', name: 'Acme Plain', context_length: 100000, supported_parameters: [], architecture: { input_modalities: ['text'] }, pricing: { prompt: '0', completion: '0' } },
+                    { id: 'test/model', name: 'Test Model', context_length: 200000, supported_parameters: ['tools'], architecture: { input_modalities: ['text', 'image'] }, pricing: { prompt: '0', completion: '0' } },
                 ],
             },
         }),
@@ -96,7 +100,7 @@ export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedC
         const delta = typeof turn === 'string'
             ? { content: turn }
             : { tool_calls: turn.map((c, index) => ({ index, id: `call_${state.sent.length}_${index}`, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.args) } })) };
-        const chunk = { choices: [{ delta, finish_reason: typeof turn === 'string' ? 'stop' : 'tool_calls' }] };
+        const chunk = { choices: [{ delta, finish_reason: typeof turn === 'string' ? 'stop' : 'tool_calls' }], usage: USAGE };
         return route.fulfill({ contentType: 'text/event-stream', body: `data: ${JSON.stringify(chunk)}\n\ndata: [DONE]\n\n` });
     });
     return state;

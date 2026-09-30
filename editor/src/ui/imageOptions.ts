@@ -1,5 +1,6 @@
 import type { ParamValue } from '../core/types';
 import { describeSpec, type ParamSpec } from '../openrouter/images';
+import { DRAW_HINTS, IMAGE_QUALITIES, QUALITY_NAMES, type ImageQuality } from '../openrouter/imageQuality';
 import { h } from './dom';
 
 const humanize = (k: string) => k.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
@@ -41,4 +42,25 @@ export function optionField(key: string, spec: ParamSpec, params: Record<string,
         control = input;
     }
     return h('label', { class: 'po-field' }, label, control);
+}
+
+/**
+ * The image quality of one generation (openrouter/imageQuality.ts): it sets
+ * the model's resolution and quality options below it and the size of the
+ * references sent, so a lower one costs less.
+ */
+export function qualityField(value: ImageQuality, onChange: (q: ImageQuality) => void): HTMLElement {
+    const sel = h('select', { class: 'select' });
+    for (const q of IMAGE_QUALITIES) sel.appendChild(h('option', { text: QUALITY_NAMES[q], attrs: { value: q } }));
+    sel.value = value;
+    const hint = h('span', { class: 'muted small' });
+    const describe = () => (hint.textContent = DRAW_HINTS[sel.value as ImageQuality]);
+    describe();
+    sel.addEventListener('change', () => {
+        describe();
+        onChange(sel.value as ImageQuality);
+    });
+    sel.addEventListener('keydown', (e) => e.stopPropagation());
+    const label = h('span', { text: 'Image quality', title: 'The size and quality the model draws at, and the size of the reference images sent to it: lower costs less.' });
+    return h('div', { class: 'po-row' }, h('label', { class: 'po-field' }, label, sel), hint);
 }

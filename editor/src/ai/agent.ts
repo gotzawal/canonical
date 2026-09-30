@@ -1,15 +1,17 @@
 import type { Editor } from '../editor';
 import { kvDelete, kvGet, kvSet } from '../core/db';
-import { assetImageDataUrl } from '../core/images';
+import { assetImageDataUrl, capImage } from '../core/images';
 import { Emitter } from '../core/events';
 import { designSummary, pipelineSummary } from '../design/context';
 import { uid } from '../core/ids';
 import { cacheStyle } from '../openrouter/caching';
-import { cacheTokens, chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart, type Usage } from '../openrouter/client';
+import { chat, listModels, OpenRouterError, supportsImages, type ChatMessage, type ContentPart } from '../openrouter/client';
 import { COMPACT_PROMPT, MEMO_PROMPT, SYSTEM_PROMPT } from './prompt';
+import { SEE_DETAIL, SEE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
 import { runTool, toolDefs } from './registry';
 import type { Approval, ToolEnv } from './toolUtil';
+import type { UsageTask } from './usage';
 
 export interface ToolTurn {
     name: string;
@@ -76,7 +78,6 @@ interface SessionData {
     version: 1;
     turns: AgentTurn[];
     history: ChatMessage[];
-    usage: Agent['usage'];
     savedAt: string;
     /** Key of the conversation for OpenRouter's sticky routing (a new conversation gets a new one). */
     conversation?: string;
@@ -122,8 +123,6 @@ export class Agent extends Emitter<AgentEvents> {
     private compacting: AbortController | null = null;
     /** What the assistant is doing now, for the status the UI shows: the tool running, or '' while it thinks or writes. */
     activity = '';
-    usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
-    lastModel = '';
     private sessionKey = '';
     /** Sent as OpenRouter's session_id, so the requests of a conversation stay with the provider holding its prompt cache. */
     private conversation = uid('c');
@@ -136,6 +135,8 @@ export class Agent extends Emitter<AgentEvents> {
     private generation = 0;
     /** The memo refresh running, and the work it takes in (see refreshMemo). */
     private refreshing: { session: string; recent: string; abort: AbortController } | null = null;
+    /** Where the running request's tokens and credits are counted (the project's usage log). */
+    private task: UsageTask | null = null;
 
     constructor(private editor: Editor, private context: () => string) {
         super();
@@ -160,7 +161,9 @@ export class Agent extends Emitter<AgentEvents> {
             screenshots: () => aiSettings.value.screenshots,
             limitTools: () => aiSettings.value.limitTools,
             allowImages: () => aiSettings.value.allowImages,
+            imageSize: () => SEE_PIXELS[aiSettings.value.seeQuality],
             signal: this.abort?.signal,
+            usage: this.task ?? undefined,
         };
     }
 
@@ -173,7 +176,6 @@ export class Agent extends Emitter<AgentEvents> {
         this.turns = [];
         this.history = [];
         this.placeholders.clear();
-        this.usage = { prompt: 0, completion: 0, cached: 0, written: 0, cost: 0, requests: 0 };
         this.conversation = uid('c');
         this.emit('update', null);
         this.loadingKey = key;
@@ -183,7 +185,6 @@ export class Agent extends Emitter<AgentEvents> {
         if (typeof data.conversation === 'string' && data.conversation) this.conversation = data.conversation;
         this.turns = Array.isArray(data.turns) ? data.turns : [];
         this.history = Array.isArray(data.history) ? data.history : [];
-        if (data.usage) this.usage = { ...this.usage, ...data.usage };
         for (const t of this.turns) {
             turnId = Math.max(turnId, t.id);
             // A reload in the middle of a tool call leaves it running forever otherwise.
@@ -199,7 +200,7 @@ export class Agent extends Emitter<AgentEvents> {
         const key = this.sessionKey;
         if (key === this.loadingKey) return;
         clearTimeout(this.saveTimers.get(key));
-        const { history, usage, conversation } = this;
+        const { history, conversation } = this;
         const all = this.turns;
         this.saveTimers.set(key, window.setTimeout(() => {
             this.saveTimers.delete(key);
@@ -219,7 +220,7 @@ export class Agent extends Emitter<AgentEvents> {
                 })
                 .reverse()
                 .map((t) => (t.tool?.result && t.tool.result.length > 6000 ? { ...t, tool: { ...t.tool, result: t.tool.result.slice(0, 6000) + '...' } } : t));
-            const data: SessionData = { version: 1, turns, history, usage, savedAt: new Date().toISOString(), conversation };
+            const data: SessionData = { version: 1, turns, history, savedAt: new Date().toISOString(), conversation };
             void kvSet(key, data);
         }, 600));
     }
@@ -275,16 +276,6 @@ export class Agent extends Emitter<AgentEvents> {
         return key && model ? { key, model } : null;
     }
 
-    private addUsage(u: Usage | null | undefined) {
-        const cache = cacheTokens(u);
-        this.usage.requests++;
-        this.usage.prompt += u?.prompt_tokens ?? 0;
-        this.usage.completion += u?.completion_tokens ?? 0;
-        this.usage.cached += cache.read;
-        this.usage.written += cache.written;
-        this.usage.cost += u?.cost ?? 0;
-    }
-
     /** The cache fields every request of this conversation carries (see caching.ts). */
     private get cacheRequest(): { sessionId: string; longCache: boolean } {
         return { sessionId: `morglay-${this.editor.store.doc.design.id}-${this.conversation}`, longCache: aiSettings.value.cacheLong };
@@ -325,6 +316,7 @@ export class Agent extends Emitter<AgentEvents> {
         this.push({ role: 'user', text: shown, images: attachments.length ? attachments : undefined });
         this.abort = new AbortController();
         const signal = this.abort.signal;
+        const task = (this.task = this.editor.usage.begin('request', shown || 'Images'));
         const store = this.editor.store;
         const label = `AI: ${(shown || 'images').replace(/\s+/g, ' ').slice(0, 40)}${shown.length > 40 ? '...' : ''}`;
         // The tools' edits undo as one step (store.squash); edits by hand meanwhile stay apart.
@@ -375,9 +367,8 @@ export class Agent extends Emitter<AgentEvents> {
                         },
                     },
                 );
+                task.chat(model, res.usage);
                 cut();
-                this.lastModel = res.model;
-                this.addUsage(res.usage);
                 this.history.push(res.message);
                 // Images are sent once; later requests only mention them. With a
                 // prompt cache they stay until the request ends (up to
@@ -405,6 +396,7 @@ export class Agent extends Emitter<AgentEvents> {
                     if (signal.aborted) throw new DOMException('Aborted', 'AbortError');
                     const toolTurn = this.push({ role: 'tool', text: '', tool: { name: call.function.name, args: call.function.arguments || '{}', state: 'running' } });
                     this.setActivity(call.function.name);
+                    task.tool();
                     let args: Record<string, any> = {};
                     let content: string;
                     try {
@@ -423,7 +415,10 @@ export class Agent extends Emitter<AgentEvents> {
                         const failed = !!(result.data && typeof result.data === 'object' && 'error' in (result.data as any));
                         toolTurn.tool!.state = failed ? 'error' : 'done';
                         toolTurn.tool!.summary = failed ? String((result.data as any).error) : result.summary;
-                        const shown = [...(result.image ? [result.image] : []), ...(result.images ?? [])];
+                        // No image is sharper than the chat's image quality asks for.
+                        const size = SEE_PIXELS[aiSettings.value.seeQuality];
+                        const shown = await Promise.all([...(result.image ? [result.image] : []), ...(result.images ?? [])].map((url) => capImage(url, size)));
+                        cut();
                         if (shown.length) {
                             toolTurn.tool!.image = shown[0];
                             images.push(...shown);
@@ -438,8 +433,10 @@ export class Agent extends Emitter<AgentEvents> {
                 }
                 if (images.length) {
                     if (vision) {
+                        const quality = aiSettings.value.seeQuality;
                         const parts: ContentPart[] = [{ type: 'text', text: `${TOOL_IMAGES} Images from the tool calls above:` }];
-                        for (const url of images) parts.push({ type: 'image_url', image_url: { url } });
+                        for (const url of images) parts.push(imagePart(url, quality));
+                        task.sent(images.length, quality);
                         const msg: ChatMessage = { role: 'user', content: parts };
                         this.placeholders.set(msg, `${TOOL_IMAGES} (${images.length} image${images.length === 1 ? ' was' : 's were'} shown here.)`);
                         this.history.push(msg);
@@ -463,6 +460,8 @@ export class Agent extends Emitter<AgentEvents> {
                 console.warn('[ai] request failed', e);
             }
         } finally {
+            task.end();
+            this.task = null;
             committed = store.squash(batch, label);
             // A conversation left for another project was settled when it was left (see the constructor).
             if (live()) this.settle(stopped);
@@ -510,11 +509,13 @@ export class Agent extends Emitter<AgentEvents> {
         if (!vision) {
             return { role: 'user', content: `${text}\n\n(The user attached ${attachments.length} image${attachments.length === 1 ? '' : 's'}: ${list}. This model cannot see images.)` };
         }
+        const quality = aiSettings.value.seeQuality;
         const parts: ContentPart[] = [{ type: 'text', text: `${text}\n\nAttached images: ${list}` }];
         for (const a of attachments) {
-            const url = await assetImageDataUrl(a.asset).catch(() => null);
-            if (url) parts.push({ type: 'image_url', image_url: { url } });
+            const url = await assetImageDataUrl(a.asset, SEE_PIXELS[quality]).catch(() => null);
+            if (url) parts.push(imagePart(url, quality));
         }
+        this.task?.sent(parts.length - 1, quality);
         const msg: ChatMessage = { role: 'user', content: parts };
         this.placeholders.set(msg, `${text}\n\n(The user attached ${list} here. Call view_images with their asset ids to look at them again.)`);
         return msg;
@@ -569,6 +570,7 @@ export class Agent extends Emitter<AgentEvents> {
         signal ??= own?.signal;
         this.working = true;
         this.emit('busy', this.busy);
+        const task = this.editor.usage.begin('summary', auto ? 'Summary of a long conversation' : 'Summary of the conversation');
         try {
             const res = await chat(
                 cred.key,
@@ -585,8 +587,8 @@ export class Agent extends Emitter<AgentEvents> {
                 },
                 { signal },
             );
+            task.chat(cred.model, res.usage);
             if (this.generation !== gen) return false;
-            this.addUsage(res.usage);
             const summary = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!summary) throw new Error('The model returned an empty summary.');
             const recent = this.history.slice(cut);
@@ -615,6 +617,7 @@ export class Agent extends Emitter<AgentEvents> {
             this.trimHistory(COMPACT_CHARS);
             return false;
         } finally {
+            task.end();
             if (own && this.compacting === own) this.compacting = null;
             this.working = false;
             this.emit('busy', this.busy);
@@ -667,6 +670,7 @@ export class Agent extends Emitter<AgentEvents> {
         before?.abort.abort();
         if (before?.session === session) recent = `${before.recent}\n${recent}`;
         const job = (this.refreshing = { session, recent, abort: new AbortController() });
+        const task = this.editor.usage.begin('memo', 'Scene memo');
         const state = [
             `Scene "${doc.name}": ${doc.nodes.length} objects, ${doc.prefabs.length} prefabs, ${doc.scripts.length} scripts, ${doc.shaders.length} shaders.`,
             ...pipelineSummary(doc),
@@ -684,9 +688,8 @@ export class Agent extends Emitter<AgentEvents> {
                 ...this.cacheRequest,
                 cacheable: false,
             }, { signal: job.abort.signal });
+            task.chat(cred.model, res.usage);
             if (this.sessionKey !== session) return false;
-            this.addUsage(res.usage);
-            this.saveSession();
             const text = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!text) return false;
             store.patch((d) => {
@@ -697,9 +700,16 @@ export class Agent extends Emitter<AgentEvents> {
             if (e?.name !== 'AbortError') console.warn('[ai] memo refresh failed', e);
             return false;
         } finally {
+            task.end();
             if (this.refreshing === job) this.refreshing = null;
         }
     }
+}
+
+/** An image for the model, with OpenAI's detail hint for the quality (other providers go by its pixels). */
+function imagePart(url: string, quality: ImageQuality): ContentPart {
+    const detail = SEE_DETAIL[quality];
+    return { type: 'image_url', image_url: detail ? { url, detail } : { url } };
 }
 
 function contentChars(m: ChatMessage): number {

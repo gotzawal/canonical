@@ -4,6 +4,7 @@ import { defaultCamera, defaultRenderGraph, uid } from './defaults';
 import { sanitizeAgent, sanitizeBehaviors, sanitizeBlackboards, sanitizeMemory, sanitizeAiModels } from './behavior/format';
 import { sanitizeDesign } from './design';
 import { migrateScene } from './migrate';
+import { isMobileDevice } from './quality';
 import { Animation, Body, Camera, Character, Environment, Mesh, Model, Params, Particles, Player } from './model';
 import { defaults, isObj, repair, str, vecOr } from './schema';
 import {
@@ -55,9 +56,9 @@ export interface Prefs {
     giProbes: boolean;
     /** Glass surfaces; null follows the system's transparency setting (ui/theme.ts). */
     glass: boolean | null;
-    /** The viewport's frame rate limit. Low by default: a scene being edited seldom needs more. */
+    /** The viewport's frame rate limit: 60 on a computer, 30 on a phone or tablet by default (viewportDefaults). */
     viewportFps: ViewportFps;
-    /** The viewport's resolution, low by default. Captures (the assistant's, shots) are taken sharp either way. */
+    /** The viewport's resolution: medium on a computer, low on a phone or tablet by default. Captures (the assistant's, shots) are taken sharp either way. */
     viewportQuality: ViewportQuality;
     /** A graphics quality tier the viewport shows instead of the scene's ('scene': the scene's, high when auto). */
     previewQuality: 'scene' | ViewportQuality;
@@ -149,6 +150,8 @@ const HISTORY_BUDGET = 64 * 1024 * 1024;
 /** What a step takes besides the state it holds: the step, its label and maps. */
 const STEP_BYTES = 200;
 const PREFS_KEY = 'canonical-editor/prefs';
+/** Version of the stored preferences: 2 keeps only what differs from the defaults. */
+const PREFS_VERSION = 2;
 
 /** The top-level parts of the document each kind of hint may change. */
 const PARTS = {
@@ -172,8 +175,7 @@ function defaultPrefs(): Prefs {
         helpers: true,
         giProbes: false,
         glass: null,
-        viewportFps: 30,
-        viewportQuality: 'low',
+        ...viewportDefaults(),
         previewQuality: 'scene',
         backgroundCompression: true,
         compressImports: true,
@@ -181,15 +183,42 @@ function defaultPrefs(): Prefs {
     };
 }
 
+/**
+ * How often and how sharp the viewport draws unless the user chose: a
+ * computer draws at 60 frames per second in medium quality, a phone or
+ * tablet at 30 in low quality, to spare its battery.
+ */
+export function viewportDefaults(mobile = isMobileDevice()): Pick<Prefs, 'viewportFps' | 'viewportQuality'> {
+    return mobile ? { viewportFps: 30, viewportQuality: 'low' } : { viewportFps: 60, viewportQuality: 'medium' };
+}
+
 function loadPrefs(): Prefs {
-    const prefs = { ...defaultPrefs(), ...readLocal<Partial<Prefs>>(PREFS_KEY, {}) };
-    if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = 30;
-    if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = 'low';
+    const raw = readLocal<unknown>(PREFS_KEY, {});
+    const saved: Partial<Prefs> & { v?: number } = isObj(raw) ? { ...raw } : {};
+    // Earlier builds stored every preference, their defaults too: a viewport
+    // left at the old defaults (30 fps, low) follows the new ones.
+    if (saved.v !== PREFS_VERSION) {
+        if (saved.viewportFps === 30) delete saved.viewportFps;
+        if (saved.viewportQuality === 'low') delete saved.viewportQuality;
+    }
+    delete saved.v;
+    const base = defaultPrefs();
+    const prefs = { ...base, ...saved };
+    if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = base.viewportFps;
+    if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = base.viewportQuality;
     if (!['scene', 'low', 'medium', 'high'].includes(prefs.previewQuality)) prefs.previewQuality = 'scene';
     prefs.editMode = prefs.editMode === true;
     prefs.backgroundCompression = prefs.backgroundCompression !== false;
     prefs.compressImports = prefs.compressImports !== false;
     return prefs;
+}
+
+/** The preferences as stored: only what differs from the defaults, so a later change of a default reaches everyone who kept it. */
+function storedPrefs(prefs: Prefs): Partial<Prefs> & { v: number } {
+    const base = defaultPrefs();
+    const out: Partial<Prefs> & { v: number } = { v: PREFS_VERSION };
+    for (const k of Object.keys(prefs) as (keyof Prefs)[]) if (prefs[k] !== base[k]) (out as Record<string, unknown>)[k] = prefs[k];
+    return out;
 }
 
 /**
@@ -559,7 +588,7 @@ export class Store extends Emitter<StoreEvents> {
 
     setPrefs(patch: Partial<Prefs>) {
         this.prefs = { ...this.prefs, ...patch };
-        writeLocal(PREFS_KEY, this.prefs);
+        writeLocal(PREFS_KEY, storedPrefs(this.prefs));
         this.emit('prefs', this.prefs);
     }
 

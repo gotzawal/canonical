@@ -397,7 +397,7 @@ export const sceneTools = tools({
             assets: { type: 'array', items: { type: 'string' }, description: 'Asset ids (at most 6).' },
         },
         required: ['assets'],
-        async run({ args, doc }) {
+        async run({ env, args, doc }) {
             const refs: unknown[] = Array.isArray(args.assets) ? args.assets.slice(0, 6) : [];
             if (!refs.length) throw new ToolError('assets is empty.');
             const images: string[] = [];
@@ -405,7 +405,7 @@ export const sceneTools = tools({
             const missing: string[] = [];
             for (const ref of refs) {
                 const meta = doc().assets.find((a) => a.id === ref && (a.kind === 'image' || a.kind === 'texture'));
-                const url = meta ? await assetImageDataUrl(meta.id, 1024).catch(() => null) : null;
+                const url = meta ? await assetImageDataUrl(meta.id, env.imageSize()).catch(() => null) : null;
                 if (url && meta) {
                     images.push(url);
                     shown.push(`${meta.name} (${meta.id})`);
@@ -423,8 +423,8 @@ export const sceneTools = tools({
         groups: ['read'],
         needs: 'screenshots',
         description: 'Take a picture of the viewport as it is now (the editor view, or the game camera while playing).',
-        async run({ ed }) {
-            const image = await ed.runtime.capture(768);
+        async run({ env, ed }) {
+            const image = await ed.runtime.capture(env.imageSize());
             return { data: { ok: true, note: 'The screenshot is attached in the next message.' }, image, summary: 'screenshot' };
         },
     },

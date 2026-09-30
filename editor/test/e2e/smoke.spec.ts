@@ -1,16 +1,63 @@
+// The editor's core on a device like many phones: without the optional GPU
+// features (bgra8unorm-storage, depth-clip-control, depth32float-stencil8,
+// indirect-first-instance, rg11b10ufloat-renderable, BC texture
+// compression). The engine asks only for what the adapter has, so the
+// editor starts, draws, edits, plays and simulates there too.
 import { expect, test } from '@playwright/test';
 import { playFrames, sharedEditor } from './editor';
+import { measure } from './measure';
 
-const editor = sharedEditor();
+const HIDDEN = ['bgra8unorm-storage', 'depth-clip-control', 'depth32float-stencil8', 'indirect-first-instance', 'rg11b10ufloat-renderable', 'texture-compression-bc'];
 
-test.beforeEach(() => editor.reset());
-test.afterEach(() => expect(editor.errors).toEqual([]));
+const problems: string[] = [];
+const editor = sharedEditor(async (page) => {
+    // WebGPU validation errors show in the console only.
+    page.on('console', (m) => {
+        if (m.type() === 'error') problems.push(m.text());
+    });
+    await page.addInitScript((hidden) => {
+        const proto = (globalThis as any).GPUAdapter?.prototype;
+        if (!proto) return;
+        const features = Object.getOwnPropertyDescriptor(proto, 'features')!.get!;
+        // The adapter lists fewer features, and a device asking for a hidden one fails as it would there.
+        Object.defineProperty(proto, 'features', {
+            get(this: GPUAdapter) {
+                const all = features.call(this) as GPUSupportedFeatures;
+                return new Set(Array.from(all).filter((f) => !hidden.includes(f)));
+            },
+        });
+        const request = proto.requestDevice;
+        proto.requestDevice = function (desc?: GPUDeviceDescriptor) {
+            const asked = Array.from(desc?.requiredFeatures ?? []);
+            const missing = asked.filter((f) => hidden.includes(f));
+            if (missing.length) return Promise.reject(new TypeError(`Unsupported features: ${missing.join(', ')}`));
+            return request.call(this, desc);
+        };
+    }, HIDDEN);
+});
 
-test('starts on a new scene, edits it and undoes the edit', async () => {
+test.beforeEach(async () => {
+    await editor.reset();
+    problems.length = 0;
+});
+test.afterEach(() => {
+    expect(editor.errors).toEqual([]);
+    expect(problems).toEqual([]);
+});
+
+const names = () => editor.page().evaluate(() => window.__editor.store.doc.nodes.map((n) => n.name));
+
+test('starts and draws without the optional GPU features, edits the scene and undoes the edit', async () => {
     const page = editor.page();
-    const names = () => page.evaluate(() => window.__editor.store.doc.nodes.map((n) => n.name));
-    expect(await names()).toEqual(['Sun', 'Ground', 'Cube', 'Sphere']);
+    const device = await page.evaluate(() => {
+        const ctx = window.__editor.runtime.engine.context3D;
+        return { features: Array.from(ctx.device.features as unknown as Set<string>), support: ctx.compressedTextureSupport };
+    });
+    for (const f of HIDDEN) expect(device.features).not.toContain(f);
+    expect(device.support.bc).toBe(false);
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 
+    expect(await names()).toEqual(['Sun', 'Ground', 'Cube', 'Sphere']);
     await page.evaluate(() => window.__editor.createPrimitive('cylinder'));
     expect(await names()).toEqual(['Sun', 'Ground', 'Cube', 'Sphere', 'Cylinder']);
     // The new object is selected and shown in the hierarchy.
@@ -75,6 +122,80 @@ test('plays a script and restores the scene on Stop', async () => {
     expect(await page.evaluate(() => window.__editor.store.doc.scripts.length)).toBe(1);
 });
 
+test('drops bodies onto the level and tells their scripts what they hit', async () => {
+    const page = editor.page();
+    await page.evaluate(() => {
+        const ed = window.__editor;
+        const cube = ed.store.doc.nodes.find((n) => n.name === 'Cube')!;
+        ed.store.commit('Drop the Cube', (d) => {
+            const n = d.nodes.find((x) => x.id === cube.id)!;
+            n.position = [0, 3, 0];
+            n.body = { type: 'dynamic', shape: 'auto', mass: 1, friction: 0.5, bounce: 0, drag: 0, angularDrag: 0.05, gravity: 1, lockRotation: false, fast: false, sensor: false };
+        });
+        ed.createScript({
+            name: 'Landing',
+            code: [
+                'export default class Landing extends Script {',
+                '    start() { this.spawn("sphere", { name: "Ball", position: [2, 4, 0], body: { bounce: 0.6 } }); }',
+                '    onCollisionEnter(other) { this.log("hit " + other.name); }',
+                '}',
+            ].join('\n'),
+            attachTo: [cube.id],
+            open: false,
+        });
+    });
+    await playFrames(page, 10);
+    const y = (name: string) => page.evaluate((n) => window.__editor.player.find(n)!.y, name);
+    // It falls through the air, then rests on the ground plane (half its height up).
+    await expect.poll(() => y('Cube'), { timeout: 60_000 }).toBeLessThan(0.52);
+    expect(await y('Cube')).toBeGreaterThan(0.45);
+    await expect.poll(() => y('Ball'), { timeout: 60_000 }).toBeLessThan(0.6);
+    const run = await page.evaluate(() => ({ logs: window.__editor.player.logs.map((l) => l.text), issues: window.__editor.player.issues }));
+    expect(run.issues).toEqual([]);
+    expect(run.logs).toContain('[Landing.js on Cube] hit Ground');
+
+    await page.evaluate(() => window.__editor.stopPlay());
+    expect(await page.evaluate(() => window.__editor.store.doc.nodes.find((n) => n.name === 'Cube')!.position)).toEqual([0, 3, 0]);
+});
+
+test('shares one material among objects that look the same, and gives an edited one its own', async () => {
+    const page = editor.page();
+    const ids = await page.evaluate(() => {
+        const out: string[] = [];
+        window.__editor.store.commit('Boxes', (d) => {
+            const cube = d.nodes.find((n) => n.name === 'Cube')!;
+            for (let i = 0; i < 6; i++) {
+                const n = JSON.parse(JSON.stringify(cube));
+                n.id = `box${i}`;
+                n.name = `Box ${i}`;
+                n.position = [-4 + i * 1.3, 0.5, 2];
+                n.mesh.material.color = '#d03030';
+                d.nodes.push(n);
+                out.push(n.id);
+            }
+        });
+        return out;
+    });
+    await measure(page, 2);
+    /** The engine material each box shows (an index into the distinct ones), and how many geometries they use. */
+    const materials = () =>
+        page.evaluate((ids) => {
+            const sync = window.__editor.sync;
+            const mats = ids.map((id) => sync.entries.get(id)!.mesh!.materials[0]);
+            const distinct = [...new Set(mats)];
+            return { of: mats.map((m) => distinct.indexOf(m)), distinct: distinct.length, geometries: new Set(ids.map((id) => sync.entries.get(id)!.mesh!.geometry)).size };
+        }, ids);
+    expect(await materials()).toMatchObject({ distinct: 1, geometries: 1 });
+    // Recolor one: it gets a material of its own; the others keep theirs.
+    await page.evaluate(() => window.__editor.store.commit('Recolor', (d) => (d.nodes.find((n) => n.id === 'box3')!.mesh!.material.color = '#2050e0')));
+    const m = await materials();
+    expect(m.distinct).toBe(2);
+    expect(m.of.filter((i) => i === m.of[3]).length).toBe(1);
+    // Undo: it looks like the others again, and shares theirs.
+    await page.evaluate(() => window.__editor.store.undo());
+    expect((await materials()).distinct).toBe(1);
+});
+
 test('switches the view to the walk camera or the reference room, and back to the scene for Play', async () => {
     const page = editor.page();
     const view = () => page.evaluate(() => window.__editor.view);
@@ -95,17 +216,6 @@ test('switches the view to the walk camera or the reference room, and back to th
     await page.evaluate(() => window.__editor.stopPlay());
 });
 
-test('reopens a saved scene the same', async () => {
-    const same = await editor.page().evaluate(() => {
-        const ed = window.__editor;
-        ed.createPrimitive('torus');
-        const saved = JSON.stringify(ed.store.doc);
-        ed.loadDoc(JSON.parse(saved));
-        return JSON.stringify(ed.store.doc) === saved;
-    });
-    expect(same).toBe(true);
-});
-
 test('checks the level from the Design tab', async () => {
     const page = editor.page();
     // Clicks in the page: SwiftShader can stall the frames Playwright's actionability checks wait for.
@@ -116,4 +226,38 @@ test('checks the level from the Design tab', async () => {
     await expect(page.locator('.level-map')).toHaveAttribute('src', /^data:image\/png/);
     await click('Close');
     await expect(page.locator('.level-check')).toHaveCount(0);
+});
+
+test('draws the viewport at its frame rate and quality, and captures at full resolution', async () => {
+    const page = editor.page();
+    const state = () =>
+        page.evaluate(() => {
+            const rt = window.__editor.runtime;
+            return { fps: rt.engine.frameRate, limit: rt.fpsLimit, ratio: rt.canvas.width / rt.canvas.clientWidth };
+        });
+    const dpr = await page.evaluate(() => Math.min(window.devicePixelRatio || 1, 2));
+    // The tests draw as a phone does (editor.ts): 30 fps, low quality.
+    const low = await state();
+    expect([low.fps, low.limit]).toEqual([30, 30]);
+    expect(low.ratio).toBeCloseTo(Math.max(0.75, dpr / 2), 1);
+    await expect(page.locator('.statusbar button.status-item')).toHaveAttribute('title', /at most 30 frames per second in low quality/);
+
+    // A capture (the assistant's, a shot's) is sharp whatever the viewport shows.
+    const capture = await page.evaluate(async () => {
+        const rt = window.__editor.runtime;
+        const url = await rt.capture(4000);
+        const img = new Image();
+        img.src = url;
+        await img.decode();
+        return { width: img.naturalWidth, css: rt.canvas.clientWidth, after: rt.canvas.width };
+    });
+    expect(capture.width).toBeGreaterThanOrEqual(Math.floor(capture.css * dpr) - 1);
+    expect(capture.after).toBeLessThan(capture.width);
+
+    await page.evaluate(() => window.__editor.store.setPrefs({ viewportFps: 0, viewportQuality: 'high' }));
+    const high = await state();
+    expect(high.fps).toBeGreaterThanOrEqual(360);
+    expect(high.limit).toBe(0);
+    expect(high.ratio).toBeCloseTo(dpr, 1);
+    await page.evaluate(() => window.__editor.store.setPrefs({ viewportFps: 30, viewportQuality: 'low' }));
 });

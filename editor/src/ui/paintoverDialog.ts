@@ -5,6 +5,7 @@ import { Emitter } from '../core/events';
 import { pickFiles } from '../core/persistence';
 import type { PaintoverDoc, ParamValue, ShotDoc } from '../core/types';
 import { listImageModels, MAX_IMAGES, modelParams, OWN_PARAMS, takesImages, type ImageModel } from '../openrouter/images';
+import { drawParams, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
 import {
     defaultPaintoverPrompt, generatePaintovers, imageModelId, lastOptions, optionsForShot, paintoverSpend, rememberOptions, uploadPaintover,
@@ -12,7 +13,7 @@ import {
 } from '../design/paintover';
 import { clear, h } from './dom';
 import { icon } from './icons';
-import { optionField } from './imageOptions';
+import { optionField, qualityField } from './imageOptions';
 import { notices } from './notify';
 import { lightbox, modal, popover, showMenu, toast, type MenuItem, type Modal } from './overlays';
 import { button, iconButton, suggestions } from './widgets';
@@ -62,6 +63,8 @@ class PaintoverDialog {
     private modelInfo: HTMLElement;
     private optionsEl: HTMLElement;
     private params: Record<string, ParamValue> = {};
+    /** Sets the resolution and quality options and the size of the references (chosen per generation). */
+    private quality: ImageQuality = aiSettings.value.drawQuality;
     private prompt: HTMLTextAreaElement;
     private count: HTMLInputElement;
     private countHint: HTMLElement;
@@ -129,6 +132,10 @@ class PaintoverDialog {
             this.modelInput,
             modelList,
             this.modelInfo,
+            qualityField(this.quality, (q) => {
+                this.quality = q;
+                this.modelChanged({ ...this.params, ...drawParams(this.model, q) });
+            }),
             this.optionsEl,
             h('div', { class: 'po-row' }, h('label', { class: 'po-field' }, h('span', { text: 'Images' }), this.count), this.countHint, h('div', { class: 'spacer' }), this.seedRow),
             this.streamRow,
@@ -151,7 +158,7 @@ class PaintoverDialog {
         void listImageModels()
             .then((list) => {
                 this.models = list.filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes('image'));
-                this.modelChanged(last.params);
+                this.modelChanged({ ...last.params, ...drawParams(this.model, this.quality) });
             })
             .catch(() => (this.modelInfo.textContent = 'The image model list is unavailable (offline?). Type a model id.'));
         void this.capturePreview();
@@ -188,7 +195,7 @@ class PaintoverDialog {
         const id = this.modelInput.value.trim();
         const shot = this.shot;
         if (!shot) return;
-        const params = optionsForShot(model, shot, start ?? { ...lastOptions(id).params, ...this.params });
+        const params = optionsForShot(model, shot, start ?? { ...lastOptions(id).params, ...this.params, ...drawParams(model, this.quality) });
         this.params = params;
         const specs = modelParams(model);
         clear(this.optionsEl);
@@ -433,6 +440,7 @@ class PaintoverDialog {
             params: { ...this.params },
             stream: !this.streamRow.hidden && this.stream.checked,
             extra: [...this.extra],
+            quality: this.quality,
         };
     }
 
@@ -476,9 +484,11 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
     };
     changed();
     const shotName = () => editor.pipeline.shot(shotId)?.name ?? 'the shot';
+    const usage = editor.usage.begin('images', `Paintovers of ${shotName()}`);
     try {
         const res = await generatePaintovers(editor, shotId, settings, {
             signal: job.abort.signal,
+            usage,
             onPartial: (i, url) => {
                 if (i < job.partials.length) job.partials[i] = url;
                 changed();
@@ -509,6 +519,7 @@ async function runJob(editor: Editor, shotId: string, settings: PaintoverSetting
         if (e?.name === 'AbortError') toast('Generation cancelled (not charged).', 'info');
         else toast(`Generation failed: ${e?.message || e}`, 'error');
     } finally {
+        usage.end();
         jobs.delete(shotId);
         paintoverJobs.emit('change', shotId);
         changed();

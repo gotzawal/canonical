@@ -13,4 +13,4 @@ ASTC or plain RGBA8.
   so bundling never renames anything inside it.
 
 To update, replace both transcoder files together from a newer three.js
-release and run the KTX2 tests (`editor/test/e2e/compressed.spec.ts`).
+release and run the KTX2 tests (`editor/test/e2e/assets.spec.ts`).

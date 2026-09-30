@@ -12,7 +12,9 @@ import {
     checkParams, closestAspect, DEFAULT_IMAGE_MODEL, generateImages, listImageModels, modelParams, takesImages,
     type ImageModel,
 } from '../openrouter/images';
+import { drawParams, REFERENCE_PIXELS, type ImageQuality } from '../openrouter/imageQuality';
 import { aiSettings } from '../openrouter/settings';
+import type { UsageTask } from '../ai/usage';
 import { patchShot } from './pipeline';
 
 export interface PaintoverSettings {
@@ -27,6 +29,12 @@ export interface PaintoverSettings {
     stream: boolean;
     /** More reference images (asset ids), after the capture and the concept. */
     extra: string[];
+    /**
+     * How sharp: the size of the references sent, and the model's resolution
+     * and quality options where `params` leaves them out (default: the AI
+     * settings' drawQuality).
+     */
+    quality?: ImageQuality;
 }
 
 export interface PaintoverRun {
@@ -139,7 +147,7 @@ export async function generatePaintovers(
     editor: Editor,
     shotId: string,
     settings: PaintoverSettings,
-    opts: { signal?: AbortSignal; capture?: string | null; onPartial?: (index: number, url: string) => void; onProgress?: (done: number, total: number) => void } = {},
+    opts: { signal?: AbortSignal; capture?: string | null; onPartial?: (index: number, url: string) => void; onProgress?: (done: number, total: number) => void; usage?: UsageTask } = {},
 ): Promise<PaintoverRun> {
     const key = aiSettings.apiKey;
     if (!key) throw new Error('Add an OpenRouter key in the AI settings first.');
@@ -156,18 +164,20 @@ export async function generatePaintovers(
     if (!capture) capture = (await pipeline.captureShotAsset(shotId, 'paintover-ref')).id;
     if (opts.signal?.aborted) throw new DOMException('Aborted', 'AbortError');
     const refs = [...new Set([capture, shot.concept, ...settings.extra].filter((id): id is string => !!id && doc().assets.some((a) => a.id === id && a.kind === 'image')))];
+    const quality = settings.quality ?? aiSettings.value.drawQuality;
     const references: string[] = [];
     for (const id of refs) {
-        const url = await assetImageDataUrl(id, 1536);
+        const url = await assetImageDataUrl(id, REFERENCE_PIXELS[quality]);
         if (url) references.push(url);
     }
-    const { params, dropped } = checkParams(model, settings.params);
+    const { params, dropped } = checkParams(model, { ...drawParams(model, quality), ...settings.params });
     const result = await generateImages(
         key,
         model,
         { model: settings.model, prompt: settings.prompt, references, count: settings.count, seed: settings.seed, params, stream: settings.stream },
         { signal: opts.signal, onPartial: opts.onPartial, onProgress: opts.onProgress },
     );
+    opts.usage?.images(settings.model, result.images.length, result.cost, quality);
     const at = new Date().toISOString();
     const stem = fileStem(shot.name);
     const start = shot.paintovers.length;

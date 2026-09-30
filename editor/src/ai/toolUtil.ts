@@ -10,6 +10,7 @@ import { ALL_TOOL_GROUPS, stageDef, type ToolGroup } from '../design/stages';
 import type { Editor } from '../editor';
 import { normalizeHex } from '../engine/color';
 import type { ToolDef } from '../openrouter/client';
+import type { UsageTask } from './usage';
 
 export type Json = Record<string, any>;
 
@@ -21,8 +22,12 @@ export interface ToolEnv {
     limitTools(): boolean;
     /** Tools may spend credits on images. */
     allowImages(): boolean;
+    /** Longest side, in pixels, of the images the model sees (the chat's image quality). */
+    imageSize(): number;
     /** Aborts long tools (image generation) when the request is stopped. */
     signal?: AbortSignal;
+    /** Counts what the request's tools spend (images they have generated). */
+    usage?: UsageTask;
 }
 
 export interface ToolResult {

@@ -97,13 +97,14 @@ export const greyboxTools = tools({
             compare: { type: 'string', enum: ['both', 'target', 'concept', 'none'], description: 'Images to show next to the capture (default both).' },
         },
         required: ['shot'],
-        async run({ args, ed, doc }) {
+        async run({ env, args, ed, doc }) {
             const pipeline = ed.pipeline;
             const shot = findShot(doc(), args.shot);
             const meta = await pipeline.captureShotAsset(shot.id, 'ai');
             const images: string[] = [];
             const labels: string[] = [];
-            const url = await assetImageDataUrl(meta.id, 1024);
+            const size = env.imageSize();
+            const url = await assetImageDataUrl(meta.id, size);
             if (url) {
                 images.push(url);
                 labels.push('capture (the scene now)');
@@ -111,14 +112,14 @@ export const greyboxTools = tools({
             const compare = typeof args.compare === 'string' ? args.compare : 'both';
             const s = pipeline.shot(shot.id)!;
             if ((compare === 'both' || compare === 'target') && s.target) {
-                const t = await assetImageDataUrl(s.target, 1024);
+                const t = await assetImageDataUrl(s.target, size);
                 if (t) {
                     images.push(t);
                     labels.push('target paintover');
                 }
             }
             if ((compare === 'both' || compare === 'concept') && s.concept) {
-                const c = await assetImageDataUrl(s.concept, 1024);
+                const c = await assetImageDataUrl(s.concept, size);
                 if (c) {
                     images.push(c);
                     labels.push('original concept');
@@ -361,7 +362,7 @@ function eyeAt(env: ToolEnv, p: Vec3): Vec3 {
 }
 
 async function capture(env: ToolEnv, camera: CameraState, aspect: number): Promise<string> {
-    const blob = await env.editor.pipeline.captureCamera(camera, aspect, 1024);
+    const blob = await env.editor.pipeline.captureCamera(camera, aspect, env.imageSize());
     return blobToDataUrl(blob);
 }
 

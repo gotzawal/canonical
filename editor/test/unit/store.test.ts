@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { emptyScene, makeMeshNode, makeNode, newScene } from '../../src/core/defaults';
 import { exampleGuard, exampleShowcase } from '../../src/examples';
-import { sanitize, Store } from '../../src/core/store';
+import { isMobileDevice } from '../../src/core/quality';
+import { sanitize, Store, viewportDefaults } from '../../src/core/store';
 import { SCENE_VERSION, type NodeDoc } from '../../src/core/types';
 
 const scene = (...nodes: NodeDoc[]) => ({ ...emptyScene(), nodes });
@@ -67,6 +68,23 @@ describe('sanitize', () => {
 });
 
 describe('Store', () => {
+    it('draws the viewport by the device, and moves stored old defaults to the new ones', () => {
+        expect(viewportDefaults(false)).toEqual({ viewportFps: 60, viewportQuality: 'medium' });
+        expect(viewportDefaults(true)).toEqual({ viewportFps: 30, viewportQuality: 'low' });
+        expect(isMobileDevice({ userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8)' })).toBe(true);
+        expect(isMobileDevice({ userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)', maxTouchPoints: 5 })).toBe(true);
+        expect(isMobileDevice({ userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)', maxTouchPoints: 0 })).toBe(false);
+        // An earlier build stored every preference, the old defaults too.
+        localStorage.setItem('canonical-editor/prefs', JSON.stringify({ viewportFps: 30, viewportQuality: 'low', snap: true }));
+        const s = new Store(scene());
+        expect([s.prefs.viewportFps, s.prefs.viewportQuality, s.prefs.snap]).toEqual([60, 'medium', true]);
+        // Now only a choice is stored, and it stays.
+        s.setPrefs({ viewportFps: 30 });
+        expect(JSON.parse(localStorage.getItem('canonical-editor/prefs')!)).toEqual({ v: 2, snap: true, viewportFps: 30 });
+        expect(new Store(scene()).prefs.viewportFps).toBe(30);
+        localStorage.removeItem('canonical-editor/prefs');
+    });
+
     it('undoes and redoes committed steps', () => {
         const s = new Store(scene());
         s.commit('Add A', (d) => void d.nodes.push(makeNode('A')));

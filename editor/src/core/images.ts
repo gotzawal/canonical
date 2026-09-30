@@ -48,6 +48,17 @@ export async function assetImageDataUrl(id: string, max = 1280): Promise<string 
     return resizedDataUrl(blob, max);
 }
 
+/** An image (data URL) no larger than `max` pixels on its longer side: as it is when it fits, else a JPEG of it scaled down. */
+export async function capImage(url: string, max: number): Promise<string> {
+    const bmp = await bitmapOf(url).catch(() => null);
+    if (!bmp) return url;
+    try {
+        return Math.max(bmp.width, bmp.height) <= max ? url : fitCanvas(bmp, max).toDataURL('image/jpeg', 0.85);
+    } finally {
+        bmp.close();
+    }
+}
+
 export async function dataUrlToBlob(url: string): Promise<Blob> {
     const res = await fetch(url);
     return res.blob();

@@ -47,6 +47,13 @@ export function resolveQuality(setting: QualitySetting | undefined, device: Qual
     return setting && setting !== 'auto' ? setting : device;
 }
 
+/** Whether the browser runs on a phone or tablet, from its user agent (iPads report a Mac one, but have touch). */
+export function isMobileDevice(nav: { userAgent?: string; maxTouchPoints?: number; userAgentData?: { mobile?: boolean } } | undefined = globalThis.navigator): boolean {
+    if (!nav) return false;
+    const ua = nav.userAgent ?? '';
+    return !!nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && (nav.maxTouchPoints ?? 0) > 1);
+}
+
 /** What is known of the device before the engine starts (engine/device.ts). */
 export interface DeviceInfo {
     /** Adapter vendor, architecture and description, lower case. */

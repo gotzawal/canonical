@@ -3,7 +3,7 @@
 // own; the engine requests another), whether it is a phone or tablet, and
 // its memory.
 
-import type { DeviceInfo } from '../core/quality';
+import { isMobileDevice, type DeviceInfo } from '../core/quality';
 
 export async function probeDevice(): Promise<DeviceInfo> {
     const nav = navigator as any;
@@ -21,8 +21,5 @@ export async function probeDevice(): Promise<DeviceInfo> {
     } catch {
         // The engine reports what is wrong with WebGPU.
     }
-    const ua: string = nav.userAgent ?? '';
-    // iPads report a Mac user agent, but have touch.
-    const mobile = !!nav.userAgentData?.mobile || /Android|iPhone|iPad|iPod/i.test(ua) || (/Macintosh/.test(ua) && (nav.maxTouchPoints ?? 0) > 1);
-    return { gpu, fallback, mobile, memory: typeof nav.deviceMemory === 'number' ? nav.deviceMemory : undefined, maxTexture, saveData: !!nav.connection?.saveData };
+    return { gpu, fallback, mobile: isMobileDevice(nav), memory: typeof nav.deviceMemory === 'number' ? nav.deviceMemory : undefined, maxTexture, saveData: !!nav.connection?.saveData };
 }

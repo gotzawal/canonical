@@ -1,7 +1,8 @@
-// Helpers shared by the spec files split from derive.spec.ts.
+// Imported files for the asset tests: a textured card, and building a game
+// and playing it served as a static site.
 import { readFileSync } from 'node:fs';
-import { expect, test, type Browser, type Page } from '@playwright/test';
-import { png, unzip } from './fixtures';
+import { expect, type Browser, type Page } from '@playwright/test';
+import { unzip } from './fixtures';
 
 /**
  * A 4 x 4 m card seen from above, unlit, with a 256-pixel texture of four
@@ -33,33 +34,6 @@ export async function card(page: Page, name = 'Quarters.png'): Promise<string> {
         await ed.importFiles([new File([blob], name, { type: 'image/png' })]);
         return ed.store.doc.assets.find((a) => a.name === name)!.id;
     }, name);
-}
-
-/** The card's texture as SceneSync shows it: format, and whether the material still binds that same object. */
-export function shown(page: Page, asset: string) {
-    return page.evaluate(async (asset) => {
-        const ed = window.__editor;
-        await ed.sync.whenLoaded();
-        const tex = (await ed.sync.loadTexture(asset, 'color')) as any;
-        const mat = ed.sync.renderersOf(ed.store.doc.nodes[0].id)[0].materials[0] as any;
-        return { format: tex.format as string, bound: mat.shader.getTexture('baseMap') === tex, images: ed.runtime.stats!.snapshot().memory.textures.image.bytes as number };
-    }, asset);
-}
-
-/** The middle of the view (of the editor, or of a game's player) as RGB rows. */
-export function view(page: Page, of: 'editor' | 'player' = 'editor'): Promise<{ w: number; h: number; data: number[] }> {
-    return page.evaluate(async (of) => {
-        const rt = of === 'editor' ? window.__editor.runtime : (window as any).__player.runtime;
-        const [w, h] = rt.cssSize;
-        const blob = await rt.captureFrame({ type: 'image/png', frames: 3, maxWidth: 160, crop: { x: w / 2 - 120, y: h / 2 - 120, w: 240, h: 240 } });
-        const bmp = await createImageBitmap(blob);
-        const g = new OffscreenCanvas(bmp.width, bmp.height).getContext('2d')!;
-        g.drawImage(bmp, 0, 0);
-        const d = g.getImageData(0, 0, bmp.width, bmp.height).data;
-        const data: number[] = [];
-        for (let i = 0; i < d.length; i += 4) data.push(d[i], d[i + 1], d[i + 2]);
-        return { w: bmp.width, h: bmp.height, data };
-    }, of);
 }
 
 /** RGBA pixels of the card's four quarters (red, green, blue, yellow). */
@@ -115,38 +89,4 @@ export function glbJson(bytes: Uint8Array): any {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     expect(view.getUint32(0, true)).toBe(0x46546c67);
     return JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + view.getUint32(12, true))));
-}
-
-/** Share of pixels close to each color of the card's quarters (red, green, blue, yellow). */
-export function quarters(img: { data: number[] }): number[] {
-    const colors = [[224, 32, 32], [32, 192, 32], [32, 64, 224], [224, 208, 32]];
-    const counts = [0, 0, 0, 0];
-    for (let i = 0; i < img.data.length; i += 3) {
-        colors.forEach((c, k) => {
-            if (Math.max(Math.abs(img.data[i] - c[0]), Math.abs(img.data[i + 1] - c[1]), Math.abs(img.data[i + 2] - c[2])) < 48) counts[k]++;
-        });
-    }
-    return counts.map((n) => n / (img.data.length / 3));
-}
-
-/** Share of pixels of each quarter's hue (red, green, blue, yellow), however lit. */
-export function hues(img: { data: number[] }): number[] {
-    const counts = [0, 0, 0, 0];
-    for (let i = 0; i < img.data.length; i += 3) {
-        const [r, g, b] = [img.data[i], img.data[i + 1], img.data[i + 2]];
-        if (r > 2 * g && r > 2 * b) counts[0]++;
-        else if (g > 2 * r && g > 2 * b) counts[1]++;
-        else if (b > 2 * r && b > 1.5 * g) counts[2]++;
-        else if (r > 2 * b && g > 2 * b) counts[3]++;
-    }
-    return counts.map((n) => n / (img.data.length / 3));
-}
-
-/** Share of pixels that differ by more than `tolerance` in a channel. */
-export function differing(a: { data: number[] }, b: { data: number[] }, tolerance = 40): number {
-    let n = 0;
-    for (let i = 0; i < a.data.length; i += 3) {
-        if (Math.max(Math.abs(a.data[i] - b.data[i]), Math.abs(a.data[i + 1] - b.data[i + 1]), Math.abs(a.data[i + 2] - b.data[i + 2])) > tolerance) n++;
-    }
-    return n / (a.data.length / 3);
 }
