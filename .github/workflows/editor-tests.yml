@@ -58,7 +58,8 @@ jobs:
   browser:
     runs-on: ubuntu-latest
     # Four groups of spec files, run side by side: SwiftShader draws on the
-    # CPU, and one runner takes about twenty minutes for the whole suite.
+    # CPU, and one machine takes about twenty minutes for the whole suite
+    # (a CI runner about twice that).
     # The groups are balanced by how long their files take (Playwright's own
     # --shard splits by test count, which put the slowest files together);
     # a spec file added later goes into the lightest group.
@@ -99,7 +100,7 @@ jobs:
 
       - name: Browser tests
         run: xvfb-run -a pnpm run editor:e2e $(for f in ${{ matrix.files }}; do printf 'test/e2e/%s.spec.ts ' "$f"; done)
-        timeout-minutes: 12
+        timeout-minutes: 20
 
       - name: Upload traces
         if: failure()

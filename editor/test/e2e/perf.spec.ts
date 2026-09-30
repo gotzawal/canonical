@@ -89,6 +89,8 @@ async function cullingDifference(page: Page, cameras: { target: [number, number,
 }
 
 test('culls what the camera cannot see without changing the picture', async () => {
+    // Four captures of a level of 390 objects: over a minute here, about twice that on a CI runner.
+    test.setTimeout(300_000);
     const page = editor.page();
     await load(page, aiLevelScene());
     // Shaders compile first (SwiftShader takes a while).
