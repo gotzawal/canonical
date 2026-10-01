@@ -208,7 +208,7 @@ export type CameraDoc = z.output<typeof Camera>;
 export const PARTICLE_SHAPES = ['box', 'circle', 'sphere', 'hemisphere'] as const;
 
 /**
- * A particle emitter (fire, smoke, sparks, dust, rain), simulated on the GPU
+ * A particle emitter (fire, smoke, sparks, dust, steam), simulated on the GPU
  * by packages/particle. Ranges are [lowest, highest]; each particle takes a
  * random value in between.
  */
@@ -233,7 +233,7 @@ export const Particles = z
         alphaStart: unit(1, { title: 'Opacity Start' }),
         alphaEnd: unit(0, { title: 'Opacity End' }),
         texture: asset({ description: 'Sprite texture asset id; null draws a soft round dot.' }),
-        blend: oneOf(['add', 'alpha'], 'add', { labels: { add: 'Add (glow)', alpha: 'Alpha (cover)' }, description: 'add glows (fire, sparks, magic), alpha covers (smoke, dust, rain).' }),
+        blend: oneOf(['add', 'alpha'], 'add', { labels: { add: 'Add (glow)', alpha: 'Alpha (cover)' }, description: 'add glows (fire, sparks, magic), alpha covers (smoke, dust, mist).' }),
         local: bool(false, { description: 'Particles move with the object, or stay where they were born.' }),
         prewarm: num(2, 0, 30, { step: 0.5, precision: 1, description: 'Seconds simulated before the first frame, so the effect is already running.' }),
     })
@@ -354,6 +354,32 @@ export const Grass = z.object({
     castShadow: bool(false, { title: 'Cast Shadows', description: 'Blades cast shadows (costly for many blades); they always receive them.' }),
 });
 export type GrassDoc = z.output<typeof Grass>;
+
+/**
+ * Rain falling through a box around the object (engine/rain.ts): drops at
+ * real places in space, drawn by one shader that walks each pixel's view
+ * ray through the box, so they keep their size with distance, stop at the
+ * bottom, lean with the wind, stay out of a shelter and catch the glow of
+ * a light. The box is upright in the world: the object's turn and scale do
+ * not change it.
+ */
+export const Rain = z.object({
+    size: vec3([16, 10, 16], { precision: 2, description: 'The box the rain falls in [x, y, z], meters, centered on the object. Keep it in the open air, its bottom on the ground and its top above the walls; the less of the screen it covers, the less it costs.' }),
+    amount: unit(1, { description: 'Share of the drop lines that hold a drop: 1 is a downpour, 0.3 a drizzle.' }),
+    spacing: num(1, 0.2, 3, { step: 0.01, description: 'Budget: meters between drop lines. Smaller makes more drops and costs more; each pixel walks at most 34 steps of it.' }),
+    dropWidth: num(0.01, 0.004, 0.08, { title: 'Drop Width', step: 0.001, precision: 3, description: 'Width of a drop, meters.' }),
+    streak: num(2.85, 0.05, 3, { title: 'Streak Length', step: 0.05, description: 'Length of the streak a drop draws, meters.' }),
+    speed: num(5, 1, 25, { step: 0.1, description: 'How fast the drops fall, m/s.' }),
+    wind: num(-0.17, -0.5, 0.5, { step: 0.01, slider: true, description: 'How far the drops lean along the world X axis per meter they fall.' }),
+    density: num(8.4, 0.2, 30, { step: 0.1, description: 'How much a drop covers what is behind it.' }),
+    brightness: num(1.25, 0, 4, { step: 0.01, slider: true }),
+    color: color('#e8f0f8'),
+    nearFade: num(3.2, 0.2, 20, { title: 'Near Fade', step: 0.1, description: 'Drops closer to the camera than this fade out, meters (they would cross the view as long bars).' }),
+    shelter: z.string().min(1).nullable().catch(null).meta({ description: 'An object whose box stays dry (an awning, a porch roof, a bus shelter), by id; the drops stop above it and carry on past its rim.' }),
+    light: z.string().min(1).nullable().catch(null).meta({ description: 'A light whose glow the drops falling near it catch (a street lamp), by id: its color, within its range.' }),
+    lightGain: num(0.45, 0, 3, { title: 'Light Glow', step: 0.01, slider: true, description: 'How much brighter the drops are near the light.' }),
+});
+export type RainDoc = z.output<typeof Rain>;
 
 // ------------------------------------------------------------------ terrain
 

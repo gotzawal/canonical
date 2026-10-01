@@ -7,7 +7,7 @@ import { Emitter } from '../core/events';
 import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type {
-    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, ScatterDoc, TerrainDoc,
+    AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, RainDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, ScatterDoc, TerrainDoc,
     TextureRole,
 } from '../core/types';
 import { placeScatter, type AvoidBox, type Placement, type ScatterSolid } from '../core/scatter';
@@ -24,6 +24,7 @@ import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString,
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
 import { ScatterModel, ScatterView } from './scatter';
 import { rendererWorldBox } from './picking';
+import { objectWorldBox, RAIN_SHADER, RainVolume } from './rain';
 import type { MaterialLayer } from './terrainMaterial';
 import { CapsuleGeometry, ConeGeometry, RampGeometry, StairsGeometry } from './shapes';
 import {
@@ -85,6 +86,8 @@ export interface Entry {
     grassBuild: string;
     /** What its blades were last placed for (see placeGrass). */
     grassPlaced: string;
+    /** Its rain (a box at the scene root, placed every frame). */
+    rain: RainVolume | null;
     /** Draws the meshes of its instancing group, when it has instancing. */
     instancer: InstanceDrawComponent | null;
     /** The instancing group its meshes are drawn in: the nearest object with instancing, itself included; '' for none. */
@@ -507,6 +510,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             grass: null,
             grassBuild: '',
             grassPlaced: '',
+            rain: null,
             instancer: null,
             group: '',
             terrain: null,
@@ -553,6 +557,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.instancer) this.dirtyGroups.add(entry.id);
         entry.grass?.remove((res) => this.disposeLater(res));
         entry.grass = null;
+        this.applyRain(entry, undefined);
         if (entry.terrain) this.dropTerrain(entry);
         if (entry.scatter) this.dropScatter(entry);
         entry.obj.removeFromParent();
@@ -573,6 +578,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyParticles(entry, node.particles);
         this.applyMirror(entry, node);
         this.applyGrass(entry, node.grass);
+        this.applyRain(entry, node.rain);
         this.applyInstancing(entry, node.instancing);
         this.applyTerrain(entry, node);
         this.applyScatter(entry, node.scatter);
@@ -975,6 +981,53 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.mirror.resolutionScale = doc.resolution;
         // The top of its shape: a plane's face, a box's top.
         entry.mirror.surfaceOffset = shapeTop(node.mesh!.geometry);
+    }
+
+    // ----------------------------------------------------------------- rain
+
+    /** The objects with rain; their volumes follow them every frame (rainFrame). */
+    private rains = new Set<Entry>();
+    private rainFrame: (() => void) | null = null;
+
+    private applyRain(entry: Entry, doc: RainDoc | undefined) {
+        if (!doc) {
+            if (entry.rain) {
+                entry.rain.remove();
+                entry.rain = null;
+                this.rains.delete(entry);
+            }
+            if (!this.rains.size && this.rainFrame) {
+                this.rainFrame();
+                this.rainFrame = null;
+            }
+            return;
+        }
+        if (!entry.rain) {
+            this.shaders.ensure(RAIN_SHADER);
+            entry.rain = new RainVolume(this.runtime.scene, this.shaders);
+            this.rains.add(entry);
+            this.rainFrame ??= this.runtime.onFrame(() => this.updateRain());
+        }
+        this.updateRain(entry);
+    }
+
+    /** Places the rain volumes where their objects, shelters and lights are now. */
+    private updateRain(only?: Entry) {
+        for (const entry of only ? [only] : this.rains) {
+            const node = this.store.node(entry.id);
+            if (!node?.rain || !entry.rain) continue;
+            const doc = node.rain;
+            const p = entry.obj.transform.worldPosition;
+            const shelter = doc.shelter ? this.entries.get(doc.shelter) : undefined;
+            const lightNode = doc.light ? this.store.node(doc.light) : undefined;
+            const light = lightNode?.light ? this.entries.get(lightNode.id) : undefined;
+            let lightAt = null;
+            if (light && lightNode?.light) {
+                const q = light.obj.transform.worldPosition;
+                lightAt = { at: [q.x, q.y, q.z] as [number, number, number], color: lightNode.light.color, range: lightNode.light.type === 'directional' ? 1000 : lightNode.light.range };
+            }
+            entry.rain.update(doc, { center: [p.x, p.y, p.z], shelter: shelter ? objectWorldBox(shelter.obj) : null, light: lightAt }, entry.visible);
+        }
     }
 
     // ---------------------------------------------------------------- grass
@@ -1667,6 +1720,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.particles) entry.particles.enable = visible;
         if (entry.mirror) entry.mirror.enable = visible;
         entry.grass?.setVisible(visible);
+        entry.rain?.setVisible(visible);
         entry.terrain?.view.setVisible(visible);
         entry.scatter?.view.setVisible(visible);
         const model = this.store.node(entry.id)?.model;

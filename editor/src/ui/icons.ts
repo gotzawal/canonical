@@ -12,6 +12,7 @@ const PATHS: Record<string, string> = {
     capsule: '<rect x="7.5" y="2.5" width="9" height="19" rx="4.5"/><path d="M7.5 9.5c2.8 1.3 6.2 1.3 9 0"/>',
     physics: '<circle cx="12" cy="14" r="5"/><path d="M3 21h18M9 3v4M12 2v4M15 3v4"/>',
     gauge: '<path d="M3.5 17a9 9 0 1 1 17 0"/><path d="M12 17l4.5-6"/><circle cx="12" cy="17" r="1.2"/>',
+    rain: '<path d="M8 3l-2 5M13 3l-2 5M18 3l-2 5M7 13l-2 5M12 13l-2 5M17 13l-2 5"/>',
     grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
     terrain: '<path d="M2.5 19.5 8.5 9l3.2 5 2.8-4 7 9.5Z"/><path d="m6.6 12.3 1.9 1.2 1.6-1.4"/>',
     scatter: '<path d="M3 20.5h18M8 20.5V17M4.5 17 8 9.5l3.5 7.5ZM16.5 20.5V16M13.5 16l3-6 3 6Z"/>',

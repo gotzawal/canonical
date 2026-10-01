@@ -110,7 +110,7 @@ test('creates and changes objects, the environment and particles with its tools'
     expect((await node('Crate'))!.body).toMatchObject({ type: 'dynamic', mass: 5, bounce: 0.2, shape: 'hull' });
     expect((await node('Fire'))!.particles!.life).toEqual([1, 2]);
     const env = await editor.page().evaluate(() => window.__editor.store.doc.environment);
-    expect(env.bloom).toEqual({ enable: true, intensity: 1.5, threshold: 1 });
+    expect(env.bloom).toEqual({ enable: true, intensity: 1.5, threshold: 1, levels: 3, blur: 9 });
     expect(env.fog.color).toBe('#223344');
     expect(env.gi.counts.every((c) => c <= 16)).toBe(true);
 });

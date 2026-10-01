@@ -2,7 +2,7 @@ import type { z } from 'zod';
 import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/particles';
 import { defaultCharacter, defaultPlayer } from '../core/character';
 import {
-    Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player, Scatter, ScatterSource, Terrain,
+    Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player, Rain, Scatter, ScatterSource, Terrain,
     TerrainLayer,
 } from '../core/model';
 import { defaults } from '../core/schema';
@@ -98,6 +98,7 @@ const COMPONENTS = {
     material: [Material, (n: NodeDoc) => n.mesh?.material],
     mirror: [Mirror, (n: NodeDoc) => n.mirror],
     grass: [Grass, (n: NodeDoc) => n.grass],
+    rain: [Rain, (n: NodeDoc) => n.rain],
     terrain: [Terrain, (n: NodeDoc) => n.terrain],
     scatter: [Scatter, (n: NodeDoc) => n.scatter],
     audio: [AudioSource, (n: NodeDoc) => n.audio],
@@ -219,6 +220,8 @@ export class InspectorPanel {
             (n.mirror ? 'mirror' : '-') + (n.instancing ? ':inst' : ''),
             // The ground choices list the objects.
             n.grass ? 'grass:' + this.store.doc.nodes.length : '-',
+            // The shelter and light choices list the objects.
+            n.rain ? 'rain:' + this.store.doc.nodes.length : '-',
             // A layer shows its own maps or follows a slot, from the slots listed.
             n.terrain ? 'terrain:' + n.terrain.layers.map((l) => l.slot ?? '-').join(',') + ':' + this.store.doc.design.materials.map((m) => m.id + m.name).join(',') : '-',
             n.scatter ? 'scatter:' + n.scatter.sources.length + ':' + n.scatter.avoid.join(',') + ':' + this.store.doc.nodes.length : '-',
@@ -335,6 +338,7 @@ export class InspectorPanel {
         if (node.body) this.body.append(this.physicsSection());
         if (node.mirror && node.mesh) this.body.append(this.mirrorSection());
         if (node.grass) this.body.append(this.grassSection());
+        if (node.rain) this.body.append(this.rainSection());
         if (node.terrain) this.body.append(this.terrainSection());
         if (node.scatter) this.body.append(this.scatterSection());
         if (node.instancing) this.body.append(this.instancingSection());
@@ -997,6 +1001,28 @@ export class InspectorPanel {
             row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
             row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
             ...this.componentRows('grass', ['castShadow']),
+        ], [remove]);
+    }
+
+    private rainSection(): HTMLElement {
+        const has: Filter = (n) => !!n.rain;
+        const r = this.node.rain!;
+        const self = this.node.id;
+        const pick = (key: 'shelter' | 'light', none: string, label: string, list: NodeDoc[]) => {
+            const f = new SelectField<string>([{ value: '', label: none }, ...list.map((n) => ({ value: n.id, label: n.name }))], r[key] ?? '', (v) =>
+                this.hooks<string | null>(label, has, (n, x) => (n.rain![key] = x)).commit!(v || null));
+            this.watch(() => this.node.rain && f.set(this.node.rain[key] ?? ''));
+            return f;
+        };
+        const shelter = pick('shelter', 'None', 'Rain Shelter', this.store.doc.nodes.filter((n) => n.id !== self && !n.prefabChild && (n.mesh || n.model || this.store.children(n.id).length)));
+        const light = pick('light', 'None', 'Rain Light', this.store.doc.nodes.filter((n) => !!n.light && n.light.type !== 'directional'));
+        const remove = iconButton('trash', 'Remove rain', () => this.hooks<null>('Remove Rain', has, (n) => delete n.rain).commit!(null));
+        return section('rain', 'Rain', 'rain', [
+            h('div', { class: 'muted small pad', text: 'Drops at real places in a box around the object, drawn by one shader: they keep their size with distance, stop at the bottom and lean with the wind. Keep the box in the open air, its bottom on the ground; it costs by the share of the screen it covers and by its spacing.' }),
+            ...this.componentRows('rain', ['size', 'amount', 'spacing', 'dropWidth', 'streak', 'speed', 'wind', 'density', 'brightness', 'color', 'nearFade']),
+            row('Shelter', shelter.el, 'Its box stays dry: an awning, a porch roof'),
+            row('Light', light.el, 'Drops near it catch its color'),
+            ...this.componentRows('rain', ['lightGain']),
         ], [remove]);
     }
 
@@ -1873,6 +1899,9 @@ export class InspectorPanel {
         if (!node.grass && !node.light && !node.camera) {
             // On a mesh or a model, the grass grows on it and covers it.
             items.push({ label: 'Grass', icon: 'grass', action: () => this.hooks<null>('Add Grass', (n) => !n.grass, (n) => (n.grass = this.editor.grassFor(n))).commit!(null) });
+        }
+        if (!node.rain && !node.light && !node.camera) {
+            items.push({ label: 'Rain', icon: 'rain', action: () => this.hooks<null>('Add Rain', (n) => !n.rain, (n) => (n.rain = defaults(Rain))).commit!(null) });
         }
         if (!node.terrain && !node.mesh && !node.model && !node.light && !node.camera && !node.particles) {
             items.push({ label: 'Terrain (flat)', icon: 'terrain', action: () => this.hooks<null>('Add Terrain', (n) => !n.terrain && !n.mesh && !n.model, (n) => (n.terrain = defaults(Terrain))).commit!(null) });

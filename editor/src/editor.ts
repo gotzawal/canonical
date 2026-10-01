@@ -13,7 +13,7 @@ import {
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
-import { AudioSource, Grass, Mirror, Scatter, ScatterSource } from './core/model';
+import { AudioSource, Grass, Mirror, Rain, Scatter, ScatterSource } from './core/model';
 import { defaults } from './core/schema';
 import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
@@ -235,6 +235,17 @@ export class Editor extends Emitter<EditorEvents> {
         const at = hit && hit.distance < this.store.camera.distance * 4 ? hit.point : this.viewport.spawnPoint();
         node.grass = { ...defaults(Grass), ground: hit ? hit.id : null };
         node.position = [round(at[0]), round(at[1]), round(at[2])];
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
+    }
+
+    /** Rain over the spot in front of the view: its box stands on the ground there. */
+    createRain(): string {
+        const node = makeNode(this.uniqueName('Rain', null), null);
+        const rain = defaults(Rain);
+        const at = this.viewport.spawnPoint();
+        node.rain = rain;
+        node.position = [round(at[0]), round(at[1] + rain.size[1] / 2), round(at[2])];
         this.insert([node], 'Create ' + node.name);
         return node.id;
     }
