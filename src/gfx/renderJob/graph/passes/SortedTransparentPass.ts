@@ -53,7 +53,7 @@ export class SortedTransparentPass extends RenderGraphPass {
         // RenderContext (splitTexture / glass materials live here).
         b.useRenderTarget(MAIN_COLOR_RT);
 
-        dependOnIfRegistered(b, 'GPUCullPass');
+        dependOnIfRegistered(b, 'GPUCullPass', 'SceneDepthCopyPass');
     }
 
     public execute(ctx: RenderGraphPassContext): void {

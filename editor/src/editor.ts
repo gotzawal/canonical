@@ -257,7 +257,11 @@ export class Editor extends Emitter<EditorEvents> {
     createWater(): string {
         let id = '';
         this.store.transact('Create Water', () => {
-            const shader = this.store.doc.shaders.find((s) => s.kind === 'material' && /^Water\d*\.wgsl$/.test(s.name)) ?? this.createShader({ template: 'water', open: false });
+            // The scene's own Water shader when it is the see-through one (an
+            // older Water.wgsl stays with the water made from it), else a new one.
+            const shader =
+                this.store.doc.shaders.find((s) => s.kind === 'material' && /^Water\d*\.wgsl$/.test(s.name) && /\bsceneBehind\s*\(/.test(s.code)) ??
+                this.createShader({ template: 'water', open: false });
             const node = makeMeshNode('plane');
             node.name = this.uniqueName('Water', null);
             node.mesh.material = { ...node.mesh.material, type: 'shader', shader: shader.id };

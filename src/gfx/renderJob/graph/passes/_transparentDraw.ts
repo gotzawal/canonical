@@ -61,7 +61,7 @@ export function drawNodesEncoder(
         }
         if (transmissionFilter !== null) {
             const mat = node.materials?.[0] as any;
-            const hasTransmission = typeof mat?.transmissionFactor === 'number' && mat.transmissionFactor > 0;
+            const hasTransmission = mat?.readsScene === true || (typeof mat?.transmissionFactor === 'number' && mat.transmissionFactor > 0);
             if (transmissionFilter === 'exclude' && hasTransmission) continue;
             if (transmissionFilter === 'only' && !hasTransmission) continue;
         }
@@ -169,7 +169,7 @@ export function drawNodes(
         // UnlitMaterial etc.
         if (transmissionFilter !== null) {
             const mat = node.materials?.[0] as any;
-            const hasTransmission = typeof mat?.transmissionFactor === 'number' && mat.transmissionFactor > 0;
+            const hasTransmission = mat?.readsScene === true || (typeof mat?.transmissionFactor === 'number' && mat.transmissionFactor > 0);
             if (transmissionFilter === 'exclude' && hasTransmission) continue;
             if (transmissionFilter === 'only' && !hasTransmission) continue;
         }

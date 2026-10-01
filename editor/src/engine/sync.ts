@@ -703,8 +703,11 @@ export class SceneSync extends Emitter<SyncEvents> {
                 // Vertex shaders that move vertices cannot use the depth prepass,
                 // which draws the undisplaced mesh, and can draw outside the
                 // shape's bounds, so the camera's frustum does not cull them.
+                // Shaders that read the scene behind them (water) stay out of
+                // it too: the scene depth they read is copied from it.
                 const moves = kind.startsWith('shader:') && this.shaders.movesVertices(mesh.material.shader!);
-                if (moves) mr.addRendererMask(RendererMask.IgnoreDepthPass);
+                const reads = kind.startsWith('shader:') && this.shaders.readsScene(mesh.material.shader!);
+                if (moves || reads) mr.addRendererMask(RendererMask.IgnoreDepthPass);
                 else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
                 mr.frustumCulled = !moves;
                 mr.material = next.material;

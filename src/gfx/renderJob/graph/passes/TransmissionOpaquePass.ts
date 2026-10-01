@@ -45,7 +45,7 @@ export class TransmissionOpaquePass extends RenderGraphPass {
         // to preserve mid-pass splitTexture handling).
         b.useRenderTarget(MAIN_COLOR_RT);
 
-        dependOnIfRegistered(b, 'GPUCullPass');
+        dependOnIfRegistered(b, 'GPUCullPass', 'SceneDepthCopyPass');
     }
 
     public execute(ctx: RenderGraphPassContext): void {

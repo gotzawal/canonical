@@ -1,6 +1,6 @@
 import {
     BlendMode, Color, Engine3D, GPUTextureFormat, Material, PassType, PostBase, Preprocessor, RenderShaderPass,
-    RenderTexture, RTResourceMap, Shader, ShaderLib, Texture, Vector4, View3D, ViewQuad,
+    RenderTexture, RTResourceMap, SCENE_DEPTH_COPY, Shader, ShaderLib, Texture, Vector4, View3D, ViewQuad,
 } from '@orillusion/core';
 import { Emitter } from '../core/events';
 import type { Store } from '../core/store';
@@ -58,6 +58,8 @@ interface CompiledShader {
     usesMirror: boolean;
     /** The code reads the terrain's height (terrainHeight, terrainDepth). */
     usesTerrain: boolean;
+    /** The code reads the scene behind it (screenUV, sceneDepth, surfaceDepth, sceneBehind). */
+    usesScene: boolean;
 }
 
 interface ShaderEntry {
@@ -125,7 +127,7 @@ const ENGINE_FIELDS = `
 
 const RESERVED = new Set([
     ...ENGINE_FIELDS.split(/[\s,]+/).filter((s) => s.endsWith(':')).map((s) => s.slice(0, -1)),
-    'baseMap', 'mirrorMap', 'terrainHeightMap', 'terrainFrame', 'terrainLevel', 'shadowBias', 'x', 'y', 'width', 'height',
+    'baseMap', 'mirrorMap', 'terrainHeightMap', 'terrainFrame', 'terrainLevel', 'sceneColorPyramid', 'sceneDepthMap', 'shadowBias', 'x', 'y', 'width', 'height',
     'fn', 'let', 'var', 'const', 'struct', 'return', 'if', 'else', 'for', 'loop', 'while', 'true', 'false',
     'f32', 'i32', 'u32', 'bool', 'vec2', 'vec3', 'vec4', 'mat4x4', 'texture', 'sampler', 'discard',
 ]);
@@ -152,6 +154,8 @@ export interface ParsedShader {
     usesMirror: boolean;
     /** Material shaders: it reads the terrain's height. */
     usesTerrain: boolean;
+    /** Material shaders: it reads the scene behind it. */
+    usesScene: boolean;
 }
 
 /** Reads `// @property` declarations and prepares the code for wrapping. */
@@ -231,6 +235,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
     const hasVert = /\bfn\s+vert\s*\(/.test(body);
     const usesMirror = kind === 'material' && /\bmirror(Color|UV|Map)\b/.test(body);
     const usesTerrain = kind === 'material' && /\bterrain(Height|Depth)\b/.test(body);
+    const usesScene = kind === 'material' && /\b(screenUV|sceneDepth|surfaceDepth|sceneBehind)\b/.test(body);
     const entry = kind === 'post' ? /\bfn\s+post\s*\(/ : /\bfn\s+frag\s*\(/;
     const hasEntry = entry.test(body);
     if (!hasEntry) {
@@ -241,7 +246,7 @@ export function parseShader(code: string, kind: ShaderKind): ParsedShader {
             message: kind === 'post' ? 'Missing "fn post(uv: vec2f) -> vec4f".' : 'Missing "fn frag()".',
         });
     }
-    return { props, errors, body, includes, hasVert, hasEntry, usesMirror, usesTerrain };
+    return { props, errors, body, includes, hasVert, hasEntry, usesMirror, usesTerrain, usesScene };
 }
 
 function structFields(props: ShaderProperty[]): string {
@@ -310,6 +315,55 @@ const TERRAIN_CODE = [
     '}',
 ].join('\n');
 
+/**
+ * What material shaders that read the scene behind them get: the opaque
+ * world and sky before see-through materials draw (_SceneColorPyramid,
+ * with mips for blur) and its depth (_SceneDepthCopy). Such a material is
+ * drawn after both are taken (Material.readsScene) and skips the depth
+ * prepass, so it never sees itself. Without them the color is black and
+ * the depth the far plane.
+ */
+const SCENE_CODE = /* wgsl */ `
+@group(1) @binding(auto) var sceneColorPyramidSampler: sampler;
+@group(1) @binding(auto) var sceneColorPyramid: texture_2d<f32>;
+@group(1) @binding(auto) var sceneDepthMap: texture_depth_2d;
+
+// This pixel's position on the screen, 0..1 from the top left.
+fn screenUV() -> vec2f {
+    let ndc = ORI_VertexVarying.fragPosition.xy / ORI_VertexVarying.fragPosition.w;
+    return vec2f(ndc.x * 0.5 + 0.5, 0.5 - ndc.y * 0.5);
+}
+
+// How far in front of the camera (view depth, meters) the scene lies at uv;
+// the far plane where nothing was drawn or the copy is missing.
+fn sceneDepth(uv: vec2f) -> f32 {
+    let size = vec2i(textureDimensions(sceneDepthMap));
+    let p = clamp(vec2i(uv * vec2f(size)), vec2i(0), size - vec2i(1));
+    let d = textureLoad(sceneDepthMap, p, 0);
+    if (d <= 0.0) {
+        return globalUniform.far;
+    }
+    #if USE_LOGDEPTH
+        return exp2(d * log2(globalUniform.far + 1.0)) - 1.0;
+    #else
+        let n = globalUniform.near;
+        let f = globalUniform.far;
+        return n * f / max(f - d * (f - n), 1e-6);
+    #endif
+}
+
+// This pixel's own view depth, in the same units as sceneDepth.
+fn surfaceDepth() -> f32 {
+    return ORI_VertexVarying.fragPosition.w;
+}
+
+// The scene's color at uv (linear HDR), blurred by lod (0 sharp, each step half the resolution).
+fn sceneBehind(uv: vec2f, lod: f32) -> vec3f {
+    let c = clamp(uv, vec2f(0.001), vec2f(0.999));
+    return textureSampleLevel(sceneColorPyramid, sceneColorPyramidSampler, c, lod).rgb;
+}
+`;
+
 /** Full shader source as registered in ShaderLib. */
 export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: ParsedShader): string {
     const includes = parsed.includes.map((n) => `#include "${n}"`).join('\n');
@@ -358,6 +412,7 @@ export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: P
         textureBindings(parsed.props),
         parsed.usesMirror ? MIRROR_CODE : '',
         parsed.usesTerrain ? TERRAIN_CODE : '',
+        parsed.usesScene ? SCENE_CODE : '',
         'fn getTime() -> f32 { return globalUniform.time * 0.001; }',
         parsed.hasVert ? '' : 'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
         USER_BEGIN,
@@ -386,9 +441,16 @@ export class ShaderManager extends Emitter<ShaderEvents> {
     private terrainHeights: HeldTexture | null = null;
     private terrainValues = { frame: new Vector4(0, 0, 1, 1), level: new Vector4(0, 0, 0, 0) };
     private terrainReaders = new Set<WeakRef<Shader>>();
+    /** Shaders that read the scene behind them, and the scene textures they were last given. */
+    private sceneReaders = new Set<WeakRef<Shader>>();
+    private sceneBound: { color: Texture | null; depth: Texture | null } = { color: null, depth: null };
+    private noSceneDepth: RenderTexture | null = null;
 
     constructor(private runtime: Runtime, private store: Store) {
         super();
+        // The scene textures appear once the render graph is built and are
+        // made again when it is (a resize may): readers follow them.
+        runtime.onBeforeFrame(() => this.refreshScene());
         const check = () => this.syncAll();
         store.on('change', (hint) => {
             if (!hint?.nodes && !hint?.env && !hint?.meta && !hint?.design && !hint?.behavior) check();
@@ -420,6 +482,11 @@ export class ShaderManager extends Emitter<ShaderEvents> {
     /** The valid version moves vertices, so it cannot share the depth prepass. */
     movesVertices(id: string): boolean {
         return !!this.entries.get(id)?.valid?.hasVert;
+    }
+
+    /** The valid version reads the scene behind it, so it must not be in the depth prepass either. */
+    readsScene(id: string): boolean {
+        return !!this.entries.get(id)?.valid?.usesScene;
     }
 
     /** Resolves once every shader whose source changed has been compiled. */
@@ -521,7 +588,7 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         const version = ++shaderSerial;
         const name = `morglay_shader_${id}_${version}`.replace(/[^A-Za-z0-9_]/g, '_');
         ShaderLib.register(name, source);
-        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert, usesMirror: parsed.usesMirror, usesTerrain: parsed.usesTerrain };
+        e.valid = { name, kind: doc.kind, lighting: doc.lighting, props: parsed.props, version, hasVert: parsed.hasVert, usesMirror: parsed.usesMirror, usesTerrain: parsed.usesTerrain, usesScene: parsed.usesScene };
         e.status = { state: 'ok', messages, props: parsed.props, version };
         this.emit('compiled', id);
     }
@@ -560,12 +627,47 @@ export class ShaderManager extends Emitter<ShaderEvents> {
             shader.setUniformVector4('terrainLevel', this.terrainValues.level);
             this.terrainReaders.add(new WeakRef(shader));
         }
+        if (valid.usesScene) {
+            const scene = this.sceneTextures();
+            shader.setTexture('sceneColorPyramid', scene.color);
+            shader.setTexture('sceneDepthMap', scene.depth);
+            this.sceneReaders.add(new WeakRef(shader));
+        }
         applyProps(shader, valid.props, {}, ctx);
 
         const mat = new Material();
         mat.name = 'Custom Shader';
         mat.shader = shader;
+        // Drawn after the scene color and depth are taken (TransmissionOpaquePass).
+        mat.readsScene = valid.usesScene;
         return mat;
+    }
+
+    /** The scene color and depth material shaders read, or stand-ins (black, the far plane) until the graph makes them. */
+    private sceneTextures(): { color: Texture; depth: Texture } {
+        const ctx = this.runtime.engine.context3D;
+        const color = RTResourceMap.getTexture(ctx, '_SceneColorPyramid') ?? Engine3D.resFor(ctx).blackTexture;
+        // A stand-in depth must be a depth texture too (the binding is texture_depth_2d); its 0 reads as the far plane.
+        this.noSceneDepth ??= new RenderTexture(1, 1, GPUTextureFormat.depth32float, false, undefined, 1, 0, false, false, ctx);
+        const depth = RTResourceMap.getTexture(ctx, SCENE_DEPTH_COPY) ?? this.noSceneDepth;
+        return { color, depth };
+    }
+
+    /** Gives the readers the scene textures again when they changed. */
+    private refreshScene() {
+        if (!this.sceneReaders.size) return;
+        const scene = this.sceneTextures();
+        if (scene.color === this.sceneBound.color && scene.depth === this.sceneBound.depth) return;
+        this.sceneBound = { color: scene.color, depth: scene.depth };
+        for (const ref of Array.from(this.sceneReaders)) {
+            const shader = ref.deref();
+            if (!shader) {
+                this.sceneReaders.delete(ref);
+                continue;
+            }
+            if (shader.getTexture('sceneColorPyramid') !== scene.color) shader.setTexture('sceneColorPyramid', scene.color);
+            if (shader.getTexture('sceneDepthMap') !== scene.depth) shader.setTexture('sceneDepthMap', scene.depth);
+        }
     }
 
     /** The heights material shaders read (one texel of 0 until a terrain is set). */

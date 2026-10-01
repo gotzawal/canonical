@@ -34,6 +34,15 @@ export class Material {
     /** Whether this material is enabled for rendering. */
     public enable: boolean = true;
 
+    /**
+     * The material samples the scene behind it (`_SceneColorPyramid`,
+     * `_SceneDepthCopy`): it is drawn after both are taken, in
+     * TransmissionOpaquePass, like materials with transmission, so it
+     * never sees itself. Its renderer must also skip the depth prepass
+     * (RendererMask.IgnoreDepthPass), or the depth copy holds its surface.
+     */
+    public readsScene: boolean = false;
+
     private _oitMode: 'sorted' | 'weighted' | 'depth-peel' = 'sorted';
 
     /** Order-independent transparency mode opt-in.
