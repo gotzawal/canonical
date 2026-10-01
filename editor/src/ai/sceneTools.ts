@@ -5,7 +5,7 @@
 import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player, Terrain } from '../core/model';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player, Rain, Terrain } from '../core/model';
 import { layersOf } from './terrainTools';
 import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
@@ -61,6 +61,10 @@ const objectFields = {
     },
     grass: {
         ...toolSchema(Grass, 'A field of grass blades (one draw for thousands) around the object, bent by wind gusts. ground (an object id or name: a terrain, floor or a group of them) is what the blades stand on, so the field follows any terrain; blades outside it or on steep slopes are left out. Without ground the field is flat at the object\'s height. size is in meters in the object\'s turned frame; count is the cost (up to 30000). null removes it.'),
+        type: ['object', 'null'],
+    },
+    rain: {
+        ...toolSchema(Rain, 'Rain falling through a box around the object (an empty object is best), drawn by one shader with drops at real places: they keep their size with distance, stop at the bottom of the box and lean with the wind. Keep the box in the open air with its bottom on the ground and its top above the walls; it costs by the share of the screen it covers and by spacing (smaller spacing, more drops, more cost). shelter (an object id or name: an awning, a porch roof) stays dry; light (a point or spot light, id or name) tints the drops falling near it. Use it for rain instead of particles. null removes it.'),
         type: ['object', 'null'],
     },
     audio: {
@@ -472,6 +476,7 @@ function nodeType(n: NodeDoc): string {
     if (n.mesh) return n.mesh.geometry.type;
     if (n.particles) return 'particles';
     if (n.grass) return 'grass';
+    if (n.rain && !n.mesh && !n.model) return 'rain';
     if (n.terrain) return 'terrain';
     if (n.scatter) return 'scatter';
     if (n.audio) return 'sound';
@@ -552,6 +557,10 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     if (n.grass) {
         const g = n.grass;
         out.grass = { count: g.count, size: g.size, ground: g.ground, height: g.height, colors: [g.bottomColor, g.topColor], wind: g.wind };
+    }
+    if (n.rain) {
+        const r = n.rain;
+        out.rain = { size: r.size, amount: r.amount, spacing: r.spacing, speed: r.speed, wind: r.wind, ...(r.shelter ? { shelter: r.shelter } : {}), ...(r.light ? { light: r.light } : {}) };
     }
     if (n.terrain) {
         const t = n.terrain;
@@ -701,6 +710,18 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (texture !== undefined) g.texture = textureId(doc, texture, 'grass.texture');
         if (windMap !== undefined) g.windMap = textureId(doc, windMap, 'grass.wind_map');
         n.grass = g;
+    }
+    if (spec.rain === null) delete n.rain;
+    else if (spec.rain) {
+        const { shelter, light, ...fields } = spec.rain as Json;
+        const r = patch(Rain, n.rain ?? defaults(Rain), fields, 'rain', hex);
+        if (shelter !== undefined) r.shelter = resolveParent(doc, shelter, batch, 'rain.shelter');
+        if (light !== undefined) {
+            r.light = resolveParent(doc, light, batch, 'rain.light');
+            const target = r.light ? batch.find((x) => x.id === r.light) ?? doc.nodes.find((x) => x.id === r.light) : null;
+            if (r.light && target && !target.light) throw new ToolError(`rain.light: "${target.name}" is not a light.`);
+        }
+        n.rain = r;
     }
     if (spec.terrain === null) delete n.terrain;
     else if (spec.terrain) {

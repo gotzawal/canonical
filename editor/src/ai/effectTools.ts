@@ -1,5 +1,5 @@
 // The assistant's effect tools: particle emitters from presets (fire,
-// smoke, sparks, dust, rain, snow...) with any value changed, a vignette
+// smoke, sparks, dust, mist...) with any value changed, a vignette
 // and the lift / gamma / gain color grade of the Finish stage.
 
 import { uid } from '../core/ids';

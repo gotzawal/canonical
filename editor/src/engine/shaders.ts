@@ -435,7 +435,8 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         const docs = this.store.doc.shaders;
         const alive = new Set(docs.map((d) => d.id));
         for (const id of Array.from(this.entries.keys())) {
-            if (!alive.has(id)) this.entries.delete(id);
+            // Built-in shaders (the rain's) are the editor's, not the scene's.
+            if (!alive.has(id) && !id.startsWith('builtin:')) this.entries.delete(id);
         }
         for (const doc of docs) this.ensure(doc);
     }

@@ -49,18 +49,6 @@ export const PARTICLE_PRESETS: ParticlePreset[] = [
         values: { rate: 15, max: 1500, life: [6, 10], size: [0.01, 0.025], sizeEnd: 1, shape: 'box', box: [4, 2.5, 4], velocityMin: [-0.05, -0.03, -0.05], velocityMax: [0.05, 0.05, 0.05], gravity: [0, 0, 0], colorStart: '#fff4dc', colorEnd: '#fff4dc', alphaStart: 0.8, alphaEnd: 0, blend: 'add', prewarm: 8 },
     },
     {
-        id: 'rain',
-        label: 'Rain',
-        hint: 'Falling streaks over a wide box; place it above the level.',
-        values: { rate: 600, max: 6000, life: [0.8, 1], size: [0.02, 0.03], sizeEnd: 1, shape: 'box', box: [20, 0.5, 20], velocityMin: [0, -12, 0], velocityMax: [0, -10, 0], gravity: [0, -9.8, 0], colorStart: '#b8c8d8', colorEnd: '#b8c8d8', alphaStart: 0.5, alphaEnd: 0.5, blend: 'alpha', spin: [0, 0], prewarm: 2 },
-    },
-    {
-        id: 'snow',
-        label: 'Snow',
-        hint: 'Slow flakes over a wide box; place it above the level.',
-        values: { rate: 150, max: 6000, life: [6, 9], size: [0.03, 0.06], sizeEnd: 1, shape: 'box', box: [20, 0.5, 20], velocityMin: [-0.3, -1.2, -0.3], velocityMax: [0.3, -0.7, 0.3], gravity: [0.05, 0, 0], colorStart: '#ffffff', colorEnd: '#ffffff', alphaStart: 0.9, alphaEnd: 0.6, blend: 'alpha', prewarm: 9 },
-    },
-    {
         id: 'mist',
         label: 'Mist',
         hint: 'Low, slow fog puffs near the ground (waterfall spray, marsh).',

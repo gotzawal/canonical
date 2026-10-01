@@ -76,7 +76,9 @@ test('draws the physical sky, fog, light effects and shadows together, and the l
 
     // The low tier leaves out god rays and ambient occlusion, and draws shadows every other frame.
     await page.evaluate(() => window.__editor.store.setPrefs({ previewQuality: 'low' }));
-    expect(Object.fromEntries(await chain(page))).toMatchObject({ GodRayPost: false, GTAOPost: false, VolumetricFogPost: true });
+    // An effect switched off leaves the chain (it gives its textures back).
+    const low = Object.fromEntries(await chain(page));
+    expect([low.GodRayPost ?? false, low.GTAOPost ?? false, low.VolumetricFogPost]).toEqual([false, false, true]);
     expect(await page.evaluate(() => ({ every: window.__editor.runtime.engine.setting.shadow.updateFrameRate, level: window.__editor.runtime.qualityLevel }))).toEqual({ every: 2, level: 'low' });
     await page.evaluate(() => window.__editor.store.setPrefs({ previewQuality: 'scene' }));
     expect(Object.fromEntries(await chain(page))).toMatchObject({ GodRayPost: true, GTAOPost: true });
