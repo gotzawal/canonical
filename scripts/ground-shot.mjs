@@ -87,13 +87,16 @@ await page.evaluate(() => window.__editor.shaders.whenIdle());
 await page.evaluate(() => window.__editor.sync.whenLoaded?.());
 await page.waitForTimeout(10000);
 
-const canvas = page.locator('.viewport canvas.gpu');
+// A page screenshot clipped to the view: SwiftShader draws this scene slowly, and an element
+// screenshot waits for the canvas to settle.
 const shot = async (name, c) => {
     await page.evaluate((c) => window.__editor.store.setCamera(c), c);
     await page.waitForTimeout(7000);
-    await canvas.screenshot({ path: `${out}/${label}-${name}.png` });
+    const clip = await page.locator('.viewport canvas.gpu').boundingBox();
+    await page.screenshot({ path: `${out}/${label}-${name}.png`, clip: clip ?? undefined, timeout: 180_000 });
     console.log('shot', name);
 };
+process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await shot('shore', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
 await shot('close', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
 await shot('rain', { target: [55, 0.5, 0], yaw: 90, pitch: 32, distance: 16, fov: 60 });
@@ -107,5 +110,4 @@ await page.evaluate(() => {
     });
 });
 await shot('sunset', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });
-console.log('LOGS\n' + logs.join('\n'));
 await browser.close();
