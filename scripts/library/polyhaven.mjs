@@ -78,14 +78,30 @@ async function thumbnail(info, out, width, height) {
 const aerial = (id, a) => !!a.attributes?.aerial || /^aerial[_-]/i.test(id) || (a.tags ?? []).includes('aerial');
 
 /**
- * The ids a rule picks: of its type and every one of its categories, most
- * downloaded first; aerial textures only when the rule asks (aerial: true).
+ * Whether an asset is one a rule's `match` words name: a whole word (or its
+ * plural) of its id, name or tags, so "tree" finds island_tree_01 and a
+ * model tagged "trees" but not street_lamp. A rule without words takes
+ * every asset of its categories.
+ */
+function matches(id, a, words) {
+    if (!words?.length) return true;
+    const tokens = new Set([id, a.name ?? '', ...(a.tags ?? [])].join(' ').toLowerCase().split(/[^a-z0-9]+/));
+    return words.some((w) => {
+        const word = w.toLowerCase();
+        return tokens.has(word) || tokens.has(word + 's') || tokens.has(word + 'es');
+    });
+}
+
+/**
+ * The ids a rule picks: of its type and every one of its categories (and
+ * named by its match words), most downloaded first; aerial textures only
+ * when the rule asks (aerial: true).
  */
 function candidates(list, rule, taken) {
     const cats = rule.categories ?? [];
     const exclude = new Set(rule.exclude ?? []);
     return Object.entries(list)
-        .filter(([id, a]) => !taken.has(id) && !exclude.has(id) && cats.every((c) => (a.categories ?? []).includes(c)) && (rule.aerial || !aerial(id, a)))
+        .filter(([id, a]) => !taken.has(id) && !exclude.has(id) && cats.every((c) => (a.categories ?? []).includes(c)) && matches(id, a, rule.match) && (rule.aerial || !aerial(id, a)))
         .sort((a, b) => (b[1].download_count ?? 0) - (a[1].download_count ?? 0))
         .map(([id]) => id);
 }

@@ -1,5 +1,5 @@
 {
-    "$comment": "Open-source assets mirrored into editor/library by scripts/mirror-library.mjs (the library-mirror workflow runs it when this file changes), so the editor can offer them without depending on the upstream links. Only CC0 or public domain assets: the mirror ships them with the editor. ref pins the upstream commit and ids the Poly Haven assets a rule picked (the most downloaded of its categories); run the script with --latest to move to the newest ones.",
+    "$comment": "Open-source assets mirrored into editor/library by scripts/mirror-library.mjs (the library-mirror workflow runs it when this file changes), so the editor can offer them without depending on the upstream links. Only CC0 or public domain assets: the mirror ships them with the editor. ref pins the upstream commit and ids the Poly Haven assets a rule picked (the most downloaded of its categories, and of those whose id, name or tags hold one of its match words; maxTris skips heavier models, trees run to hundreds of thousands of triangles); run the script with --latest to move to the newest ones.",
     "sources": [
         {
             "id": "kenney-city",
@@ -99,7 +99,12 @@
                 { "kind": "material", "categories": ["roofing"], "count": 1, "tags": ["roof"], "ids": ["factory_wall"] },
                 { "kind": "model", "categories": ["nature"], "count": 4, "maxTris": 60000, "tags": ["nature"], "ids": ["grass_medium_01", "grass_bermuda_01", "rock_moss_set_02", "potted_plant_04"] },
                 { "kind": "model", "categories": ["furniture"], "count": 3, "maxTris": 60000, "tags": ["furniture", "interior"], "ids": ["sofa_02", "wooden_table_02", "sofa_03"] },
-                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"], "ids": ["Camera_01", "Television_01", "Lantern_01", "wine_bottles_01"] }
+                { "kind": "model", "categories": ["props"], "count": 4, "maxTris": 60000, "tags": ["prop"], "ids": ["Camera_01", "Television_01", "Lantern_01", "wine_bottles_01"] },
+                { "kind": "model", "match": ["tree"], "count": 6, "maxTris": 500000, "tags": ["nature", "tree", "forest"] },
+                { "kind": "model", "match": ["shrub", "bush", "fern", "plant", "flower", "sapling"], "count": 5, "maxTris": 200000, "tags": ["nature", "plant"] },
+                { "kind": "model", "match": ["rock", "boulder", "stone", "log", "stump"], "count": 4, "maxTris": 120000, "tags": ["nature", "rock"] },
+                { "kind": "model", "categories": ["furniture"], "count": 4, "maxTris": 60000, "tags": ["furniture", "interior"] },
+                { "kind": "model", "categories": ["props"], "count": 5, "maxTris": 60000, "tags": ["prop"] }
             ]
         }
     ]

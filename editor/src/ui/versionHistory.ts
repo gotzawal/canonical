@@ -79,6 +79,7 @@ export function versionActions(editor: Editor): HTMLElement {
         { class: 'design-actions' },
         button('Save a version', () => void editor.pipeline.saveVersion('Saved by hand').then(() => toast('Version saved.', 'success')), 'small', 'history'),
         button('Download project (.zip)', () => void editor.saveProjectFile(), 'small subtle', 'save'),
+        button('Download without history', () => void editor.saveProjectFile({ lean: true }), 'small subtle', 'save'),
     );
 }
 

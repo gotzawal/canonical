@@ -2,7 +2,7 @@
 // the design (and naming the scene), questions for the user, checklists and
 // stage proposals.
 
-import { detailLevel, STAGE_IDS, stageIndex } from '../core/design';
+import { detailLevel, dropRecords, RECORD_KINDS, recordAssets, STAGE_IDS, stageIndex, type RecordKind } from '../core/design';
 import { uid } from '../core/ids';
 import { Specs } from '../core/model';
 import { patch, toolSchema } from '../core/schema';
@@ -287,6 +287,28 @@ export const designTools = tools({
                 summary: stageDef(store.doc.design.stage).title,
                 approval: { kind: 'stage', stage: store.doc.design.stage },
             };
+        },
+    },
+    delete_planning_images: {
+        groups: ['design'],
+        description: 'Delete planning images the built game never uses, when the user asks to clean up or slim down the project: captures (pictures of the shots taken at each stage and comparison), paintovers (those not chosen as a shot\'s target, with the images they were painted from), targets (the chosen paintovers: comparisons stop until new ones are made) and snapshots (the versions of the version history). Concept images always stay. One undo step. Without kinds it only counts what there is.',
+        params: {
+            kinds: { type: 'array', items: { type: 'string', enum: [...RECORD_KINDS] }, description: 'What to delete; empty or missing only counts.' },
+        },
+        run({ args, store }) {
+            const kinds = (Array.isArray(args.kinds) ? args.kinds : []).filter((k: unknown): k is RecordKind => RECORD_KINDS.includes(k as RecordKind));
+            const doc = store.doc;
+            const sizes = new Map(doc.assets.map((a) => [a.id, a.size ?? 0]));
+            const ids = recordAssets(doc.design);
+            const counts = dropRecords(JSON.parse(JSON.stringify(doc.design)) as DesignDoc, RECORD_KINDS);
+            const there = Object.fromEntries(RECORD_KINDS.map((k) => [k, { count: counts[k], mb: Math.round(([...ids[k]].reduce((a, id) => a + (sizes.get(id) ?? 0), 0) / 1048576) * 100) / 100 }]));
+            if (!kinds.length) return { data: { ok: true, records: there, concepts_kept: doc.design.concepts.length }, summary: 'counted' };
+            let n = counts;
+            store.commit('AI: Delete Planning Images', (d) => {
+                n = dropRecords(d.design, kinds);
+            }, { design: true });
+            const deleted = Object.fromEntries(kinds.map((k) => [k, n[k]]));
+            return { data: { ok: true, deleted, concepts_kept: store.doc.design.concepts.length, note: 'The user can undo it; the files leave the browser storage when the project is next opened.' }, summary: kinds.join(', ') };
         },
     },
     apply_key_light: {

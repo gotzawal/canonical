@@ -412,6 +412,11 @@ export class Runtime {
         const bloom = pp.bloom!;
         bloom.bloomIntensity = env.bloom.intensity;
         bloom.luminanceThreshole = env.bloom.threshold;
+        // The budget: pyramid steps (BloomPost rebuilds its targets when they change) and an odd blur width.
+        bloom.downSampleStep = Math.min(6, Math.max(2, Math.round(env.bloom.levels)));
+        const blur = Math.min(9, Math.max(1, Math.round(env.bloom.blur) | 1));
+        bloom.downSampleBlurSize = blur;
+        bloom.upSampleBlurSize = blur;
         this.togglePost(BloomPost, env.bloom.enable);
 
         const gtao = pp.gtao!;
@@ -424,8 +429,11 @@ export class Runtime {
         ssr.roughnessThreshold = env.ssr.roughness;
         ssr.fadeDistanceMax = env.ssr.distance;
         ssr.fadeDistanceMin = env.ssr.distance * 0.5;
-        if (tier.ssrScale > 0 && ssr.pixelRatio !== tier.ssrScale) {
-            ssr.pixelRatio = tier.ssrScale;
+        ssr.rayMarchRatio = Math.min(1, Math.max(0.05, env.ssr.reach));
+        // The scene's budget, within what the tier allows.
+        const ssrScale = Math.min(tier.ssrScale, Math.max(0.25, env.ssr.resolution));
+        if (ssrScale > 0 && ssr.pixelRatio !== ssrScale) {
+            ssr.pixelRatio = ssrScale;
             // Made at the old size: traced again at the new one.
             (this.post.getPost(SSRPost as any) as SSRPost | null)?.onResize();
         }
@@ -478,6 +486,7 @@ export class Runtime {
 
         const fxaa = this.postList()?.get('FXAAPost');
         if (fxaa) fxaa.enable = env.fxaa;
+        pp.fxaa!.span = Math.min(8, Math.max(1, Math.round(env.fxaaSpan)));
 
         this.gi.apply(tier.giRealtime ? env.gi : { ...env.gi, realtime: false });
     }

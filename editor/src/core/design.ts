@@ -395,6 +395,78 @@ export function designAssetIds(design: DesignDoc): Set<string> {
 }
 
 /**
+ * Planning images a project collects while it is made, which a built game
+ * never uses: the captures of the shots (each stage, each comparison), the
+ * paintovers (and the images they were painted from), the chosen
+ * paintovers (targets) and the versions of the version history. The
+ * concept images stay: they are the record of the idea.
+ */
+export const RECORD_KINDS = ['captures', 'paintovers', 'targets', 'snapshots'] as const;
+export type RecordKind = (typeof RECORD_KINDS)[number];
+
+export const RECORD_LABELS: Record<RecordKind, { title: string; detail: string }> = {
+    captures: { title: 'Shot captures', detail: 'pictures of the shots taken at each stage and comparison' },
+    paintovers: { title: 'Paintovers not chosen', detail: 'paintovers that are not a shot\'s target, and the images they were painted from' },
+    targets: { title: 'Chosen paintovers', detail: 'the targets the shots are compared with (comparisons stop until new ones are made)' },
+    snapshots: { title: 'Versions', detail: 'the version history: scenes saved at each stage and after stretches of work' },
+};
+
+/** The images (and version files) of each kind of record, by asset id. Concept images are never among them. */
+export function recordAssets(design: DesignDoc): Record<RecordKind, Set<string>> {
+    const out: Record<RecordKind, Set<string>> = { captures: new Set(), paintovers: new Set(), targets: new Set(), snapshots: new Set() };
+    for (const s of design.shots) {
+        for (const h of s.history) out.captures.add(h.asset);
+        for (const p of s.paintovers) {
+            const kind = p.asset === s.target ? 'targets' : 'paintovers';
+            out[kind].add(p.asset);
+            for (const r of p.refs ?? []) out[kind].add(r);
+        }
+        if (s.target) out.targets.add(s.target);
+    }
+    for (const sn of design.snapshots) {
+        out.snapshots.add(sn.asset);
+        if (sn.thumb) out.snapshots.add(sn.thumb);
+    }
+    // What a kept record (or a concept, or a material slot) still uses is not freed by dropping another.
+    const concepts = new Set(design.concepts.map((c) => c.asset));
+    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm]) if (id) concepts.add(id);
+    for (const s of design.shots) if (s.concept) concepts.add(s.concept);
+    for (const set of Object.values(out)) for (const id of concepts) set.delete(id);
+    return out;
+}
+
+/**
+ * Removes the records of the given kinds from a design (in place) and
+ * returns how many entries went. Shots keep their framing and concept;
+ * without their target they go back to having none.
+ */
+export function dropRecords(design: DesignDoc, kinds: Iterable<RecordKind>): Record<RecordKind, number> {
+    const want = new Set(kinds);
+    const n: Record<RecordKind, number> = { captures: 0, paintovers: 0, targets: 0, snapshots: 0 };
+    for (const s of design.shots) {
+        if (want.has('captures')) {
+            n.captures += s.history.length;
+            s.history = [];
+        }
+        const kept = s.paintovers.filter((p) => {
+            const kind: RecordKind = p.asset === s.target ? 'targets' : 'paintovers';
+            if (!want.has(kind)) return true;
+            n[kind]++;
+            return false;
+        });
+        // A target that is not among the paintovers (older projects) goes as well.
+        if (want.has('targets') && s.target && !s.paintovers.some((p) => p.asset === s.target)) n.targets++;
+        s.paintovers = kept;
+        if (want.has('targets')) s.target = null;
+    }
+    if (want.has('snapshots')) {
+        n.snapshots = design.snapshots.length;
+        design.snapshots = [];
+    }
+    return n;
+}
+
+/**
  * The pipeline has started: there is a brief, a reference image or a
  * planned area (or it went past the Brief stage). Until then the Brief stage
  * is only where a project begins, and the first request of the user that

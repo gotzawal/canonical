@@ -521,6 +521,14 @@ export const GI = group({
     intensity: num(1, 0, Infinity, { description: 'Strength of the indirect light.' }),
     bounce: unit(0.5, { description: 'How much light keeps bouncing between surfaces, 0..1.' }),
     realtime: bool(false, { description: 'Capture the probes continuously (moving objects and lights); otherwise only after changes.' }),
+    probesPerFrame: int(1, 1, 8, {
+        title: 'Probes per Frame',
+        description: 'Budget: probes captured each frame (each draws the scene six times, small). More converges faster after a change and follows moving light sooner, at that many times the capture cost per frame.',
+    }),
+    updateEvery: int(1, 1, 30, {
+        title: 'Update Every',
+        description: 'Budget: frames between updates while the probes are captured (after a change, or always in realtime mode). 1 updates every frame; 4 spends about a quarter of the GI time per frame and reacts four times slower.',
+    }),
 }).overwrite((g) => ({ ...g, counts: clampGIGrid(g.counts) }));
 export type GIDoc = z.output<typeof GI>;
 
@@ -555,7 +563,23 @@ export const Environment = z.object({
     /** Tonemap exposure. */
     exposure: num(1, 0, 4, { step: 0.01, slider: true }),
     fxaa: bool(true, { title: 'Anti-aliasing', description: 'FXAA.' }),
-    bloom: group({ enable: enabled(), intensity: num(0.6, 0, 3, { step: 0.01, slider: true }), threshold: num(1, 0, 4, { step: 0.01, slider: true }) }),
+    fxaaSpan: int(4, 1, 8, {
+        title: 'FXAA Reach',
+        description: 'Budget: pixels FXAA blends along an edge (4 by default). Lower keeps fine detail and text sharper, higher smooths long shallow edges better. FXAA is one full-screen pass of nine samples a pixel at any reach: its budget is mostly on or off.',
+    }),
+    bloom: group({
+        enable: enabled(),
+        intensity: num(0.6, 0, 3, { step: 0.01, slider: true }),
+        threshold: num(1, 0, 4, { step: 0.01, slider: true }),
+        levels: int(3, 2, 6, {
+            description: 'Budget: steps of the glow pyramid, from a quarter of the screen down, each half the size of the last. More spread the glow wider (neon, lamps in fog) and add two small passes each.',
+        }),
+        blur: int(9, 1, 9, {
+            title: 'Blur Size',
+            step: 2,
+            description: 'Budget: samples across each blur of the glow (odd, 1 to 9). Its cost grows with the square: 9 takes 81 samples a pixel at every level, 5 takes 25, 3 takes 9; smaller blurs give a tighter, grainier glow.',
+        }),
+    }),
     ao: group({ enable: enabled(), strength: num(1, 0.01, 1, { step: 0.01, slider: true }), distance: num(1, 0.1, 10, { step: 0.05, slider: true }) }),
     /** Screen space reflections. */
     ssr: group({
@@ -563,6 +587,17 @@ export const Environment = z.object({
         strength: unit(0.5, { description: 'How much a perfectly smooth surface reflects (its share is strength squared: 0.5 a quarter, 1 all); rougher surfaces less.' }),
         roughness: unit(0.3, { title: 'Max Roughness', description: 'Surfaces rougher than this reflect nothing (rough ones get grainy reflections).' }),
         distance: num(200, 1, 5000, { step: 1, precision: 0, description: 'Reflected points farther from the camera than this fade out, meters.' }),
+        resolution: num(1, 0.25, 1, {
+            step: 0.05,
+            slider: true,
+            description: 'Budget: share of the screen\'s width and height the reflections are traced at (the graphics tier may lower it further: medium traces at most half). 0.5 costs about a quarter and blurs the reflections.',
+        }),
+        reach: num(0.5, 0.05, 1, {
+            title: 'Ray Reach',
+            step: 0.05,
+            slider: true,
+            description: 'Budget: how far a reflected ray is followed across the screen, as a share of its size; the steps (and the cost of misses) grow with it. Short reaches (0.15 to 0.3) suit floors that reflect what stands on them; long ones reach far-off walls and the sky.',
+        }),
     }),
     fog: group({
         enable: enabled(),

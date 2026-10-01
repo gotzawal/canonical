@@ -116,6 +116,14 @@ export type GlobalIlluminationSetting = {
      */
     realTimeGI: boolean;
     /**
+     * Probes captured each frame while capturing (1 when missing).
+     */
+    probeCountPerFrame?: number;
+    /**
+     * Frames between GI updates while capturing (1 when missing: every frame).
+     */
+    updateInterval?: number;
+    /**
      * Set whether the probe automatically render scene
      */
     autoRenderProbe: boolean;

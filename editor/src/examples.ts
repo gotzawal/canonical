@@ -117,7 +117,7 @@ export function exampleShowcase(): SceneDoc {
     nodes.push(cam);
 
     const env = defaultEnvironment();
-    env.bloom = { enable: true, intensity: 0.5, threshold: 1 };
+    env.bloom = { ...env.bloom, enable: true, intensity: 0.5, threshold: 1 };
     const renderGraph = defaultRenderGraph();
     renderGraph.posts.push({ id: uid('p'), shader: vignette.id, enabled: true, params: { strength: 0.5 } });
     return {

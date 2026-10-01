@@ -1,6 +1,6 @@
 import { createZip, readZip, type ZipEntry } from './zip';
 import { base64ToBlob, blobToBase64, deleteAssets, getAssetBlob, putAsset, unstoredCount } from './assets';
-import { designAssetIds } from './design';
+import { designAssetIds, dropRecords, RECORD_KINDS } from './design';
 import { gcDerived } from './derived';
 import { usedIds } from './refs';
 import { sanitize, Store } from './store';
@@ -105,8 +105,8 @@ export function fileNameFor(doc: SceneDoc): string {
     return `${baseName(doc)}.scene.json`;
 }
 
-export function projectFileNameFor(doc: SceneDoc): string {
-    return `${baseName(doc)}.morglay.zip`;
+export function projectFileNameFor(doc: SceneDoc, lean = false): string {
+    return `${baseName(doc)}${lean ? '-lean' : ''}.morglay.zip`;
 }
 
 /**
@@ -153,9 +153,13 @@ function assetFileName(meta: AssetMeta): string {
 /**
  * The whole project in one .zip: the scene with its design section, every
  * asset (game and planning) as a file, and the assets of scene snapshots.
+ * `lean` leaves out the planning records a build never uses (shot
+ * captures, paintovers, versions: see dropRecords) and keeps the concept
+ * images; the project in the editor keeps them.
  */
-export async function exportProject(store: Store): Promise<{ blob: Blob; missing: string[] }> {
+export async function exportProject(store: Store, opts: { lean?: boolean } = {}): Promise<{ blob: Blob; missing: string[] }> {
     const doc = JSON.parse(JSON.stringify(store.doc)) as SceneDoc;
+    if (opts.lean) dropRecords(doc.design, RECORD_KINDS);
     doc.assets = keptAssets(doc);
     const metas = new Map<string, AssetMeta>(doc.assets.map((a) => [a.id, a]));
     // Snapshots can use assets the project no longer lists: take their metas from the snapshots.
@@ -202,8 +206,13 @@ export async function importProject(zip: Blob): Promise<{ doc: SceneDoc; camera?
         throw new Error('project.json in this file is not valid.');
     }
     if (manifest?.format !== 'canonical-project' || !manifest.scene) throw new Error('This zip file is not a Morglay project.');
+    return storeProject(manifest, async (path) => files.get(path));
+}
+
+/** Stores the files a project manifest lists (read by `read`, by path) in this browser and returns the scene. */
+async function storeProject(manifest: ProjectManifest, read: (path: string) => Promise<Blob | undefined>): Promise<{ doc: SceneDoc; camera?: CameraState }> {
     for (const f of Array.isArray(manifest.files) ? manifest.files : []) {
-        const blob = f && typeof f.path === 'string' ? files.get(f.path) : undefined;
+        const blob = f && typeof f.path === 'string' ? await read(f.path) : undefined;
         const meta = f?.meta;
         if (!blob || !meta || typeof meta.id !== 'string') continue;
         const typed = blob.type ? blob : new Blob([blob], { type: meta.mime || '' });
@@ -211,6 +220,22 @@ export async function importProject(zip: Blob): Promise<{ doc: SceneDoc; camera?
         await putAsset(typed, name, kind, id, extra);
     }
     return { doc: sanitize(manifest.scene), camera: manifest.camera };
+}
+
+/**
+ * Reads a project laid out as files on a server: project.json and the
+ * files it lists next to it (the example projects in editor/examples).
+ */
+export async function importProjectFolder(base: string): Promise<{ doc: SceneDoc; camera?: CameraState }> {
+    const root = base.endsWith('/') ? base : base + '/';
+    const get = async (path: string) => {
+        const res = await fetch(new URL(path, root));
+        if (!res.ok) throw new Error(`Could not load ${path} (${res.status}).`);
+        return res.blob();
+    };
+    const manifest = JSON.parse(await (await get(PROJECT_FILE)).text()) as ProjectManifest;
+    if (manifest?.format !== 'canonical-project' || !manifest.scene) throw new Error('The example is not a Morglay project.');
+    return storeProject(manifest, get);
 }
 
 export async function importSceneFile(text: string): Promise<{ doc: SceneDoc; camera?: CameraState }> {

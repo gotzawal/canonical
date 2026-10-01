@@ -27,6 +27,7 @@ const ACTIVITY: Record<string, string> = {
     update_checklist: 'Checking the work',
     propose_stage_complete: 'Finishing a step',
     apply_key_light: 'Setting the sun',
+    delete_planning_images: 'Cleaning up reference images',
     // level
     build_rooms: 'Building rooms',
     check_level: 'Checking the level',
