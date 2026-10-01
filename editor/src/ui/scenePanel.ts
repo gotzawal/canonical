@@ -177,13 +177,13 @@ export class ScenePanel {
         const label = (text: string) => h('div', { class: 'group-label', text });
         this.body.append(
             section('post', 'Post Processing', 'sliders', [
-                ...this.rows(['fxaa']),
+                ...this.rows(['fxaa', 'fxaaSpan']),
                 label('Bloom'),
-                ...this.rows(['enable', 'intensity', 'threshold'], 'bloom'),
+                ...this.rows(['enable', 'intensity', 'threshold', 'levels', 'blur'], 'bloom'),
                 label('Ambient Occlusion'),
                 ...this.rows(['enable', 'strength', 'distance'], 'ao'),
                 label('Screen Space Reflections'),
-                ...this.rows(['enable', 'strength', 'roughness', 'distance'], 'ssr'),
+                ...this.rows(['enable', 'strength', 'roughness', 'distance', 'resolution', 'reach'], 'ssr'),
                 label('Fog'),
                 ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
                 label('Volumetric Fog'),
@@ -246,7 +246,7 @@ export class ScenePanel {
         rows.push(
             ...this.rows(['center', 'counts', 'spacing'], 'gi'),
             row('', info),
-            ...this.rows(['intensity', 'bounce', 'realtime'], 'gi'),
+            ...this.rows(['intensity', 'bounce', 'realtime', 'probesPerFrame', 'updateEvery'], 'gi'),
             row('Show Probes', probes.el, 'Draw a sphere per probe with the light it captured'),
             row('', h('div', { class: 'inline' }, button('Fit to Scene', () => this.editor.fitGIToScene(), 'small', 'focus'), button('Recapture', () => this.editor.runtime.gi.invalidate(), 'small'))),
             error,

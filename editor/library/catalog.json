@@ -220,6 +220,126 @@
      "id": "polyhaven/wine-bottles-01",
      "author": "Rico Cilliers and Jurita Burger",
      "origin": "https://polyhaven.com/a/wine_bottles_01"
+    },
+    {
+     "id": "polyhaven/dead-tree-trunk-02",
+     "author": "Jenelle van Heerden and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/dead_tree_trunk_02"
+    },
+    {
+     "id": "polyhaven/tree-stump-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/tree_stump_01"
+    },
+    {
+     "id": "polyhaven/dead-tree-trunk",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/dead_tree_trunk"
+    },
+    {
+     "id": "polyhaven/pine-roots",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/pine_roots"
+    },
+    {
+     "id": "polyhaven/pine-sapling-small",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/pine_sapling_small"
+    },
+    {
+     "id": "polyhaven/quiver-tree-02",
+     "author": "Dario Barresi and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/quiver_tree_02"
+    },
+    {
+     "id": "polyhaven/potted-plant-02",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/potted_plant_02"
+    },
+    {
+     "id": "polyhaven/fern-02",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/fern_02"
+    },
+    {
+     "id": "polyhaven/celandine-01",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/celandine_01"
+    },
+    {
+     "id": "polyhaven/potted-plant-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/potted_plant_01"
+    },
+    {
+     "id": "polyhaven/dandelion-01",
+     "author": "Rob Tuytel and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/dandelion_01"
+    },
+    {
+     "id": "polyhaven/rock-moss-set-01",
+     "author": "Kless Gyzen",
+     "origin": "https://polyhaven.com/a/rock_moss_set_01"
+    },
+    {
+     "id": "polyhaven/boulder-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/boulder_01"
+    },
+    {
+     "id": "polyhaven/namaqualand-boulder-02",
+     "author": "Greg Zaal and Rico Cilliers",
+     "origin": "https://polyhaven.com/a/namaqualand_boulder_02"
+    },
+    {
+     "id": "polyhaven/modular-fort-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/modular_fort_01"
+    },
+    {
+     "id": "polyhaven/modern-arm-chair-01",
+     "author": "Vibrant Nordic",
+     "origin": "https://polyhaven.com/a/modern_arm_chair_01"
+    },
+    {
+     "id": "polyhaven/sofa-01",
+     "author": "Kirill Sannikov",
+     "origin": "https://polyhaven.com/a/Sofa_01"
+    },
+    {
+     "id": "polyhaven/round-wooden-table-01",
+     "author": "Ulan Cabanilla",
+     "origin": "https://polyhaven.com/a/round_wooden_table_01"
+    },
+    {
+     "id": "polyhaven/coffeecart-01",
+     "author": "Joe Seabuhr",
+     "origin": "https://polyhaven.com/a/CoffeeCart_01"
+    },
+    {
+     "id": "polyhaven/horse-statue-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/horse_statue_01"
+    },
+    {
+     "id": "polyhaven/tea-set-01",
+     "author": "James Ray Cock, Rico Cilliers and Jurita Burger",
+     "origin": "https://polyhaven.com/a/tea_set_01"
+    },
+    {
+     "id": "polyhaven/rubber-duck-toy",
+     "author": "Plat251",
+     "origin": "https://polyhaven.com/a/rubber_duck_toy"
+    },
+    {
+     "id": "polyhaven/dry-branches-medium-01",
+     "author": "Rico Cilliers",
+     "origin": "https://polyhaven.com/a/dry_branches_medium_01"
+    },
+    {
+     "id": "polyhaven/alarm-clock-01",
+     "author": "Yann Kervran and James Ray Cock",
+     "origin": "https://polyhaven.com/a/alarm_clock_01"
     }
    ]
   }
@@ -1989,6 +2109,34 @@
    "thumb": "kenney-racing/thumbs/vehicle-truck-yellow.png"
   },
   {
+   "id": "polyhaven/alarm-clock-01",
+   "name": "Alarm Clock 01",
+   "kind": "model",
+   "file": "polyhaven/alarm-clock-01.glb",
+   "bytes": 599032,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "clock",
+    "time",
+    "alarm",
+    "bedside",
+    "old",
+    "90s",
+    "watch",
+    "blue"
+   ],
+   "author": "Yann Kervran and James Ray Cock",
+   "origin": "https://polyhaven.com/a/alarm_clock_01",
+   "tris": 8985,
+   "extent": [
+    0.132,
+    0.174,
+    0.067
+   ],
+   "thumb": "polyhaven/thumbs/alarm-clock-01.png"
+  },
+  {
    "id": "polyhaven/asphalt-02",
    "name": "Asphalt 02",
    "kind": "material",
@@ -2050,6 +2198,34 @@
     1024
    ],
    "thumb": "polyhaven/thumbs/beige-wall-001.png"
+  },
+  {
+   "id": "polyhaven/boulder-01",
+   "name": "Boulder 01",
+   "kind": "model",
+   "file": "polyhaven/boulder-01.glb",
+   "bytes": 2024796,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "rock",
+    "rocks",
+    "boulder",
+    "lichen",
+    "landscape",
+    "geology",
+    "formation",
+    "weathered"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/boulder_01",
+   "tris": 66122,
+   "extent": [
+    1.272,
+    1.004,
+    1.83
+   ],
+   "thumb": "polyhaven/thumbs/boulder-01.png"
   },
   {
    "id": "polyhaven/brown-mud-leaves-01",
@@ -2136,6 +2312,62 @@
    "thumb": "polyhaven/thumbs/camera-01.png"
   },
   {
+   "id": "polyhaven/celandine-01",
+   "name": "Celandine 01",
+   "kind": "model",
+   "file": "polyhaven/celandine-01.glb",
+   "bytes": 531460,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "field",
+    "green",
+    "shrub",
+    "outdoor",
+    "leaf",
+    "botany"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/celandine_01",
+   "tris": 8966,
+   "extent": [
+    2.239,
+    0.186,
+    0.307
+   ],
+   "thumb": "polyhaven/thumbs/celandine-01.png"
+  },
+  {
+   "id": "polyhaven/coffeecart-01",
+   "name": "Coffee Cart 01",
+   "kind": "model",
+   "file": "polyhaven/coffeecart-01.glb",
+   "bytes": 1459280,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "table",
+    "metal",
+    "shelf",
+    "plastic",
+    "cart",
+    "coffee",
+    "portable",
+    "wheels"
+   ],
+   "author": "Joe Seabuhr",
+   "origin": "https://polyhaven.com/a/CoffeeCart_01",
+   "tris": 27659,
+   "extent": [
+    2.168,
+    1.718,
+    1.073
+   ],
+   "thumb": "polyhaven/thumbs/coffeecart-01.png"
+  },
+  {
    "id": "polyhaven/concrete-floor-02",
    "name": "Concrete Floor 02",
    "kind": "material",
@@ -2196,6 +2428,119 @@
    "thumb": "polyhaven/thumbs/concrete-floor-worn-001.png"
   },
   {
+   "id": "polyhaven/dandelion-01",
+   "name": "Dandelion 01",
+   "kind": "model",
+   "file": "polyhaven/dandelion-01.glb",
+   "bytes": 1115404,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "green",
+    "shrub",
+    "outdoor",
+    "leaf",
+    "bush",
+    "botany"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/dandelion_01",
+   "tris": 54764,
+   "extent": [
+    4.214,
+    0.17,
+    0.258
+   ],
+   "thumb": "polyhaven/thumbs/dandelion-01.png"
+  },
+  {
+   "id": "polyhaven/dead-tree-trunk",
+   "name": "Dead Tree Trunk",
+   "kind": "model",
+   "file": "polyhaven/dead-tree-trunk.glb",
+   "bytes": 1610784,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "log",
+    "dead tree",
+    "trunk",
+    "bark",
+    "natural",
+    "foliage"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/dead_tree_trunk",
+   "tris": 101802,
+   "extent": [
+    3.051,
+    0.29,
+    0.278
+   ],
+   "thumb": "polyhaven/thumbs/dead-tree-trunk.png"
+  },
+  {
+   "id": "polyhaven/dead-tree-trunk-02",
+   "name": "Dead Tree Trunk 02",
+   "kind": "model",
+   "file": "polyhaven/dead-tree-trunk-02.glb",
+   "bytes": 1741208,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "trunk",
+    "log",
+    "tree trunk",
+    "dead",
+    "decayed",
+    "dry",
+    "rough texture",
+    "forest floor"
+   ],
+   "author": "Jenelle van Heerden and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/dead_tree_trunk_02",
+   "tris": 83128,
+   "extent": [
+    4.051,
+    1.055,
+    1.056
+   ],
+   "thumb": "polyhaven/thumbs/dead-tree-trunk-02.png"
+  },
+  {
+   "id": "polyhaven/dry-branches-medium-01",
+   "name": "Dry Branches Medium 01",
+   "kind": "model",
+   "file": "polyhaven/dry-branches-medium-01.glb",
+   "bytes": 1194672,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "branches",
+    "dead",
+    "dry",
+    "plants",
+    "nature",
+    "natural",
+    "plant",
+    "outdoor"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/dry_branches_medium_01",
+   "tris": 16803,
+   "extent": [
+    1.059,
+    0.341,
+    1.299
+   ],
+   "thumb": "polyhaven/thumbs/dry-branches-medium-01.png"
+  },
+  {
    "id": "polyhaven/factory-wall",
    "name": "Factory Wall",
    "kind": "material",
@@ -2221,6 +2566,34 @@
     1024
    ],
    "thumb": "polyhaven/thumbs/factory-wall.png"
+  },
+  {
+   "id": "polyhaven/fern-02",
+   "name": "Fern 02",
+   "kind": "model",
+   "file": "polyhaven/fern-02.glb",
+   "bytes": 408604,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "fern",
+    "foliage",
+    "jungle",
+    "shrub",
+    "bush",
+    "leaf",
+    "leaves"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/fern_02",
+   "tris": 6232,
+   "extent": [
+    1.973,
+    0.428,
+    1.724
+   ],
+   "thumb": "polyhaven/thumbs/fern-02.png"
   },
   {
    "id": "polyhaven/forest-ground-04",
@@ -2340,6 +2713,34 @@
     0.327
    ],
    "thumb": "polyhaven/thumbs/grass-medium-01.png"
+  },
+  {
+   "id": "polyhaven/horse-statue-01",
+   "name": "Horse Statue 01",
+   "kind": "model",
+   "file": "polyhaven/horse-statue-01.glb",
+   "bytes": 736108,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "decorative",
+    "horse",
+    "statue",
+    "figurine",
+    "porcelain",
+    "animal",
+    "sculpture",
+    "white"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/horse_statue_01",
+   "tris": 22388,
+   "extent": [
+    0.163,
+    0.22,
+    0.108
+   ],
+   "thumb": "polyhaven/thumbs/horse-statue-01.png"
   },
   {
    "id": "polyhaven/kloofendal-48d-partly-cloudy-puresky",
@@ -2477,6 +2878,64 @@
    "thumb": "polyhaven/thumbs/metal-plate.png"
   },
   {
+   "id": "polyhaven/modern-arm-chair-01",
+   "name": "Modern Arm Chair 01",
+   "kind": "model",
+   "file": "polyhaven/modern-arm-chair-01.glb",
+   "bytes": 902892,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "wood",
+    "leather",
+    "fancy",
+    "modern",
+    "chair",
+    "contemporary",
+    "wooden",
+    "lounge"
+   ],
+   "author": "Vibrant Nordic",
+   "origin": "https://polyhaven.com/a/modern_arm_chair_01",
+   "tris": 8916,
+   "extent": [
+    0.82,
+    1.023,
+    0.987
+   ],
+   "thumb": "polyhaven/thumbs/modern-arm-chair-01.png"
+  },
+  {
+   "id": "polyhaven/modular-fort-01",
+   "name": "Modular Fort 01",
+   "kind": "model",
+   "file": "polyhaven/modular-fort-01.glb",
+   "bytes": 3914596,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "rock",
+    "fort",
+    "modular",
+    "old",
+    "colonial",
+    "castle",
+    "wall",
+    "ramparts",
+    "structure"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/modular_fort_01",
+   "tris": 28218,
+   "extent": [
+    42.67,
+    13.672,
+    71.375
+   ],
+   "thumb": "polyhaven/thumbs/modular-fort-01.png"
+  },
+  {
    "id": "polyhaven/moonless-golf",
    "name": "Moonless Golf",
    "kind": "hdri",
@@ -2499,6 +2958,90 @@
     512
    ],
    "thumb": "polyhaven/thumbs/moonless-golf.png"
+  },
+  {
+   "id": "polyhaven/namaqualand-boulder-02",
+   "name": "Namaqualand Boulder 02",
+   "kind": "model",
+   "file": "polyhaven/namaqualand-boulder-02.glb",
+   "bytes": 1799588,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "rock",
+    "karoo",
+    "desert",
+    "south africa",
+    "boulders",
+    "rocks",
+    "geological",
+    "landscaping"
+   ],
+   "author": "Greg Zaal and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/namaqualand_boulder_02",
+   "tris": 97964,
+   "extent": [
+    2.532,
+    0.883,
+    1.234
+   ],
+   "thumb": "polyhaven/thumbs/namaqualand-boulder-02.png"
+  },
+  {
+   "id": "polyhaven/pine-roots",
+   "name": "Pine Roots",
+   "kind": "model",
+   "file": "polyhaven/pine-roots.glb",
+   "bytes": 3492828,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "pine",
+    "roots",
+    "needles",
+    "leaf",
+    "natural"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/pine_roots",
+   "tris": 162693,
+   "extent": [
+    1.772,
+    0.155,
+    1.893
+   ],
+   "thumb": "polyhaven/thumbs/pine-roots.png"
+  },
+  {
+   "id": "polyhaven/pine-sapling-small",
+   "name": "Pine Sapling Small",
+   "kind": "model",
+   "file": "polyhaven/pine-sapling-small.glb",
+   "bytes": 7227784,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "needles",
+    "pine",
+    "woodland",
+    "branches",
+    "environment",
+    "coniferous",
+    "plants"
+   ],
+   "author": "Rob Tuytel and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/pine_sapling_small",
+   "tris": 398144,
+   "extent": [
+    2.642,
+    1.299,
+    0.77
+   ],
+   "thumb": "polyhaven/thumbs/pine-sapling-small.png"
   },
   {
    "id": "polyhaven/plywood",
@@ -2530,6 +3073,62 @@
    "thumb": "polyhaven/thumbs/plywood.png"
   },
   {
+   "id": "polyhaven/potted-plant-01",
+   "name": "Potted Plant 01",
+   "kind": "model",
+   "file": "polyhaven/potted-plant-01.glb",
+   "bytes": 2797268,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "potplant",
+    "terracotta",
+    "pot",
+    "vase",
+    "medium",
+    "leaf",
+    "green"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/potted_plant_01",
+   "tris": 176226,
+   "extent": [
+    0.587,
+    1.35,
+    0.634
+   ],
+   "thumb": "polyhaven/thumbs/potted-plant-01.png"
+  },
+  {
+   "id": "polyhaven/potted-plant-02",
+   "name": "Potted Plant 02",
+   "kind": "model",
+   "file": "polyhaven/potted-plant-02.glb",
+   "bytes": 1547308,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "plant",
+    "potplant",
+    "pot",
+    "vase",
+    "medium",
+    "leaf",
+    "green",
+    "terracotta"
+   ],
+   "author": "Rico Cilliers",
+   "origin": "https://polyhaven.com/a/potted_plant_02",
+   "tris": 69806,
+   "extent": [
+    0.701,
+    0.841,
+    0.657
+   ],
+   "thumb": "polyhaven/thumbs/potted-plant-02.png"
+  },
+  {
    "id": "polyhaven/potted-plant-04",
    "name": "Potted Plant 04",
    "kind": "model",
@@ -2556,6 +3155,32 @@
     0.185
    ],
    "thumb": "polyhaven/thumbs/potted-plant-04.png"
+  },
+  {
+   "id": "polyhaven/quiver-tree-02",
+   "name": "Quiver Tree 02",
+   "kind": "model",
+   "file": "polyhaven/quiver-tree-02.glb",
+   "bytes": 1593244,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "south africa",
+    "karoo",
+    "succulent",
+    "aloe"
+   ],
+   "author": "Dario Barresi and Rico Cilliers",
+   "origin": "https://polyhaven.com/a/quiver_tree_02",
+   "tris": 82074,
+   "extent": [
+    0.872,
+    1.469,
+    0.881
+   ],
+   "thumb": "polyhaven/thumbs/quiver-tree-02.png"
   },
   {
    "id": "polyhaven/red-brick",
@@ -2648,6 +3273,32 @@
    "thumb": "polyhaven/thumbs/rock-face-03.png"
   },
   {
+   "id": "polyhaven/rock-moss-set-01",
+   "name": "Rock Moss Set 01",
+   "kind": "model",
+   "file": "polyhaven/rock-moss-set-01.glb",
+   "bytes": 1052956,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "rock",
+    "rocks",
+    "outdoor",
+    "stones",
+    "pebbles",
+    "dirt"
+   ],
+   "author": "Kless Gyzen",
+   "origin": "https://polyhaven.com/a/rock_moss_set_01",
+   "tris": 63127,
+   "extent": [
+    8.005,
+    1.768,
+    6.949
+   ],
+   "thumb": "polyhaven/thumbs/rock-moss-set-01.png"
+  },
+  {
    "id": "polyhaven/rock-moss-set-02",
    "name": "Rock Moss Set 02",
    "kind": "model",
@@ -2672,6 +3323,62 @@
     3.41
    ],
    "thumb": "polyhaven/thumbs/rock-moss-set-02.png"
+  },
+  {
+   "id": "polyhaven/round-wooden-table-01",
+   "name": "Round Wooden Table 01",
+   "kind": "model",
+   "file": "polyhaven/round-wooden-table-01.glb",
+   "bytes": 436612,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "vintage",
+    "wooden",
+    "wood",
+    "polish",
+    "circle",
+    "dark",
+    "old"
+   ],
+   "author": "Ulan Cabanilla",
+   "origin": "https://polyhaven.com/a/round_wooden_table_01",
+   "tris": 8640,
+   "extent": [
+    1.399,
+    1.005,
+    1.399
+   ],
+   "thumb": "polyhaven/thumbs/round-wooden-table-01.png"
+  },
+  {
+   "id": "polyhaven/rubber-duck-toy",
+   "name": "Rubber Duck Toy",
+   "kind": "model",
+   "file": "polyhaven/rubber-duck-toy.glb",
+   "bytes": 237128,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "shed",
+    "toy",
+    "bathroom",
+    "child",
+    "home",
+    "fun",
+    "kids",
+    "play"
+   ],
+   "author": "Plat251",
+   "origin": "https://polyhaven.com/a/rubber_duck_toy",
+   "tris": 4288,
+   "extent": [
+    0.214,
+    0.286,
+    0.3
+   ],
+   "thumb": "polyhaven/thumbs/rubber-duck-toy.png"
   },
   {
    "id": "polyhaven/sandstone-cracks",
@@ -2768,6 +3475,34 @@
    "thumb": "polyhaven/thumbs/snow-02.png"
   },
   {
+   "id": "polyhaven/sofa-01",
+   "name": "Sofa 01",
+   "kind": "model",
+   "file": "polyhaven/sofa-01.glb",
+   "bytes": 516596,
+   "source": "polyhaven",
+   "tags": [
+    "furniture",
+    "interior",
+    "wood",
+    "prop",
+    "vintage",
+    "gothic",
+    "chair",
+    "couch",
+    "victorian"
+   ],
+   "author": "Kirill Sannikov",
+   "origin": "https://polyhaven.com/a/Sofa_01",
+   "tris": 4101,
+   "extent": [
+    1.571,
+    0.797,
+    0.658
+   ],
+   "thumb": "polyhaven/thumbs/sofa-01.png"
+  },
+  {
    "id": "polyhaven/sofa-02",
    "name": "Sofa 02",
    "kind": "model",
@@ -2824,6 +3559,34 @@
    "thumb": "polyhaven/thumbs/sofa-03.png"
   },
   {
+   "id": "polyhaven/tea-set-01",
+   "name": "Tea Set 01",
+   "kind": "model",
+   "file": "polyhaven/tea-set-01.glb",
+   "bytes": 706160,
+   "source": "polyhaven",
+   "tags": [
+    "prop",
+    "antique",
+    "tea",
+    "cup",
+    "english",
+    "ornate",
+    "vintage",
+    "floral",
+    "decorative"
+   ],
+   "author": "James Ray Cock, Rico Cilliers and Jurita Burger",
+   "origin": "https://polyhaven.com/a/tea_set_01",
+   "tris": 40296,
+   "extent": [
+    0.918,
+    0.165,
+    0.484
+   ],
+   "thumb": "polyhaven/thumbs/tea-set-01.png"
+  },
+  {
    "id": "polyhaven/television-01",
    "name": "Television 01",
    "kind": "model",
@@ -2876,6 +3639,33 @@
     512
    ],
    "thumb": "polyhaven/thumbs/the-sky-is-on-fire.png"
+  },
+  {
+   "id": "polyhaven/tree-stump-01",
+   "name": "Tree Stump 01",
+   "kind": "model",
+   "file": "polyhaven/tree-stump-01.glb",
+   "bytes": 1473012,
+   "source": "polyhaven",
+   "tags": [
+    "nature",
+    "tree",
+    "forest",
+    "trunk",
+    "stump",
+    "dead tree",
+    "bark",
+    "natural"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/tree_stump_01",
+   "tris": 41046,
+   "extent": [
+    1.426,
+    0.573,
+    1.59
+   ],
+   "thumb": "polyhaven/thumbs/tree-stump-01.png"
   },
   {
    "id": "polyhaven/wide-street-01",

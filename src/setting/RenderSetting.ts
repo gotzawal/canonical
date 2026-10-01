@@ -99,6 +99,8 @@ export type RenderSetting = {
         godRay?: GodRaySetting;
         fxaa?: {
             enable: boolean;
+            /** Pixels FXAA blends along an edge at most (4 when missing). */
+            span?: number;
         };
         depthOfView?: DepthOfViewSetting;
         volumetricFog?: VolumetricFogSetting;

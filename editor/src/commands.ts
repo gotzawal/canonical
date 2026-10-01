@@ -43,6 +43,7 @@ export function editorCommands(editor: Editor, ui: CommandUI): Command[] {
         // Mod+S in the code editor applies the file (codeEditor.ts).
         { id: 'file.save', label: 'Save Scene File', icon: 'save', keys: ['Mod+S'], global: true, localIn: '.code-editor', run: () => void editor.saveSceneFile() },
         { id: 'file.saveProject', label: 'Save Project (.zip)', icon: 'save', keys: ['Mod+Shift+S'], global: true, run: () => void editor.saveProjectFile() },
+        { id: 'file.saveProjectLean', label: 'Save Project without History (.zip)', icon: 'save', run: () => void editor.saveProjectFile({ lean: true }) },
         { id: 'file.build', label: 'Build & Deploy...', icon: 'rocket', keys: ['Mod+B'], run: () => showBuildDialog(editor) },
         { id: 'edit.undo', label: 'Undo', icon: 'undo', keys: ['Mod+Z'], run: () => store.undo() },
         { id: 'edit.redo', label: 'Redo', icon: 'redo', keys: ['Mod+Shift+Z', 'Mod+Y'], run: () => store.redo() },

@@ -258,7 +258,12 @@ export class BloomPost extends PostBase {
      * @internal
      */
     render(view: View3D, command: GPUCommandEncoder) {
+        // A new pyramid depth (the budget's levels) needs new targets and passes.
+        if (this.thresholdCompute && this.builtSteps !== this.setting.render.postProcessing.bloom.downSampleStep) {
+            this.releaseResources();
+        }
         if (!this.thresholdCompute) {
+            this.builtSteps = this.setting.render.postProcessing.bloom.downSampleStep;
             this._createBloomResources();
             this.createThreshouldCompute();
 
@@ -295,11 +300,27 @@ export class BloomPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
     }
 
-    public destroy(force?: boolean) {
+    /** The pyramid steps the targets were made for. */
+    private builtSteps = 0;
+
+    private releaseResources() {
         this.destroyOwned(
             this.thresholdCompute, ...(this.downSampleComputes ?? []), ...(this.upSampleComputes ?? []), this.postCompute,
             this.RT_threshold, this.RT_final, ...(this.RT_BloomDown ?? []), ...(this.RT_BloomUp ?? []), this.bloomSetting,
         );
+        this.thresholdCompute = null;
+        this.downSampleComputes = [];
+        this.upSampleComputes = [];
+        this.postCompute = null;
+        this.RT_BloomDown = [];
+        this.RT_BloomUp = [];
+        this.RT_threshold = null;
+        this.RT_final = null;
+        this.bloomSetting = null;
+    }
+
+    public destroy(force?: boolean) {
+        this.releaseResources();
         super.destroy(force);
     }
 

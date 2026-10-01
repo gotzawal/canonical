@@ -167,6 +167,8 @@ const MIME = {
     '.json': 'application/json; charset=utf-8',
     '.svg': 'image/svg+xml',
     '.png': 'image/png',
+    '.jpg': 'image/jpeg',
+    '.ktx2': 'image/ktx2',
     '.ico': 'image/x-icon',
     '.wasm': 'application/wasm',
     '.glb': 'model/gltf-binary',
@@ -259,22 +261,22 @@ function devPlayer() {
     }
 }
 
-const LIBRARY = here('./library')
-
 /**
- * The asset library (editor/library, mirrored by scripts/mirror-library.mjs)
- * at library/ next to the editor: served by the dev server, copied into the
- * editor's build. It is not in public/, so the player builds leave it out.
+ * A folder of files at <name>/ next to the editor: served by the dev
+ * server, copied into the editor's build. They are not in public/, so the
+ * player builds leave them out. The asset library (editor/library,
+ * mirrored by scripts/mirror-library.mjs) and the example projects
+ * (editor/examples) are served this way.
  */
-function library() {
+function folder(name, dir) {
     return {
-        name: 'morglay-library',
+        name: `morglay-${name}`,
         configureServer(server) {
             server.middlewares.use((req, res, next) => {
                 const url = decodeURIComponent((req.url || '').split('?')[0])
-                if (!url.startsWith('/library/')) return next()
-                const file = path.resolve(LIBRARY, '.' + url.slice('/library'.length))
-                if (!file.startsWith(LIBRARY + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
+                if (!url.startsWith(`/${name}/`)) return next()
+                const file = path.resolve(dir, '.' + url.slice(name.length + 1))
+                if (!file.startsWith(dir + path.sep) || !fs.existsSync(file) || !fs.statSync(file).isFile()) {
                     res.statusCode = 404
                     res.end('Not found')
                     return
@@ -284,14 +286,14 @@ function library() {
             })
         },
         writeBundle(options) {
-            if (fs.existsSync(LIBRARY)) fs.cpSync(LIBRARY, path.join(options.dir, 'library'), { recursive: true })
+            if (fs.existsSync(dir)) fs.cpSync(dir, path.join(options.dir, name), { recursive: true })
         },
     }
 }
 
 export default defineConfig({
     ...shared(),
-    plugins: [playerManifest(), devPlayer(), library()],
+    plugins: [playerManifest(), devPlayer(), folder('library', here('./library')), folder('examples', here('./examples'))],
     server: {
         host: '0.0.0.0',
         port: 8100,

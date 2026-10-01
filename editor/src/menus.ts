@@ -10,6 +10,7 @@ import { mascotPose } from './ui/mascot';
 import { dialog, MenuItem, toast } from './ui/overlays';
 import { showBehaviorReference } from './ui/behaviorReference';
 import { importFromLink, openFromLink, openLibraryDialog } from './ui/libraryDialog';
+import { openRecordsDialog } from './ui/recordsDialog';
 import { showReference } from './ui/reference';
 import { glassOn } from './ui/theme';
 import { viewportMenu } from './ui/viewportMenu';
@@ -86,12 +87,15 @@ export function menuDefinitions(
                 { label: 'New Empty Scene', icon: 'plus', action: () => void editor.newScene('empty') },
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
                 { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
+                { label: 'Open Example: Night Laundromat (Full Project)', action: () => void editor.newScene('laundromat') },
                 { separator: true },
                 cmd('file.open'),
                 { label: 'Open Link...', icon: 'link', action: () => void openFromLink(editor) },
                 cmd('file.save'),
                 cmd('file.saveProject'),
+                cmd('file.saveProjectLean'),
                 { label: 'Version History...', icon: 'history', action: panels.versions },
+                { label: 'Delete Planning Images...', icon: 'trash', action: () => void openRecordsDialog(editor) },
                 { separator: true },
                 cmd('file.build'),
                 { separator: true },

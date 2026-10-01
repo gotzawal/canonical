@@ -303,11 +303,20 @@ export async function performanceReport(ed: Editor) {
             env.gi.enable && `global illumination (${probes} probes${env.gi.realtime ? ', captured every frame' : ''})`,
             ...doc.renderGraph.posts.filter((p) => p.enabled).map((p) => `post effect ${doc.shaders.find((x) => x.id === p.shader)?.name ?? p.shader}`),
         ].filter(Boolean),
+        // What the costly effects are allowed to spend (set_environment).
+        budgets: {
+            ...(env.fxaa ? { fxaa_span: env.fxaaSpan } : {}),
+            ...(env.bloom.enable ? { bloom: { levels: env.bloom.levels, blur: env.bloom.blur } } : {}),
+            ...(env.ssr.enable ? { ssr: { resolution: env.ssr.resolution, reach: env.ssr.reach } } : {}),
+            ...(env.gi.enable ? { gi: { probes_per_frame: env.gi.probesPerFrame, update_every: env.gi.updateEvery } } : {}),
+        },
         ...(mirrors.length ? { mirrors: mirrors.map((n) => ({ name: n.name, resolution: n.mirror!.resolution })) } : {}),
         ...(emitters.length ? { particles: { emitters: emitters.length, alive_at_most: alive } } : {}),
         ...(fields.length ? { grass: { fields: fields.length, blades } } : {}),
     };
     if (env.gi.enable && env.gi.realtime) advice.push('Global illumination is captured every frame: turn realtime off unless lights or large objects move in Play (it is captured again after every change).');
+    if (env.bloom.enable && env.bloom.blur >= 7) advice.push(`Bloom blurs with ${env.bloom.blur} x ${env.bloom.blur} samples at each of its ${env.bloom.levels} levels: bloom.blur 5 costs about a third of that and looks close; fewer levels keep the glow tighter for less.`);
+    if (env.ssr.enable && env.ssr.resolution > 0.75) advice.push(`Screen space reflections are traced at ${env.ssr.resolution} of the screen: ssr.resolution 0.5 costs about a quarter (softer reflections), and a shorter ssr.reach (${env.ssr.reach} now) saves the steps of rays that miss.`);
     if (env.godRays.enable && env.volumetricFog.enable) advice.push('God rays and volumetric fog both march through the sun\'s shadow map every frame: one of them is usually enough.');
     if (mirrors.length > 2) advice.push(`${mirrors.length} mirrors each draw the scene again every frame: keep the one or two the player sees most.`);
     for (const n of mirrors) if (n.mirror!.resolution > 0.5) advice.push(`Mirror ${n.name} draws at ${n.mirror!.resolution} of the screen size: 0.5 looks nearly the same for far less.`);

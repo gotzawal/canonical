@@ -104,6 +104,8 @@ export class GIController {
         s.probeYCount = counts[1];
         s.probeZCount = counts[2];
         this.realtime = gi.realtime;
+        s.probeCountPerFrame = gi.probesPerFrame;
+        s.updateInterval = gi.updateEvery;
 
         const grid = counts.join('x');
         const rebuilt = grid !== this.grid;
@@ -260,7 +262,10 @@ export class GIController {
      */
     private capture(restart: boolean) {
         const s = this.setting;
-        this.captureFrames = Math.max(this.captureFrames, 240, this.probes.length * 3);
+        // Enough frames for three passes over the probes at the budget's pace.
+        const s0 = this.setting;
+        const frames = Math.ceil((this.probes.length * 3) / Math.max(1, s0.probeCountPerFrame ?? 1)) * Math.max(1, s0.updateInterval ?? 1);
+        this.captureFrames = Math.max(this.captureFrames, 240, frames);
         s.autoRenderProbe = true;
         s.realTimeGI = true;
         if (restart) this.giPass()?.startRenderGI(0);

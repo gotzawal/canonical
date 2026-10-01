@@ -83,7 +83,8 @@ export class GIPass extends RenderGraphPass {
     protected _renderContext!: RenderContext;
     protected _rendererPassState!: RendererPassState;
     protected _probeGBufferFrame!: ProbeGBufferFrame;
-    protected readonly _probeCountPerFrame = 1;
+    /** Frames counted for `updateInterval`. */
+    protected _skipCounter = 0;
 
     protected _nextProbeIndex = -1;
     protected _tempProbeList: Probe[] = [];
@@ -154,6 +155,10 @@ export class GIPass extends RenderGraphPass {
         const view = ctx.view;
         if (!view.engine3D.setting.gi.enable) return;
 
+        // The budget: while probes are captured, work only every this many frames.
+        const every = Math.max(1, Math.round(view.engine3D.setting.gi.updateInterval ?? 1));
+        if (every > 1 && ++this._skipCounter % every !== 0 && !EntityCollect.instance.state.giLightingChange) return;
+
         this._volume.updateOrientation();
         this._volume.isVolumeFrameChange = false;
         this._volume.uploadBuffer();
@@ -220,7 +225,8 @@ export class GIPass extends RenderGraphPass {
         this._renderContext.beginOpaqueRenderPass();
         this._tempProbeList.length = 0;
 
-        let remainCount = Math.min(this._probeCountPerFrame, probeList.length);
+        const perFrame = Math.max(1, Math.round(view.engine3D.setting.gi.probeCountPerFrame ?? 1));
+        let remainCount = Math.max(0, Math.min(perFrame, probeList.length - this._nextProbeIndex));
         this._probeRenderResult.count = remainCount;
 
         while (remainCount > 0) {

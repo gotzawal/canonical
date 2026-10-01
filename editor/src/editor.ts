@@ -17,7 +17,7 @@ import { AudioSource, Grass, Mirror, Scatter, ScatterSource } from './core/model
 import { defaults } from './core/schema';
 import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
-    AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importSceneFile, pickFiles,
+    AutoSaver, collectGarbage, download, exportProject, exportSceneFile, fileNameFor, importProject, importProjectFolder, importSceneFile, pickFiles,
     keptAssets, projectFileNameFor, usedAssetIds,
 } from './core/persistence';
 import type { Store, Tool } from './core/store';
@@ -1660,8 +1660,19 @@ export class Editor extends Emitter<EditorEvents> {
         return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
     }
 
-    async newScene(kind: 'empty' | 'showcase' | 'guard' = 'empty') {
+    async newScene(kind: 'empty' | 'showcase' | 'guard' | 'laundromat' = 'empty') {
         if (!(await this.confirmReplace('New scene', 'Discard'))) return;
+        if (kind === 'laundromat') {
+            // A finished project, with its files: loaded from editor/examples (examples/ next to the editor).
+            toast('Opening Night Laundromat...', 'info', 2000);
+            try {
+                const { doc, camera } = await importProjectFolder(new URL('examples/night-laundromat/', document.baseURI).href);
+                this.loadDoc(doc, camera ?? defaultCamera());
+            } catch (e: any) {
+                toast(`The example could not be opened: ${e?.message || e}`, 'error');
+            }
+            return;
+        }
         const doc = kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : emptyScene();
         const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
         this.loadDoc(doc, camera);
@@ -1698,12 +1709,13 @@ export class Editor extends Emitter<EditorEvents> {
 
     /**
      * Downloads the whole project as one .zip: the scene with its design
-     * section and every file, planning images and snapshots included.
+     * section and every file, planning images and snapshots included
+     * (`lean`: only the concept images of the planning records).
      */
-    async saveProjectFile(): Promise<boolean> {
-        const name = projectFileNameFor(this.store.doc);
+    async saveProjectFile(opts: { lean?: boolean } = {}): Promise<boolean> {
+        const name = projectFileNameFor(this.store.doc, opts.lean);
         try {
-            const { blob, missing } = await exportProject(this.store);
+            const { blob, missing } = await exportProject(this.store, opts);
             download(blob, name);
             this.autosave.flush();
             if (missing.length) {

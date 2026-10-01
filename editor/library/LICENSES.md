@@ -45,3 +45,27 @@ The credits are kept all the same.
   - polyhaven/television-01 by Gabriel Radić: https://polyhaven.com/a/Television_01
   - polyhaven/lantern-01 by Rajil Jose Macatangay: https://polyhaven.com/a/Lantern_01
   - polyhaven/wine-bottles-01 by Rico Cilliers and Jurita Burger: https://polyhaven.com/a/wine_bottles_01
+  - polyhaven/dead-tree-trunk-02 by Jenelle van Heerden and Rico Cilliers: https://polyhaven.com/a/dead_tree_trunk_02
+  - polyhaven/tree-stump-01 by Rob Tuytel: https://polyhaven.com/a/tree_stump_01
+  - polyhaven/dead-tree-trunk by Rob Tuytel: https://polyhaven.com/a/dead_tree_trunk
+  - polyhaven/pine-roots by Rob Tuytel: https://polyhaven.com/a/pine_roots
+  - polyhaven/pine-sapling-small by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/pine_sapling_small
+  - polyhaven/quiver-tree-02 by Dario Barresi and Rico Cilliers: https://polyhaven.com/a/quiver_tree_02
+  - polyhaven/potted-plant-02 by Rico Cilliers: https://polyhaven.com/a/potted_plant_02
+  - polyhaven/fern-02 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/fern_02
+  - polyhaven/celandine-01 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/celandine_01
+  - polyhaven/potted-plant-01 by Rico Cilliers: https://polyhaven.com/a/potted_plant_01
+  - polyhaven/dandelion-01 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/dandelion_01
+  - polyhaven/rock-moss-set-01 by Kless Gyzen: https://polyhaven.com/a/rock_moss_set_01
+  - polyhaven/boulder-01 by Rico Cilliers: https://polyhaven.com/a/boulder_01
+  - polyhaven/namaqualand-boulder-02 by Greg Zaal and Rico Cilliers: https://polyhaven.com/a/namaqualand_boulder_02
+  - polyhaven/modular-fort-01 by Rico Cilliers: https://polyhaven.com/a/modular_fort_01
+  - polyhaven/modern-arm-chair-01 by Vibrant Nordic: https://polyhaven.com/a/modern_arm_chair_01
+  - polyhaven/sofa-01 by Kirill Sannikov: https://polyhaven.com/a/Sofa_01
+  - polyhaven/round-wooden-table-01 by Ulan Cabanilla: https://polyhaven.com/a/round_wooden_table_01
+  - polyhaven/coffeecart-01 by Joe Seabuhr: https://polyhaven.com/a/CoffeeCart_01
+  - polyhaven/horse-statue-01 by Rico Cilliers: https://polyhaven.com/a/horse_statue_01
+  - polyhaven/tea-set-01 by James Ray Cock, Rico Cilliers and Jurita Burger: https://polyhaven.com/a/tea_set_01
+  - polyhaven/rubber-duck-toy by Plat251: https://polyhaven.com/a/rubber_duck_toy
+  - polyhaven/dry-branches-medium-01 by Rico Cilliers: https://polyhaven.com/a/dry_branches_medium_01
+  - polyhaven/alarm-clock-01 by Yann Kervran and James Ray Cock: https://polyhaven.com/a/alarm_clock_01

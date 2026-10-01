@@ -4361,6 +4361,21 @@ kbd {
     overflow: auto;
 }
 
+.records-dialog {
+    max-width: 460px;
+}
+
+.records-row {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 8px 0;
+}
+
+.records-row .muted {
+    padding-left: 26px;
+}
+
 .design-proposal {
     margin: 6px 0 8px;
     padding: 8px 10px;

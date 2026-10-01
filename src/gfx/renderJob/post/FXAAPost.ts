@@ -28,8 +28,12 @@ export class FXAAPost extends PostBase {
         this.renderTexture = this.createRTTexture(`FXAAPost`, w, h, GPUTextureFormat.rgba16float);
         this.postQuad = this.createViewQuad(`fxaa`, 'FXAA_Shader', this.renderTexture);
         this.postQuad.quadShader.setUniform("u_texel", new Vector2(1.0 / w, 1.0 / h));
-        this.postQuad.quadShader.setUniform("u_strength", 4);
+        this.span = this.setting.render.postProcessing.fxaa.span ?? 4;
+        this.postQuad.quadShader.setUniform("u_strength", this.span);
     }
+
+    /** The edge span the shader was given last. */
+    private span = 4;
 
     public onResize() {
         let [w, h] = this._boundCtx!.presentationSize;
@@ -54,6 +58,11 @@ export class FXAAPost extends PostBase {
 
     public render(view: View3D, command: GPUCommandEncoder) {
         this.compute(view);
+        const span = this.setting.render.postProcessing.fxaa.span ?? 4;
+        if (this.postQuad && span !== this.span) {
+            this.span = span;
+            this.postQuad.quadShader.setUniform("u_strength", span);
+        }
         this.rtViewQuad.forEach((viewQuad, k) => {
             let lastTexture = this._boundCtx!.gpuContext.lastRenderPassState.getLastRenderTexture(this._boundCtx!);
             viewQuad.renderToViewQuad(view, viewQuad, command, lastTexture);

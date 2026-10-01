@@ -5,7 +5,11 @@ import { defaults, InputError, patch, repair, toolSchema } from '../../src/core/
 describe('model schemas', () => {
     it('give every field its default', () => {
         expect(defaults(Player)).toEqual({ view: 'third', distance: 4, lookSpeed: 1, invertY: false });
-        expect(defaults(Environment).bloom).toEqual({ enable: false, intensity: 0.6, threshold: 1 });
+        expect(defaults(Environment).bloom).toEqual({ enable: false, intensity: 0.6, threshold: 1, levels: 3, blur: 9 });
+        // The effect budgets default to what the engine always spent.
+        expect(defaults(Environment).ssr).toMatchObject({ resolution: 1, reach: 0.5 });
+        expect(defaults(Environment).gi).toMatchObject({ probesPerFrame: 1, updateEvery: 1 });
+        expect(defaults(Environment).fxaaSpan).toBe(4);
         expect(defaults(Environment).gi.counts).toEqual([8, 3, 8]);
         // Optional material fields stay missing: missing means their default.
         expect(Object.keys(defaults(Material))).toEqual(['type', 'color', 'opacity', 'metallic', 'roughness', 'emissive', 'emissiveIntensity', 'doubleSide', 'map']);
@@ -49,7 +53,7 @@ describe('patch', () => {
         expect(() => patch(Player, defaults(Player), { look_speed: 'fast' }, 'player')).toThrow(/player\.look_speed/);
         expect(() => patch(Player, defaults(Player), 5, 'player')).toThrow(/player must be an object/);
         expect(() => patch(Environment, defaults(Environment), { bloom: { strength: 1 } }, 'environment')).toThrow(
-            'environment.bloom has no strength; its fields are enable, intensity, threshold.',
+            'environment.bloom has no strength; its fields are enable, intensity, threshold, levels, blur.',
         );
     });
 });
