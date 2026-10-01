@@ -99,6 +99,7 @@ const shot = async (name, c) => {
 process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await shot('shore', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
 await shot('close', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
+await shot('beach', { target: [62, 0.3, 14], yaw: 100, pitch: 55, distance: 10, fov: 60 });
 await shot('rain', { target: [55, 0.5, 0], yaw: 90, pitch: 32, distance: 16, fov: 60 });
 await shot('wide', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });
 // Sunset: the key light low in the west; the sky's sun and the light's color follow it.
