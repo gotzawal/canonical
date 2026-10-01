@@ -37,7 +37,7 @@ export function slotTextureSides(doc: SceneDoc): Map<string, number> {
     const density = doc.design.specs.texelDensity;
     for (const s of doc.design.materials) {
         const side = swatchSide(s.tile, density);
-        for (const id of [s.swatch, s.normal, s.arm]) if (id) out.set(id, Math.max(out.get(id) ?? 0, side));
+        for (const id of [s.swatch, s.normal, s.arm, s.heightMap]) if (id) out.set(id, Math.max(out.get(id) ?? 0, side));
     }
     return out;
 }

@@ -47,8 +47,8 @@ export interface LibraryItemDoc {
     seconds?: number;
     /** Images, materials and HDRIs: width and height. */
     pixels?: [number, number];
-    /** Materials: the normal (OpenGL) and ARM (occlusion, roughness, metallic) maps, next to the color file. */
-    maps?: { normal?: string; arm?: string };
+    /** Materials: the normal (OpenGL), ARM (occlusion, roughness, metallic) and height (displacement) maps, next to the color file. */
+    maps?: { normal?: string; arm?: string; height?: string };
     /** Materials: meters one tile of the texture covers in the world. */
     tile?: number;
     /** Who made it, and its page (when the pack credits each asset). */
@@ -61,7 +61,7 @@ export interface LibraryItem extends LibraryItemDoc {
     url: string;
     thumbUrl?: string;
     /** Materials: where their other maps are. */
-    mapUrls?: { normal?: string; arm?: string };
+    mapUrls?: { normal?: string; arm?: string; height?: string };
     /** The catalog it is from. */
     catalog: string;
     sourceInfo?: LibrarySource;
@@ -129,7 +129,7 @@ async function fetchCatalog(url: string): Promise<LibraryCatalog> {
             tags: Array.isArray(it.tags) ? it.tags.filter((t) => typeof t === 'string') : [],
             url: file,
             thumbUrl: it.thumb ? new URL(it.thumb, url).href : it.kind === 'texture' || it.kind === 'material' ? file : undefined,
-            ...(maps ? { mapUrls: { ...(maps.normal ? { normal: new URL(maps.normal, url).href } : {}), ...(maps.arm ? { arm: new URL(maps.arm, url).href } : {}) } } : {}),
+            ...(maps ? { mapUrls: { ...(maps.normal ? { normal: new URL(maps.normal, url).href } : {}), ...(maps.arm ? { arm: new URL(maps.arm, url).href } : {}), ...(maps.height ? { height: new URL(maps.height, url).href } : {}) } } : {}),
             catalog: url,
             sourceInfo: byId.get(it.source),
         });

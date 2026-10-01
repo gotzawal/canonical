@@ -6,8 +6,9 @@
 // to), downloads them at one resolution and packs them for the editor:
 //
 //   hdri      the .hdr file, for the sky and the scene's lighting
-//   material  color, normal (OpenGL) and ARM (occlusion, roughness,
-//             metallic) maps as JPEG, with the real size of a tile
+//   material  color, normal (OpenGL), ARM (occlusion, roughness,
+//             metallic) and height (displacement) maps as JPEG, with the
+//             real size of a tile
 //   model     a self-contained GLB (JPEG textures, meshopt geometry)
 //
 // with Poly Haven's thumbnail of each.
@@ -240,6 +241,14 @@ async function materialItem(ctx) {
         writeFileSync(join(dir, 'arm.jpg'), jpg);
         bytes += jpg.length;
         maps.arm = `${src.id}/${slug}/arm.jpg`;
+    }
+    // Heights (displacement) as gray: terrain layers blend by them.
+    const heightFile = fileOf(files, 'Displacement', res) ?? fileOf(files, 'disp', res);
+    if (heightFile) {
+        const jpg = await sharp(await getBytes(heightFile.url)).resize(size, size, { fit: 'fill' }).greyscale().jpeg({ quality: 90, mozjpeg: true }).toBuffer();
+        writeFileSync(join(dir, 'height.jpg'), jpg);
+        bytes += jpg.length;
+        maps.height = `${src.id}/${slug}/height.jpg`;
     }
     // The size of one tile in the world, meters (the dimensions are millimeters).
     const tile = Array.isArray(info.dimensions) && info.dimensions[0] > 0 ? Math.round(info.dimensions[0]) / 1000 : 2;

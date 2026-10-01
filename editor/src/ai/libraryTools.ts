@@ -47,7 +47,7 @@ function brief(item: LibraryItem, n: number) {
         ...(item.seconds ? { seconds: item.seconds } : {}),
         ...(item.pixels ? { pixels: item.pixels } : {}),
         ...(item.tile ? { tile_m: item.tile } : {}),
-        ...(item.maps ? { maps: ['color', ...(item.maps.normal ? ['normal'] : []), ...(item.maps.arm ? ['arm'] : [])] } : {}),
+        ...(item.maps ? { maps: ['color', ...(item.maps.normal ? ['normal'] : []), ...(item.maps.arm ? ['arm'] : []), ...(item.maps.height ? ['height'] : [])] } : {}),
         kb: Math.round(item.bytes / 1024),
         pack: item.sourceInfo?.name,
         ...(item.author ? { author: item.author } : {}),

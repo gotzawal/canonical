@@ -59,11 +59,13 @@ export function applySlot(m: MaterialDoc, slot: MaterialSlotDoc, shaderId: strin
     m.slot = slot.id;
 }
 
-/** Puts a slot on a terrain layer: its swatch, normal map, tile size, color and roughness (the layer follows it from then on). */
+/** Puts a slot on a terrain layer: its swatch, normal, ARM and height maps, tile size, color and roughness (the layer follows it from then on). */
 export function layerFromSlot(layer: TerrainLayerDoc, slot: MaterialSlotDoc) {
     layer.slot = slot.id;
     layer.albedo = slot.swatch ?? null;
     layer.normal = slot.swatch ? slot.normal ?? null : null;
+    layer.arm = slot.swatch ? slot.arm ?? null : null;
+    layer.heightMap = slot.swatch ? slot.heightMap ?? null : null;
     layer.tile = slot.tile;
     layer.color = slot.color;
     layer.roughness = slot.roughness;
@@ -250,7 +252,7 @@ export async function useSwatch(store: Store, slotId: string, swatchId: string):
     const side = swatchSide(rec.tile, store.doc.design.specs.texelDensity);
     const compress = side < rec.size ? { maxSize: side } : undefined;
     const maps: Partial<Record<SwatchMap, { meta: AssetMeta; added: boolean }>> = {};
-    for (const map of ['albedo', 'normal', 'arm'] as const) {
+    for (const map of ['albedo', 'normal', 'arm', 'height'] as const) {
         const got = await swatchAsset(store, rec, map, compress);
         if (got) maps[map] = got;
     }
@@ -265,6 +267,8 @@ export async function useSwatch(store: Store, slotId: string, swatchId: string):
         else delete slot.normal;
         if (maps.arm) slot.arm = maps.arm.meta.id;
         else delete slot.arm;
+        if (maps.height) slot.heightMap = maps.height.meta.id;
+        else delete slot.heightMap;
         slot.color = '#ffffff';
         slot.tile = rec.tile;
         if (maps.arm) {

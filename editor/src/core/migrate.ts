@@ -41,6 +41,17 @@ const STEPS: Record<number, (doc: Raw) => void> = {
         delete s.follow;
         delete s.cascades;
     },
+    // 4 -> 5: the atmospheric skies take their sun from the key light, and
+    // distant objects fade into the sky (aerial perspective). Older scenes
+    // keep their own sky sun (a night scene's light may be the moon) and
+    // their look.
+    4: (doc) => {
+        const env = doc.environment;
+        if (!env || typeof env !== 'object') return;
+        env.atmosphere = { ...(env.atmosphere && typeof env.atmosphere === 'object' ? env.atmosphere : {}) };
+        env.atmosphere.followLight ??= false;
+        env.atmosphere.haze ??= 0;
+    },
 };
 
 /**

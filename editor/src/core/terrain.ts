@@ -6,6 +6,7 @@
 // terrain takes only its object's position: it does not turn or scale.
 
 import { heightAt, type Heightmap } from './heightmap';
+import type { TerrainLayerDoc } from './model';
 
 /** Where a terrain lies in the world: its middle, its extent and its height scale, meters. */
 export interface TerrainFrame {
@@ -305,4 +306,54 @@ export function terrainTriangles(s: TerrainSurface, step = 1): { positions: Floa
         }
     }
     return { positions, indices };
+}
+
+/** A smooth step from 0 at the edge's low side to 1 past its high side, as WGSL's smoothstep. */
+function smooth(lo: number, hi: number, x: number): number {
+    const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+    return t * t * (3 - 2 * t);
+}
+
+/** 1 within [lo, hi], fading over `soft` across each limit (the terrain material's band). */
+function band(x: number, lo: number, hi: number, soft: number): number {
+    const s = Math.max(soft, 0.0001) * 0.5;
+    return smooth(lo - s, lo + s, x) * (1 - smooth(hi - s, hi + s, x));
+}
+
+/**
+ * How much each layer of a terrain shows at a point of height `y` and
+ * `slope` degrees, as the terrain material places them (each later layer
+ * over those before it by its rules, then the paint, a channel a layer,
+ * 0 to 1), without the noise that roughens their edges in the view.
+ */
+export function layerWeights(
+    layers: readonly Pick<TerrainLayerDoc, 'height' | 'slope' | 'heightBlend' | 'slopeBlend' | 'onlyPainted'>[],
+    y: number,
+    slope: number,
+    paint?: readonly number[] | null,
+): number[] {
+    const w: number[] = layers.map((_, i) => (i === 0 ? 1 : 0));
+    for (let i = 1; i < layers.length; i++) {
+        const l = layers[i];
+        const a = l.onlyPainted ? 0 : band(y, l.height[0], l.height[1], l.heightBlend) * band(slope, l.slope[0], l.slope[1], l.slopeBlend);
+        for (let j = 0; j < i; j++) w[j] *= 1 - a;
+        w[i] = a;
+    }
+    if (paint) {
+        const painted = Math.min(1, paint.slice(0, w.length).reduce((s, v) => s + v, 0));
+        for (let i = 0; i < w.length; i++) w[i] = w[i] * (1 - painted) + (paint[i] ?? 0);
+    }
+    const total = w.reduce((s, v) => s + v, 0);
+    return total > 0 ? w.map((v) => v / total) : w;
+}
+
+/** The paint (RGBA bytes, a channel a layer) of a terrain at world x, z, 0 to 1 each, or null outside it. */
+export function paintAt(frame: TerrainFrame, paint: { width: number; height: number; data: Uint8Array }, x: number, z: number): number[] | null {
+    const u = (x - (frame.x - frame.sizeX / 2)) / frame.sizeX;
+    const v = (z - (frame.z - frame.sizeZ / 2)) / frame.sizeZ;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+    const i = Math.min(paint.width - 1, Math.floor(u * paint.width));
+    const j = Math.min(paint.height - 1, Math.floor(v * paint.height));
+    const o = (j * paint.width + i) * 4;
+    return [paint.data[o] / 255, paint.data[o + 1] / 255, paint.data[o + 2] / 255, paint.data[o + 3] / 255];
 }

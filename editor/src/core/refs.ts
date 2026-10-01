@@ -106,6 +106,8 @@ export function refs(doc: SceneDoc): Ref[] {
         for (const layer of terrain?.layers ?? []) {
             if (layer.albedo) out.push({ kind: 'asset', id: layer.albedo, at: 'object', role: 'color', drop: () => (layer.albedo = null) });
             if (layer.normal) out.push({ kind: 'asset', id: layer.normal, at: 'object', role: 'normal', drop: () => (layer.normal = null) });
+            if (layer.arm) out.push({ kind: 'asset', id: layer.arm, at: 'object', role: 'data', drop: () => (layer.arm = null) });
+            if (layer.heightMap) out.push({ kind: 'asset', id: layer.heightMap, at: 'object', role: 'data', drop: () => (layer.heightMap = null) });
         }
         for (const source of n.scatter?.sources ?? []) {
             if (source.model) out.push({ kind: 'asset', id: source.model, at: 'object', role: 'model', drop: () => (source.model = null) });

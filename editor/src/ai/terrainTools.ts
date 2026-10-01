@@ -240,7 +240,7 @@ export const terrainTools = tools({
     scatter: {
         groups: ['objects', 'materials'],
         description:
-            'Spread copies of models over an area by rules, drawn instanced (thousands cost little): trees and rocks in the Level stage, grass tufts, flowers and pebbles in the Materials stage. Only the rules are kept; the copies are placed again from them and the seed whenever the rules, the ground or what to avoid change. Copies stand on ground (a terrain or meshes) where its world height and slope are within range, keep spacing apart and stay out of the boxes of the objects to avoid (plus margin). A model that is a set of pieces side by side (a rock set, grass clumps) gives each copy one piece. Solid sources (trunk for trees, box for rocks) stop characters and bodies and are holes in the navigation mesh. Give object to change a scatter (only the fields given change); bake: true turns its copies into objects of their own (to edit one by one); remove: true deletes it. Returns the copies placed per source.',
+            'Spread copies of models over an area by rules, drawn instanced (thousands cost little): trees and rocks in the Level stage, grass tufts, flowers and pebbles in the Materials stage. Only the rules are kept; the copies are placed again from them and the seed whenever the rules, the ground or what to avoid change. Copies stand on ground (a terrain or meshes) where its world height and slope are within range, keep spacing apart and stay out of the boxes of the objects to avoid (plus margin). A model that is a set of pieces side by side (a rock set, grass clumps) gives each copy one piece. Natural rocks: clusters with a cluster size, layer to follow a terrain layer, tilt, align about 0.7 and bury so they sit in the ground. Solid sources (trunk for trees, box for rocks) stop characters and bodies and are holes in the navigation mesh. Give object to change a scatter (only the fields given change); bake: true turns its copies into objects of their own (to edit one by one); remove: true deletes it. Returns the copies placed per source.',
         params: {
             object: ref('An existing scatter to change (id or name); leave out to make one.'),
             name: { type: 'string' },
@@ -270,6 +270,11 @@ export const terrainTools = tools({
             margin: { type: 'number', description: 'Meters kept clear around the objects to avoid (default 1).' },
             align: { type: 'number', description: '0 upright (trees) to 1 leaning with the ground (rocks, tufts).' },
             sink: { type: 'number', description: 'Meters the copies sink into the ground (rock bottoms, roots).' },
+            bury: { type: 'number', description: '0 to 1: on slopes, how much of the gap under a copy\'s downhill side it sinks further (default 0.5), so rocks sit in a hillside.' },
+            tilt: { type: 'number', description: 'Degrees of random tilt per copy on top of its lean (rocks 10 to 30; 0 for trees).' },
+            clusters: { type: 'number', description: '0 to 1: how much copies gather in groups with bare ground between, the largest in the middle (rocks 0.6 to 0.9, shrubs 0.4); 0 spreads them evenly.' },
+            cluster_size: { type: 'number', description: 'Meters across a group (default 15; boulder fields 20 to 40, pebbles 3 to 8).' },
+            layer: { type: 'number', description: '1 to 4: stand only where that layer of the ground terrain shows, as much as it shows (pebbles on the gravel layer, rocks on the rock layer); 0 anywhere.' },
             distance: { type: 'number', description: 'Draw distance in meters; 0 draws at any distance (grass tufts 40 to 80).' },
             cast_shadow: { type: 'boolean' },
             bake: { type: 'boolean', description: 'Turn the copies into objects under an instanced group; the scatter goes.' },

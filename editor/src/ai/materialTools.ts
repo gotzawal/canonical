@@ -188,7 +188,7 @@ export function slotSummary(env: ToolEnv, s: MaterialSlotDoc) {
         roughness: r3(s.roughness),
         metallic: r3(s.metallic),
         tile: r3(s.tile),
-        ...(s.normal || s.arm ? { maps: [s.normal ? 'normal' : '', s.arm ? 'arm' : ''].filter(Boolean) } : {}),
+        ...(s.normal || s.arm || s.heightMap ? { maps: [s.normal ? 'normal' : '', s.arm ? 'arm' : '', s.heightMap ? 'height' : ''].filter(Boolean) } : {}),
         ...(s.arm ? { note: 'Its ARM map gives roughness and metallic per pixel, times these values (1: as scanned).' } : {}),
         ...(meta ? { texture: textureShip(meta) } : {}),
         ...(s.flat ? { flat: true } : {}),

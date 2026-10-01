@@ -395,6 +395,8 @@ export const TerrainLayer = z.object({
     slot: nodeRef('Material slot id: the layer shows its swatch, tile size, color and roughness, and follows it when it changes; null for its own.'),
     albedo: asset({ description: 'Color map (texture asset id): the slot\'s swatch.' }),
     normal: asset({ description: 'Normal map (texture asset id): the slot\'s.' }),
+    arm: asset({ title: 'ARM', description: 'Occlusion, roughness and metallic map (texture asset id, R G B): the slot\'s; roughness multiplies its G.' }),
+    heightMap: asset({ title: 'Height Map', description: 'Height (displacement) map (texture asset id, R): the slot\'s. Where layers meet, the higher texels win, so sand fills the gaps between stones.' }),
     tile: num(4, 0.05, 1000, { step: 0.05, description: 'Meters one tile of the maps covers.' }),
     color: color('#808080', { description: 'Multiplies the color map (white shows it as it is).' }),
     roughness: unit(0.9),
@@ -422,6 +424,10 @@ export const Terrain = z.object({
     layers: z.array(TerrainLayer).max(4).catch((c) => (Array.isArray(c?.value) ? c.value.slice(0, 4).map((l: unknown) => TerrainLayer.parse(l && typeof l === 'object' ? l : {})) : []))
         .meta({ description: 'Up to four surface layers, the first covering everything; each later one over those before it where its rules match or it is painted.' }),
     detail: num(1, 0.25, 4, { step: 0.05, description: 'How far from the camera the full detail reaches: 1 by default, higher is finer far away and costlier.' }),
+    blending: unit(0.7, { title: 'Height Blending', description: 'Where layers meet, how much their height maps decide which shows (sand fills the gaps between stones) and how much their rules\' edges wander instead of following contour lines; 0 fades them evenly.' }),
+    variation: unit(0.5, { description: 'Large patches of lighter and darker ground, and the maps mixed with a larger copy far away, so the tiles do not repeat visibly; 0 for none.' }),
+    wetShore: num(0.8, 0, 5, { title: 'Wet Shore', step: 0.05, description: 'Meters over a water surface on the terrain (a Water plane) that are wet: darker and glossy; 0 for none.' }),
+    puddles: unit(0.5, { description: 'Under a Rain box the ground is wet; this is how much of its flat ground puddles cover (in the hollows); 0 for none.' }),
     collide: bool(true, { description: 'Characters and bodies stand on it in Play, and the navigation mesh covers it.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
 });
@@ -467,6 +473,11 @@ export const Scatter = z.object({
     margin: num(1, 0, 100, { step: 0.1, description: 'Meters kept clear around the objects to avoid.' }),
     align: unit(0, { description: 'How much copies lean with the ground: 0 upright (trees), 1 along the slope (rocks, grass tufts).' }),
     sink: num(0, 0, 10, { step: 0.01, description: 'Meters the copies sink into the ground (so roots and rock bottoms do not float on slopes).' }),
+    bury: unit(0.5, { description: 'On a slope, how much of the gap under the downhill side of a copy is filled by sinking it further (by the copy\'s width and how much it does not lean with the ground): rocks sit in a hillside instead of on it.' }),
+    tilt: num(0, 0, 60, { step: 1, description: 'Degrees each copy tilts at random on top of its lean, so rocks do not all sit the same way up; 0 for none.' }),
+    clusters: unit(0, { description: 'How much copies gather in groups with bare ground between them, the largest at the middle of a group (rocks, shrubs); 0 spreads them evenly.' }),
+    clusterSize: num(15, 1, 1000, { title: 'Cluster Size', step: 0.5, description: 'Meters across a group of copies (with clusters above 0).' }),
+    layer: int(0, 0, 4, { title: 'Terrain Layer', description: '1 to 4: copies stand only where that layer of the ground terrain shows (by its rules and paint), as much as it shows (rocks on the gravel layer); 0 anywhere.' }),
     distance: num(0, 0, 100000, { step: 1, title: 'Draw Distance', description: 'Copies farther than this from the camera are not drawn (a part of the area at a time); 0 draws them at any distance. Small copies (grass tufts, pebbles, flowers) can go at 40 to 80 m.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
 });
@@ -575,7 +586,7 @@ export const Environment = z.object({
     skyColor: color('#3a4250'),
     skyHdri: asset({ title: 'HDRI', description: 'HDRI sky: the .hdr image asset shown around the scene and lighting it (a Library HDRI).' }),
     /** Sky sun azimuth and elevation, 0..1. */
-    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light.' }),
+    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light. Not used while the sky follows the key light (atmosphere.followLight).' }),
     sunY: unit(0.6, { title: 'Sun Height', step: 0.005, precision: 3, description: 'Sky sun elevation 0..1: 0.5 on the horizon, 1 straight up.' }),
     skyExposure: num(1, 0, 4, { step: 0.01, slider: true }),
     /** The sun and air of the atmospheric and physical skies. */
@@ -585,6 +596,15 @@ export const Environment = z.object({
         showSun: bool(true, { title: 'Show Sun', description: 'Draw the sun disc.' }),
         altitude: num(1500, 0, 10000, { step: 10, precision: 0, description: 'Height of the viewer in the air, meters: higher sees a darker, clearer sky.' }),
         clouds: bool(false, { description: 'Multiple scattering sky only: a cloud layer 3-5 km up. The clouds do not move, and each sky change takes much longer to redraw with them.' }),
+        followLight: bool(true, {
+            title: 'Sun Follows Light',
+            description: 'Single and multiple scattering skies: the sky\'s sun is where the key light (the first shown directional light) comes from, and the light takes the color and brightness of sunlight through the air at that height (warm and dimmer near the horizon, gone below it). Off: Sun Direction and Sun Height place the sky\'s sun and the light keeps its own color.',
+        }),
+        haze: num(1, 0, 20, {
+            title: 'Aerial Perspective',
+            step: 0.05,
+            description: 'How much distant objects fade into the color of the sky behind them through the air: 1 is a clear day (half faded at about 12 km, thicker low down), higher for hazy or humid air; 0 for none. Works with every sky.',
+        }),
     }),
     /** Tonemap exposure. */
     exposure: num(1, 0, 4, { step: 0.01, slider: true }),

@@ -1055,7 +1055,7 @@ export class InspectorPanel {
             h('div', { class: 'muted small pad', text: 'Ground from a heightmap over the area around the object, drawn in chunks that get coarser far away. In Play characters and bodies stand on it; grass and scatters grow on it. Choose a brush and drag on it in the view to shape or paint it.' }),
             row('Ground', shape, 'Lowest and highest ground'),
             row('Heightmap', h('div', { class: 'inline grow' }, heights, load), 'Each sculpt stroke saves the heights as a new file (one undo step)'),
-            ...this.componentRows('terrain', ['size', 'height', 'detail', 'collide', 'castShadow']),
+            ...this.componentRows('terrain', ['size', 'height', 'detail', 'blending', 'variation', 'wetShore', 'puddles', 'collide', 'castShadow']),
             ...this.brushRows(),
             ...this.terrainLayerRows(),
         ], [remove]);
@@ -1234,9 +1234,9 @@ export class InspectorPanel {
             ...sources,
             ...this.componentRows('scatter', ['size', 'count', 'spacing', 'seed']),
             row('Ground', ground.el, 'What the copies stand on: a terrain, a floor or a group of them'),
-            ...this.componentRows('scatter', ['height', 'slope']),
+            ...this.componentRows('scatter', ['height', 'slope', 'layer', 'clusters', 'clusterSize']),
             row('Avoid', h('div', {}, avoided, addAvoid.el), 'Objects whose ground area stays clear: buildings, paths, the play area'),
-            ...this.componentRows('scatter', ['margin', 'align', 'sink', 'distance', 'castShadow']),
+            ...this.componentRows('scatter', ['margin', 'align', 'tilt', 'sink', 'bury', 'distance', 'castShadow']),
             h('div', { class: 'design-actions' }, reseed, bake),
         ], [remove]);
     }

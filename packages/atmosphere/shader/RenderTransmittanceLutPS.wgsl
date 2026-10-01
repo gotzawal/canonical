@@ -23,7 +23,7 @@ fn CsMain(@builtin(workgroup_id) workgroup_id: vec3<u32>, @builtin(global_invoca
     fragCoord = vec2<i32>(globalInvocation_id.xy);
     texSizeF32 = vec2<f32>(uniformBuffer.width, uniformBuffer.height);
     uv01 = vec2<f32>(globalInvocation_id.xy) / texSizeF32;
-    uv01.y = 1.0 - uv01.y - EPSILON;
+    // Rows from the ground up, as LutTransmittanceParamsToUv reads them.
     PI_2 = PI * 2.0;
     textureStore(outTexture, fragCoord, RenderTransmittanceLutPS(vec2<f32>(fragCoord), uv01));//vec4(uv01, 0.0, 1.0));
 }

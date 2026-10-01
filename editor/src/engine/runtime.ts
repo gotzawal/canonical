@@ -446,16 +446,19 @@ export class Runtime {
         // The engine's fog is clear up to `end`; linear fog is full at `start`.
         fog.end = Math.max(0, f.near);
         fog.start = Math.max(fog.end + 0.01, f.far);
-        fog.ins = f.intensity;
+        // Aerial perspective runs in the fog's pass: without fog, the pass only fades distant ground into the sky.
+        fog.ins = f.enable ? f.intensity : 0;
         fog.density = f.mode === 'linear' ? 0 : Math.max(0, f.density);
         fog.fogHeightScale = Math.max(0.001, f.heightFalloff);
         fog.heightBase = f.height;
         // The engine's older height term stays off.
         fog.rayLength = 0;
-        fog.overrideSkyFactor = f.sky;
+        fog.overrideSkyFactor = f.enable ? f.sky : 0;
         fog.dirHeightLine = sunScatterToLine(f.sunScatter);
         fog.scatteringExponent = f.sunFocus;
-        this.togglePost(GlobalFog, f.enable);
+        // A clear day (haze 1): half faded at about 12 km near the ground.
+        fog.airDensity = Math.max(0, env.atmosphere.haze) * 5.6e-5;
+        this.togglePost(GlobalFog, f.enable || env.atmosphere.haze > 0);
 
         const vf = env.volumetricFog;
         const vol = (pp as any).volumetricFog;

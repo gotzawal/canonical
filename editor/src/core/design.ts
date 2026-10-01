@@ -241,6 +241,7 @@ export function sanitizeDesign(input: any): DesignDoc {
             swatch: typeof ms.swatch === 'string' && ms.swatch ? ms.swatch : null,
             ...(typeof ms.normal === 'string' && ms.normal ? { normal: ms.normal } : {}),
             ...(typeof ms.arm === 'string' && ms.arm ? { arm: ms.arm } : {}),
+            ...(typeof ms.heightMap === 'string' && ms.heightMap ? { heightMap: ms.heightMap } : {}),
             color: hex(ms.color, '#ffffff'),
             roughness: clampNum(ms.roughness, 0.8, 0, 1),
             metallic: clampNum(ms.metallic, 0, 0, 1),
@@ -385,7 +386,7 @@ export function designAssetIds(design: DesignDoc): Set<string> {
         }
         for (const h of s.history) out.add(h.asset);
     }
-    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm]) if (id) out.add(id);
+    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm, m.heightMap]) if (id) out.add(id);
     for (const sn of design.snapshots) {
         out.add(sn.asset);
         if (sn.thumb) out.add(sn.thumb);
@@ -429,7 +430,7 @@ export function recordAssets(design: DesignDoc): Record<RecordKind, Set<string>>
     }
     // What a kept record (or a concept, or a material slot) still uses is not freed by dropping another.
     const concepts = new Set(design.concepts.map((c) => c.asset));
-    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm]) if (id) concepts.add(id);
+    for (const m of design.materials) for (const id of [m.swatch, m.normal, m.arm, m.heightMap]) if (id) concepts.add(id);
     for (const s of design.shots) if (s.concept) concepts.add(s.concept);
     for (const set of Object.values(out)) for (const id of concepts) set.delete(id);
     return out;

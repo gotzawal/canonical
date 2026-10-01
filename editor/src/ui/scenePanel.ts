@@ -39,6 +39,7 @@ export class ScenePanel {
     private sky: SkyType | null = null;
     private giOn: boolean | null = null;
     private fogMode: string | null = null;
+    private follow: boolean | null = null;
     private steps: FieldSteps;
     private fov: SliderField | null = null;
     /** Updates the line on what the shadow maps take. */
@@ -55,7 +56,7 @@ export class ScenePanel {
                 return;
             }
             const env = editor.store.doc.environment;
-            if (env.sky !== this.sky || env.gi.enable !== this.giOn || env.fog.mode !== this.fogMode) this.render();
+            if (env.sky !== this.sky || env.gi.enable !== this.giOn || env.fog.mode !== this.fogMode || env.atmosphere.followLight !== this.follow) this.render();
             else for (const s of this.syncs) s();
         });
         editor.store.on('load', () => this.render());
@@ -122,6 +123,7 @@ export class ScenePanel {
         this.sky = env.sky;
         this.giOn = env.gi.enable;
         this.fogMode = env.fog.mode;
+        this.follow = env.atmosphere.followLight;
         const store = this.editor.store;
         const watch = (fn: () => void) => this.syncs.push(fn);
 
@@ -132,12 +134,18 @@ export class ScenePanel {
 
         // The sun and the sky's brightness (Lighting)
         const sunSky = env.sky !== 'color';
+        // The atmospheric skies can take their sun from the key light: then the light places it.
+        const airSky = env.sky === 'atmospheric' || env.sky === 'physical';
+        const follows = airSky && env.atmosphere.followLight;
         this.body.append(
             section('sky', sunSky ? 'Sun and Sky' : 'Sky', 'sun', [
                 ...(env.sky === 'hdri' ? [this.hdriRow(watch)] : []),
-                ...this.rows([...(sunSky ? ['sunX', 'sunY'] : ['skyColor']), 'skyExposure']),
+                ...(airSky ? this.rows(['followLight'], 'atmosphere') : []),
+                ...(follows ? [h('div', { class: 'muted small pad', text: 'The sun is where the key light (the first directional light) comes from: turn the light to move it.' })] : []),
+                ...this.rows([...(sunSky && !follows ? ['sunX', 'sunY'] : sunSky ? [] : ['skyColor']), 'skyExposure']),
                 // The sun disc and the air.
-                ...(sunSky && env.sky !== 'hdri' ? this.rows(['sunSize', 'sunBrightness', 'showSun', 'altitude'], 'atmosphere') : []),
+                ...(airSky ? this.rows(['sunSize', 'sunBrightness', 'showSun', 'altitude'], 'atmosphere') : []),
+                ...this.rows(['haze'], 'atmosphere'),
             ], [stageChip('light')]),
         );
 
