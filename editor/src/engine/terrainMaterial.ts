@@ -242,9 +242,11 @@ fn frag() {
     }
     var pool = 0.0;
     if (water.z > 0.0) {
+        // Wet inside the rain's box, drying out raggedly over a few meters past its sides.
         let r = materialUniform.terrainRain;
-        let inside = smoothstep(r.x - 1.0, r.x + 1.0, p.x) * (1.0 - smoothstep(r.z - 1.0, r.z + 1.0, p.x))
-            * smoothstep(r.y - 1.0, r.y + 1.0, p.z) * (1.0 - smoothstep(r.w - 1.0, r.w + 1.0, p.z));
+        let fade = max(3.0, 0.15 * min(r.z - r.x, r.w - r.y));
+        let past = max(max(r.x - p.x, p.x - r.z), max(r.y - p.z, p.z - r.w)) + edge * fade;
+        let inside = 1.0 - smoothstep(-fade, fade, past);
         let rain = water.z * inside;
         wet = max(wet, rain * (0.55 + 0.45 * clamp(n.y, 0.0, 1.0)));
         // Puddles in the hollows of flat ground: where the low noise dips and the texels are low.

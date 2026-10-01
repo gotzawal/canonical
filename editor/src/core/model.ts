@@ -426,7 +426,7 @@ export const Terrain = z.object({
     detail: num(1, 0.25, 4, { step: 0.05, description: 'How far from the camera the full detail reaches: 1 by default, higher is finer far away and costlier.' }),
     blending: unit(0.7, { title: 'Height Blending', description: 'Where layers meet, how much their height maps decide which shows (sand fills the gaps between stones) and how much their rules\' edges wander instead of following contour lines; 0 fades them evenly.' }),
     variation: unit(0.5, { description: 'Large patches of lighter and darker ground, and the maps mixed with a larger copy far away, so the tiles do not repeat visibly; 0 for none.' }),
-    wetShore: num(0.8, 0, 5, { title: 'Wet Shore', step: 0.05, description: 'Meters over a water surface on the terrain (a Water plane) that are wet: darker and glossy; 0 for none.' }),
+    wetShore: num(1.2, 0, 5, { title: 'Wet Shore', step: 0.05, description: 'Meters over a water surface on the terrain (a Water plane) that are wet: darker and glossy; 0 for none.' }),
     puddles: unit(0.5, { description: 'Under a Rain box the ground is wet; this is how much of its flat ground puddles cover (in the hollows); 0 for none.' }),
     collide: bool(true, { description: 'Characters and bodies stand on it in Play, and the navigation mesh covers it.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
