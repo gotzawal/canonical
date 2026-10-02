@@ -6,6 +6,8 @@
 
 import { z } from 'zod';
 import { clampGIGrid } from './giLimits';
+import { SHAPE_DISTRIBUTIONS, SIZE_DISTRIBUTIONS } from './grass';
+import { WEATHERS } from './weather';
 import { asset, bool, color, group, int, num, oneOf, optionalFields, params, range, records, text, vec2, vec3 } from './schema';
 
 const enabled = (m = {}) => bool(false, { title: 'Enabled', ...m });
@@ -342,15 +344,40 @@ export const Grass = z.object({
     count: int(4000, 1, 30000, { title: 'Blades', description: 'Number of blades (one draw for all of them; each is a matrix the engine updates, so keep large fields to a few objects).' }),
     size: vec2([10, 10], { precision: 2, description: 'Area covered [x, z] in meters, centered on the object.' }),
     ground: z.string().min(1).nullable().catch(null).meta({ description: 'Object (a terrain, a floor or a group of them) the blades stand on, by id; null for a flat field at the object\'s height. Blades outside it or on slopes steeper than 60 degrees are left out.' }),
-    height: num(0.45, 0.02, 5, { step: 0.01, precision: 2, description: 'Blade height in meters (each blade varies around it).' }),
-    width: num(0.06, 0.005, 1, { step: 0.005, precision: 3, description: 'Blade width at its root in meters.' }),
+    height: num(0.6, 0.02, 5, { step: 0.01, precision: 2, description: 'Blade height in meters (each blade varies around it).' }),
+    width: num(0.09, 0.005, 1, { step: 0.005, precision: 3, description: 'Blade width at its root in meters.' }),
+    heights: range([0.7, 1.3], 0.1, 4, { title: 'Height Spread', precision: 2, step: 0.05, description: 'Each blade\'s height is the height times a number in [least, most], spread by Size Spread.' }),
+    widths: range([0.7, 1.3], 0.1, 4, { title: 'Width Spread', precision: 2, step: 0.05, description: 'Each blade\'s width is the width times a number in [least, most], spread by Size Spread.' }),
+    sizes: oneOf(SIZE_DISTRIBUTIONS, 'uniform', {
+        title: 'Size Spread',
+        labels: { uniform: 'Uniform', bell: 'Mostly Middling', short: 'Mostly Short', patches: 'In Patches' },
+        description: 'How sizes spread within the height and width ranges: uniform (any size as likely), bell (most near the middle), short (most small, a few tall), patches (tall and short grass in patches of Patch Size).',
+    }),
+    shapes: group({
+        blade: num(1, 0, 10, { step: 0.1, description: 'Share of plain blades that taper evenly to a point.' }),
+        leaf: num(0, 0, 10, { step: 0.1, description: 'Share of broad leaves, widest in their lower middle, that bend more.' }),
+        needle: num(0, 0, 10, { step: 0.1, description: 'Share of thin, stiff needles.' }),
+    }, { description: 'The blade shapes, by their shares (relative to each other).' }),
+    shapeSpread: oneOf(SHAPE_DISTRIBUTIONS, 'mixed', {
+        title: 'Shape Spread',
+        labels: { mixed: 'Mixed', patches: 'In Patches' },
+        description: 'mixed: each blade takes a shape by the shares; patches: the shapes gather in patches of Patch Size (a few of the others among them).',
+    }),
+    curvature: range([0, 0.5], 0, 1, { precision: 2, step: 0.05, description: 'How much blades bend at rest, [least, most] (leaves bend more, needles less).' }),
+    patchSize: num(4, 0.5, 200, { title: 'Patch Size', step: 0.5, description: 'Meters across a patch, for sizes or shapes spread in patches (bare patches are three times as large).' }),
+    maxSlope: num(40, 5, 80, { title: 'Max Slope', step: 1, description: 'Degrees of slope past which no grass grows; it thins out over the last third.' }),
+    waterGap: num(0.3, 0, 5, { title: 'Water Gap', step: 0.05, description: 'Meters above water (a Water plane over a terrain) that stay bare before the grass grows fully.' }),
+    gaps: unit(0, { title: 'Bare Patches', description: 'How much of the field is left in bare patches (clumps of grass with ground between); 0 none.' }),
     bottomColor: color('#28461c', { title: 'Root Color' }),
+    rootBlend: unit(0.5, { title: 'Into Ground', description: 'How much the blades\' roots take the color of the terrain they grow from, so the field grows out of it.' }),
+    dryness: unit(0.3, { description: 'Drier, yellower patches over the field; 0 evenly green.' }),
     topColor: color('#7cab45', { title: 'Tip Color' }),
     wind: num(0.6, 0, 3, { step: 0.01, slider: true, description: 'How far gusts bend the blades.' }),
     windSpeed: num(3, 0, 30, { step: 0.1, description: 'How fast gusts sweep over the field, m/s.' }),
     windDirection: angle(35, 0, 360, { description: 'Where the wind blows toward, degrees around +Y from +X.' }),
     texture: asset({ description: 'Blade texture asset id (alpha below 0.3 is cut out), or null for plain blades.' }),
     windMap: asset({ title: 'Gust Map', description: 'Gust noise texture asset id (its red and green make the gusts, one pixel per meter), or null for built-in noise.' }),
+    distance: num(0, 0, 10000, { step: 1, title: 'Draw Distance', description: 'Meters from the camera where the last blades are gone: they thin out from half of it, so far grass costs less; 0 draws every blade at any distance. 30 to 60 suits most fields.' }),
     castShadow: bool(false, { title: 'Cast Shadows', description: 'Blades cast shadows (costly for many blades); they always receive them.' }),
 });
 export type GrassDoc = z.output<typeof Grass>;
@@ -395,6 +422,8 @@ export const TerrainLayer = z.object({
     slot: nodeRef('Material slot id: the layer shows its swatch, tile size, color and roughness, and follows it when it changes; null for its own.'),
     albedo: asset({ description: 'Color map (texture asset id): the slot\'s swatch.' }),
     normal: asset({ description: 'Normal map (texture asset id): the slot\'s.' }),
+    arm: asset({ title: 'ARM', description: 'Occlusion, roughness and metallic map (texture asset id, R G B): the slot\'s; roughness multiplies its G.' }),
+    heightMap: asset({ title: 'Height Map', description: 'Height (displacement) map (texture asset id, R): the slot\'s. Where layers meet, the higher texels win, so sand fills the gaps between stones.' }),
     tile: num(4, 0.05, 1000, { step: 0.05, description: 'Meters one tile of the maps covers.' }),
     color: color('#808080', { description: 'Multiplies the color map (white shows it as it is).' }),
     roughness: unit(0.9),
@@ -403,6 +432,8 @@ export const TerrainLayer = z.object({
     heightBlend: num(1, 0, 100, { step: 0.1, description: 'Meters over which the layer fades in at its height limits.' }),
     slopeBlend: num(5, 0, 45, { step: 0.5, description: 'Degrees over which the layer fades in at its slope limits.' }),
     onlyPainted: bool(false, { title: 'Only Where Painted', description: 'Shows only where it is painted (paths, fields), not by its rules.' }),
+    grass: unit(1, { title: 'Grass Grows', description: 'How well Grass fields grow on this layer: 1 fully, 0 not at all (sand, rock); in between they thin out and grow shorter.' }),
+    debris: unit(0, { title: 'Loose Stones', description: 'Small stones lying on this layer near the camera, in its colors (0 none, 1 about three a square meter). Not on the low graphics tier.' }),
 });
 export type TerrainLayerDoc = z.output<typeof TerrainLayer>;
 
@@ -422,6 +453,12 @@ export const Terrain = z.object({
     layers: z.array(TerrainLayer).max(4).catch((c) => (Array.isArray(c?.value) ? c.value.slice(0, 4).map((l: unknown) => TerrainLayer.parse(l && typeof l === 'object' ? l : {})) : []))
         .meta({ description: 'Up to four surface layers, the first covering everything; each later one over those before it where its rules match or it is painted.' }),
     detail: num(1, 0.25, 4, { step: 0.05, description: 'How far from the camera the full detail reaches: 1 by default, higher is finer far away and costlier.' }),
+    blending: unit(0.7, { title: 'Height Blending', description: 'Where layers meet, how much their height maps decide which shows (sand fills the gaps between stones) and how much their rules\' edges wander instead of following contour lines; 0 fades them evenly.' }),
+    variation: unit(0.5, { description: 'Large patches of lighter and darker ground, and the maps mixed with a larger copy far away, so the tiles do not repeat visibly; 0 for none.' }),
+    wetShore: num(1.2, 0, 5, { title: 'Wet Shore', step: 0.05, description: 'Meters over a water surface on the terrain (a Water plane) that are wet: darker and glossy; 0 for none.' }),
+    puddles: unit(0.5, { description: 'Under a Rain box the ground is wet; this is how much of its flat ground puddles cover (in the hollows); 0 for none.' }),
+    relief: unit(0.5, { description: 'How deep the layers\' height maps look up close (stones and gravel standing out of the ground); 0 flat. Not on the low graphics tier.' }),
+    compress: bool(false, { title: 'Compress Layers', description: 'Keeps the layers\' textures block compressed on the GPU (BC3): a quarter of the memory and less bandwidth, a little less sharp color and normals. Where the device cannot (most phones) they stay as they are.' }),
     collide: bool(true, { description: 'Characters and bodies stand on it in Play, and the navigation mesh covers it.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
 });
@@ -467,6 +504,16 @@ export const Scatter = z.object({
     margin: num(1, 0, 100, { step: 0.1, description: 'Meters kept clear around the objects to avoid.' }),
     align: unit(0, { description: 'How much copies lean with the ground: 0 upright (trees), 1 along the slope (rocks, grass tufts).' }),
     sink: num(0, 0, 10, { step: 0.01, description: 'Meters the copies sink into the ground (so roots and rock bottoms do not float on slopes).' }),
+    bury: unit(0.5, { description: 'Copies always sit with no side of their base over the ground (slopes, tilt); this sinks them further by part of how unevenly they sit: rocks set into a hillside instead of on it.' }),
+    soil: num(0.3, 0, 3, { step: 0.05, description: 'Meters the color of the terrain under a copy creeps up its base, to a ragged line, so it sits in the ground; 0 for none. Engine lit materials (Library and imported models).' }),
+    moss: unit(0, { description: 'How much moss (or dust: its color) grows on what faces up; 0 for none.' }),
+    mossColor: color('#55602f', { title: 'Moss Color' }),
+    sway: num(0, 0, 2, { step: 0.01, description: 'Meters the tops of copies lean in the wind, in slow gusts with a flutter (trees 0.2 to 0.5, shrubs 0.1; 0 for rocks). It follows the weather\'s wind (else the clouds\' direction). Engine lit materials.' }),
+    vary: unit(0.4, { title: 'Variation', description: 'How much copies differ in brightness and warmth.' }),
+    tilt: num(0, 0, 60, { step: 1, description: 'Degrees each copy tilts at random on top of its lean, so rocks do not all sit the same way up; 0 for none.' }),
+    clusters: unit(0, { description: 'How much copies gather in groups with bare ground between them, the largest at the middle of a group (rocks, shrubs); 0 spreads them evenly.' }),
+    clusterSize: num(15, 1, 1000, { title: 'Cluster Size', step: 0.5, description: 'Meters across a group of copies (with clusters above 0).' }),
+    layer: int(0, 0, 4, { title: 'Terrain Layer', description: '1 to 4: copies stand only where that layer of the ground terrain shows (by its rules and paint), as much as it shows (rocks on the gravel layer); 0 anywhere.' }),
     distance: num(0, 0, 100000, { step: 1, title: 'Draw Distance', description: 'Copies farther than this from the camera are not drawn (a part of the area at a time); 0 draws them at any distance. Small copies (grass tufts, pebbles, flowers) can go at 40 to 80 m.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
 });
@@ -575,7 +622,7 @@ export const Environment = z.object({
     skyColor: color('#3a4250'),
     skyHdri: asset({ title: 'HDRI', description: 'HDRI sky: the .hdr image asset shown around the scene and lighting it (a Library HDRI).' }),
     /** Sky sun azimuth and elevation, 0..1. */
-    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light.' }),
+    sunX: unit(0.71, { title: 'Sun Direction', step: 0.005, precision: 3, description: 'Sky sun azimuth 0..1. Keep it where the sun light comes from (apply_key_light does): god rays and the fog glow follow the light. Not used while the sky follows the key light (atmosphere.followLight).' }),
     sunY: unit(0.6, { title: 'Sun Height', step: 0.005, precision: 3, description: 'Sky sun elevation 0..1: 0.5 on the horizon, 1 straight up.' }),
     skyExposure: num(1, 0, 4, { step: 0.01, slider: true }),
     /** The sun and air of the atmospheric and physical skies. */
@@ -585,6 +632,15 @@ export const Environment = z.object({
         showSun: bool(true, { title: 'Show Sun', description: 'Draw the sun disc.' }),
         altitude: num(1500, 0, 10000, { step: 10, precision: 0, description: 'Height of the viewer in the air, meters: higher sees a darker, clearer sky.' }),
         clouds: bool(false, { description: 'Multiple scattering sky only: a cloud layer 3-5 km up. The clouds do not move, and each sky change takes much longer to redraw with them.' }),
+        followLight: bool(true, {
+            title: 'Sun Follows Light',
+            description: 'Single and multiple scattering skies: the sky\'s sun is where the key light (the first shown directional light) comes from, and the light takes the color and brightness of sunlight through the air at that height (warm and dimmer near the horizon, gone below it). Off: Sun Direction and Sun Height place the sky\'s sun and the light keeps its own color.',
+        }),
+        haze: num(1, 0, 20, {
+            title: 'Aerial Perspective',
+            step: 0.05,
+            description: 'How much distant objects fade into the color of the sky behind them through the air: 1 is a clear day (half faded at about 12 km, thicker low down), higher for hazy or humid air; 0 for none. Works with every sky.',
+        }),
     }),
     /** Tonemap exposure. */
     exposure: num(1, 0, 4, { step: 0.01, slider: true }),
@@ -624,6 +680,41 @@ export const Environment = z.object({
             slider: true,
             description: 'Budget: how far a reflected ray is followed across the screen, as a share of its size; the steps (and the cost of misses) grow with it. Short reaches (0.15 to 0.3) suit floors that reflect what stands on them; long ones reach far-off walls and the sky.',
         }),
+    }),
+    /** Volumetric clouds over the scene (whatever the sky), see engine CloudPost. */
+    clouds: group({
+        enable: bool(false, { description: 'Volumetric clouds: a layer of clouds drawn in 3D over any sky, drifting with the wind, lit by the sun and the sky, with shadows on the ground. They cost by the graphics tier (fewer steps on weak devices).' }),
+        coverage: unit(0.45, { description: 'How much of the sky they cover: 0.2 a few, 0.5 half, 0.9 overcast.' }),
+        type: unit(0.6, { description: '0 flat sheets (stratus) to 1 heaps (cumulus) with flat bases and domed tops, taller where they are thickest.' }),
+        density: num(1, 0.1, 4, { step: 0.05, slider: true, description: 'How thick and dark they are.' }),
+        detail: unit(0.6, { description: 'How much their edges are worn: wisps at their bases, billows on their tops.' }),
+        size: num(1, 0.3, 4, { step: 0.05, slider: true, description: 'How big each cloud is: 1 heaps a kilometer or two across, less for small puffs, more for big masses.' }),
+        clumping: unit(0.6, { description: '0 many small puffs scattered over the sky to 1 clouds gathered in a few big masses.' }),
+        softness: unit(0.3, { description: '0 crisp clouds with sharp edges to 1 soft, hazy ones.' }),
+        variety: unit(0.5, { description: 'How much clouds differ from one another: 0 all alike, 1 hazy, thin veils beside crisp, towering heaps.' }),
+        seed: num(0, 0, 9999, { step: 1, precision: 0, title: 'Pattern', description: 'Another number gives another arrangement of the clouds.' }),
+        bottom: num(1500, 100, 10000, { step: 50, precision: 0, title: 'Base', description: 'Altitude of their base, meters.' }),
+        thickness: num(2000, 100, 8000, { step: 50, precision: 0, description: 'Meters from their base to their top.' }),
+        wind: num(8, 0, 60, { step: 0.5, description: 'How fast they drift, m/s.' }),
+        windDirection: num(30, 0, 360, { step: 1, title: 'Wind Direction', description: 'Where they drift toward, degrees around +Y from +X.' }),
+        evolve: num(2, 0, 20, { step: 0.1, description: 'How fast their shapes change as they drift, m/s.' }),
+        shadows: unit(0.6, { description: 'How dark their shadows on the ground are; 0 for none.' }),
+    }),
+    /** Weather and the time of day: sets the sun, sky, key light, clouds, fog, rain and wind together (core/weather.ts). */
+    weather: group({
+        enable: bool(false, { description: 'The time of day and the weather set the sun (and the key light: the moon at night), the sky, clouds, fog, haze, rain around the camera and the wind of grass, clouds and rain together; their own settings are used as they say otherwise.' }),
+        time: num(10, 0, 24, { step: 0.05, precision: 2, slider: true, title: 'Time of Day', description: 'Hours: 6 sunrise, 12 noon, 18 sunset.' }),
+        cycle: num(0, 0, 240, { step: 0.5, title: 'Day Length', description: 'Real minutes a whole day takes to pass, from Time of Day; 0 stops time.' }),
+        sunrise: angle(90, 0, 360, { title: 'Sunrise Direction', description: 'Degrees around +Y from +X where the sun rises (it sets opposite).' }),
+        noon: num(60, 5, 90, { step: 1, title: 'Noon Height', description: 'Degrees the sun stands over the horizon at noon (lower far north or in winter).' }),
+        preset: oneOf(WEATHERS, 'fair', {
+            title: 'Weather',
+            labels: { clear: 'Clear', fair: 'Fair', cloudy: 'Cloudy', overcast: 'Overcast', rain: 'Rain', storm: 'Storm', fog: 'Fog' },
+            description: 'clear (no clouds), fair (small heaps), cloudy (broken), overcast (a grey deck, dimmer light), rain and storm (rain around the camera, wet ground, gusty), fog (thick haze, high veils).',
+        }),
+        wind: num(5, 0, 30, { step: 0.5, description: 'Wind m/s, shared by clouds, grass and rain (storms blow harder).' }),
+        windDirection: angle(30, 0, 360, { title: 'Wind Direction', description: 'Where the wind blows toward, degrees around +Y from +X.' }),
+        stars: unit(1, { description: 'How bright the stars are at night (and the moon\'s disc).' }),
     }),
     fog: group({
         enable: enabled(),

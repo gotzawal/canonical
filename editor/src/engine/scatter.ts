@@ -3,16 +3,22 @@
 // renderer per part. The copies are drawn instanced, one instancer per cell
 // of the area, with the cell's box to cull by: the engine leaves out the
 // cells a camera cannot see, the view's and each shadow map's on their own.
+// Each part also has simpler versions (levels of detail: the same vertices,
+// fewer triangles, made with meshoptimizer's simplifier), and each cell
+// draws the level its distance from the camera calls for.
 // The root sits at the scene's root and the copies are placed in world space.
 
 import {
     BoundingBox, InstanceDrawComponent, Material, MeshRenderer, Object3D, Quaternion, RenderNode, SkinnedMeshRenderer, SkinnedMeshRenderer2, Vector3,
-    VertexAttributeName, type Context3D, type GeometryBase,
+    VertexAttributeName, type Context3D, type GeometryBase, type Texture,
 } from '@orillusion/core';
 import { compose, decompose, invert, mul, rayBox, type Mat4, type Ray } from '../core/math';
 import type { Placement } from '../core/scatter';
 import type { Vec3 } from '../core/types';
-import { cloneMaterial, partPaths } from './modelParts';
+import { boxDistance, levelAt } from './chunks';
+import { geometryWithLods } from './lod';
+import { partPaths } from './modelParts';
+import { RockGround } from './rockGround';
 
 /** A part of a source model: its shape and materials, and its matrix in the model's space. */
 interface Part {
@@ -31,6 +37,8 @@ export interface ScatterPiece {
     max: Vec3;
     /** The middle and radius of what reaches the ground, in the piece's space. */
     trunk: { x: number; z: number; radius: number };
+    /** Eight points around its bottom, in its space (where it meets the ground). */
+    base: Vec3[];
 }
 
 /**
@@ -66,6 +74,17 @@ export class ScatterModel {
     piece(variant: number): ScatterPiece | null {
         return this.pieces[Math.min(this.pieces.length - 1, Math.floor(variant * this.pieces.length))] ?? null;
     }
+
+    /**
+     * Gives every part its simpler levels of detail (1 and 2), when the
+     * simplifier loads; parts keep their own shape otherwise. A shape the
+     * pieces share is simplified once.
+     */
+    async addLods(): Promise<void> {
+        for (const piece of this.pieces) {
+            for (const part of piece.parts) part.geometry = await geometryWithLods(part.geometry);
+        }
+    }
 }
 
 function rendererOf(o: Object3D): boolean {
@@ -74,7 +93,7 @@ function rendererOf(o: Object3D): boolean {
 
 /** The static mesh parts under `root`, in the model's space, with their box and trunk. */
 function pieceOf(root: Object3D, toModel: ArrayLike<number>): ScatterPiece {
-    const piece: ScatterPiece = { parts: [], renderers: [], offset: [0, 0, 0], min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity], trunk: { x: 0, z: 0, radius: 0.1 } };
+    const piece: ScatterPiece = { parts: [], renderers: [], offset: [0, 0, 0], min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity], trunk: { x: 0, z: 0, radius: 0.1 }, base: [] };
     const points: number[] = [];
     root.traverse((o: Object3D) => {
         o.components.forEach((c) => {
@@ -127,6 +146,19 @@ function fitTrunk(piece: ScatterPiece, points: number[]) {
     reach.sort((a, b) => a - b);
     const footprint = Math.max(piece.max[0] - piece.min[0], piece.max[2] - piece.min[2]);
     piece.trunk = { x: cx, z: cz, radius: Math.max(0.03, Math.min(reach[Math.floor(reach.length * 0.8)] ?? 0.1, footprint / 2)) };
+    // The base: the low points farthest out in eight directions.
+    const best = new Array<number>(8).fill(-Infinity);
+    for (let i = 0; i < points.length; i += 3) {
+        if (points[i + 1] > low) continue;
+        for (let k = 0; k < 8; k++) {
+            const a = (k * Math.PI) / 4;
+            const out = (points[i] - cx) * Math.cos(a) + (points[i + 2] - cz) * Math.sin(a);
+            if (out > best[k]) {
+                best[k] = out;
+                piece.base[k] = [points[i], points[i + 1], points[i + 2]];
+            }
+        }
+    }
 }
 
 /** Whether pieces stand apart on the ground (a set), rather than together (a trunk and its leaves). */
@@ -162,6 +194,7 @@ function standing(p: ScatterPiece): ScatterPiece {
         min: [p.min[0] + dx, p.min[1] + dy, p.min[2] + dz],
         max: [p.max[0] + dx, p.max[1] + dy, p.max[2] + dz],
         trunk: { x: p.trunk.x + dx, z: p.trunk.z + dz, radius: p.trunk.radius },
+        base: p.base.map((b) => [b[0] + dx, b[1] + dy, b[2] + dz] as Vec3),
     };
 }
 
@@ -174,11 +207,18 @@ interface Cell {
     boxes: Float64Array;
     min: Vec3;
     max: Vec3;
+    /** The level of detail drawn, and the copies' mean radius (meters), which sets where the levels change. */
+    level: number;
+    radius: number;
 }
 
 /** Copies per cell to aim at, and the most cells a side. */
 const PER_CELL = 32;
-const MAX_CELLS = 4;
+const MAX_CELLS = 6;
+
+/** Meters (at least) and copy radii from the camera where cells switch to levels 1 and 2. */
+const LOD_NEAR = { meters: 12, radii: 25 };
+const LOD_FAR = { meters: 30, radii: 70 };
 
 const pos = new Vector3();
 const scl = new Vector3();
@@ -190,12 +230,17 @@ export class ScatterView {
     private visible = true;
     /** Meters from the camera beyond which cells are not drawn; 0 for any distance. */
     private drawDistance = 0;
+    /** Scales the distances where cells switch to simpler levels (the graphics tier's: nearer on weak devices). */
+    private lodScale = 1;
     /** Copies made. */
     count = 0;
+    /** What its copies read to sit in the ground (soil, moss, variation). */
+    readonly ground: RockGround;
 
-    constructor(scene: Object3D, private ctx: Context3D, readonly id: string) {
+    constructor(scene: Object3D, private ctx: Context3D, readonly id: string, heights: Texture) {
         this.root.name = 'Scatter';
         scene.addChild(this.root);
+        this.ground = new RockGround(heights);
     }
 
     /**
@@ -236,15 +281,17 @@ export class ScatterView {
         const copies = new Map<Material, Material>();
         const materialOf = (m: Material) => {
             let c = copies.get(m);
-            if (!c) copies.set(m, (c = cloneMaterial(m, this.ctx)));
+            if (!c) copies.set(m, (c = this.ground.material(m, this.ctx)));
             return c;
         };
         const renderers: MeshRenderer[] = [];
         const boxes: number[] = [];
         const min: Vec3 = [Infinity, Infinity, Infinity];
         const max: Vec3 = [-Infinity, -Infinity, -Infinity];
+        let radii = 0;
         for (const p of group) {
             const piece = models[p.source]!.piece(p.variant)!;
+            radii += (Math.hypot(piece.max[0] - piece.min[0], piece.max[1] - piece.min[1], piece.max[2] - piece.min[2]) / 2) * p.scale;
             const copy = compose(p.position, p.rotation, [p.scale, p.scale, p.scale]);
             for (const part of piece.parts) {
                 const m = mul(copy, part.matrix);
@@ -275,7 +322,7 @@ export class ScatterView {
         instancer.cullBounds = new BoundingBox().setFromMinMax(new Vector3(min[0], min[1], min[2]), new Vector3(max[0], max[1], max[2]));
         instancer.frustumCulled = true;
         instancer.rebuild(renderers);
-        return { obj, instancer, renderers, boxes: new Float64Array(boxes), min, max };
+        return { obj, instancer, renderers, boxes: new Float64Array(boxes), min, max, level: 0, radius: radii / Math.max(1, group.length) };
     }
 
     setVisible(visible: boolean) {
@@ -290,18 +337,40 @@ export class ScatterView {
         this.setVisible(this.visible);
     }
 
-    /** Leaves out the cells beyond the draw distance from a camera at `eye` (world). */
+    /** Scales the distances where cells switch to simpler levels. */
+    setLodScale(scale: number) {
+        this.lodScale = Math.max(0.1, scale);
+    }
+
+    /**
+     * Leaves out the cells beyond the draw distance from a camera at `eye`
+     * (world), and gives each the level of detail its distance calls for
+     * (with a margin, so a cell at a limit does not flicker between two).
+     */
     update(eye: ArrayLike<number>) {
-        if (!(this.drawDistance > 0) || !this.visible) return;
+        if (!this.visible) return;
         for (const c of this.cells) {
-            let d = 0;
-            for (let k = 0; k < 3; k++) {
-                const e = Math.max(c.min[k] - eye[k], 0, eye[k] - c.max[k]);
-                d += e * e;
+            const d = boxDistance(c.min, c.max, eye);
+            if (this.drawDistance > 0) {
+                const on = d <= this.drawDistance;
+                if (c.instancer.enable !== on) c.instancer.enable = on;
+                if (!on) continue;
             }
-            const on = d <= this.drawDistance * this.drawDistance;
-            if (c.instancer.enable !== on) c.instancer.enable = on;
+            const near = Math.max(LOD_NEAR.meters, LOD_NEAR.radii * c.radius) * this.lodScale;
+            const far = Math.max(LOD_FAR.meters, LOD_FAR.radii * c.radius) * this.lodScale;
+            const level = levelAt(d, near, far, c.level);
+            if (level === c.level) continue;
+            c.level = level;
+            // The instancer draws each group at its first renderer's level; all of them say the same.
+            for (const r of c.renderers) r.lodLevel = level;
         }
+    }
+
+    /** What it draws, for the profiler: copies, cells shown and their levels of detail. */
+    report(): string {
+        const on = this.cells.filter((c) => c.instancer.enable);
+        const levels = [0, 1, 2].map((l) => on.filter((c) => c.level === l).length);
+        return `${this.count.toLocaleString('en-US')} copies, ${on.length}/${this.cells.length} cells (levels ${levels.join(' / ')})`;
     }
 
     /** The world box of every copy, or null without copies. */
@@ -356,6 +425,7 @@ export class ScatterView {
         this.clear(dispose);
         this.root.removeFromParent();
         this.root.destroy();
+        dispose(this.ground);
     }
 }
 

@@ -28,6 +28,12 @@ export type GlobalFogSetting = {
      */
     heightBase?: number;
     /**
+     * Aerial perspective: the air's extinction per meter at height 0
+     * (thinning upward like the air, by e^-1 every 8 km). Distant ground
+     * fades into the sky color behind it, before the fog; 0 for none.
+     */
+    airDensity?: number;
+    /**
      * If the distance between the object and the camera is set as distance, the fog concentration will be linear interpolation between start and end
      */
     start: number;

@@ -204,9 +204,13 @@ export class ShadowPass extends RenderGraphPass {
             const mode = dirLight.shadowUpdate;
             const useStaticCache = shadowSetting.enableStaticCache === true && mode !== 'static';
 
+            // Far cascades every few frames (each its own frame), once they have been drawn.
+            const every = Math.max(1, Math.floor(shadowSetting.farCascadeEvery ?? 1));
+            const later = (c: number) => !force && every > 1 && c >= 2 && dirLight._shadowSignatures[c] !== undefined
+                && (Time.frame + c) % (every * (c - 1)) !== 0;
             let cameras: Camera3D[];
             if (dirLight.enableCSM) {
-                dirLight.updateShadowCameraCSM(view.camera);
+                dirLight.updateShadowCameraCSM(view.camera, later);
                 dirLight.lightData.csmShadowMapIndex = shadowIndex;
                 cameras = dirLight.csmShadowCamera.slice(0, Math.max(1, dirLight.cascadeNum));
             } else {
@@ -216,6 +220,10 @@ export class ShadowPass extends RenderGraphPass {
             }
 
             for (let c = 0; c < cameras.length; c++) {
+                if (dirLight.enableCSM && later(c)) {
+                    this.keptMaps++;
+                    continue;
+                }
                 const shadowCamera = cameras[c];
                 const layer = shadowIndex + c;
                 (shadowCamera as any)._boundCtx ||= view.engine3D.context3D;

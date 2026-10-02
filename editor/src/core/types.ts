@@ -214,8 +214,11 @@ export interface RenderGraphDoc {
     posts: PostDoc[];
 }
 
-/** Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents), 3 the scene's AI models. */
-export const SCENE_VERSION = 4;
+/**
+ * Scene format version. 2 added the AI behavior data (blackboards, behaviors, memory, agents), 3 the scene's AI models,
+ * 4 per-light shadows, 5 the sky's sun following the key light and aerial perspective (off in older scenes).
+ */
+export const SCENE_VERSION = 5;
 
 /** The name of a scene nobody has named yet (the assistant names it when it learns what the scene is). */
 export const UNTITLED_SCENE = 'Untitled Scene';
@@ -903,6 +906,8 @@ export interface MaterialSlotDoc {
     normal?: string | null;
     /** The swatch's occlusion, roughness and metallic map (in R, G, B), if it has one: roughness and metallic multiply it. */
     arm?: string | null;
+    /** The swatch's height (displacement) map in R, if it has one: terrain layers blend by it. */
+    heightMap?: string | null;
     color: string;
     roughness: number;
     metallic: number;

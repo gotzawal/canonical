@@ -1,15 +1,23 @@
 // The material terrains are drawn with: up to four layers, each a material
-// slot's swatch (color and normal maps at the slot's tile size, its color
-// and roughness), blended by the layers' height and slope rules and by
-// paint (a splat map, a channel a layer). The layers' maps sit in two
-// texture arrays (engine/heldTexture.ts), so the material binds three
-// textures whatever the layers are. Each layer is projected along the
-// axes the surface faces, so cliffs keep their texture size.
+// slot's swatch (color, normal, ARM and height maps at the slot's tile
+// size, its color and roughness), placed by the layers' height and slope
+// rules and by paint (a splat map, a channel a layer). Where layers meet,
+// the one whose texels stand higher shows (height blending: sand fills
+// the gaps between stones), and the rules' edges wander with noise instead
+// of following contour lines. Large-scale noise varies the color and the
+// maps are mixed with a larger copy of themselves far away, so the tiles
+// do not repeat visibly. Ground along a water surface over the terrain,
+// and under rain, is wet: darker and glossy, with puddles in its hollows.
+// The layers' maps sit in two texture arrays (engine/heldTexture.ts):
+// color with height in alpha, and normal with roughness and occlusion in
+// blue and alpha, so the material binds three textures whatever the layers
+// are. Each layer is projected along the axes the surface faces, so cliffs
+// keep their texture size.
 
-import { Material, PassType, RenderShaderPass, Shader, ShaderLib, Vector4, type Context3D, type Texture } from '@orillusion/core';
+import { Material, PassType, RenderShaderPass, Shader, ShaderLib, Texture, Vector4, type Context3D } from '@orillusion/core';
 import type { TerrainFrame } from '../core/terrain';
-import { hexToColor } from './color';
-import { buildLayerArray, HeldTexture, uploadTexture, type ArrayLayer } from './heldTexture';
+import { hexToColor, srgbToLinear } from './color';
+import { buildLayerArray, compressLayerArray, HeldTexture, uploadTexture, type ArrayLayer } from './heldTexture';
 import { litMaterialSource, setEngineDefaults } from './shaders';
 
 const LAYERS = 4;
@@ -19,6 +27,11 @@ const FIELDS = [
     '    layerTile: vec4<f32>,',
     '    terrainInfo: vec4<f32>,',
     '    terrainRect: vec4<f32>,',
+    '    terrainLook: vec4<f32>,',
+    '    terrainWater: vec4<f32>,',
+    '    terrainRain: vec4<f32>,',
+    '    terrainRelief: vec4<f32>,',
+    '    terrainGrass: vec4<f32>,',
 ].join('\n');
 
 const BINDINGS = [
@@ -28,6 +41,8 @@ const BINDINGS = [
     '@group(1) @binding(auto) var layerNormal: texture_2d_array<f32>;',
     '@group(1) @binding(auto) var splatMapSampler: sampler;',
     '@group(1) @binding(auto) var splatMap: texture_2d<f32>;',
+    '@group(1) @binding(auto) var contactMapSampler: sampler;',
+    '@group(1) @binding(auto) var contactMap: texture_2d<f32>;',
 ].join('\n');
 
 const pick = (field: string) => `fn ${field}Of(i: i32) -> vec4f {
@@ -43,7 +58,13 @@ const BODY = /* wgsl */ `
 // (x, meters), slope fade (y, degrees), only painted (z). layerTile: the
 // tile size of each layer in meters. terrainInfo: layer count, whether
 // there is paint, normal map strength. terrainRect: the terrain's -x, -z
-// corner and its size, for the splat map.
+// corner and its size, for the splat map. terrainLook: height blending
+// (x) and variation (y), 0 to 1, and the far copies (z, 0 or 1). terrainWater: the water's height over
+// the terrain (x, -1e9 without), meters above it that are wet (y), rain
+// (z, 0 to 1) and puddles (w, 0 to 1). terrainRain: the rain's box, its
+// -x, -z and +x, +z corners. terrainRelief: how deep the layers' height
+// maps look (x, 0 to 1), meters from the camera where relief and fine
+// detail fade out (y, 0 for none), whether there is a contact map (z).
 ${pick('layerColor')}
 ${pick('layerRule')}
 ${pick('layerBlend')}
@@ -53,42 +74,112 @@ fn band(x: f32, lo: f32, hi: f32, soft: f32) -> f32 {
     return smoothstep(lo - s, lo + s, x) * (1.0 - smoothstep(hi - s, hi + s, x));
 }
 
+fn tHash(p: vec2f) -> f32 {
+    var q = fract(p * vec2f(0.1031, 0.1030));
+    q += dot(q, q.yx + 33.33);
+    return fract((q.x + q.y) * q.x);
+}
+
+fn tNoise(p: vec2f) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(tHash(i), tHash(i + vec2f(1.0, 0.0)), u.x), mix(tHash(i + vec2f(0.0, 1.0)), tHash(i + vec2f(1.0, 1.0)), u.x), u.y);
+}
+
+// Three octaves, 0 to 1 (about 0.5 on average).
+fn tFbm(p: vec2f) -> f32 {
+    return tNoise(p) * 0.5 + tNoise(p * 2.03 + vec2f(17.3, 5.1)) * 0.3 + tNoise(p * 4.11 + vec2f(3.7, 29.9)) * 0.2;
+}
+
+// Near the camera (0 to 1, set by frag): the layers' relief and fine detail fade with it.
+var<private> nearK: f32 = 0.0;
+// The direction to the camera (set by frag).
+var<private> toEye: vec3f = vec3f(0.0, 1.0, 0.0);
+
 struct LayerSample {
     color: vec3f,
     bump: vec3f,
+    height: f32,
+    rough: f32,
+    ao: f32,
 };
+
+struct Tap {
+    a: vec4f,
+    n: vec4f,
+};
+
+// Both arrays at uv, mixed by 'far' with the same maps at a larger,
+// unrelated scale: far away the tiles stop lining up.
+fn tap(i: i32, uv: vec2f, gx: vec2f, gy: vec2f, far: f32) -> Tap {
+    var t: Tap;
+    t.a = textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv, i, gx, gy);
+    t.n = textureSampleGrad(layerNormal, layerNormalSampler, uv, i, gx, gy);
+    if (far > 0.0) {
+        let k = 0.29;
+        let o = vec2f(0.37, 0.71);
+        let fa = textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv * k + o, i, gx * k, gy * k);
+        let fnm = textureSampleGrad(layerNormal, layerNormalSampler, uv * k + o, i, gx * k, gy * k);
+        t.a = mix(t.a, fa, far);
+        t.n = mix(t.n, fnm, far);
+    }
+    // A compressed normal array keeps x in alpha and roughness in red (heldTexture's BC3).
+    if (materialUniform.terrainLook.w > 0.5) { t.n = vec4f(t.n.a, t.n.g, t.n.r, t.n.b); }
+    return t;
+}
 
 // A layer along the axes the surface faces (w), with gradients taken
 // where every pixel runs (dx, dy: of the world position).
-fn sampleLayer(i: i32, p: vec3f, w: vec3f, dx: vec3f, dy: vec3f) -> LayerSample {
+fn sampleLayer(i: i32, p: vec3f, w: vec3f, dx: vec3f, dy: vec3f, far: f32) -> LayerSample {
     let s = 1.0 / max(materialUniform.layerTile[i], 0.01);
     var out: LayerSample;
-    out.color = vec3f(0.0);
+    var a = vec4f(0.0);
+    var d = vec2f(0.0);
     out.bump = vec3f(0.0);
     if (w.x > 0.0) {
-        let uv = vec2f(p.z, -p.y) * s;
-        let gx = vec2f(dx.z, -dx.y) * s;
-        let gy = vec2f(dy.z, -dy.y) * s;
-        out.color += textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv, i, gx, gy).rgb * w.x;
-        let t = textureSampleGrad(layerNormal, layerNormalSampler, uv, i, gx, gy).xy * 2.0 - 1.0;
-        out.bump += (t.x * vec3f(0.0, 0.0, 1.0) + t.y * vec3f(0.0, 1.0, 0.0)) * w.x;
+        let t = tap(i, vec2f(p.z, -p.y) * s, vec2f(dx.z, -dx.y) * s, vec2f(dy.z, -dy.y) * s, far);
+        a += t.a * w.x;
+        d += t.n.zw * w.x;
+        let b = t.n.xy * 2.0 - 1.0;
+        out.bump += (b.x * vec3f(0.0, 0.0, 1.0) + b.y * vec3f(0.0, 1.0, 0.0)) * w.x;
     }
     if (w.y > 0.0) {
-        let uv = vec2f(p.x, p.z) * s;
         let gx = vec2f(dx.x, dx.z) * s;
         let gy = vec2f(dy.x, dy.z) * s;
-        out.color += textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv, i, gx, gy).rgb * w.y;
-        let t = textureSampleGrad(layerNormal, layerNormalSampler, uv, i, gx, gy).xy * 2.0 - 1.0;
-        out.bump += (t.x * vec3f(1.0, 0.0, 0.0) + t.y * vec3f(0.0, 0.0, -1.0)) * w.y;
+        var uv = vec2f(p.x, p.z) * s;
+        // Relief (parallax): near the camera the texel shown is where the view meets the height map.
+        let depth = nearK * materialUniform.terrainRelief.x * 0.06;
+        if (depth > 0.0) {
+            let o = toEye.xz / max(toEye.y, 0.3) * depth;
+            let uv0 = uv;
+            for (var k = 0; k < 3; k++) {
+                uv = uv0 + o * (textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv, i, gx, gy).a - 0.5);
+            }
+        }
+        let t = tap(i, uv, gx, gy, far);
+        a += t.a * w.y;
+        d += t.n.zw * w.y;
+        var b = t.n.xy * 2.0 - 1.0;
+        // Fine detail: the same normals four times smaller, close up.
+        if (nearK > 0.0) {
+            let fine = textureSampleGrad(layerNormal, layerNormalSampler, uv * 4.3 + vec2f(0.31, 0.57), i, gx * 4.3, gy * 4.3);
+            let fb = select(fine.xy, vec2f(fine.a, fine.g), materialUniform.terrainLook.w > 0.5) * 2.0 - 1.0;
+            b += fb * 0.35 * nearK;
+        }
+        out.bump += (b.x * vec3f(1.0, 0.0, 0.0) + b.y * vec3f(0.0, 0.0, -1.0)) * w.y;
     }
     if (w.z > 0.0) {
-        let uv = vec2f(p.x, -p.y) * s;
-        let gx = vec2f(dx.x, -dx.y) * s;
-        let gy = vec2f(dy.x, -dy.y) * s;
-        out.color += textureSampleGrad(layerAlbedo, layerAlbedoSampler, uv, i, gx, gy).rgb * w.z;
-        let t = textureSampleGrad(layerNormal, layerNormalSampler, uv, i, gx, gy).xy * 2.0 - 1.0;
-        out.bump += (t.x * vec3f(1.0, 0.0, 0.0) + t.y * vec3f(0.0, 1.0, 0.0)) * w.z;
+        let t = tap(i, vec2f(p.x, -p.y) * s, vec2f(dx.x, -dx.y) * s, vec2f(dy.x, -dy.y) * s, far);
+        a += t.a * w.z;
+        d += t.n.zw * w.z;
+        let b = t.n.xy * 2.0 - 1.0;
+        out.bump += (b.x * vec3f(1.0, 0.0, 0.0) + b.y * vec3f(0.0, 1.0, 0.0)) * w.z;
     }
+    out.color = a.rgb;
+    out.height = a.a;
+    out.rough = d.x;
+    out.ao = d.y;
     return out;
 }
 
@@ -98,16 +189,22 @@ fn frag() {
     let dx = dpdx(p);
     let dy = dpdy(p);
     let info = materialUniform.terrainInfo;
+    let look = materialUniform.terrainLook;
     let count = i32(info.x + 0.5);
     let slope = degrees(acos(clamp(n.y, -1.0, 1.0)));
+    // Noise at the scale of rule edges (meters) and of the land (tens of meters).
+    let edge = tFbm(p.xz * 0.37 + vec2f(41.0, 7.0)) - 0.5;
+    let land = tFbm(p.xz * 0.021);
 
-    // Rules: each later layer over those before it.
+    // Rules: each later layer over those before it, its edges wandering.
     var w = array<f32, 4>(1.0, 0.0, 0.0, 0.0);
     for (var i = 1; i < 4; i++) {
         if (i >= count) { break; }
         let r = layerRuleOf(i);
         let b = layerBlendOf(i);
-        var a = band(p.y, r.x, r.y, b.x) * band(slope, r.z, r.w, b.y);
+        let hy = p.y + edge * max(b.x, 0.3) * 1.6 * look.x;
+        let sl = slope + edge * max(b.y, 2.0) * 1.6 * look.x;
+        var a = band(hy, r.x, r.y, b.x) * band(sl, r.z, r.w, b.y);
         if (b.z > 0.5) { a = 0.0; }
         for (var j = 0; j < i; j++) { w[j] = w[j] * (1.0 - a); }
         w[i] = a;
@@ -125,28 +222,103 @@ fn frag() {
     axes = axes / max(axes.x + axes.y + axes.z, 0.0001);
     axes = select(vec3f(0.0), axes, axes > vec3f(0.02));
     axes = axes / max(axes.x + axes.y + axes.z, 0.0001);
+    let eyeDist = distance(globalUniform.CameraPos.xyz, p);
+    let far = smoothstep(12.0, 60.0, eyeDist) * 0.5 * look.y * look.z;
+    let relief = materialUniform.terrainRelief;
+    nearK = select(0.0, 1.0 - smoothstep(relief.y * 0.6, relief.y, eyeDist), relief.y > 0.0);
+    toEye = (globalUniform.CameraPos.xyz - p) / max(eyeDist, 0.001);
+
+    // Each layer shown, and how high its texels stand where it is.
+    var smp: array<LayerSample, 4>;
+    var hw = array<f32, 4>(0.0, 0.0, 0.0, 0.0);
+    var top = -1e3;
+    var wsum = 0.0;
+    for (var i = 0; i < 4; i++) {
+        if (i >= count || w[i] < 0.01) { continue; }
+        smp[i] = sampleLayer(i, p, axes, dx, dy, far);
+        hw[i] = w[i] + smp[i].height;
+        top = max(top, hw[i]);
+        wsum += w[i];
+    }
+    // Height blending: within a band below the highest, the higher texels show.
+    var hsum = 0.0;
+    for (var i = 0; i < 4; i++) {
+        if (i >= count || w[i] < 0.01) { continue; }
+        hw[i] = max(hw[i] - (top - 0.12), 0.0);
+        hsum += hw[i];
+    }
 
     var color = vec3f(0.0);
     var bump = vec3f(0.0);
     var rough = 0.0;
-    var total = 0.0;
+    var ao = 0.0;
+    var height = 0.0;
     for (var i = 0; i < 4; i++) {
         if (i >= count || w[i] < 0.01) { continue; }
-        let s = sampleLayer(i, p, axes, dx, dy);
+        let k = mix(w[i] / max(wsum, 0.0001), hw[i] / max(hsum, 0.0001), look.x);
         let c = layerColorOf(i);
-        color += s.color * c.rgb * w[i];
-        bump += s.bump * w[i];
-        rough += c.a * w[i];
-        total += w[i];
+        color += smp[i].color * c.rgb * k;
+        bump += smp[i].bump * k;
+        rough += c.a * smp[i].rough * k;
+        ao += smp[i].ao * k;
+        height += smp[i].height * k;
     }
-    total = max(total, 0.0001);
-    ORI_ShadingInput.BaseColor = vec4f(color / total, 1.0);
-    ORI_ShadingInput.Roughness = clamp(rough / total, 0.05, 1.0);
+    // Variation over the land: patches lighter and darker, drier and smoother.
+    let vary = (land - 0.5) * 0.45 + (tFbm(p.xz * 0.11 + vec2f(9.0, 3.0)) - 0.5) * 0.25;
+    color *= 1.0 + vary * look.y;
+    rough *= 1.0 + vary * 0.4 * look.y;
+
+    // Around what stands on the ground: darker where it meets it, a little rougher where loose stones lie.
+    if (relief.z > 0.5) {
+        let rect = materialUniform.terrainRect;
+        let c = textureSampleLevel(contactMap, contactMapSampler, (p.xz - rect.xy) / rect.zw, 0.0);
+        ao *= 1.0 - c.r * 0.6;
+        color *= 1.0 - c.r * 0.25 - c.g * 0.08;
+        rough = mix(rough, 1.0, c.g * 0.3);
+        // Under grass the ground takes its color: a little near, most where its far blades are left out.
+        let gt = materialUniform.terrainGrass;
+        if (c.b > 0.0) {
+            let k = select(0.3, 0.3 + 0.45 * smoothstep(gt.w * 0.35, gt.w * 0.9, eyeDist), gt.w > 0.0);
+            color = mix(color, gt.rgb, c.b * k);
+        }
+    }
+
+    // Wet along the water, up a ragged band over the waterline, and under rain.
+    let water = materialUniform.terrainWater;
+    var wet = 0.0;
+    if (water.y > 0.0 && water.x > -1e8) {
+        let reach = water.x + water.y * (0.6 + 0.8 * tNoise(p.xz * 0.9));
+        wet = 1.0 - smoothstep(water.x, reach, p.y);
+    }
+    var pool = 0.0;
+    if (water.z > 0.0) {
+        // Wet inside the rain's box, drying out raggedly over a few meters past its sides.
+        let r = materialUniform.terrainRain;
+        let fade = max(3.0, 0.15 * min(r.z - r.x, r.w - r.y));
+        let past = max(max(r.x - p.x, p.x - r.z), max(r.y - p.z, p.z - r.w)) + edge * fade;
+        let inside = 1.0 - smoothstep(-fade, fade, past);
+        let rain = water.z * inside;
+        wet = max(wet, rain * (0.55 + 0.45 * clamp(n.y, 0.0, 1.0)));
+        // Puddles in the hollows of flat ground: where the low noise dips and the texels are low.
+        let flatGround = smoothstep(0.93, 0.985, n.y);
+        let lowness = tFbm(p.xz * 0.16 + vec2f(5.0, 11.0)) + (0.5 - height) * 0.5;
+        let level = 0.66 - 0.22 * water.w;
+        pool = rain * step(0.001, water.w) * flatGround * smoothstep(level, level + 0.04, lowness);
+    }
+    // Wet ground is darker and glossier; a puddle is a dark, flat mirror.
+    color *= mix(1.0, 0.55, wet);
+    rough = mix(rough, min(rough, 0.28), wet);
+    color *= mix(1.0, 0.45, pool);
+    rough = mix(rough, 0.03, pool);
+    ao = mix(ao, 1.0, pool);
+
+    ORI_ShadingInput.BaseColor = vec4f(color, 1.0);
+    ORI_ShadingInput.Roughness = clamp(rough, 0.03, 1.0);
     ORI_ShadingInput.Metallic = 0.0;
     ORI_ShadingInput.Specular = 1.0;
-    ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.AmbientOcclusion = ao;
     ORI_ShadingInput.EmissiveColor = vec4f(0.0, 0.0, 0.0, 1.0);
-    ORI_ShadingInput.Normal = normalize(n + (bump / total) * info.z);
+    ORI_ShadingInput.Normal = normalize(n + bump * info.z * (1.0 - pool) * (1.0 - 0.3 * wet));
     useShadow();
     BxDFShading();
 }
@@ -156,7 +328,7 @@ let shaderName: string | null = null;
 
 function registered(): string {
     if (!shaderName) {
-        shaderName = 'morglay_terrain_1';
+        shaderName = 'morglay_terrain_5';
         ShaderLib.register(shaderName, litMaterialSource(FIELDS, BINDINGS, BODY));
     }
     return shaderName;
@@ -166,6 +338,8 @@ function registered(): string {
 export interface MaterialLayer {
     albedo: Texture | null;
     normal: Texture | null;
+    arm: Texture | null;
+    heightMap: Texture | null;
     tile: number;
     color: string;
     roughness: number;
@@ -176,8 +350,22 @@ export interface MaterialLayer {
     onlyPainted: boolean;
 }
 
-const WHITE: [number, number, number, number] = [1, 1, 1, 1];
+/** Color white, heights level (alpha). */
+const WHITE: [number, number, number, number] = [1, 1, 1, 0.5];
+/** A flat normal, roughness as the layer's (blue: its factor), no occlusion (alpha). */
 const FLAT: [number, number, number, number] = [0.5, 0.5, 1, 1];
+
+/** What a water surface and rain over a terrain make wet (see TerrainMaterial.setWet). */
+export interface TerrainWet {
+    /** The water's height, or null without water over the terrain. */
+    water: number | null;
+    /** Meters over the waterline that are wet. */
+    shore: number;
+    /** The rain's box (its -x, -z, +x, +z corners) and how hard it rains, 0 to 1, or null. */
+    rain: { rect: [number, number, number, number]; amount: number } | null;
+    /** How much of the flat ground under the rain puddles cover, 0 to 1. */
+    puddles: number;
+}
 
 /** A terrain's material, its layer arrays and its paint. */
 export class TerrainMaterial {
@@ -186,8 +374,18 @@ export class TerrainMaterial {
     private albedo: HeldTexture;
     private normal: HeldTexture;
     private splat: HeldTexture;
+    private contacts: HeldTexture;
+    private relief = new Vector4(0.5, 0, 0, 0);
     /** What the arrays were built from, to build them again only when that changes. */
     private arraysKey = '';
+    /** Keep the arrays block compressed (Terrain.compress), and whether the ones held are. */
+    private compress = false;
+    private compressed = false;
+    private look = new Vector4(0.7, 0.5, 1, 0);
+    private lastArrays: { layers: (MaterialLayer | null)[]; size: number } | null = null;
+    /** Each layer's mean color (linear rgb, from the arrays' last level), once read back; `meansVersion` counts the reads. */
+    means: [number, number, number][] = [];
+    meansVersion = 0;
     /** Layers shown, and whether there is paint (terrainInfo). */
     private count = 1;
     private painted = false;
@@ -216,12 +414,20 @@ export class TerrainMaterial {
         shader.setUniformVector4('layerTile', new Vector4(4, 4, 4, 4));
         shader.setUniformVector4('terrainInfo', new Vector4(1, 0, 1, 0));
         shader.setUniformVector4('terrainRect', new Vector4(0, 0, 1, 1));
+        shader.setUniformVector4('terrainLook', new Vector4(0.7, 0.5, 1, 0));
+        shader.setUniformVector4('terrainWater', new Vector4(-1e9, 0, 0, 0));
+        shader.setUniformVector4('terrainRain', new Vector4(0, 0, 0, 0));
+        shader.setUniformVector4('terrainRelief', this.relief);
+        shader.setUniformVector4('terrainGrass', new Vector4(0, 0, 0, 0));
         // The arrays are bound before the first draw: the pipeline's layout comes from them.
         this.albedo = new HeldTexture(ctx, '2d-array');
         this.normal = new HeldTexture(ctx, '2d-array');
         this.splat = new HeldTexture(ctx, '2d', 'float', false);
-        this.albedo.hold(buildLayerArray(ctx, [{ source: null, fill: WHITE }], 4, 'rgba8unorm-srgb', 'terrain albedo'));
-        this.normal.hold(buildLayerArray(ctx, [{ source: null, fill: FLAT }], 4, 'rgba8unorm', 'terrain normal'));
+        this.contacts = new HeldTexture(ctx, '2d', 'float', false);
+        this.contacts.hold(uploadTexture(ctx, 1, 1, 'rgba8unorm', new Uint8Array(4), 'terrain contacts'));
+        shader.setTexture('contactMap', this.contacts);
+        this.albedo.hold(buildLayerArray(ctx, [{ sources: [], fill: WHITE }], 4, 'rgba8unorm-srgb', 'terrain albedo'));
+        this.normal.hold(buildLayerArray(ctx, [{ sources: [], fill: FLAT }], 4, 'rgba8unorm', 'terrain normal'));
         this.splat.hold(uploadTexture(ctx, 1, 1, 'rgba8unorm', new Uint8Array(4), 'terrain paint'));
         shader.setTexture('layerAlbedo', this.albedo);
         shader.setTexture('layerNormal', this.normal);
@@ -258,7 +464,7 @@ export class TerrainMaterial {
         this.count = list.length;
         this.writeInfo();
         const ids = (t: Texture | null) => (t ? (t as any).instanceID ?? t.name : '-');
-        const key = `${size}|` + list.map((l) => `${ids(l?.albedo ?? null)},${ids(l?.normal ?? null)}`).join('|');
+        const key = `${size}|` + list.map((l) => [l?.albedo, l?.normal, l?.arm, l?.heightMap].map((t) => ids(t ?? null)).join(',')).join('|');
         if (key === this.arraysKey) return;
         this.arraysKey = key;
         this.rebuildArrays(list, size);
@@ -266,10 +472,77 @@ export class TerrainMaterial {
 
     /** Builds the arrays again (a layer's texture finished loading or was refilled). */
     rebuildArrays(layers: (MaterialLayer | null)[], size: number) {
-        const albedo: ArrayLayer[] = layers.map((l) => ({ source: l?.albedo ?? null, fill: WHITE }));
-        const normal: ArrayLayer[] = layers.map((l) => ({ source: l?.normal ?? null, fill: FLAT }));
-        this.albedo.hold(buildLayerArray(this.ctx, albedo, size, 'rgba8unorm-srgb', 'terrain albedo'));
-        this.normal.hold(buildLayerArray(this.ctx, normal, size, 'rgba8unorm', 'terrain normal'));
+        // Color with height in alpha; normal with roughness and occlusion (an ARM map's G and R) in blue and alpha.
+        const albedo: ArrayLayer[] = layers.map((l) => ({ sources: [{ texture: l?.albedo ?? null, channels: 'rgb' }, { texture: l?.heightMap ?? null, channels: 'a' }], fill: WHITE }));
+        const normal: ArrayLayer[] = layers.map((l) => ({ sources: [{ texture: l?.normal ?? null, channels: 'rg' }, { texture: l?.arm ?? null, channels: 'ba' }], fill: FLAT }));
+        this.lastArrays = { layers, size };
+        let a = buildLayerArray(this.ctx, albedo, size, 'rgba8unorm-srgb', 'terrain albedo');
+        void this.readMeans(a, layers.map((l) => l?.color ?? '#ffffff'));
+        let n = buildLayerArray(this.ctx, normal, size, 'rgba8unorm', 'terrain normal');
+        const ca = this.compress ? compressLayerArray(this.ctx, a, false, 'terrain albedo (BC3)') : null;
+        const cn = ca ? compressLayerArray(this.ctx, n, true, 'terrain normal (BC3)') : null;
+        if (ca && cn) {
+            Texture.delayDestroyTexture(this.ctx, a);
+            Texture.delayDestroyTexture(this.ctx, n);
+            a = ca;
+            n = cn;
+        }
+        this.compressed = !!(ca && cn);
+        this.albedo.hold(a);
+        this.normal.hold(n);
+        this.writeLook();
+    }
+
+    /** Reads back each layer's 1x1 level: its mean color, times the layer's tint. */
+    private async readMeans(tex: GPUTexture, tints: string[]) {
+        const device = this.ctx.device;
+        const layers = tex.depthOrArrayLayers;
+        const buffer = device.createBuffer({ size: 256 * layers, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: tex, mipLevel: tex.mipLevelCount - 1 }, { buffer, bytesPerRow: 256, rowsPerImage: 1 }, { width: 1, height: 1, depthOrArrayLayers: layers });
+        device.queue.submit([encoder.finish()]);
+        try {
+            await buffer.mapAsync(GPUMapMode.READ);
+            const bytes = new Uint8Array(buffer.getMappedRange());
+            this.means = Array.from({ length: layers }, (_, l) => {
+                const t = hexToColor(tints[l] ?? '#ffffff');
+                return [0, 1, 2].map((k) => srgbToLinear(bytes[l * 256 + k] / 255) * [t.r, t.g, t.b][k]) as [number, number, number];
+            });
+            this.meansVersion++;
+        } catch {
+            // The texture went before the read (a newer build): that build reads its own.
+        } finally {
+            buffer.destroy();
+        }
+    }
+
+    /** Keeps the layers block compressed (where the device can): the arrays are made again when this changes. */
+    setCompressed(on: boolean) {
+        if (on === this.compress) return;
+        this.compress = on;
+        if (this.lastArrays) this.rebuildArrays(this.lastArrays.layers, this.lastArrays.size);
+    }
+
+    private writeLook() {
+        this.look.w = this.compressed ? 1 : 0;
+        this.shader.setUniformVector4('terrainLook', this.look);
+    }
+
+    /**
+     * How much the layers' heights decide where they meet (0: they fade
+     * evenly) and how much the land varies, 0 to 1; `far` mixes the maps
+     * with a larger copy far away (the graphics tier's choice).
+     */
+    setLook(blending: number, variation: number, far: boolean) {
+        this.look = new Vector4(blending, variation, far ? 1 : 0, this.compressed ? 1 : 0);
+        this.writeLook();
+    }
+
+    /** Wet ground along a water surface over the terrain and under rain. */
+    setWet(wet: TerrainWet) {
+        this.shader.setUniformVector4('terrainWater', new Vector4(wet.water ?? -1e9, wet.water === null ? 0 : wet.shore, wet.rain?.amount ?? 0, wet.puddles));
+        const r = wet.rain?.rect ?? [0, 0, 0, 0];
+        this.shader.setUniformVector4('terrainRain', new Vector4(r[0], r[1], r[2], r[3]));
     }
 
     /** Where the terrain is, for its paint. */
@@ -299,6 +572,26 @@ export class TerrainMaterial {
         this.ctx.device.queue.writeTexture({ texture: tex, origin: { x: x0, y: z0 } }, paint.data as BufferSource, { offset: (z0 * paint.width + x0) * 4, bytesPerRow: paint.width * 4 }, { width: w, height: h });
     }
 
+    /** How deep the layers look (0 to 1) and how far from the camera relief and fine detail reach (meters, 0 for none: the tier's). */
+    setRelief(depth: number, distance: number) {
+        this.relief.x = depth;
+        this.relief.y = distance;
+        this.shader.setUniformVector4('terrainRelief', this.relief);
+    }
+
+    /** What stands on it (core/terrain contactMap), or none. */
+    setContacts(map: { width: number; height: number; data: Uint8Array } | null) {
+        if (map) this.contacts.hold(uploadTexture(this.ctx, map.width, map.height, 'rgba8unorm', map.data, 'terrain contacts'));
+        this.relief.z = map ? 1 : 0;
+        this.shader.setUniformVector4('terrainRelief', this.relief);
+    }
+
+    /** The color the ground under grass takes (linear rgb) and the grass's draw distance (0: any), or none. */
+    setGrass(tint: { color: number[]; distance: number } | null) {
+        const c = tint?.color ?? [0, 0, 0];
+        this.shader.setUniformVector4('terrainGrass', new Vector4(c[0], c[1], c[2], tint?.distance ?? 0));
+    }
+
     private writeInfo() {
         this.shader.setUniformVector4('terrainInfo', new Vector4(this.count, this.painted ? 1 : 0, 1, 0));
     }
@@ -307,5 +600,6 @@ export class TerrainMaterial {
         this.albedo.release();
         this.normal.release();
         this.splat.release();
+        this.contacts.release();
     }
 }

@@ -23,6 +23,19 @@ export let GrassCastShadowShader = /* wgsl */`
         roughness: f32,
         soft: f32,
         specular: f32,
+        // Meters from the camera where the last blades are gone (they thin out from half of it); 0 for none.
+        drawDistance: f32,
+        // The viewer (the shadow pass's camera is the light's) and how far from it blades cast shadows; 0 for all.
+        shadowEyeX: f32,
+        shadowEyeY: f32,
+        shadowEyeZ: f32,
+        shadowDistance: f32,
+        // The ground's color (linear) the roots fade into, how much, and how dry patches are.
+        groundR: f32,
+        groundG: f32,
+        groundB: f32,
+        rootBlend: f32,
+        dryness: f32,
     };
       
     @group(2) @binding(0)
@@ -100,6 +113,17 @@ export let GrassCastShadowShader = /* wgsl */`
         let nMat = mat3x3<f32>(finalMatrix[0].xyz,finalMatrix[1].xyz,finalMatrix[2].xyz) ;
         ORI_NORMALMATRIX = transpose(inverse( nMat ));
         transformVertex.normal = ORI_NORMALMATRIX * normal;
+
+        // Far from the viewer the blades thin out of the shadow, as they do on screen, but nearer.
+        let shadowDistance = materialUniform.shadowDistance;
+        if (shadowDistance > 0.0) {
+            let eye = vec3<f32>(materialUniform.shadowEyeX, materialUniform.shadowEyeY, materialUniform.shadowEyeZ);
+            let d = distance(eye, grassPivot);
+            let keep = fract(sin(dot(grassPivot.xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            if (keep < smoothstep(shadowDistance * 0.5, shadowDistance, d)) {
+                transformVertex.position = grassPivot;
+            }
+        }
 
         return transformVertex ;
     }

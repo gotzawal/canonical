@@ -30,6 +30,8 @@ export interface SwatchRecord {
     normal?: Blob;
     /** Occlusion, roughness and metallic in R, G and B, when the swatch has them. */
     arm?: Blob;
+    /** Height (displacement) in R, when the swatch has one (a Library material): terrain layers blend by it. */
+    height?: Blob;
     /** Pixels per side. */
     size: number;
     /** Mean color, #rrggbb. */
@@ -337,7 +339,7 @@ export interface LibraryMaterial {
     name: string;
     tags: string[];
     url: string;
-    mapUrls?: { normal?: string; arm?: string };
+    mapUrls?: { normal?: string; arm?: string; height?: string };
     tile?: number;
     pixels?: [number, number];
     author?: string;
@@ -350,11 +352,19 @@ export interface LibraryMaterial {
  */
 export async function librarySwatch(item: LibraryMaterial, fetchBlob: (url: string) => Promise<Blob>): Promise<{ rec: SwatchRecord; added: boolean }> {
     const found = (await listSwatches()).find((s) => s.library === item.id);
-    if (found) return { rec: found, added: false };
-    const [blob, normal, arm] = await Promise.all([
+    if (found) {
+        // Added before the Library had its height map: it gets it now.
+        if (!found.height && item.mapUrls?.height) {
+            found.height = await fetchBlob(item.mapUrls.height);
+            await putSwatch(found);
+        }
+        return { rec: found, added: false };
+    }
+    const [blob, normal, arm, height] = await Promise.all([
         fetchBlob(item.url),
         item.mapUrls?.normal ? fetchBlob(item.mapUrls.normal) : Promise.resolve(undefined),
         item.mapUrls?.arm ? fetchBlob(item.mapUrls.arm) : Promise.resolve(undefined),
+        item.mapUrls?.height ? fetchBlob(item.mapUrls.height) : Promise.resolve(undefined),
     ]);
     const bmp = await createImageBitmap(blob);
     const c = canvas(64, 64);
@@ -369,6 +379,7 @@ export async function librarySwatch(item: LibraryMaterial, fetchBlob: (url: stri
         blob,
         ...(normal ? { normal } : {}),
         ...(arm ? { arm } : {}),
+        ...(height ? { height } : {}),
         size,
         color: meanColor(g.getImageData(0, 0, 64, 64)),
         tile: item.tile ?? 2,
@@ -465,7 +476,7 @@ export async function generateSwatches(
     return { swatches, cost: res.cost, errors: res.errors, dropped: [...checked.dropped, ...(refs.length < gen.refs.length ? ['references (the model takes no images)'] : [])] };
 }
 
-export type SwatchMap = 'albedo' | 'normal' | 'arm';
+export type SwatchMap = 'albedo' | 'normal' | 'arm' | 'height';
 
 const EXT: Record<string, string> = { 'image/png': 'png', 'image/jpeg': 'jpg', 'image/webp': 'webp' };
 
@@ -493,7 +504,7 @@ export async function swatchAsset(store: Store, rec: SwatchRecord, map: SwatchMa
 
 /** The library swatch (and which of its maps) a project texture was copied from, if any; also after it was compressed (.ktx2). */
 export function swatchMapOf(meta: AssetMeta | undefined): { id: string; map: SwatchMap } | null {
-    const m = meta ? /\.(sw_[a-z0-9]+)(?:\.(normal|arm))?\.(webp|png|jpe?g|ktx2)$/i.exec(meta.name) : null;
+    const m = meta ? /\.(sw_[a-z0-9]+)(?:\.(normal|arm|height))?\.(webp|png|jpe?g|ktx2)$/i.exec(meta.name) : null;
     return m ? { id: m[1], map: (m[2]?.toLowerCase() as SwatchMap | undefined) ?? 'albedo' } : null;
 }
 

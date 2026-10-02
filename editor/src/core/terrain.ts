@@ -6,6 +6,7 @@
 // terrain takes only its object's position: it does not turn or scale.
 
 import { heightAt, type Heightmap } from './heightmap';
+import type { TerrainLayerDoc } from './model';
 
 /** Where a terrain lies in the world: its middle, its extent and its height scale, meters. */
 export interface TerrainFrame {
@@ -261,6 +262,41 @@ export function refillChunk(map: Heightmap, frame: Pick<TerrainFrame, 'sizeX' | 
     fillChunk(map, frame, chunkGrid(map, cx, cz), skirt, positions, normals);
 }
 
+/**
+ * Writes a chunk's heights eased toward its next coarser level (geomorphing):
+ * at `level` the samples that the coarser level skips move a share `f`
+ * (0 to 1) of the way to where its triangles pass, so the switch to it
+ * changes nothing. Its skirt follows; x, z and the normals stay.
+ */
+export function morphChunk(map: Heightmap, frame: Pick<TerrainFrame, 'height'>, cx: number, cz: number, skirt: number, positions: Float32Array, level: number, f: number) {
+    const g = chunkGrid(map, cx, cz);
+    const { nx, nz } = g;
+    const w = map.width;
+    const h = (i: number, j: number) => map.data[(g.z0 + j) * w + g.x0 + i] * frame.height;
+    const s = 2 ** level;
+    const s2 = s * 2;
+    const morph = f > 0 && level < TERRAIN_LODS - 1;
+    for (let j = 0; j < nz; j++) {
+        for (let i = 0; i < nx; i++) {
+            let y = h(i, j);
+            if (morph && i % s === 0 && j % s === 0) {
+                const oi = i % s2 !== 0;
+                const oj = j % s2 !== 0;
+                const inX = i - s >= 0 && i + s < nx;
+                const inZ = j - s >= 0 && j + s < nz;
+                let to: number | null = null;
+                if (oi && !oj && inX) to = (h(i - s, j) + h(i + s, j)) / 2;
+                else if (!oi && oj && inZ) to = (h(i, j - s) + h(i, j + s)) / 2;
+                // A quad's middle lies on its diagonal, from its +x -z corner to its -x +z one (see chunkMesh).
+                else if (oi && oj && inX && inZ) to = (h(i + s, j - s) + h(i - s, j + s)) / 2;
+                if (to !== null) y += (to - y) * f;
+            }
+            positions[(j * nx + i) * 3 + 1] = y;
+        }
+    }
+    g.rim.forEach((v, k) => (positions[(nx * nz + k) * 3 + 1] = positions[v * 3 + 1] - skirt));
+}
+
 /** A chunk's samples as a region of the map (x0, z0 inclusive, x1, z1 exclusive). */
 export function chunkRegion(map: Heightmap, cx: number, cz: number): { x0: number; z0: number; x1: number; z1: number } {
     const g = chunkGrid(map, cx, cz);
@@ -305,4 +341,125 @@ export function terrainTriangles(s: TerrainSurface, step = 1): { positions: Floa
         }
     }
     return { positions, indices };
+}
+
+/** A smooth step from 0 at the edge's low side to 1 past its high side, as WGSL's smoothstep. */
+function smooth(lo: number, hi: number, x: number): number {
+    const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+    return t * t * (3 - 2 * t);
+}
+
+/** 1 within [lo, hi], fading over `soft` across each limit (the terrain material's band). */
+function band(x: number, lo: number, hi: number, soft: number): number {
+    const s = Math.max(soft, 0.0001) * 0.5;
+    return smooth(lo - s, lo + s, x) * (1 - smooth(hi - s, hi + s, x));
+}
+
+/**
+ * How much each layer of a terrain shows at a point of height `y` and
+ * `slope` degrees, as the terrain material places them (each later layer
+ * over those before it by its rules, then the paint, a channel a layer,
+ * 0 to 1), without the noise that roughens their edges in the view.
+ */
+export function layerWeights(
+    layers: readonly Pick<TerrainLayerDoc, 'height' | 'slope' | 'heightBlend' | 'slopeBlend' | 'onlyPainted'>[],
+    y: number,
+    slope: number,
+    paint?: readonly number[] | null,
+): number[] {
+    const w: number[] = layers.map((_, i) => (i === 0 ? 1 : 0));
+    for (let i = 1; i < layers.length; i++) {
+        const l = layers[i];
+        const a = l.onlyPainted ? 0 : band(y, l.height[0], l.height[1], l.heightBlend) * band(slope, l.slope[0], l.slope[1], l.slopeBlend);
+        for (let j = 0; j < i; j++) w[j] *= 1 - a;
+        w[i] = a;
+    }
+    if (paint) {
+        const painted = Math.min(1, paint.slice(0, w.length).reduce((s, v) => s + v, 0));
+        for (let i = 0; i < w.length; i++) w[i] = w[i] * (1 - painted) + (paint[i] ?? 0);
+    }
+    const total = w.reduce((s, v) => s + v, 0);
+    return total > 0 ? w.map((v) => v / total) : w;
+}
+
+/** The paint (RGBA bytes, a channel a layer) of a terrain at world x, z, 0 to 1 each, or null outside it. */
+export function paintAt(frame: TerrainFrame, paint: { width: number; height: number; data: Uint8Array }, x: number, z: number): number[] | null {
+    const u = (x - (frame.x - frame.sizeX / 2)) / frame.sizeX;
+    const v = (z - (frame.z - frame.sizeZ / 2)) / frame.sizeZ;
+    if (u < 0 || u > 1 || v < 0 || v > 1) return null;
+    const i = Math.min(paint.width - 1, Math.floor(u * paint.width));
+    const j = Math.min(paint.height - 1, Math.floor(v * paint.height));
+    const o = (j * paint.width + i) * 4;
+    return [paint.data[o] / 255, paint.data[o + 1] / 255, paint.data[o + 2] / 255, paint.data[o + 3] / 255];
+}
+
+/** Something standing on the ground: its middle and the radius of its foot, meters, and how much loose stone lies around it (0 to 1: rocks, not trees). */
+export interface Contact {
+    x: number;
+    z: number;
+    r: number;
+    ring: number;
+}
+
+/** Ground a Grass field covers: its x-z box and how densely it grows at a point (0 to 1). */
+export interface Cover {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+    at(x: number, z: number): number;
+}
+
+/**
+ * Where things stand on a terrain, as an RGBA8 map over it (row 0 at its
+ * -z side): red the darkening around each foot (occlusion where it meets
+ * the ground), green a ring of loose stones just outside it, blue how
+ * densely grass covers it (`covers`, stamped last: they may read red).
+ * Texels are a quarter meter at most, `maxSide` a side at least; null
+ * with neither contacts nor covers.
+ */
+export function contactMap(frame: TerrainFrame, contacts: readonly Contact[], maxSide = 512, covers: readonly Cover[] = [], read?: (map: { width: number; height: number; data: Uint8Array }) => void): { width: number; height: number; data: Uint8Array } | null {
+    if (!contacts.length && !covers.length) return null;
+    const step = Math.max(0.25, Math.max(frame.sizeX, frame.sizeZ) / maxSide);
+    const width = Math.max(1, Math.ceil(frame.sizeX / step)), height = Math.max(1, Math.ceil(frame.sizeZ / step));
+    const x0 = frame.x - frame.sizeX / 2, z0 = frame.z - frame.sizeZ / 2;
+    const data = new Uint8Array(width * height * 4);
+    const ss = (a: number, b: number, v: number) => {
+        const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
+        return t * t * (3 - 2 * t);
+    };
+    for (const c of contacts) {
+        const r = Math.max(0.05, c.r), reach = r * 2.6;
+        const i0 = Math.max(0, Math.floor((c.x - reach - x0) / step)), i1 = Math.min(width - 1, Math.ceil((c.x + reach - x0) / step));
+        const j0 = Math.max(0, Math.floor((c.z - reach - z0) / step)), j1 = Math.min(height - 1, Math.ceil((c.z + reach - z0) / step));
+        for (let j = j0; j <= j1; j++) {
+            for (let i = i0; i <= i1; i++) {
+                const d = Math.hypot(x0 + (i + 0.5) * step - c.x, z0 + (j + 0.5) * step - c.z) / r;
+                if (d > 2.6) continue;
+                const o = (j * width + i) * 4;
+                data[o] = Math.max(data[o], Math.round(255 * (1 - ss(0.85, 1.7, d))));
+                data[o + 1] = Math.max(data[o + 1], Math.round(255 * c.ring * ss(0.8, 1.15, d) * (1 - ss(1.4, 2.6, d))));
+            }
+        }
+    }
+    const map = { width, height, data };
+    read?.(map);
+    for (const c of covers) {
+        const i0 = Math.max(0, Math.floor((c.minX - x0) / step)), i1 = Math.min(width - 1, Math.ceil((c.maxX - x0) / step));
+        const j0 = Math.max(0, Math.floor((c.minZ - z0) / step)), j1 = Math.min(height - 1, Math.ceil((c.maxZ - z0) / step));
+        // At most about 40000 reads a cover (a large field is read in blocks of texels).
+        const k = Math.max(1, Math.ceil(Math.sqrt(((i1 - i0 + 1) * (j1 - j0 + 1)) / 40000)));
+        for (let jb = j0; jb <= j1; jb += k) {
+            for (let ib = i0; ib <= i1; ib += k) {
+                const v = Math.round(255 * Math.min(1, Math.max(0, c.at(x0 + (ib + k / 2) * step, z0 + (jb + k / 2) * step))));
+                for (let j = jb; j < Math.min(jb + k, j1 + 1); j++) {
+                    for (let i = ib; i < Math.min(ib + k, i1 + 1); i++) {
+                        const o = (j * width + i) * 4 + 2;
+                        data[o] = Math.max(data[o], v);
+                    }
+                }
+            }
+        }
+    }
+    return map;
 }

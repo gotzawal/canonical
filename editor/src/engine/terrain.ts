@@ -8,7 +8,7 @@
 import { BoundingBox, GeometryBase, MeshRenderer, Object3D, Reference, Vector3, VertexAttributeName, type Context3D } from '@orillusion/core';
 import { getAssetUrl } from '../core/assets';
 import { decodePngRgba, readHeightmap, type Heightmap } from '../core/heightmap';
-import { chunkCounts, chunkMesh, chunkQuads, chunkRegion, refillChunk, TERRAIN_LODS, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { chunkCounts, chunkMesh, chunkQuads, chunkRegion, morphChunk, refillChunk, TERRAIN_LODS, type TerrainFrame, type TerrainSurface } from '../core/terrain';
 import type { AssetMeta } from '../core/types';
 import { TerrainMaterial, type MaterialLayer } from './terrainMaterial';
 
@@ -77,6 +77,8 @@ interface Chunk {
     /** Its middle in the terrain's space, and how far its corners reach from it. */
     center: [number, number, number];
     radius: number;
+    /** The level and the share of the way to the next one its heights were last eased to (-1: not yet). */
+    morph: number;
 }
 
 /** Skirt depth: enough to cover the gap between the coarsest and finest levels on steep ground. */
@@ -91,6 +93,12 @@ export class TerrainView {
     readonly material: TerrainMaterial;
     map: Heightmap = flatMap();
     frame: TerrainFrame = { x: 0, y: 0, z: 0, sizeX: 1, sizeZ: 1, height: 1 };
+    /** What it draws, for the profiler: chunks by level of detail. */
+    report(): string {
+        const levels = [0, 0, 0, 0];
+        for (const c of this.chunks) levels[Math.min(3, c.renderer.lodLevel)]++;
+        return `${this.chunks.length} chunks (levels ${levels.filter((n, i) => n || i < 3).join(' / ')})`;
+    }
     private chunks: Chunk[] = [];
     private skirt = 1;
     private castShadow = true;
@@ -139,7 +147,9 @@ export class TerrainView {
                 renderer.castGI = true;
                 // It never moves; its shadow is drawn again when its level of detail changes.
                 renderer.shadowCacheMode = 'static';
-                const chunk: Chunk = { obj, renderer, geometry, cx, cz, center: [0, 0, 0], radius: 0 };
+                // Culled by its box (fitBounds: easing toward a coarser level stays within it).
+                renderer.frustumCulled = true;
+                const chunk: Chunk = { obj, renderer, geometry, cx, cz, center: [0, 0, 0], radius: 0, morph: -1 };
                 this.fitBounds(chunk, mesh.positions);
                 this.chunks.push(chunk);
                 this.root.addChild(obj);
@@ -186,19 +196,38 @@ export class TerrainView {
             c.geometry.vertexBuffer?.upload(VertexAttributeName.position, pos);
             c.geometry.vertexBuffer?.upload(VertexAttributeName.normal, nor);
             this.fitBounds(c, pos.data as Float32Array);
+            // Eased again from the new heights on the next update.
+            c.morph = -1;
         }
     }
 
-    /** Picks each chunk's level of detail for a camera at `eye` (world). */
-    update(eye: ArrayLike<number>) {
+    /**
+     * Picks each chunk's level of detail for a camera at `eye` (world), and
+     * over the last 40% of the way to the next level eases its heights
+     * toward that level (in eighths), so a switch does not pop. Returns
+     * whether any heights changed (shadows then need drawing again).
+     */
+    update(eye: ArrayLike<number>): boolean {
         const ex = eye[0] - this.frame.x;
         const ey = eye[1] - this.frame.y;
         const ez = eye[2] - this.frame.z;
+        let moved = false;
         for (const c of this.chunks) {
             const d = Math.max(0, Math.hypot(ex - c.center[0], ey - c.center[1], ez - c.center[2]) - c.radius);
             const lod = Math.min(TERRAIN_LODS - 1, Math.max(0, Math.floor(Math.log2(Math.max(1, d / this.near)) + (d > this.near ? 1 : 0))));
             if (c.renderer.lodLevel !== lod) c.renderer.lodLevel = lod;
+            // Where this level ends: near, then twice as far each level.
+            const end = this.near * 2 ** lod;
+            const f = lod < TERRAIN_LODS - 1 ? Math.round(Math.min(1, Math.max(0, (d - end * 0.6) / (end * 0.4))) * 8) / 8 : 0;
+            const morph = lod + f;
+            if (morph === c.morph) continue;
+            c.morph = morph;
+            const pos = c.geometry.getAttribute(VertexAttributeName.position);
+            morphChunk(this.map, this.frame, c.cx, c.cz, this.skirt, pos.data as Float32Array, lod, f);
+            c.geometry.vertexBuffer?.upload(VertexAttributeName.position, pos);
+            moved = true;
         }
+        return moved;
     }
 
     setLayers(layers: MaterialLayer[], size: number) {

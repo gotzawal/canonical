@@ -43,3 +43,50 @@ export function skyParams(env: EnvironmentDoc): SkyParams {
         exposure: env.skyExposure,
     };
 }
+
+/**
+ * Sunlight after the air it crosses to reach a viewer `altitude` meters up
+ * with the sun `elevation` degrees over the horizon: Rayleigh scattering,
+ * Mie haze and ozone over a spherical Earth (the physical sky's
+ * coefficients), relative to the sun straight overhead. `color` has its
+ * largest channel at 1 (white overhead, orange and red near the horizon)
+ * and `strength` is how bright it is (1 overhead, 0 once the sun is
+ * below the horizon).
+ */
+export function sunlightThroughAir(elevation: number, altitude = 0): { color: [number, number, number]; strength: number } {
+    const R = 6360e3, TOP = 6460e3;
+    const rayleigh = [5.802e-6, 13.558e-6, 33.1e-6];
+    const mie = 4.4e-6;
+    const ozone = [0.65e-6, 1.881e-6, 0.085e-6];
+    const depth = (deg: number): number[] => {
+        const e = (deg * Math.PI) / 180;
+        const r0 = R + Math.max(0, altitude);
+        const dir = [Math.cos(e), Math.sin(e)];
+        // From the viewer to the top of the air: |p + t d| = TOP.
+        const b = r0 * dir[1];
+        const far = -b + Math.sqrt(b * b - r0 * r0 + TOP * TOP);
+        const steps = 64;
+        const out = [0, 0, 0];
+        for (let i = 0; i < steps; i++) {
+            const t = ((i + 0.5) / steps) * far;
+            const h = Math.hypot(t * dir[0], r0 + t * dir[1]) - R;
+            if (h < 0) return [Infinity, Infinity, Infinity];
+            const ray = Math.exp(-h / 8000);
+            const haze = Math.exp(-h / 1200);
+            const oz = Math.max(0, 1 - Math.abs(h - 25000) / 15000);
+            const dt = far / steps;
+            for (let c = 0; c < 3; c++) out[c] += (rayleigh[c] * ray + mie * haze + ozone[c] * oz) * dt;
+        }
+        return out;
+    };
+    const overhead = depth(90);
+    // Below the horizon the Earth hides the sun: fade out over the last degree. From up high the
+    // horizon is lower (clouds stay sunlit a while after sunset on the ground).
+    const dip = (Math.acos(R / (R + Math.max(0, altitude))) * 180) / Math.PI;
+    const at = depth(Math.max(elevation, 0.5 - dip));
+    const t = at.map((d, c) => Math.exp(-(d - overhead[c])));
+    const fade = Math.min(1, Math.max(0, (elevation + dip + 1) / 2));
+    const max = Math.max(t[0], t[1], t[2], 1e-6);
+    const luminance = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
+    return { color: [t[0] / max, t[1] / max, t[2] / max], strength: Math.min(1, luminance) * fade };
+}

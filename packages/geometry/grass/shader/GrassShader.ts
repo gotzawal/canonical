@@ -30,6 +30,19 @@ export let GrassShader = /* wgsl */`
         roughness: f32,
         soft: f32,
         specular: f32,
+        // Meters from the camera where the last blades are gone (they thin out from half of it); 0 for none.
+        drawDistance: f32,
+        // The viewer (the shadow pass's camera is the light's) and how far from it blades cast shadows; 0 for all.
+        shadowEyeX: f32,
+        shadowEyeY: f32,
+        shadowEyeZ: f32,
+        shadowDistance: f32,
+        // The ground's color (linear) the roots fade into, how much, and how dry patches are.
+        groundR: f32,
+        groundG: f32,
+        groundB: f32,
+        rootBlend: f32,
+        dryness: f32,
     };
       
     @group(2) @binding(0)
@@ -109,6 +122,17 @@ export let GrassShader = /* wgsl */`
         ORI_NORMALMATRIX = transpose(inverse( nMat ));
         transformVertex.normal = ORI_NORMALMATRIX * normal;
 
+        // Far blades thin out: past half the draw distance more and more of
+        // them (picked by where they stand) fold to their root and draw nothing.
+        let drawDistance = materialUniform.drawDistance;
+        if (drawDistance > 0.0) {
+            let d = distance(globalUniform.CameraPos.xyz, grassPivot);
+            let keep = fract(sin(dot(grassPivot.xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            if (keep < smoothstep(drawDistance * 0.5, drawDistance, d)) {
+                transformVertex.position = grassPivot;
+            }
+        }
+
         return transformVertex ;
     }
 
@@ -126,6 +150,17 @@ export let GrassShader = /* wgsl */`
             return lightBuffer[u32(globalUniform.shadowLights[i / 4u][i % 4u])];
         }
         return lightBuffer[0];
+    }
+
+    fn grassHash(p: vec2<f32>) -> f32 {
+        return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    }
+
+    fn grassNoise(p: vec2<f32>) -> f32 {
+        let i = floor(p);
+        let f = p - i;
+        let u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(grassHash(i), grassHash(i + vec2<f32>(1.0, 0.0)), u.x), mix(grassHash(i + vec2<f32>(0.0, 1.0)), grassHash(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
     }
 
     fn frag(){
@@ -155,7 +190,14 @@ export let GrassShader = /* wgsl */`
 
         // Root to tip, darker near the ground where the blades shade each other.
         let tip = 1.0 - uv.y ;
-        let albedo = color.rgb * mix(materialUniform.grassBottomColor.rgb, materialUniform.grassTopColor.rgb, tip) ;
+        var albedo = color.rgb * mix(materialUniform.grassBottomColor.rgb, materialUniform.grassTopColor.rgb, tip) ;
+        // Drier, yellower patches over the field.
+        let at = ORI_VertexVarying.vWorldPos.xz ;
+        let patchy = grassNoise(at * 0.07) * 0.65 + grassNoise(at * 0.23 + vec2<f32>(7.1, 3.3)) * 0.35 ;
+        albedo = mix(albedo, albedo * vec3<f32>(1.35, 1.1, 0.45), smoothstep(0.45, 0.8, patchy) * materialUniform.dryness) ;
+        // Roots fading into the ground they grow from.
+        let root = (1.0 - smoothstep(0.0, 0.35, tip)) * materialUniform.rootBlend ;
+        albedo = mix(albedo, vec3<f32>(materialUniform.groundR, materialUniform.groundG, materialUniform.groundB), root * 0.8) ;
         let occlusion = mix(0.5, 1.0, tip) ;
 
         // Thin blades: light wraps around them, and shines through them seen against the sun.

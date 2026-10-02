@@ -7579,3 +7579,10 @@ input.text.bt-part-id {
         opacity: 0.6;
     }
 }
+
+/* A row of small buttons that wraps (Scene tab: cloud presets). */
+.button-row {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+}

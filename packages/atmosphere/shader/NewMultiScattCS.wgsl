@@ -28,7 +28,8 @@ fn CsMain(@builtin(global_invocation_id) ThreadId: vec3<u32>) {
     var pixPos: vec2<f32> = vec2<f32>(ThreadId.xy) + 0.5;
     var uv: vec2<f32> = pixPos / MultiScatteringLUTRes;
 
-    uv = vec2<f32>(fromSubUvsToUnit(uv.x, MultiScatteringLUTRes), fromSubUvsToUnit(1. - uv.y, MultiScatteringLUTRes));
+    // Rows from the ground up, as GetMultipleScattering reads them.
+    uv = vec2<f32>(fromSubUvsToUnit(uv.x, MultiScatteringLUTRes), fromSubUvsToUnit(uv.y, MultiScatteringLUTRes));
 
     var Atmosphere: AtmosphereParameters = GetAtmosphereParameters();
 

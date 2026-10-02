@@ -230,6 +230,11 @@ export async function performanceReport(ed: Editor) {
                 .slice(0, 6)
                 .map((p) => ({ pass: p.name, cpu_ms: r2(p.cpu), ...(p.gpu !== null ? { gpu_ms: r2(p.gpu) } : {}), draws: Math.round(p.draws), triangles: Math.round(p.triangles) })),
         });
+        // The environment's parts: what each draws now, and advice where one of them costs a lot.
+        frame.environment = Object.fromEntries(ed.sync.environmentReport());
+        const passCost = (name: string) => passes.filter((p) => p.name === name).reduce((n, p) => n + cost(p), 0);
+        if (passCost('Post: CloudPost') > 3) advice.push(`Clouds take ${r2(passCost('Post: CloudPost'))} ms: a lower graphics tier marches fewer steps to a shorter reach, and less Thickness or coverage costs less; reflections cost a face a frame.`);
+        if (passCost('Editor: ground (contacts, stones, soil, wetness)') > 2) advice.push('The ground work (contacts, loose stones, grass cover) is being remade often: something on a terrain keeps changing (a dragged grass field or scatter); it settles when the change stops.');
         if (snap.peak.draws > DRAWS_HIGH) advice.push(`${snap.peak.draws} draw calls a frame: put repeated objects under instancing groups, prefer models with fewer parts, and turn cast_shadow off on small objects (each caster is drawn again for every shadow map it is in).`);
         if (snap.peak.triangles > TRIANGLES_HIGH) advice.push(`${Math.round(snap.peak.triangles / 1e5) / 10} million triangles a frame: simpler models away from the play area, fewer grass blades, fewer shadow casters.`);
     }

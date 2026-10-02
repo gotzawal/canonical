@@ -62,6 +62,8 @@ export interface Prefs {
     viewportQuality: ViewportQuality;
     /** A graphics quality tier the viewport shows instead of the scene's ('scene': the scene's, high when auto). */
     previewQuality: 'scene' | ViewportQuality;
+    /** Draw the viewport at fewer pixels while frames run late (and back up when there is room). */
+    adaptiveResolution: boolean;
     /** Make the compressed copies of textures (KTX2) in the background while editing, not only when building. */
     backgroundCompression: boolean;
     /** Compress imported textures and models right away and keep only the compressed file (smaller projects). */
@@ -181,6 +183,7 @@ function defaultPrefs(): Prefs {
         glass: null,
         ...viewportDefaults(),
         previewQuality: 'scene',
+        adaptiveResolution: true,
         backgroundCompression: true,
         compressImports: true,
         editMode: false,
@@ -213,6 +216,7 @@ function loadPrefs(): Prefs {
     if (![30, 60, 0].includes(prefs.viewportFps)) prefs.viewportFps = base.viewportFps;
     if (!['low', 'medium', 'high'].includes(prefs.viewportQuality)) prefs.viewportQuality = base.viewportQuality;
     if (!['scene', 'low', 'medium', 'high'].includes(prefs.previewQuality)) prefs.previewQuality = 'scene';
+    prefs.adaptiveResolution = prefs.adaptiveResolution !== false;
     prefs.editMode = prefs.editMode === true;
     prefs.backgroundCompression = prefs.backgroundCompression !== false;
     prefs.compressImports = prefs.compressImports !== false;

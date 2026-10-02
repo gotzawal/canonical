@@ -238,6 +238,8 @@ export class GpuStats {
     internal = false;
     /** Work timed before the engine's frame (addCpu), outside its CPU time. */
     private before = new Set<string>();
+    /** Milliseconds given to addCpu so far (work timed within other work subtracts it). */
+    added = 0;
 
     /** @internal Counts go to the frame being drawn. */
     get counts(): FrameCounts {
@@ -256,22 +258,37 @@ export class GpuStats {
         this.current = zero();
         this.passFrame = new Map();
         this.scope = OUTSIDE;
+        this.outer = [];
     }
 
-    /** A render graph pass starts recording (its draws and GPU time count for it). */
+    /**
+     * A render graph pass starts recording (its draws and GPU time count for
+     * it). Passes nest (each post effect inside the post pass): the time of
+     * one inside another counts for it alone.
+     */
     passBegin(name: string) {
+        const now = performance.now();
+        if (this.scope !== OUTSIDE) {
+            this.passCounts().cpu += now - this.scopeStart;
+            this.outer.push(this.scope);
+        }
         this.scope = name;
-        this.scopeStart = performance.now();
+        this.scopeStart = now;
     }
 
     passEnd(name: string) {
         if (this.scope !== name) return;
-        this.passCounts().cpu += performance.now() - this.scopeStart;
-        this.scope = OUTSIDE;
+        const now = performance.now();
+        this.passCounts().cpu += now - this.scopeStart;
+        this.scope = this.outer.pop() ?? OUTSIDE;
+        this.scopeStart = now;
     }
+    /** The passes a nested pass is inside of. */
+    private outer: string[] = [];
 
     /** CPU time of work before the engine's frame (scripts in Play), shown as a pass of its own. */
     addCpu(name: string, ms: number) {
+        this.added += ms;
         this.before.add(name);
         let p = this.passFrame.get(name);
         if (!p) this.passFrame.set(name, (p = { cpu: 0, draws: 0, triangles: 0 }));

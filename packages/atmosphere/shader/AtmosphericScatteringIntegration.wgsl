@@ -186,10 +186,10 @@ fn getSunDirection() -> vec3<f32> {
     return L;
 }
 
-fn GetTransmittanceToSun(Atmosphere: AtmosphereParameters, P: vec3<f32>) -> vec3<f32> {
+fn GetTransmittanceToSun(Atmosphere: AtmosphereParameters, P: vec3<f32>, SunDir: vec3<f32>) -> vec3<f32> {
     var pHeight: f32 = length(P);
     var UpVector: vec3<f32> = P / pHeight;
-    var SunZenithCosAngle: f32 = dot(getSunDirection(), UpVector);
+    var SunZenithCosAngle: f32 = dot(SunDir, UpVector);
     var uv = LutTransmittanceParamsToUv(Atmosphere, pHeight, SunZenithCosAngle);
     return textureSampleLevel(transmittanceTexture, transmittanceTextureSampler, uv, 0).rgb;
 }
@@ -351,9 +351,8 @@ fn IntegrateScatteredLuminance(
         var UpVector: vec3<f32> = P / pHeight;
         var SunZenithCosAngle: f32 = dot(SunDir, UpVector);
         var uv = LutTransmittanceParamsToUv(Atmosphere, pHeight, SunZenithCosAngle);
-        var transmittanceTextureSize = vec2<f32>(textureDimensions(transmittanceTexture, 0));
-        var transmittanceTextureCoord = vec2<i32>(transmittanceTextureSize * uv);
-        var TransmittanceToSun: vec3<f32> = textureLoad(transmittanceTexture, transmittanceTextureCoord, 0).rgb;
+        // Filtered: the nearest texel bands the sky at low sun.
+        var TransmittanceToSun: vec3<f32> = textureSampleLevel(transmittanceTexture, transmittanceTextureSampler, uv, 0).rgb;
 
         var PhaseTimesScattering: vec3<f32>;
         if MieRayPhase {
@@ -418,7 +417,7 @@ fn IntegrateScatteredLuminance(
         var UpVector: vec3<f32> = P / pHeight;
         var NdotL: f32 = clamp(dot(normalize(UpVector), normalize(SunDir)), 0.0, 1.0);
         var albedo: vec3<f32> = Atmosphere.GroundAlbedo;
-        var TransmittanceToSun: vec3<f32> = GetTransmittanceToSun(Atmosphere, P);
+        var TransmittanceToSun: vec3<f32> = GetTransmittanceToSun(Atmosphere, P, SunDir);
         L += globalL * TransmittanceToSun * throughput * NdotL * albedo / PI;
     }
 

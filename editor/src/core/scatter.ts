@@ -4,7 +4,7 @@
 // engine (engine/scatter.ts) draws the copies, and Play, the level check
 // and the navigation mesh take the solid ones as trunks and boxes.
 
-import type { Quat, Vec3 } from './math';
+import { quatRotate, type Quat, type Vec3 } from './math';
 import type { ScatterDoc } from './types';
 import { seededRandom } from './terrainGen';
 
@@ -16,6 +16,18 @@ export interface GroundSample {
 
 /** The ground under (x, z), or null where there is none. */
 export type GroundQuery = (x: number, z: number) => GroundSample | null;
+
+/** How much each layer of the terrain shows where a copy stands (see core/terrain.ts layerWeights), or null off a terrain. */
+export type LayerQuery = (x: number, z: number, ground: GroundSample) => readonly number[] | null;
+
+/** Points around the bottom of a source's piece at scale 1, in its space (where it meets the ground). */
+export type BaseQuery = (source: number, variant: number) => readonly Vec3[];
+
+/** What placement knows of the ground and the models beyond the ground's height. */
+export interface PlaceExtras {
+    layers?: LayerQuery;
+    base?: BaseQuery;
+}
 
 /** Where a scatter lies: its object's world position and its turned x and z axes (sizes are meters). */
 export interface ScatterFrame {
@@ -53,14 +65,25 @@ const TRIES = 12;
  * keeps two objects with the same seed apart), each kept where the ground
  * is, its height and slope are within the rules, it is clear of the boxes
  * to avoid (and their margin) and of the copies before it by the spacing.
- * Every try draws the same six numbers, so a copy that is left out does
- * not move the ones after it.
+ * With clusters, a dart is kept by how dense a noise of the cluster size
+ * is there (the larger copies in the dense middles); with a terrain layer,
+ * by how much that layer shows there. Copies tilt at random by up to the
+ * tilt, and sink on slopes by the width of their piece (bury). Every try
+ * draws the same six numbers from the seed, and four more from a second
+ * stream, so a copy that is left out does not move the ones after it, and
+ * scatters without the newer rules keep their copies.
  */
-export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: GroundQuery | null, avoid: readonly AvoidBox[], salt = 0): Placement[] {
+export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: GroundQuery | null, avoid: readonly AvoidBox[], salt = 0, extras: PlaceExtras = {}): Placement[] {
     const weights = doc.sources.map((s) => (s.model && s.weight > 0 ? s.weight : 0));
     const total = weights.reduce((a, b) => a + b, 0);
     if (!(total > 0) || doc.count <= 0) return [];
     const random = seededRandom(Math.imul(doc.seed + 1, 2654435761) ^ salt);
+    const more = seededRandom(Math.imul(doc.seed + 7, 2246822519) ^ salt ^ 0x5bd1e995);
+    const clusters = Math.min(1, Math.max(0, doc.clusters));
+    const clusterScale = 1 / Math.max(1, doc.clusterSize);
+    const noiseSeed = Math.imul(doc.seed + 3, 3266489917) ^ salt;
+    const tilt = (Math.min(60, Math.max(0, doc.tilt)) * Math.PI) / 180;
+    const bury = Math.min(1, Math.max(0, doc.bury));
     const [w, d] = doc.size;
     const { origin: o, x: ax, z: az } = frame;
     const spacing = Math.max(0, doc.spacing);
@@ -73,7 +96,8 @@ export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: Groun
     const [h0, h1] = doc.height;
     const [s0, s1] = doc.slope;
     const margin = Math.max(0, doc.margin);
-    const tries = Math.min(doc.count * TRIES + 50, 400000);
+    // Clusters and layers leave darts out: more tries keep the count.
+    const tries = Math.min(doc.count * TRIES * (1 + 3 * clusters + (doc.layer > 0 ? 2 : 0)) + 50, 400000);
     for (let n = 0; n < tries && out.length < doc.count; n++) {
         const u = (random() - 0.5) * w;
         const v = (random() - 0.5) * d;
@@ -81,8 +105,20 @@ export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: Groun
         const turn = random();
         const grow = random();
         const variant = random();
+        const keepCluster = more();
+        const keepLayer = more();
+        const tiltTurn = more();
+        const tiltBy = more();
         const x = o[0] + ax[0] * u + az[0] * v;
         const z = o[2] + ax[2] * u + az[2] * v;
+        // Groups: kept by how dense the noise is here; the middles take the large copies.
+        let dense = 0;
+        if (clusters > 0) {
+            const nz = clusterNoise(x * clusterScale, z * clusterScale, noiseSeed);
+            const keep = 1 - clusters + clusters * smoothstep(0.42, 0.7, nz);
+            if (keepCluster >= keep) continue;
+            dense = clusters * smoothstep(0.55, 0.85, nz);
+        }
         if (avoid.some((b) => x >= b.minX - margin && x <= b.maxX + margin && z >= b.minZ - margin && z <= b.maxZ + margin)) continue;
         let ci = 0;
         let cj = 0;
@@ -95,22 +131,75 @@ export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: Groun
         if (!g || g.y < h0 || g.y > h1) continue;
         const slope = (Math.acos(Math.min(1, Math.max(-1, g.normal[1]))) * 180) / Math.PI;
         if (slope < s0 || slope > s1) continue;
+        if (doc.layer > 0 && extras.layers) {
+            const shows = extras.layers(x, z, g)?.[doc.layer - 1] ?? 0;
+            if (keepLayer >= shows) continue;
+        }
         let source = 0;
         for (let acc = weights[0]; acc <= pick && source < weights.length - 1; acc += weights[++source]);
         while (!weights[source] && source > 0) source--;
         const src = doc.sources[source];
         const yaw = turn * Math.PI * 2;
+        const size = dense > 0 ? grow + (1 - grow) * dense * 0.8 : grow;
+        const scale = src.scale[0] + (src.scale[1] - src.scale[0]) * size;
+        let rotation = leanWith(g.normal, doc.align, yaw);
+        if (tilt > 0 && tiltBy > 0) {
+            // About a level axis turned at random, by up to the tilt (most copies a little).
+            const a = tiltTurn * Math.PI * 2;
+            const half = (tilt * tiltBy * tiltBy) / 2;
+            rotation = mulQuat([Math.cos(a) * Math.sin(half), 0, Math.sin(a) * Math.sin(half), Math.cos(half)], rotation);
+        }
+        // No side of its base floats over the ground (slopes, tilt): the highest gap closes,
+        // and bury sinks it further by part of how unevenly it sits.
+        let drop = doc.sink;
+        const base = extras.base?.(source, variant);
+        if (base?.length) {
+            let hi = -Infinity, lo = Infinity;
+            for (const b of base) {
+                const q = quatRotate(rotation, [b[0] * scale, b[1] * scale, b[2] * scale]);
+                const gap = g.y + q[1] - (ground?.(x + q[0], z + q[2])?.y ?? g.y);
+                hi = Math.max(hi, gap);
+                lo = Math.min(lo, gap);
+            }
+            drop += Math.max(0, hi) + (hi - lo) * 0.35 * bury;
+        }
         out.push({
             source,
-            position: [x, g.y - doc.sink, z],
-            rotation: leanWith(g.normal, doc.align, yaw),
-            scale: src.scale[0] + (src.scale[1] - src.scale[0]) * grow,
+            position: [x, g.y - drop, z],
+            rotation,
+            scale,
             yaw,
             variant,
         });
         if (cell > 0) grid.set(keyOf(ci, cj), out.length - 1);
     }
     return out;
+}
+
+function smoothstep(lo: number, hi: number, x: number): number {
+    const t = Math.min(1, Math.max(0, (x - lo) / (hi - lo)));
+    return t * t * (3 - 2 * t);
+}
+
+/** A value of 0 to 1 hashed from a lattice point and a seed. */
+function latticeValue(i: number, j: number, seed: number): number {
+    let h = Math.imul(i, 374761393) ^ Math.imul(j, 668265263) ^ seed;
+    h = Math.imul(h ^ (h >>> 13), 1274126177);
+    return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function valueNoise(x: number, z: number, seed: number): number {
+    const i = Math.floor(x), j = Math.floor(z);
+    const fx = x - i, fz = z - j;
+    const ux = fx * fx * (3 - 2 * fx), uz = fz * fz * (3 - 2 * fz);
+    const a = latticeValue(i, j, seed), b = latticeValue(i + 1, j, seed);
+    const c = latticeValue(i, j + 1, seed), d = latticeValue(i + 1, j + 1, seed);
+    return (a + (b - a) * ux) * (1 - uz) + (c + (d - c) * ux) * uz;
+}
+
+/** Two octaves of value noise, 0 to 1, one cluster across per unit. */
+function clusterNoise(x: number, z: number, seed: number): number {
+    return valueNoise(x, z, seed) * 0.7 + valueNoise(x * 2.7 + 13.1, z * 2.7 + 7.3, seed ^ 0x2f) * 0.3;
 }
 
 /** Whether a copy within `spacing` of (x, z) is already placed. */

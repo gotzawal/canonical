@@ -123,7 +123,7 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
             instancing: sync.instancingOf('copies'),
             cube: { shown: sync.shown(cube), alone: cube.enable },
             sphere: sync.entries.get(id('Sphere'))!.mesh!.enable,
-            standing: sync.entries.get(id('Ground'))!.grass!.renderer.nodes.filter((b) => b.localScale.y > 0).length,
+            standing: sync.entries.get(id('Ground'))!.grass!.renderers.reduce((n, r) => n + r.nodes.filter((b) => b.localScale.y > 0).length, 0),
             mirror: !!mirror.captureComponent && !!mirror.material,
             cascades: (sync.entries.get(id('Sun'))!.light as any).enableCSM,
         };

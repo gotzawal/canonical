@@ -1,9 +1,10 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    AtmosphericComponent, BloomPost, Camera3D, CloudPost, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
     MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowPass, PointShadowPass, LightBase, SkyRenderer, SolidColorSky, SSRPost,
     Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
+import { AdaptiveResolution } from '../core/adaptive';
 import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
 import { skyParams } from '../core/sky';
 import type { ViewportFps, ViewportQuality } from '../core/store';
@@ -16,7 +17,7 @@ import { fitLightShadow } from './shadows';
 type PostCtor = new () => PostBase;
 
 /** The built-in effects in the order they run: reflections over ambient occlusion, fog over them, light shafts over fog, bloom of it all. */
-const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
+const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'CloudPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
 const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
 /** Least time between two bakes of the physical sky with clouds, ms. */
 const CLOUD_BAKE_MS = 250;
@@ -78,6 +79,9 @@ export class Runtime {
     private watchingRatio = false;
     /** Captures in progress, which draw at full resolution. */
     private sharp = 0;
+    /** Draws at fewer pixels while frames run late (setAdaptive). */
+    private adaptive: AdaptiveResolution | null = null;
+    private lastFrameAt = 0;
     private frameListeners = new Set<() => void>();
     private beforeListeners = new Set<() => void>();
     private graphListeners = new Set<() => void>();
@@ -200,6 +204,21 @@ export class Runtime {
         this.watchRatio();
     }
 
+    /**
+     * Lowers the resolution a step at a time while frames take longer than
+     * the frame rate aims at, and raises it back when there is room.
+     */
+    setAdaptive(on: boolean) {
+        if (on === !!this.adaptive) return;
+        this.adaptive = on ? new AdaptiveResolution() : null;
+        this.applyResolution();
+    }
+
+    /** The share of the chosen resolution drawn now (1 without adaptive resolution or while it has room). */
+    get resolutionScale(): number {
+        return this.adaptive?.scale ?? 1;
+    }
+
     /** Sets the resolution again when the screen's pixel ratio changes (the engine's own resize keeps the ratio it was given). */
     private watchRatio() {
         if (this.watchingRatio || typeof matchMedia !== 'function') return;
@@ -222,7 +241,8 @@ export class Runtime {
     private applyResolution(): boolean {
         if (!this.quality) return false;
         const ctx = this.engine.context3D;
-        const ratio = this.sharp > 0 ? screenRatio() : VIEWPORT_QUALITY.find((q) => q.value === this.quality)!.ratio();
+        // Never under half a pixel per CSS pixel, whatever the adaptive step.
+        const ratio = this.sharp > 0 ? screenRatio() : Math.max(Math.min(0.5, screenRatio()), VIEWPORT_QUALITY.find((q) => q.value === this.quality)!.ratio() * this.resolutionScale);
         if (ctx.canvasConfig?.devicePixelRatio === ratio) return false;
         ctx.canvasConfig = { ...ctx.canvasConfig, devicePixelRatio: ratio };
         const size = [ctx.windowWidth, ctx.windowHeight];
@@ -280,6 +300,7 @@ export class Runtime {
         this.stats?.beginFrame();
         this.fitShadowLights();
         const start = performance.now();
+        const timed = this.stats?.added ?? 0;
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -288,8 +309,8 @@ export class Runtime {
             }
         }
         this.engineStart = performance.now();
-        // Play (scripts, behavior trees, physics) and the walk camera run here.
-        if (this.beforeListeners.size) this.stats?.addCpu('Play and walk', this.engineStart - start);
+        // Play (scripts, behavior trees, physics) and the walk camera run here, besides the editor's own work (timed by itself).
+        if (this.beforeListeners.size && this.stats) this.stats.addCpu('Play and walk', this.engineStart - start - (this.stats.added - timed));
     }
 
     /** The camera the view renders through: the editor camera, or a scene camera in Play mode. */
@@ -308,6 +329,28 @@ export class Runtime {
     invalidateEnvironment() {
         this.lastEnv = '';
     }
+
+    /** What the clouds draw, for the Profiler. */
+    environmentReport(): [string, string][] {
+        const c = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (!c) return [];
+        const tier = QUALITY[this.qualityLevel];
+        return [['Clouds', `${c.coverage > 0 ? `${c.steps} steps a ray, one ray a ${c.block}x${c.block} block a frame, to ${(c.farLimit / 1000).toFixed(0)} km` : 'stars only'}${c.reflections ? `; reflections a face every ${tier.cloudReflectionEvery} frame(s)` : ''}`]];
+    }
+
+    /** How bright the stars and the moon's disc are (the weather's night), 0 for none: they show with the clouds. */
+    setStars(stars: number) {
+        this.stars = Math.max(0, stars);
+    }
+    private stars = 0;
+
+    /** The sunlight the clouds get (linear rgb times brightness), or null for the key light's own. */
+    setCloudSun(sun: [number, number, number] | null) {
+        this.cloudSun = sun;
+        const c = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (c) c.sunlight = sun;
+    }
+    private cloudSun: [number, number, number] | null = null;
 
     /** The tier drawn now: the previewed one, else the document's, else the device's. */
     get qualityLevel(): QualityLevel {
@@ -360,6 +403,8 @@ export class Runtime {
         }
         this.frames++;
         const now = performance.now();
+        if (this.adaptive && this.lastFrameAt && !this.sharp && this.adaptive.frame(now - this.lastFrameAt, 1000 / this.fpsTarget, now)) this.applyResolution();
+        this.lastFrameAt = now;
         if (now - this.fpsTime >= 500) {
             this.fps = (this.frames * 1000) / (now - this.fpsTime);
             this.frames = 0;
@@ -446,16 +491,36 @@ export class Runtime {
         // The engine's fog is clear up to `end`; linear fog is full at `start`.
         fog.end = Math.max(0, f.near);
         fog.start = Math.max(fog.end + 0.01, f.far);
-        fog.ins = f.intensity;
+        // Aerial perspective runs in the fog's pass: without fog, the pass only fades distant ground into the sky.
+        fog.ins = f.enable ? f.intensity : 0;
         fog.density = f.mode === 'linear' ? 0 : Math.max(0, f.density);
         fog.fogHeightScale = Math.max(0.001, f.heightFalloff);
         fog.heightBase = f.height;
         // The engine's older height term stays off.
         fog.rayLength = 0;
-        fog.overrideSkyFactor = f.sky;
+        fog.overrideSkyFactor = f.enable ? f.sky : 0;
         fog.dirHeightLine = sunScatterToLine(f.sunScatter);
         fog.scatteringExponent = f.sunFocus;
-        this.togglePost(GlobalFog, f.enable);
+        // A clear day (haze 1): half faded at about 12 km near the ground.
+        const haze = tier.aerial ? Math.max(0, env.atmosphere.haze) : 0;
+        fog.airDensity = haze * 5.6e-5;
+        this.togglePost(GlobalFog, f.enable || haze > 0);
+
+        // Clouds go before the fog, which then hazes them like the sky.
+        const cl = env.clouds;
+        // No clouds (or stars) to draw: no cost at all.
+        const clouded = cl.enable && cl.coverage > 0;
+        this.togglePost(CloudPost, clouded || this.stars > 0);
+        const clouds = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (clouds) {
+            const a = (cl.windDirection * Math.PI) / 180;
+            Object.assign(clouds, {
+                coverage: clouded ? cl.coverage : 0, stars: this.stars, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, variety: cl.variety, softness: cl.softness, seed: cl.seed,
+                bottom: cl.bottom, top: cl.bottom + cl.thickness,
+                windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, sunlight: this.cloudSun, steps: tier.cloudSteps, farLimit: tier.cloudFar, block: tier.cloudBlock, reflectionEvery: tier.cloudReflectionEvery,
+            });
+        }
 
         const vf = env.volumetricFog;
         const vol = (pp as any).volumetricFog;
@@ -481,6 +546,7 @@ export class Runtime {
         const shadow = setting.shadow;
         shadow.pcfKernelScale = env.shadow.softness;
         shadow.updateFrameRate = tier.shadowEvery;
+        shadow.farCascadeEvery = tier.farCascadeEvery;
         shadow.pointShadowAtlasMax = tier.shadowAtlasMax;
         this.fitShadowLights();
 

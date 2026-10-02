@@ -31,6 +31,8 @@ export interface NewTerrain {
     height?: number;
     seed?: number;
     roughness?: number;
+    /** How much water has worn it, 0 to 1 (by its shape when left out). */
+    erosion?: number;
     /** Samples a side: 257, 513 (default) or 1025. */
     resolution?: number;
     /** Island: the water's height, where its coast lies (0 by default). */
@@ -61,7 +63,7 @@ export async function newTerrain(o: NewTerrain, name: string, at: Vec3): Promise
     const d = SHAPE_DEFAULTS[o.shape];
     const size = o.size ?? d.size;
     const height = o.height ?? d.height;
-    const map = generateHeightmap({ shape: o.shape, resolution: o.resolution ?? 513, seed: o.seed ?? 1, roughness: o.roughness });
+    const map = generateHeightmap({ shape: o.shape, resolution: o.resolution ?? 513, seed: o.seed ?? 1, roughness: o.roughness, erosion: o.erosion });
     const meta = await saveHeightmap(map, `${name} Heights.png`);
     const y = o.shape === 'island' ? (o.waterLevel ?? 0) - ISLAND_COAST * height : at[1];
     return {

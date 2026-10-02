@@ -14,6 +14,7 @@ import { PreDepthPass } from '../graph/passes/PreDepthPass';
 import { ReflectionPass } from '../graph/passes/ReflectionPass';
 import { SceneCapturePass } from '../graph/passes/SceneCapturePass';
 import { SceneColorPyramidPass } from '../graph/passes/SceneColorPyramidPass';
+import { SceneDepthCopyPass } from '../graph/passes/SceneDepthCopyPass';
 import { ShadowPass } from '../graph/passes/ShadowPass';
 import { SkyPass } from '../graph/passes/SkyPass';
 import { SortedTransparentPass } from '../graph/passes/SortedTransparentPass';
@@ -117,6 +118,10 @@ export class ForwardRendererJob extends RendererJob {
 
         // Scene color pyramid snapshot for transmission / refraction.
         this.graph.add(SceneColorPyramidPass);
+
+        // Scene depth snapshot, taken with the color above: materials that
+        // read the scene (Material.readsScene, e.g. water) sample both.
+        this.graph.add(SceneDepthCopyPass);
 
         // Transmission split: opaque-with-transmission deferred to
         // after the pyramid so refraction samples the world behind.

@@ -1,11 +1,12 @@
 import {
-    AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, Shader, SkinnedMeshRenderer2, Texture, Vector4,
+    AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, RendererMask, RendererMaskUtil, Shader, type RenderShaderPass, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
 import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, TextureRole, Vec3 } from '../core/types';
 import { colorToHex, hexToColor } from './color';
 import { applyAlpha, applyUVTransform, createBuiltinMaterial, EngineAlpha, engineAlpha, MaterialMaps, BASE_MAP } from './materials';
 import { applyProps, MODEL_MAPS, type ShaderManager } from './shaders';
+import { ownIndices } from './lod';
 
 // An imported model is a single document node whose engine object is a
 // clone of the parsed glTF prefab. Its meshes ("parts") and materials
@@ -53,7 +54,7 @@ export interface ModelPart {
     vertices: number;
     triangles: number;
     /** `frustumCulled`: whether the loaded renderer takes part in culling (not skinned or morphed). */
-    base: { position: Vec3; rotation: Vec3; scale: Vec3; castShadow: boolean; receiveShadow: boolean; frustumCulled: boolean };
+    base: { position: Vec3; rotation: Vec3; scale: Vec3; castShadow: boolean; receiveShadow: boolean; frustumCulled: boolean; ignoresDepthPass: boolean };
 }
 
 export interface ModelSlot {
@@ -137,11 +138,12 @@ function destroyKeepTextures(shader: Shader) {
  * for the new material, and copying them through Shader.clone() fails for
  * pass classes whose constructors take other arguments. A copy of a
  * LitMaterial stays a LitMaterial: the renderer sends transmissive (glass)
- * materials to their own pass by asking for `transmissionFactor`.
+ * materials to their own pass by asking for `transmissionFactor`. `copyPass`
+ * makes each pass of the copy (a variant of the shader, say).
  */
-export function cloneMaterial(src: Material, ctx?: any): Material {
+export function cloneMaterial(src: Material, ctx?: any, copyPass = (pass: RenderShaderPass) => pass.clone()): Material {
     const shader = new Shader();
-    for (const pass of src.shader.getSubShaders(PassType.COLOR)) shader.addRenderPass(pass.clone());
+    for (const pass of src.shader.getSubShaders(PassType.COLOR)) shader.addRenderPass(copyPass(pass));
     let mat: Material;
     if (src instanceof LitMaterial) {
         const lit = new LitMaterial(ctx);
@@ -234,7 +236,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
                 if (!r.geometry || !mat) return;
                 const p = paths.get(r)!;
                 const pos = r.geometry.getAttribute(VertexAttributeName.position)?.data;
-                const idx = r.geometry.getAttribute(VertexAttributeName.indices)?.data;
+                const idx = ownIndices(r.geometry);
                 const key = slotKey(mat);
                 // The loader puts each primitive in its own child named after
                 // the mesh; the glTF node above it has the meaningful name.
@@ -262,6 +264,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
                         castShadow: r.castShadow,
                         receiveShadow: (r as any).receiveShadow ?? true,
                         frustumCulled: r.frustumCulled,
+                        ignoresDepthPass: RendererMaskUtil.hasMask(r.rendererMask, RendererMask.IgnoreDepthPass),
                     },
                 };
                 parts.push(part);
@@ -376,6 +379,11 @@ export class ModelOverrides {
                 }
                 mat = this.mats.get(key)!.material;
             }
+            // A shader reading the scene behind it stays out of the depth prepass
+            // (set before the material, whose passes are made from the mask).
+            const reads = !!mo?.shader && this.deps.shaders.isValid(mo.shader) && this.deps.shaders.readsScene(mo.shader);
+            if (reads) part.renderer.addRendererMask(RendererMask.IgnoreDepthPass);
+            else if (!part.base.ignoresDepthPass) part.renderer.removeRendererMask(RendererMask.IgnoreDepthPass);
             if (part.renderer.materials[0] !== mat) part.renderer.materials = [mat];
             // A shader that moves vertices can draw outside the part's bounds: it is never culled.
             const moves = !!mo?.shader && this.deps.shaders.isValid(mo.shader) && this.deps.shaders.movesVertices(mo.shader);

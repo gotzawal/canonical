@@ -138,6 +138,8 @@ async function main() {
     runtime.setQualityOverride(override);
     // As fast as the display refreshes, at the tier's resolution.
     runtime.setViewport(0, QUALITY[quality].resolution);
+    // Fewer pixels while frames run late, on any device.
+    runtime.setAdaptive(true);
     const shaders = new ShaderManager(runtime, store);
     const sync = new SceneSync(runtime, store, shaders, game.textures, { textureMaxSize: QUALITY[quality].textureMaxSize });
     const picker = new Picker(runtime, sync, store);

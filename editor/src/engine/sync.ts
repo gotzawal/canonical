@@ -1,4 +1,5 @@
 import {
+    Vector3,
     BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, InstanceDrawComponent, isKTX2, LightBase, LitMaterial, Material,
     MeshRenderer, MirrorComponent, MirrorMaterial, Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer,
     SkinnedMeshRenderer2, SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
@@ -10,15 +11,21 @@ import type {
     AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, RainDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, ScatterDoc, TerrainDoc,
     TextureRole,
 } from '../core/types';
-import { placeScatter, type AvoidBox, type Placement, type ScatterSolid } from '../core/scatter';
-import { covers, groundHeight, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { placeScatter, type AvoidBox, type GroundSample, type Placement, type ScatterSolid } from '../core/scatter';
+import { covers, groundHeight, layerWeights, paintAt, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { GroundDetails, type GroundHost } from './ground';
 import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
+import { skySunOf, sunlightThroughAir } from '../core/sky';
+import { WeatherClock } from '../core/weather';
+import { defaults } from '../core/schema';
+import { Rain } from '../core/model';
+import { ModelLods } from './lod';
 import { castGI } from './gi';
 import { setLightShadow } from './shadows';
-import { QUALITY } from '../core/quality';
+import { QUALITY, type QualityLevel } from '../core/quality';
 import { movesInPlay } from '../core/motion';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
@@ -106,6 +113,8 @@ interface ScatterState {
     placements: Placement[];
     /** The solid copies, as trunks and boxes. */
     solids: ScatterSolid[];
+    /** What its soil and moss were last set from. */
+    groundKey?: string;
 }
 
 /** Scatters are placed again this long after the last change (a drag changes things many times a second). */
@@ -126,6 +135,12 @@ interface TerrainState {
     watched: Texture[];
     /** Changes whenever its heights or place change (grass and scatter on it follow). */
     version: number;
+    /** The water and rain that last made it wet (see GroundDetails). */
+    wet: string;
+    /** The height of water over it (grass grows above it), or null. */
+    water?: number | null;
+    /** Its paint as last loaded (scatters that follow a layer read it), or null. */
+    paintData: { width: number; height: number; data: Uint8Array } | null;
 }
 
 /** An engine material and the objects showing it (see SceneSync.materials). */
@@ -194,6 +209,17 @@ export class SceneSync extends Emitter<SyncEvents> {
     private isolateLights = false;
     /** Environment shown instead of the document's (the reference room). */
     private envOverride: EnvironmentDoc | null = null;
+    /** The weather and time of day shown (Environment.weather), when on; when it was worked out and from what. */
+    private clock = new WeatherClock();
+    /** The weather and time of day shown (Environment.weather), when on. */
+    private get weather() {
+        return this.clock.now;
+    }
+    /** What the clouds' sunlight was last worked out for: the document's version, the weather and the overrides. */
+    private cloudSunFor: unknown[] = [];
+    /** Counts environment overrides set (the weather follows them). */
+    private overrides = 0;
+    private weatherRain: RainVolume | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     /** Texture assets by `${asset}|${role}`: the texture, once it has data. */
@@ -250,6 +276,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     private scatterModelsLoaded = new Map<string, ScatterModel | null>();
     /** Scatters in the scene; a placement waiting to run, and what resolves once it ran. */
     private scatterStates = new Set<ScatterState>();
+    /** What lies on and colors the ground (contacts, loose stones, soil, wetness). */
+    private ground: GroundDetails;
     private scatterTimer = 0;
     private scatterPending: Promise<void> | null = null;
     private scatterRan: (() => void) | null = null;
@@ -268,18 +296,107 @@ export class SceneSync extends Emitter<SyncEvents> {
         // A shader that finished compiling changes the materials built from it.
         shaders.on('compiled', () => this.sync());
         shaders.on('status', () => this.sync());
+        this.ground = new GroundDetails(this.groundHost(), runtime.scene, runtime.engine.context3D);
         // Terrains draw the detail the camera's distance calls for.
         runtime.onBeforeFrame(() => this.eachFrame());
     }
 
     /** Terrain levels of detail and scatter draw distances for the camera, once a frame. */
     private eachFrame() {
-        if (!this.terrainStates.size && !this.scatterStates.size) return;
+        if (this.tierApplied !== this.runtime.qualityLevel) this.applyTier();
         const eye = this.runtime.activeCamera?.transform.worldPosition;
         if (!eye) return;
         const at = [eye.x, eye.y, eye.z];
-        for (const t of this.terrainStates) t.view.update(at);
+        // Each part's CPU time shows in the Profiler as a row of its own.
+        const stats = this.runtime.stats;
+        let t0 = performance.now();
+        const lap = (name: string) => {
+            const t = performance.now();
+            stats?.addCpu(name, t - t0);
+            t0 = t;
+        };
+        this.modelLods.update(at, QUALITY[this.runtime.qualityLevel].lodDistance);
+        for (const g of this.grasses) g.grass?.update(at);
+        lap('Editor: grass and model levels of detail');
+        this.updateWeather(at);
+        // The clouds' sunlight follows the document, the weather and the environment shown.
+        if (this.store.version !== this.cloudSunFor[0] || this.weather !== this.cloudSunFor[1] || this.overrides !== this.cloudSunFor[2]) {
+            this.cloudSunFor = [this.store.version, this.weather, this.overrides];
+            this.runtime.setCloudSun(this.cloudSunlight());
+        }
+        lap('Editor: weather');
+        if (!this.terrainStates.size && !this.scatterStates.size) return;
+        let eased = false;
+        for (const t of this.terrainStates) eased = t.view.update(at) || eased;
+        // Eased terrain heights move the shadows they cast (a few times a second at most).
+        const now = performance.now();
+        if (eased && now - this.shadowsEasedAt > 250) {
+            this.shadowsEasedAt = now;
+            this.runtime.redrawShadows();
+        }
         for (const s of this.scatterStates) s.view.update(at);
+        lap('Editor: terrain and scatter levels of detail');
+        const tier = QUALITY[this.runtime.qualityLevel];
+        this.ground.update(at, tier.clutterDistance * tier.lodDistance);
+        lap('Editor: ground (contacts, stones, soil, wetness)');
+    }
+
+    /** What the ground details read from the scene shown. */
+    private groundHost(): GroundHost {
+        const shown = (e: Entry) => e.visible && !this.detached.has(e.id);
+        return {
+            node: (id) => this.store.node(id),
+            version: () => this.store.version,
+            terrains: () => [...this.terrainStates].filter((t) => this.entries.get(t.view.id)?.visible),
+            fields: () => [...this.grasses].flatMap((e) => (e.grass ? [{ id: e.id, grass: e.grass, matrix: e.obj.transform.worldMatrix.rawData, visible: e.visible }] : [])),
+            scatters: () => [...this.entries.values()].flatMap((e) => (e.scatter ? [{ id: e.id, state: e.scatter, visible: e.visible }] : [])),
+            groundTerrains: (id) => this.groundTerrains(id),
+            piece: (model, variant) => this.scatterModelsLoaded.get(model)?.piece(variant) ?? null,
+            waters: () => [...this.waters].filter(shown).map((e) => e.obj),
+            rains: () => [...this.rains].flatMap((e) => {
+                const doc = this.store.node(e.id)?.rain;
+                return doc && e.visible ? [{ obj: e.obj, size: doc.size, amount: doc.amount }] : [];
+            }),
+            weather: () => ({ rain: this.weather?.rain ?? 0, wind: this.weather?.wind ?? { speed: 5, direction: this.shownEnvironment.clouds.windDirection } }),
+            place: () => this.shaders.terrainPlace,
+            placeGrass: () => this.placeGrass(),
+        };
+    }
+
+    /** What each part of the environment draws now, for the Profiler: its name and load. */
+    environmentReport(): [string, string][] {
+        const name = (id: string) => this.store.node(id)?.name ?? id;
+        const rows: [string, string][] = [];
+        for (const t of this.terrainStates) rows.push([`Terrain "${name(t.view.id)}"`, t.view.report()]);
+        for (const e of this.grasses) if (e.grass) rows.push([`Grass "${name(e.id)}"`, e.grass.report()]);
+        for (const e of this.entries.values()) if (e.scatter) rows.push([`Scatter "${name(e.id)}"`, e.scatter.view.report()]);
+        const stones = this.ground.report();
+        if (stones) rows.push(['Loose stones', stones]);
+        const w = this.weather, env = this.store.doc.environment.weather;
+        if (w) rows.push(['Weather', `${env.preset}, sun ${w.sun.elevation.toFixed(0)}° ${w.night ? '(night, moon light)' : ''}, wind ${w.wind.speed.toFixed(1)} m/s${w.rain ? `, rain ${w.rain}` : ''}`]);
+        rows.push(...this.runtime.environmentReport());
+        return rows;
+    }
+
+    /** When terrain heights eased last asked for the shadows again. */
+    private shadowsEasedAt = 0;
+    /** The tier the mirrors, terrains and scatters were last fitted to. */
+    private tierApplied: QualityLevel | null = null;
+
+    /** Fits mirrors, terrains and scatters to the graphics tier drawn (a preview or the scene's setting changed it). */
+    private applyTier() {
+        const level = (this.tierApplied = this.runtime.qualityLevel);
+        for (const e of this.entries.values()) {
+            const node = this.store.node(e.id);
+            if (!node) continue;
+            if (e.mirror) this.applyMirror(e, node);
+            if (e.terrain && node.terrain) {
+                e.terrain.view.material.setLook(node.terrain.blending, node.terrain.variation, QUALITY[level].terrainFar);
+                e.terrain.view.material.setRelief(node.terrain.relief, QUALITY[level].terrainRelief);
+            }
+            if (e.scatter) e.scatter.view.setLodScale(QUALITY[level].lodDistance);
+            e.grass?.setLodScale(QUALITY[level].lodDistance);
+        }
     }
 
     // ---------------------------------------------------------------- sync
@@ -289,7 +406,11 @@ export class SceneSync extends Emitter<SyncEvents> {
         const doc = this.store.doc;
         // Anything that changed (objects, materials, sky) changes what the GI probes see.
         this.runtime.gi.invalidate();
-        if (!hint?.nodes || hint.env) this.runtime.applyEnvironment(this.envOverride ?? doc.environment);
+        if (!hint?.nodes || hint.env) {
+            this.applySkyEnvironment();
+            // The key light takes its color from the air the sky's sun shines through.
+            this.refreshKeyLight();
+        }
         if (hint?.env && !hint.nodes) return;
 
         if (hint?.nodes) {
@@ -319,6 +440,11 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.schedulePlaceScatters();
             this.flushGroups();
             if (!hint.transform) this.shadowsChanged();
+            // A directional light turned, shown or hidden moves the sky's sun with it.
+            if (hint.nodes.some((id) => this.store.node(id)?.light?.type === 'directional') && this.followsLight()) {
+                this.applySkyEnvironment();
+                this.refreshKeyLight();
+            }
             return;
         }
         const alive = new Set<string>();
@@ -354,7 +480,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         for (const [id, entry] of this.entries) {
             const mode = canMove(id) ? 'auto' : 'static';
             for (const r of this.renderersOf(id)) r.shadowCacheMode = mode;
-            if (entry.grass) entry.grass.renderer.shadowCacheMode = mode;
+            entry.grass?.setShadowCacheMode(mode);
             // Its copies move without it: a copy that can move makes it change every frame it moves.
             if (entry.instancer) {
                 const members = this.groupMembers.get(id) ?? [];
@@ -557,7 +683,9 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.instancer) this.dirtyGroups.add(entry.id);
         entry.grass?.remove((res) => this.disposeLater(res));
         entry.grass = null;
+        this.grasses.delete(entry);
         this.applyRain(entry, undefined);
+        this.waters.delete(entry);
         if (entry.terrain) this.dropTerrain(entry);
         if (entry.scatter) this.dropScatter(entry);
         entry.obj.removeFromParent();
@@ -703,9 +831,15 @@ export class SceneSync extends Emitter<SyncEvents> {
                 // Vertex shaders that move vertices cannot use the depth prepass,
                 // which draws the undisplaced mesh, and can draw outside the
                 // shape's bounds, so the camera's frustum does not cull them.
+                // Shaders that read the scene behind them (water) stay out of
+                // it too: the scene depth they read is copied from it.
                 const moves = kind.startsWith('shader:') && this.shaders.movesVertices(mesh.material.shader!);
-                if (moves) mr.addRendererMask(RendererMask.IgnoreDepthPass);
+                const reads = kind.startsWith('shader:') && this.shaders.readsScene(mesh.material.shader!);
+                if (moves || reads) mr.addRendererMask(RendererMask.IgnoreDepthPass);
                 else mr.removeRendererMask(RendererMask.IgnoreDepthPass);
+                // A surface that shows what lies under it is water: terrains under it are wet along it.
+                if (reads) this.waters.add(entry);
+                else this.waters.delete(entry);
                 mr.frustumCulled = !moves;
                 mr.material = next.material;
                 entry.material = next;
@@ -842,12 +976,21 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (!entry.visible) entry.light.enable = false;
             if (this.runtime.gi.enabled) entry.light.castGI = true;
         }
-        const key = JSON.stringify(light);
+        const tint = light.type === 'directional' ? this.sunlightTint(entry.id) : null;
+        if (tint) this.tintedLight = entry.id;
+        else if (this.tintedLight === entry.id) this.tintedLight = null;
+        const key = JSON.stringify([light, tint]);
         if (key === entry.lightKey) return;
         entry.lightKey = key;
         const l = entry.light!;
-        l.lightColor = hexToColor(light.color);
-        l.intensity = Math.max(0, light.intensity);
+        const c = hexToColor(light.color);
+        if (tint) {
+            c.r *= tint.color[0];
+            c.g *= tint.color[1];
+            c.b *= tint.color[2];
+        }
+        l.lightColor = c;
+        l.intensity = Math.max(0, light.intensity) * (tint?.strength ?? 1);
         l.castShadow = !!light.castShadow;
         setLightShadow(l, light.shadow);
         if (l instanceof PointLight || l instanceof SpotLight) {
@@ -887,6 +1030,8 @@ export class SceneSync extends Emitter<SyncEvents> {
                 castGI(instance);
                 state.obj = instance;
                 state.status = 'ready';
+                // Outside an instancing group (which draws all its copies at one level), parts get simpler levels far away.
+                if (!group) void this.modelLods.add(staticRenderers(instance), () => entry.model === state && this.entries.get(entry.id) === entry);
                 const ctx = this.runtime.engine.context3D;
                 try {
                     state.info = inspectModel(instance, ctx);
@@ -978,15 +1123,25 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.mirror = entry.obj.addComponent(MirrorComponent);
             if (!entry.visible) entry.mirror.enable = false;
         }
-        entry.mirror.resolutionScale = doc.resolution;
+        // Weaker tiers capture fewer pixels.
+        entry.mirror.resolutionScale = doc.resolution * QUALITY[this.runtime.qualityLevel].mirrorScale;
         // The top of its shape: a plane's face, a box's top.
         entry.mirror.surfaceOffset = shapeTop(node.mesh!.geometry);
     }
 
     // ----------------------------------------------------------------- rain
 
+    /** The light whose color the air tinted last (the key light while the sky follows it). */
+    private tintedLight: string | null = null;
+
     /** The objects with rain; their volumes follow them every frame (rainFrame). */
     private rains = new Set<Entry>();
+    /** The objects with grass (their chunks follow the camera every frame). */
+    private grasses = new Set<Entry>();
+    /** Renderers of models placed one by one that draw simpler levels far away. */
+    private modelLods = new ModelLods();
+    /** The objects whose material shows what lies under them (water): terrains under them are wet. */
+    private waters = new Set<Entry>();
     private rainFrame: (() => void) | null = null;
 
     private applyRain(entry: Entry, doc: RainDoc | undefined) {
@@ -1038,6 +1193,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.grass && build !== entry.grassBuild) {
             entry.grass.remove((res) => this.disposeLater(res));
             entry.grass = null;
+            this.grasses.delete(entry);
         }
         entry.grassBuild = build;
         if (!doc) {
@@ -1047,16 +1203,18 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!entry.grass) {
             entry.grass = new GrassField(this.runtime.scene, doc);
             entry.grass.setVisible(entry.visible);
+            entry.grass.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
+            this.grasses.add(entry);
             entry.grassPlaced = '';
         }
         const field = entry.grass;
-        field.apply(doc);
+        field.apply(this.windOn(doc));
         const ctx = this.runtime.engine.context3D;
         this.gusts ??= gustTexture(ctx);
         const blade = doc.texture ? this.loadTexture(doc.texture, 'color') : Promise.resolve(null);
         const gusts = doc.windMap ? this.loadTexture(doc.windMap, 'data') : Promise.resolve(null);
         // Plain until its textures are there.
-        if (!field.renderer.grassMaterial.baseMap) field.setTextures(plainBlades(ctx), this.gusts);
+        if (!field.hasTextures) field.setTextures(plainBlades(ctx), this.gusts);
         void Promise.all([blade, gusts]).then(([b, g]) => {
             if (entry.grass !== field) return;
             const now = this.store.node(entry.id)?.grass;
@@ -1080,16 +1238,22 @@ export class SceneSync extends Emitter<SyncEvents> {
             const lands = doc.ground ? this.groundTerrains(doc.ground) : [];
             const m = entry.obj.transform.worldMatrix.rawData;
             const key = JSON.stringify([
-                doc.size, doc.count, doc.ground, Array.from(m, (v) => +v.toFixed(4)),
+                doc.size, doc.count, doc.ground, doc.heights, doc.widths, doc.sizes, doc.shapes, doc.shapeSpread, doc.curvature, doc.patchSize, doc.height, Array.from(m, (v) => +v.toFixed(4)),
                 ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))]),
                 lands.map((l) => [l.id, l.version]),
+                // Where it grows follows the layers, what stands on them and the water.
+                lands.length ? this.ground.key : null,
             ]);
             if (key === entry.grassPlaced) continue;
             entry.grassPlaced = key;
             const frame = fieldFrame(m);
             const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
-            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : doc.ground ? new LayeredGround(null, []) : null;
-            entry.grass!.place(doc, frame, surface, hashString(entry.id));
+            const states = [...this.terrainStates].filter((t) => lands.some((l) => l.id === t.view.id));
+            // The steepest ground blades stand on: a little past the field's own limit, which thins them out before it.
+            const slope = Math.cos((Math.min(85, doc.maxSlope + 5) * Math.PI) / 180);
+            const grow = this.ground.growth(states, doc, hashString(entry.id));
+            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface), slope) : doc.ground ? new LayeredGround(null, []) : null;
+            entry.grass!.place(doc, frame, surface, hashString(entry.id), grow);
         }
     }
 
@@ -1134,12 +1298,16 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!t) {
             const view = new TerrainView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
             view.material.setAnisotropy(QUALITY[this.runtime.qualityLevel].anisotropy);
-            t = entry.terrain = { view, built: '', shape: '', paint: '', layers: '', token: 0, watched: [], version: 0 };
+            t = entry.terrain = { view, built: '', shape: '', paint: '', layers: '', token: 0, watched: [], version: 0, wet: '', paintData: null };
             this.terrainStates.add(t);
             view.setVisible(entry.visible);
         }
         const state = t;
         state.view.setShadows(doc.castShadow);
+        state.view.material.setLook(doc.blending, doc.variation, QUALITY[this.runtime.qualityLevel].terrainFar);
+        state.view.material.setCompressed(doc.compress);
+        state.view.material.setRelief(doc.relief, QUALITY[this.runtime.qualityLevel].terrainRelief);
+        state.wet = '';
         const built = JSON.stringify([doc.heightmap, doc.size, doc.height, doc.detail]);
         if (built !== state.built) {
             state.built = built;
@@ -1220,11 +1388,17 @@ export class SceneSync extends Emitter<SyncEvents> {
         const meta = doc.splatmap ? this.store.doc.assets.find((a) => a.id === doc.splatmap) : undefined;
         if (!meta) {
             t.view.material.setPaint(null);
+            t.paintData = null;
+            this.schedulePlaceScatters();
             return;
         }
         const done = paintOf(meta).then(
             (paint) => {
-                if (entry.terrain === t && t.paint === key) t.view.material.setPaint(paint);
+                if (entry.terrain !== t || t.paint !== key) return;
+                t.view.material.setPaint(paint);
+                t.paintData = paint;
+                // Scatters that follow a layer stand where it is painted now.
+                this.schedulePlaceScatters();
             },
             (e) => console.warn('[editor] the terrain paint could not be read', e),
         );
@@ -1245,17 +1419,29 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private applyTerrainLayers(entry: Entry, t: TerrainState, doc: TerrainDoc) {
         const size = this.layerArraySize(doc);
-        const key = JSON.stringify([doc.layers, size]);
+        // Loose stones are drawn apart (GroundClutter): they leave the arrays as they are.
+        const key = JSON.stringify([doc.layers.map(({ debris: _, ...l }) => l), size]);
         if (key === t.layers) return;
         t.layers = key;
         const layers = doc.layers.length ? doc.layers : [];
-        void Promise.all(layers.map((l) => Promise.all([l.albedo ? this.loadTexture(l.albedo, 'color') : null, l.normal ? this.loadTexture(l.normal, 'normal') : null]))).then((maps) => {
+        void Promise.all(
+            layers.map((l) =>
+                Promise.all([
+                    l.albedo ? this.loadTexture(l.albedo, 'color') : null,
+                    l.normal ? this.loadTexture(l.normal, 'normal') : null,
+                    l.arm ? this.loadTexture(l.arm, 'data') : null,
+                    l.heightMap ? this.loadTexture(l.heightMap, 'data') : null,
+                ]),
+            ),
+        ).then((maps) => {
             if (entry.terrain !== t || t.layers !== key) return;
             for (const tex of t.watched) tex.unBindStateChange(t);
             t.watched = [];
             const list: MaterialLayer[] = layers.map((l, i) => ({
                 albedo: maps[i][0],
                 normal: maps[i][1],
+                arm: maps[i][2],
+                heightMap: maps[i][3],
                 tile: l.tile,
                 color: l.color,
                 roughness: l.roughness,
@@ -1276,8 +1462,8 @@ export class SceneSync extends Emitter<SyncEvents> {
                     if (entry.terrain === t && t.layers === key) t.view.material.rebuildArrays(list, size);
                 });
             };
-            for (const [a, n] of maps) {
-                for (const tex of [a, n]) {
+            for (const four of maps) {
+                for (const tex of four) {
                     if (!tex) continue;
                     tex.bindStateChange(refill, t);
                     t.watched.push(tex);
@@ -1358,7 +1544,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             return;
         }
         if (!entry.scatter) {
-            const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
+            const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id, this.shaders.terrainTexture());
+            view.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
             view.setVisible(entry.visible);
             entry.scatter = { view, placed: '', placements: [], solids: [] };
             this.scatterStates.add(entry.scatter);
@@ -1381,7 +1568,12 @@ export class SceneSync extends Emitter<SyncEvents> {
         let p = this.scatterModels.get(assetId);
         if (!p) {
             const made = this.loadPrefab(assetId).then(
-                (prefab) => new ScatterModel(prefab),
+                async (prefab) => {
+                    const m = new ScatterModel(prefab);
+                    // Simpler versions for the cells far from the camera.
+                    await m.addLods();
+                    return m;
+                },
                 (e) => {
                     console.warn('[editor] a scatter model could not be loaded', e);
                     return null;
@@ -1437,23 +1629,48 @@ export class SceneSync extends Emitter<SyncEvents> {
                 { ...doc, distance: 0 }, Array.from(m, round),
                 ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, round)]),
                 lands.map((l) => [l.id, l.version]),
+                // A scatter that follows a layer moves with the layers' rules and paint.
+                doc.layer > 0 ? lands.map((l) => [this.store.node(l.id)?.terrain?.layers, this.entries.get(l.id)?.terrain?.paintData ? this.store.node(l.id)?.terrain?.splatmap : null]) : null,
                 avoid.map((b) => [b.minX, b.maxX, b.minZ, b.maxZ].map(round)),
                 models.map((x) => !!x),
             ]);
             if (key === st.placed) continue;
             st.placed = key;
+            this.ground.scattersPlaced();
             const frame = fieldFrame(m);
             const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
             const layered = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : null;
             // With a ground object copies stand only where it is; without one, flat at the object's height.
             const query = doc.ground ? (x: number, z: number) => layered?.sample(x, z) ?? null : null;
-            st.placements = placeScatter(doc, frame, query, avoid, hashString(entry.id));
+            st.placements = placeScatter(doc, frame, query, avoid, hashString(entry.id), {
+                layers: doc.layer > 0 && lands.length ? (x, z, g) => this.terrainLayersAt(lands, x, z, g) : undefined,
+                base: (source, variant) => models[source]?.piece(variant)?.base ?? [],
+            });
             st.view.build(st.placements, models, doc.castShadow, (res) => this.disposeLater(res));
             st.solids = scatterSolids(doc, st.placements, models);
             this.runtime.gi.invalidate();
             this.runtime.redrawShadows();
             this.emit('scatter', entry.id);
         }
+    }
+
+    /**
+     * What lies on and around the ground, once a frame (made again only when
+     * what it comes from changes): the contacts of scattered copies on each
+     * terrain, the soil and moss of each scatter, and the loose stones near
+     * the camera.
+     */
+    /** How much each layer shows on the terrain (of these) whose ground a copy stands on, or null on other ground. */
+    private terrainLayersAt(lands: { id: string; surface: TerrainSurface }[], x: number, z: number, g: GroundSample): number[] | null {
+        for (const l of lands) {
+            if (!covers(l.surface, x, z) || Math.abs(groundHeight(l.surface, x, z) - g.y) > 0.05) continue;
+            const doc = this.store.node(l.id)?.terrain;
+            if (!doc) continue;
+            const paint = this.entries.get(l.id)?.terrain?.paintData;
+            const slope = (Math.acos(Math.min(1, Math.max(-1, g.normal[1]))) * 180) / Math.PI;
+            return layerWeights(doc.layers, g.y, slope, paint ? paintAt(l.surface.frame, paint, x, z) : null);
+        }
+        return null;
     }
 
     /** The x-z boxes of the shown meshes of objects to avoid (and of the objects under them). */
@@ -1672,8 +1889,145 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** Shows another environment than the document's until called with null. */
     setEnvironmentOverride(env: EnvironmentDoc | null) {
         this.envOverride = env;
+        this.overrides++;
         this.runtime.invalidateEnvironment();
-        this.runtime.applyEnvironment(env ?? this.store.doc.environment);
+        this.applySkyEnvironment();
+        this.refreshKeyLight();
+    }
+
+    /** The environment shown: the override's or the document's, as its weather and time of day make it. */
+    private get shownEnvironment(): EnvironmentDoc {
+        return this.weather?.env ?? this.envOverride ?? this.store.doc.environment;
+    }
+
+    /** Whether the sky shown takes its sun from the key light (see Environment.atmosphere.followLight). */
+    private followsLight(): boolean {
+        const env = this.shownEnvironment;
+        return (env.sky === 'atmospheric' || env.sky === 'physical') && env.atmosphere.followLight;
+    }
+
+    /**
+     * Weather and the time of day (Environment.weather), once a frame: the
+     * time passes by its Day Length, and when what it gives changes (at
+     * most a few times a second: the sky is drawn again) the sky, key light,
+     * grass wind and rain follow. The key light turns with it every frame.
+     */
+    private updateWeather(eye: number[]) {
+        const env = this.envOverride ?? this.store.doc.environment;
+        if (!env.weather.enable) {
+            if (this.weather) {
+                this.clock.reset();
+                this.weatherChanged();
+                const key = this.keyLight();
+                const entry = key && this.entries.get(key.id);
+                if (key && entry) this.applyTransform(entry, key);
+            }
+            return;
+        }
+        if (this.clock.tick(env, `${this.store.partsVersion}:${this.overrides}`, performance.now())) this.weatherChanged();
+        const light = this.keyLight();
+        const entry = light && this.entries.get(light.id);
+        if (entry && this.weather) {
+            const r = this.weather.light.rotation;
+            const t = entry.obj.transform;
+            if (Math.abs(t.rotationX - r[0]) + Math.abs(t.rotationY - r[1]) + Math.abs(t.rotationZ - r[2]) > 1e-3) t.localRotation = new Vector3(r[0], r[1], r[2]);
+        }
+        // Rain around the camera, its box resting a little under it.
+        const rain = this.weather?.rain ?? 0;
+        if (rain > 0) {
+            if (!this.weatherRain) {
+                this.shaders.ensure(RAIN_SHADER);
+                this.weatherRain = new RainVolume(this.runtime.scene, this.shaders);
+            }
+            const lean = Math.max(-0.5, Math.min(0.5, (this.weather!.wind.speed * Math.cos((this.weather!.wind.direction * Math.PI) / 180)) / 40));
+            this.weatherRain.update({ ...defaults(Rain), size: [36, 24, 36], amount: rain, wind: lean }, { center: [eye[0], eye[1] + 4, eye[2]], shelter: null, light: null }, true);
+        } else if (this.weatherRain) {
+            this.weatherRain.setVisible(false);
+        }
+    }
+
+    /**
+     * The sunlight the clouds get (linear rgb times brightness), when the sky follows the key
+     * light: through the thinner air at their height, brighter and more golden at sunset than
+     * on the ground, and still there a while after the sun has set below. Null otherwise.
+     */
+    private cloudSunlight(): [number, number, number] | null {
+        const key = this.followsLight() ? this.keyLight() : null;
+        const env = this.shownEnvironment;
+        if (!key?.light || !env.clouds.enable || this.weather?.night) return null;
+        const elevation = this.weather ? this.weather.sun.elevation : (skySunOf(key.rotation).sunY - 0.5) * 180;
+        const air = sunlightThroughAir(elevation, env.atmosphere.altitude + env.clouds.bottom + env.clouds.thickness * 0.3);
+        const c = hexToColor(key.light.color);
+        // Its dimming eased (as eyes adapt to dusk): sunset clouds glow gold and red rather than turning brown.
+        const k = Math.max(0, key.light.intensity) * Math.sqrt(air.strength) * (this.weather?.sunlight ?? 1);
+        // And its color deepened a little (tone mapping washes bright orange toward white).
+        const [r, g, b] = air.color.map((v) => Math.pow(v, 1.4));
+        return [c.r * r * k, c.g * g * k, c.b * b * k];
+    }
+
+    /** The weather changed: the sky, key light, stars, grass wind and wet ground follow. */
+    private weatherChanged() {
+        this.runtime.invalidateEnvironment();
+        this.runtime.setStars(this.weather?.stars ?? 0);
+        this.applySkyEnvironment();
+        this.refreshKeyLight();
+        for (const entry of this.grasses) {
+            const doc = this.store.node(entry.id)?.grass;
+            if (doc && entry.grass) entry.grass.apply(this.windOn(doc));
+        }
+        for (const t of this.terrainStates) t.wet = '';
+    }
+
+    /** A grass field's wind as the weather blows it (its own without weather). */
+    private windOn(doc: GrassDoc): GrassDoc {
+        const wind = this.weather?.wind;
+        if (!wind) return doc;
+        const k = Math.max(0.2, Math.min(3, wind.speed / 5));
+        return { ...doc, wind: doc.wind * k, windSpeed: doc.windSpeed * k, windDirection: wind.direction };
+    }
+
+    /** The key light: the first shown directional light (as apply_key_light picks it). */
+    private keyLight(): NodeDoc | null {
+        return this.store.doc.nodes.find((n) => n.light?.type === 'directional' && n.visible && this.entries.get(n.id)?.visible !== false) ?? null;
+    }
+
+    /** Applies the environment, its sky's sun where the key light comes from when it follows the light. */
+    private applySkyEnvironment() {
+        const env = this.shownEnvironment;
+        // With weather the sky's sun is the sun, wherever the key light (the moon at night) is.
+        if (this.weather) {
+            this.runtime.applyEnvironment({ ...env, ...skySunOf(this.weather.sun.rotation) });
+            return;
+        }
+        const key = this.followsLight() ? this.keyLight() : null;
+        this.runtime.applyEnvironment(key ? { ...env, ...skySunOf(key.rotation) } : env);
+    }
+
+    /** Applies the key light again (its color and brightness follow the sky's air), and the light it was before. */
+    private refreshKeyLight() {
+        const key = this.keyLight();
+        const ids = new Set([key?.id, this.tintedLight].filter((x): x is string => !!x));
+        for (const id of ids) {
+            const node = this.store.node(id);
+            const entry = this.entries.get(id);
+            if (!node || !entry) continue;
+            entry.lightKey = '';
+            this.applyLight(entry, node.light);
+        }
+    }
+
+    /**
+     * The key light's color and brightness through the air, when the sky
+     * follows it: white and full with the sun high, warmer and dimmer near
+     * the horizon, none below it. Null for other lights and skies.
+     */
+    private sunlightTint(id: string): { color: [number, number, number]; strength: number } | null {
+        if (!this.followsLight()) return null;
+        const key = this.keyLight();
+        if (!key || key.id !== id) return null;
+        if (this.weather) return this.weather.light;
+        const elevation = (skySunOf(key.rotation).sunY - 0.5) * 180;
+        return sunlightThroughAir(elevation, this.shownEnvironment.atmosphere.altitude);
     }
 
     /** Shows and hides objects as they and their parents are visible (all, or `ids` and what is below them). */
@@ -1976,6 +2330,19 @@ function oneRange(g: GeometryBase): GeometryBase {
     subs.length = 0;
     g.addSubGeometry({ indexStart: start, indexCount: total, vertexStart: 0, vertexCount: 0, firstStart: 0, index: 0, topology: 0 });
     return g;
+}
+
+/** The renderers under an object that keep their shape (not skinned, not morphing): those that can have simpler levels. */
+function staticRenderers(root: Object3D): RenderNode[] {
+    const out: RenderNode[] = [];
+    root.traverse((o: Object3D) => {
+        o.components.forEach((c) => {
+            if (!(c instanceof MeshRenderer) || c instanceof SkinnedMeshRenderer || c instanceof SkinnedMeshRenderer2) return;
+            if (!c.geometry || (c as any).morphData?.enable) return;
+            out.push(c);
+        });
+    });
+    return out;
 }
 
 /** How far a shape's top is above its origin (shapes are centered on it): where a mirror on it reflects. */

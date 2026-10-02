@@ -66,8 +66,10 @@ export class ComputeShader extends ShaderPassBase {
         // Previously this was set-once (silently ignored repeat binds), which
         // broke any caller that wanted to re-point an output binding (e.g.
         // when the upstream chain changes and a post needs to rebind).
+        const old = this._storageTextureDic.get(name);
         this._storageTextureDic.set(name, texture);
         this._followTexture(texture);
+        if (old && old !== texture) this._dropBindGroups();
     }
 
     /**
@@ -76,8 +78,11 @@ export class ComputeShader extends ShaderPassBase {
      * @param texture
      */
     public setSamplerTexture(name: string, texture: Texture) {
+        const old = this._sampleTextureDic.get(name);
         this._sampleTextureDic.set(name, texture);
         this._followTexture(texture);
+        // Another texture in the same place: the bind groups are made again at the next dispatch.
+        if (old && old !== texture) this._dropBindGroups();
     }
 
     /**
@@ -85,9 +90,11 @@ export class ComputeShader extends ShaderPassBase {
      * (a resized shadow map, say): the old one is destroyed with it.
      */
     private _followTexture(texture: Texture) {
-        texture?.bindStateChange?.(() => {
-            for (let i = 0; i < this.bindGroups.length; i++) this.bindGroups[i] = null;
-        }, this);
+        texture?.bindStateChange?.(() => this._dropBindGroups(), this);
+    }
+
+    private _dropBindGroups() {
+        for (let i = 0; i < this.bindGroups.length; i++) this.bindGroups[i] = null;
     }
 
     /**

@@ -83,6 +83,7 @@ export class GlobalFog extends PostBase {
         fogUniform.setFloat("overrideSkyFactor", globalFog.overrideSkyFactor);
         fogUniform.setFloat("isSkyHDR", 0);
         fogUniform.setFloat("slot0", globalFog.heightBase ?? 0);
+        fogUniform.setFloat("slot1", Math.max(0, globalFog.airDensity ?? 0));
 
         fogUniform.apply();
         this.fogCompute.setUniformBuffer('fogUniform', this.fogUniform);

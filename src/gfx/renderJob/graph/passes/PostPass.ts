@@ -10,6 +10,7 @@ import { PostBase } from '../../post/PostBase';
 import { TonemapPost } from '../../post/TonemapPost';
 import { RendererPassState } from '../../passRenderer/state/RendererPassState';
 import { RenderGraphBuilder, RenderGraphPass, RenderGraphPassContext } from '../RenderGraphPass';
+import { RenderGraph } from '../RenderGraph';
 import { COLOR_BUFFER } from './ColorPass';
 
 /**
@@ -134,9 +135,20 @@ export class PostPass extends RenderGraphPass {
         // Non-final posts (Bloom, FXAA, GodRay, ...) drain in attach
         // order — each samples the previous via `lastRenderPassState`,
         // so order matters.
+        // Each effect timed on its own (the profiler's rows), inside this pass.
+        const hook = RenderGraph.passHook;
+        const timed = (v: PostBase) => {
+            const name = `Post: ${v.constructor.name}`;
+            hook?.begin(name);
+            try {
+                v.render(view, command);
+            } finally {
+                hook?.end(name);
+            }
+        };
         this.postList.forEach((v) => {
             if (v.enable && !v.isFinalPass) {
-                v.render(view, command);
+                timed(v);
                 if (v.rendererPassState) {
                     gpu.lastRenderPassState = v.rendererPassState;
                 }
@@ -147,7 +159,7 @@ export class PostPass extends RenderGraphPass {
         // HDR signal.
         this.postList.forEach((v) => {
             if (v.enable && v.isFinalPass) {
-                v.render(view, command);
+                timed(v);
                 if (v.rendererPassState) {
                     gpu.lastRenderPassState = v.rendererPassState;
                 }

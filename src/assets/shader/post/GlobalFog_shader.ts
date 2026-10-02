@@ -30,6 +30,7 @@ export let GlobalFog_shader = /* wgsl */ `
         isSkyHDR: f32,
         // Height fog: the height where the fog is 'density' thick.
         slot0: f32,
+        // Aerial perspective: the air's extinction per meter at height 0.
         slot1: f32,
     };
 
@@ -97,13 +98,33 @@ export let GlobalFog_shader = /* wgsl */ `
         }else{
             //for ground
             let fogFactor = calcFogFactor();
-            opColor = mix(texColor.rgb, fogUniform.fogColor.xyz, fogFactor);
+            opColor = mix(aerialPerspective(texColor.rgb), fogUniform.fogColor.xyz, fogFactor);
             // The sun lights the fog it shines through: as much as there is fog.
             let sun = sunLight();
             opColor += inScatterIng(sun.direction, texPosition.xyz, sun.lightColor) * fogFactor;
         }
 
         textureStore(outTex, fragCoord , vec4<f32>(opColor.xyz, texColor.a));
+    }
+
+    // Distant ground seen through the air: it fades into the sky's color
+    // toward the horizon in its direction (a blurred look at the sky), by
+    // the air along the view, which thins with height (8 km scale).
+    fn aerialPerspective(color: vec3<f32>) -> vec3<f32>
+    {
+        if (fogUniform.slot1 <= 0.0) {
+            return color;
+        }
+        let cam = globalUniform.CameraPos.xyz;
+        let toPoint = texPosition.xyz - cam;
+        let dist = length(toPoint);
+        let dir = toPoint / max(dist, 0.0001);
+        let midHeight = max((cam.y + texPosition.y) * 0.5, 0.0);
+        let air = 1.0 - exp(-fogUniform.slot1 * exp(-midHeight / 8000.0) * dist);
+        let lod = f32(textureNumLevels(prefilterMap)) * 0.6;
+        let horizon = normalize(vec3<f32>(dir.x, max(dir.y, 0.04), dir.z));
+        let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, horizon, lod).xyz * globalUniform.skyExposure;
+        return mix(color, sky, air);
     }
 
     // The first directional light that casts shadows (the sun), else the first light.

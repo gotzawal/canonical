@@ -72,7 +72,7 @@ export class DirectLight extends LightBase {
      * to keep cascade shadows stable as the camera moves.
      * @param renderCamera the main rendering camera
      */
-    public updateShadowCameraCSM(renderCamera: Camera3D) {
+    public updateShadowCameraCSM(renderCamera: Camera3D, keep?: (cascade: number) => boolean) {
         if (!this.csmAutoUpdate) return;
 
         this.frustumCSM.update(renderCamera.projectionMatrix, renderCamera.pvMatrixInv, renderCamera.near, renderCamera.far, this.transform.view3D!.engine3D.setting.shadow, this.csmSplitFunction);
@@ -113,6 +113,8 @@ export class DirectLight extends LightBase {
         const coverageSafetyFactor = 1.25;
 
         for (let i = 0; i < this.cascadeNum; i++) {
+            // A cascade not drawn this frame keeps the view its map was drawn from.
+            if (keep?.(i)) continue;
             const corners = this.frustumCSM.children[i].getWorldCorners();
             // Centroid of the 8 frustum corners.
             sphereCenter.set(0, 0, 0);

@@ -17,3 +17,6 @@ export class Transform {
 }
 export const VertexAttributeName = { position: 'position', indices: 'indices' };
 export const isSrgbFormat = (format: unknown) => typeof format === 'string' && format.endsWith('-srgb');
+// Base classes the shader module extends at load (its parsing is tested).
+export class Texture {}
+export class PostBase {}

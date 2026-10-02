@@ -159,7 +159,7 @@ class LibraryDialog {
             if (item.tris) facts.push(`${item.tris} tris`);
             if (item.animations?.length) facts.push(`${item.animations.length} clips`);
         } else if (item.kind === 'audio' && item.seconds) facts.push(`${item.seconds} s`);
-        else if (item.kind === 'material' && item.tile) facts.push(`${item.tile} m tile`, ...(item.mapUrls?.normal ? ['normal'] : []), ...(item.mapUrls?.arm ? ['ARM'] : []));
+        else if (item.kind === 'material' && item.tile) facts.push(`${item.tile} m tile`, ...(item.mapUrls?.normal ? ['normal'] : []), ...(item.mapUrls?.arm ? ['ARM'] : []), ...(item.mapUrls?.height ? ['height'] : []));
         else if (item.pixels) facts.push(`${item.pixels[0]} x ${item.pixels[1]}`);
         facts.push(formatBytes(item.bytes));
         const src = item.sourceInfo;

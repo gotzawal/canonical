@@ -470,73 +470,281 @@ fn frag() {
     {
         id: 'water',
         label: 'Water',
-        description: 'Waves, a fresnel reflection of the sky and, with a Mirror component on the object, of the scene, the sun\'s glint, and over a terrain shallow water and foam along the shore.',
+        description: 'See-through water: the scene under it dimmed and tinted by depth (absorption and scattering), bent by the ripples, with caustics on a shallow bed, foam along every shore and around anything standing in it, the sky or (with a Mirror component) the scene reflected by a fresnel term, and the sun\'s highlight.',
         kind: 'material',
         lighting: 'lit',
-        code: `// Water for a flat surface (a plane). mirrorColor(offset) is the scene a
-// Mirror component on the object reflects, moved by offset (screen units);
-// its alpha is 0 without one, and the sky is reflected instead.
-// terrainDepth() is how far below the water the terrain lies here (very
-// deep without one): the water is lighter where it is shallow, and foam
-// runs along the shore.
-// @property deepColor color #0b2a36
-// @property shallowColor color #1f5e66
-// @property waveScale float 1 0.05 5
-// @property waveSpeed float 1 0 5
-// @property waveHeight float 0.15 0 1
-// @property distortion float 0.03 0 0.2
+        code: `// Water for a flat surface (a plane), shaded the way UE's Single Layer Water
+// is: the scene behind the surface (sceneBehind) is seen through the water
+// and dimmed by absorption over the distance the view ray travels under it
+// (sceneDepth - surfaceDepth), while light scattered in the water fills in
+// its color. The surface reflects the scene a Mirror component on the object
+// captures (mirrorColor), else the sky, by a fresnel term, and the sun gives
+// it a GGX highlight. Ripples are noise octaves that fade out as they shrink
+// toward a pixel, their lost slope going into roughness so far water still
+// glitters instead of turning into a mirror.
+//
+// absorption / scattering: per meter for red, green, blue (pure water absorbs
+// red first: about 0.45, 0.07, 0.04). clarity divides both (2 = twice as clear).
+//
+// @property absorption vec4 0.45 0.075 0.04 0
+// @property scattering vec4 0.012 0.024 0.032 0
+// @property foamColor color #eef4f4
+// @property clarity float 1 0.1 4
+// @property waveScale float 1 0.1 4
+// @property waveRelief float 1.4 0 6
+// @property waveFlow float 1 0 4
+// @property distortion float 0.035 0 0.15
 // @property reflectivity float 1 0 1
-// @property depthScale float 3 0.1 50
-// @property foamColor color #e4eeec
-// @property foamWidth float 0.8 0 5
+// @property sunGlint float 1 0 4
+// @property crestGlow float 0.6 0 3
+// @property foamWidth float 0.6 0 4
+// @property caustics float 0.6 0 3
 
-// Slopes of three waves across the surface.
-fn waveSlope(p: vec2f, t: f32) -> vec2f {
-    let k = materialUniform.waveScale;
-    var s = vec2f(0.8, 0.6) * cos(dot(p, vec2f(0.8, 0.6)) * 1.1 * k + t * 1.2);
-    s += vec2f(-0.5, 0.87) * cos(dot(p, vec2f(-0.5, 0.87)) * 2.3 * k - t * 1.7) * 0.5;
-    s += vec2f(0.28, -0.96) * cos(dot(p, vec2f(0.28, -0.96)) * 4.9 * k + t * 2.3) * 0.25;
-    return s * materialUniform.waveHeight;
+const W_PI: f32 = 3.14159265;
+
+fn wHash(p: vec2f) -> f32 {
+    var q = fract(p * vec2f(0.1031, 0.1030));
+    q += dot(q, q.yx + 33.33);
+    return fract((q.x + q.y) * q.x);
+}
+
+// Value noise with its slope from the same four taps: (height, d/dx, d/dy).
+fn wNoiseD(p: vec2f) -> vec3f {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * (3.0 - 2.0 * f);
+    let du = 6.0 * f * (1.0 - f);
+    let a = wHash(i);
+    let b = wHash(i + vec2f(1.0, 0.0));
+    let c = wHash(i + vec2f(0.0, 1.0));
+    let d = wHash(i + vec2f(1.0, 1.0));
+    return vec3f(
+        mix(mix(a, b, u.x), mix(c, d, u.x), u.y),
+        ((b - a) * (1.0 - u.y) + (d - c) * u.y) * du.x,
+        ((c - a) * (1.0 - u.x) + (d - b) * u.x) * du.y
+    );
+}
+
+// One octave turned by 'angle', so the grids of the octaves never line up,
+// at 'freq' (per axis, a swell can be stretched) and drifting by 'drift'.
+// The slope is brought back to p's axes (chain rule through the turn).
+fn wOctave(p: vec2f, angle: f32, freq: vec2f, drift: vec2f) -> vec3f {
+    let c = cos(angle);
+    let s = sin(angle);
+    let R = mat2x2f(c, s, -s, c);
+    let n = wNoiseD(freq * (R * p) + drift);
+    return vec3f(n.x, transpose(R) * (freq * n.yz));
+}
+
+struct WaveSum {
+    h: f32,
+    slope: vec2f,
+    // Sum of the weights shown (to normalize the height).
+    norm: f32,
+    // Slope variance of what faded out (goes into roughness).
+    lost: f32,
+};
+
+// Adds an octave of amplitude 'amp' whose finest wavelength is 1 / 'freq',
+// faded out as that wavelength nears a few pixels ('px': what one pixel
+// covers here), so it never flickers and switches off without a seam.
+fn wAdd(sum: ptr<function, WaveSum>, o: vec3f, amp: f32, freq: f32, px: f32) {
+    let w = 1.0 - smoothstep(0.15, 0.35, freq * px);
+    (*sum).h += o.x * amp * w;
+    (*sum).slope += o.yz * amp * w;
+    (*sum).norm += amp * w;
+    (*sum).lost += (1.0 - w) * (amp * freq) * (amp * freq);
+}
+
+fn wWaves(p: vec2f, t: f32, px: f32) -> WaveSum {
+    var sum = WaveSum(0.0, vec2f(0.0), 0.0, 0.0);
+    // A long swell, stretched across the wind so it wanders instead of banding.
+    wAdd(&sum, wOctave(p, 0.35, vec2f(0.021, 0.058), vec2f(0.47, -0.88) * (t * 0.0625)), 1.0, 0.058, px);
+    wAdd(&sum, wOctave(p, 1.70, vec2f(0.113), vec2f(-0.72, 0.51) * (t * 0.270)), 0.5, 0.113, px);
+    wAdd(&sum, wOctave(p, 2.90, vec2f(0.317), vec2f(0.44, 0.90) * (t * 0.570)), 0.25, 0.317, px);
+    wAdd(&sum, wOctave(p, 4.10, vec2f(0.907), vec2f(-0.86, 0.31) * (t * 1.270)), 0.125, 0.907, px);
+    // The low graphics tier skips the finest ripples: their slope goes into roughness.
+    if (qualityTier() > 0) {
+        wAdd(&sum, wOctave(p, 5.30, vec2f(2.31), vec2f(0.21, -0.98) * (t * 2.100)), 0.0625, 2.31, px);
+    } else {
+        sum.lost += (0.0625 * 2.31) * (0.0625 * 2.31);
+    }
+    return sum;
+}
+
+// Henyey-Greenstein phase: how much light turned by an angle of cosine 'c' scatters (g > 0: forward).
+fn wPhase(c: f32, g: f32) -> f32 {
+    let g2 = g * g;
+    return (1.0 - g2) / (4.0 * W_PI * pow(max(1.0 + g2 - 2.0 * g * c, 1e-4), 1.5));
+}
+
+// GGX highlight of a light from l, already multiplied by n.l, water's F0 0.02.
+fn wSunSpec(n: vec3f, v: vec3f, l: vec3f, rough: f32) -> f32 {
+    let h = normalize(v + l);
+    let nh = max(dot(n, h), 0.0);
+    let nl = max(dot(n, l), 0.0);
+    let nv = max(dot(n, v), 1e-4);
+    let a = max(rough * rough, 1e-3);
+    let a2 = a * a;
+    let dd = nh * nh * (a2 - 1.0) + 1.0;
+    let D = a2 / (W_PI * dd * dd);
+    let k = a * 0.5;
+    let G = (nl / (nl * (1.0 - k) + k)) * (nv / (nv * (1.0 - k) + k));
+    let F = 0.02 + 0.98 * pow(1.0 - max(dot(h, v), 0.0), 5.0);
+    return min(D * G * F / (4.0 * nv), 500.0);
+}
+
+// How close p is to the border between cells around wandering points
+// (0 on a border): the borders form the net caustics draw.
+fn wCells(p: vec2f, t: f32) -> f32 {
+    let i = floor(p);
+    let f = p - i;
+    var d1 = 8.0;
+    var d2 = 8.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let g = vec2f(f32(x), f32(y));
+            let h = vec2f(wHash(i + g), wHash(i + g + vec2f(17.1, 31.7)));
+            let o = 0.5 + 0.4 * sin(t * (0.5 + h) + 6.2831 * h);
+            let d = length(g + o - f);
+            if (d < d1) {
+                d2 = d1;
+                d1 = d;
+            } else if (d < d2) {
+                d2 = d;
+            }
+        }
+    }
+    return d2 - d1;
+}
+
+// The bright net the waves focus onto a shallow bed: two layers of cell
+// borders, bent by noise so they curve, brightest where they cross and
+// stronger in drifting patches.
+fn wCaustic(p: vec2f, t: f32) -> f32 {
+    let warp = vec2f(wNoiseD(p * 0.7 + vec2f(t * 0.1)).x, wNoiseD(p * 0.7 + vec2f(4.3, 1.9) - vec2f(t * 0.1)).x) - 0.5;
+    let q = p + warp * 0.9;
+    let a = 1.0 - smoothstep(0.0, 0.22, wCells(q, t));
+    let b = 1.0 - smoothstep(0.0, 0.22, wCells(q * 1.37 + vec2f(3.1, 7.7), t * 1.3));
+    let patches = smoothstep(0.2, 0.8, wNoiseD(p * 0.23 + vec2f(t * 0.03)).x);
+    return (a * a * 0.4 + a * b) * (0.4 + 0.6 * patches);
 }
 
 fn frag() {
-    let p = ORI_VertexVarying.vWorldPos.xyz;
-    // Waves calm with distance: far away they are finer than a pixel and would flicker in stripes.
-    let slope = waveSlope(p.xz, getTime() * materialUniform.waveSpeed) / (1.0 + distance(globalUniform.CameraPos.xyz, p) * 0.03);
+    useShadow();
+    let t = getTime() * materialUniform.waveFlow;
+    let wp = ORI_VertexVarying.vWorldPos.xyz;
+    let cam = globalUniform.CameraPos.xyz;
+    let toCam = cam - wp;
+    let dist = max(length(toCam), 1e-4);
+    let v = toCam / dist;
+
+    // ---- the surface: ripples, their normal and the roughness they leave
+    let s = materialUniform.waveScale;
+    let q = wp.xz * s;
+    let px = max(length(dpdx(q)), length(dpdy(q)));
+    let wave = wWaves(q, t, px);
+    let relief = materialUniform.waveRelief;
+    let slope = wave.slope * s * relief;
     let n = normalize(vec3f(-slope.x, 1.0, -slope.y));
-    let v = normalize(globalUniform.CameraPos.xyz - p);
+    let rough = clamp(sqrt(0.035 * 0.035 + wave.lost * relief * relief * s * s * 0.5), 0.035, 0.6);
+    let crest = smoothstep(0.62, 0.9, wave.h / max(wave.norm, 1e-4));
     let nv = max(dot(n, v), 0.0);
-    let fresnel = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
-    let r = reflect(-v, n);
+    let F = 0.02 + 0.98 * pow(1.0 - nv, 5.0);
 
-    // The mirrored scene where there is one, else the sky.
-    let mirror = mirrorColor(n.xz * materialUniform.distortion);
-    let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, r, 0.0).rgb * globalUniform.skyExposure;
+    // ---- light: the first light if it is the sun, and the sky
     let sun = lightBuffer[0];
+    var L = vec3f(0.0, 1.0, 0.0);
+    var sunRad = vec3f(0.0);
+    var shadow = 1.0;
+    if (sun.lightType == DirectLightType) {
+        L = normalize(-sun.direction);
+        sunRad = getHDRColor(sun.lightColor.rgb, sun.linear) * max(sun.intensity, 0.0);
+        shadow = select(1.0, directShadowVisibility[max(sun.castShadow, 0)], sun.castShadow >= 0);
+    }
+    let skyLods = f32(textureNumLevels(prefilterMap)) - 1.0;
+    let r = reflect(-v, n);
+    // Rays the ripples turn downward would see the ground; show them the low sky instead.
+    let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, vec3f(r.x, abs(r.y), r.z), rough * skyLods).rgb * globalUniform.skyExposure;
+    let ambient = textureSampleLevel(prefilterMap, prefilterMapSampler, vec3f(0.0, 1.0, 0.0), skyLods * 0.8).rgb * globalUniform.skyExposure;
 
-    // Shallow over the ground near the shore, deep away from it (and without a terrain).
-    let depth = max(terrainDepth(), 0.0);
-    let deep = 1.0 - exp(-depth / materialUniform.depthScale);
-    let body = mix(materialUniform.shallowColor.rgb, mix(materialUniform.deepColor.rgb, materialUniform.shallowColor.rgb, sqrt(nv)), deep);
-    // Foam where the water meets the shore, in bands that run in with the waves.
-    let edge = 1.0 - smoothstep(0.0, max(materialUniform.foamWidth, 0.001), depth);
-    let bands = 0.5 + 0.5 * sin(depth * 9.0 - getTime() * 2.0 * materialUniform.waveSpeed + (slope.x + slope.y) * 6.0);
-    let foam = clamp(edge * (0.55 + 0.45 * bands), 0.0, 1.0);
-    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity * (1.0 - foam);
-    let glint = pow(max(dot(r, -normalize(sun.direction)), 0.0), 600.0) * sun.lightColor.rgb * sun.intensity * 8.0 * (1.0 - foam);
+    // ---- what lies under the water here
+    let uv0 = screenUV();
+    let zw = max(surfaceDepth(), 1e-4);
+    let zs0 = sceneDepth(uv0);
+    // The point of the scene under this pixel (same view ray) and how deep it lies.
+    let behind = cam - toCam * (zs0 / zw);
+    let vdepth = max(wp.y - behind.y, 0.0);
+    let path0 = max(zs0 / zw - 1.0, 0.0) * dist;
 
-    ORI_ShadingInput.BaseColor = vec4f(mix(body * (1.0 - fresnel), materialUniform.foamColor.rgb, foam), 1.0);
-    // Rough, so the lighting adds no reflection of its own over this one.
-    ORI_ShadingInput.Roughness = 1.0;
+    // Refraction: shifted by the ripples, less where it is shallow (the shore
+    // line stays put) and far away (the same shift on screen is more there).
+    var uv = uv0 + n.xz * materialUniform.distortion * clamp(path0 * 0.5, 0.0, 1.0) * min(1.0, 10.0 / zw);
+    var zs = sceneDepth(uv);
+    // The shifted pixel shows something in front of the water: use the straight one.
+    if (zs < zw) {
+        uv = uv0;
+        zs = zs0;
+    }
+    // Meters the view ray travels under the water.
+    let path = max(zs / zw - 1.0, 0.0) * dist;
+
+    // ---- absorption and scattering in the water (Beer-Lambert)
+    let sigmaA = materialUniform.absorption.rgb / materialUniform.clarity;
+    let sigmaS = materialUniform.scattering.rgb / materialUniform.clarity;
+    let sigmaT = max(sigmaA + sigmaS, vec3f(1e-5));
+    let T = exp(-sigmaT * path);
+    let albedo = sigmaS / sigmaT;
+    let inLight = ambient * 0.5 + sunRad * wPhase(dot(v, -L), 0.5) * shadow;
+    let inscatter = albedo * (1.0 - T) * inLight;
+
+    // Caustics on the bed: none at the waterline, fading as it gets deep.
+    // (Not on the low graphics tier, nor where they would not show.)
+    let causticFade = (1.0 - exp(-vdepth * 4.0)) * exp(-vdepth * 0.35);
+    var caustic = 0.0;
+    if (qualityTier() > 0 && causticFade * materialUniform.caustics * shadow > 0.002) {
+        caustic = wCaustic(behind.xz * 1.2, t) * materialUniform.caustics * causticFade * shadow;
+    }
+    // Deep or murky water blurs what is under it.
+    let blur = clamp(path * dot(sigmaS, vec3f(0.333)) * 30.0, 0.0, 4.0);
+    let under = sceneBehind(uv, blur) * (1.0 + caustic * 2.0);
+    let transmitted = under * T + inscatter;
+
+    // ---- reflection: the mirrored scene where there is a Mirror, else the sky
+    let mirror = mirrorColor(n.xz * materialUniform.distortion);
+    let reflection = mix(sky, mirror.rgb, mirror.a) * materialUniform.reflectivity;
+
+    // Sunlight through the thin top of a wave lit from behind.
+    let back = pow(clamp(dot(v, -normalize(L + n * 0.4)), 0.0, 1.0), 4.0);
+    let sss = exp(-sigmaA * 2.0) * sunRad * back * crest * materialUniform.crestGlow * shadow * 0.15;
+
+    var color = mix(transmitted, reflection, F) + sss;
+    color += sunRad * wSunSpec(n, v, L, rough) * materialUniform.sunGlint * shadow;
+
+    // ---- foam along the shore and around anything standing in the water
+    let fw = max(materialUniform.foamWidth, 1e-3);
+    let edge = 1.0 - smoothstep(0.0, fw, vdepth);
+    // A thin unbroken line where the water touches, then lace in bands that run in with the waves.
+    let line = smoothstep(0.8, 0.97, edge);
+    let bands = 0.5 + 0.5 * sin(vdepth / fw * 9.0 - t * 2.2 + wave.h * 6.0);
+    let breakup = wNoiseD(wp.xz * 2.3 + vec2f(t * 0.21, -t * 0.17)).x * 0.65 + wNoiseD(wp.xz * 6.1 - vec2f(t * 0.3, t * 0.1)).x * 0.35;
+    let lace = edge * edge * bands * smoothstep(0.45, 0.75, breakup);
+    let foam = clamp(line * 0.9 + lace, 0.0, 1.0);
+    let foamLit = materialUniform.foamColor.rgb * (ambient + sunRad * max(dot(n, L), 0.0) * shadow / W_PI);
+    color = mix(color, foamLit, foam);
+
+    // BxDFShading writes the G-buffer that fog, SSR and AO read; the color is this one.
+    // With a Mirror the reflection is complete: the G-buffer says rough so SSR
+    // leaves it alone; without one SSR (when on) adds what is on screen.
+    ORI_ShadingInput.BaseColor = vec4f(mix(albedo * 0.2, materialUniform.foamColor.rgb, foam), 1.0);
+    ORI_ShadingInput.Roughness = mix(rough, 1.0, clamp(mirror.a, 0.0, 1.0));
     ORI_ShadingInput.Metallic = 0.0;
     ORI_ShadingInput.Specular = 0.0;
     ORI_ShadingInput.AmbientOcclusion = 1.0;
+    ORI_ShadingInput.EmissiveColor = vec4f(0.0, 0.0, 0.0, 1.0);
     ORI_ShadingInput.Normal = n;
-    useShadow();
-    // Emission is read as gamma-encoded color: encode the linear light.
-    let light = reflection * fresnel + glint * directShadowVisibility[0];
-    ORI_ShadingInput.EmissiveColor = vec4f(pow(max(light, vec3f(0.0)), vec3f(1.0 / 2.4)), 1.0);
     BxDFShading();
+    ORI_FragmentOutput.color = vec4f(max(color, vec3f(0.0)), 1.0);
 }
 `,
     },

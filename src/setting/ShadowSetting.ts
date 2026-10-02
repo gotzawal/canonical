@@ -24,6 +24,13 @@ export type ShadowSetting = {
     updateFrameRate: number;
 
     /**
+     * Cascades past the second are drawn again every this many frames
+     * (the third), and twice that (the fourth); between, they keep the
+     * view they were drawn from. 1 draws every cascade every frame.
+     */
+    farCascadeEvery?: number;
+
+    /**
      * Shadow sampling mode.
      *
      * - `'HARD'`: single-tap hardware compare, sharp 1-texel edges.

@@ -3,6 +3,7 @@ import type { Editor } from '../editor';
 import { onChanges, touches } from './batch';
 import { Environment } from '../core/model';
 import { QUALITY } from '../core/quality';
+import { CLOUD_PRESETS } from '../core/clouds';
 import { describeShadowCost, shadowCasters, shadowCost } from '../engine/shadows';
 import { inner } from '../core/schema';
 import type { EnvironmentDoc, SkyType, StageId } from '../core/types';
@@ -11,7 +12,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere';
+type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere' | 'clouds' | 'weather';
 
 /** The stage a section's settings are made in, shown in its header. */
 function stageChip(stage: StageId): HTMLElement {
@@ -39,6 +40,7 @@ export class ScenePanel {
     private sky: SkyType | null = null;
     private giOn: boolean | null = null;
     private fogMode: string | null = null;
+    private follow: boolean | null = null;
     private steps: FieldSteps;
     private fov: SliderField | null = null;
     /** Updates the line on what the shadow maps take. */
@@ -55,7 +57,7 @@ export class ScenePanel {
                 return;
             }
             const env = editor.store.doc.environment;
-            if (env.sky !== this.sky || env.gi.enable !== this.giOn || env.fog.mode !== this.fogMode) this.render();
+            if (env.sky !== this.sky || env.gi.enable !== this.giOn || env.fog.mode !== this.fogMode || env.atmosphere.followLight !== this.follow) this.render();
             else for (const s of this.syncs) s();
         });
         editor.store.on('load', () => this.render());
@@ -122,6 +124,7 @@ export class ScenePanel {
         this.sky = env.sky;
         this.giOn = env.gi.enable;
         this.fogMode = env.fog.mode;
+        this.follow = env.atmosphere.followLight;
         const store = this.editor.store;
         const watch = (fn: () => void) => this.syncs.push(fn);
 
@@ -132,12 +135,18 @@ export class ScenePanel {
 
         // The sun and the sky's brightness (Lighting)
         const sunSky = env.sky !== 'color';
+        // The atmospheric skies can take their sun from the key light: then the light places it.
+        const airSky = env.sky === 'atmospheric' || env.sky === 'physical';
+        const follows = airSky && env.atmosphere.followLight;
         this.body.append(
             section('sky', sunSky ? 'Sun and Sky' : 'Sky', 'sun', [
                 ...(env.sky === 'hdri' ? [this.hdriRow(watch)] : []),
-                ...this.rows([...(sunSky ? ['sunX', 'sunY'] : ['skyColor']), 'skyExposure']),
+                ...(airSky ? this.rows(['followLight'], 'atmosphere') : []),
+                ...(follows ? [h('div', { class: 'muted small pad', text: 'The sun is where the key light (the first directional light) comes from: turn the light to move it.' })] : []),
+                ...this.rows([...(sunSky && !follows ? ['sunX', 'sunY'] : sunSky ? [] : ['skyColor']), 'skyExposure']),
                 // The sun disc and the air.
-                ...(sunSky && env.sky !== 'hdri' ? this.rows(['sunSize', 'sunBrightness', 'showSun', 'altitude'], 'atmosphere') : []),
+                ...(airSky ? this.rows(['sunSize', 'sunBrightness', 'showSun', 'altitude'], 'atmosphere') : []),
+                ...this.rows(['haze'], 'atmosphere'),
             ], [stageChip('light')]),
         );
 
@@ -173,6 +182,14 @@ export class ScenePanel {
             ], [stageChip('effects')]),
         );
 
+        // Weather and time of day (Effects)
+        this.body.append(
+            section('weather', 'Weather & Time', 'sun', [
+                ...this.rows(['enable', 'time', 'cycle', 'preset', 'wind', 'windDirection', 'sunrise', 'noon', 'stars'], 'weather'),
+                h('div', { class: 'muted small pad', text: 'Sets the sun (the key light; the moon at night), the sky, clouds, fog, haze, rain around the camera and the wind of grass, clouds and rain together.' }),
+            ], [stageChip('effects')]),
+        );
+
         // Post processing (Effects)
         const label = (text: string) => h('div', { class: 'group-label', text });
         this.body.append(
@@ -186,6 +203,16 @@ export class ScenePanel {
                 ...this.rows(['enable', 'strength', 'roughness', 'distance', 'resolution', 'reach'], 'ssr'),
                 label('Fog'),
                 ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
+                label('Clouds'),
+                ...this.rows(['enable'], 'clouds'),
+                row('Presets', h('div', { class: 'button-row' }, ...CLOUD_PRESETS.map((p) => {
+                    const b = button(p.label, () => store.commit(`Clouds: ${p.label}`, (d) => {
+                        d.environment.clouds = { ...d.environment.clouds, ...p.look, enable: true };
+                    }, { env: true }), 'small');
+                    b.title = p.description;
+                    return b;
+                }))),
+                ...this.rows(['coverage', 'type', 'size', 'clumping', 'variety', 'softness', 'detail', 'density', 'seed', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
                 label('Volumetric Fog'),
                 ...this.rows(['enable', 'density', 'scattering', 'anisotropy', 'distance', 'ambient'], 'volumetricFog'),
                 label('God Rays'),

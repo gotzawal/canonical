@@ -195,7 +195,7 @@ export class Engine3D {
             shadow: {
                 enable: true, type: 'HARD', shadowSize: 2048, pointShadowSize: 1024,
                 shadowSoft: 0.005, pcfKernelScale: 1.0, needUpdate: true, autoUpdate: true,
-                updateFrameRate: 1, csmMargin: 0.1, csmScatteringExp: 0.7, csmAreaScale: 0.4,
+                updateFrameRate: 1, farCascadeEvery: 1, csmMargin: 0.1, csmScatteringExp: 0.7, csmAreaScale: 0.4,
                 maxCascades: 4, maxShadowMapNum: 8, maxShadowMapWidth: 2048, maxShadowMapHeight: 2048, shadowBound: 256,
                 debug: false,
                 contactShadow: {
