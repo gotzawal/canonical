@@ -373,9 +373,9 @@ export class Editor extends Emitter<EditorEvents> {
     /**
      * A forest of trees like a tree object, around it: a scatter whose one
      * source grows its tree (copies of a few variants of it) over 60 meters,
-     * on the ground under it and above any water, clear of its crown. The
-     * tree stays. Returns the scatter's id, or null when the object is not a
-     * tree.
+     * on the ground under it and above any water, as far from its trunk as
+     * from each other. The tree stays. Returns the scatter's id, or null
+     * when the object is not a tree.
      */
     forestFrom(id: string): string | null {
         const n = this.store.node(id);
@@ -386,8 +386,9 @@ export class Editor extends Emitter<EditorEvents> {
         const size: [number, number] = [60, 60];
         const scatter = forestScatter([{ tree: { ...n.tree }, weight: 1 }], size);
         scatter.ground = this.groundUnder(at, id);
-        // No copy stands in the tree's own crown.
+        // The tree is one of the forest: copies keep the spacing from its trunk too.
         scatter.avoid = [id];
+        scatter.margin = scatter.spacing;
         const water = this.waterOver(at, size);
         if (water !== null) scatter.height = [round(water + 1), 10000];
         return this.createScatter(scatter, { name: `${n.name} Forest`, at });

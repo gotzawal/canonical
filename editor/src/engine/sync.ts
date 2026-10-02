@@ -1768,7 +1768,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         return null;
     }
 
-    /** The x-z boxes of the shown meshes and tree crowns of objects to avoid (and of the objects under them). */
+    /** The x-z boxes of the shown meshes and tree trunks of objects to avoid (and of the objects under them). */
     private avoidBoxes(ids: readonly string[]): AvoidBox[] {
         const out: AvoidBox[] = [];
         for (const id of ids) {
@@ -1778,8 +1778,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                     const b = rendererWorldBox(r);
                     if (b) out.push({ minX: b.min[0], maxX: b.max[0], minZ: b.min[2], maxZ: b.max[2] });
                 }
-                const crown = this.entries.get(nid)?.tree?.view.bounds();
-                if (crown) out.push({ minX: crown.min[0], maxX: crown.max[0], minZ: crown.min[2], maxZ: crown.max[2] });
+                // A tree keeps its trunk clear: what grows under its crown may stay.
+                for (const t of this.entries.get(nid)?.tree?.view.trunks() ?? []) {
+                    out.push({ minX: t.center[0] - t.size[0], maxX: t.center[0] + t.size[0], minZ: t.center[2] - t.size[2], maxZ: t.center[2] + t.size[2] });
+                }
                 const f = this.terrainView(nid)?.frame;
                 if (f) out.push({ minX: f.x - f.sizeX / 2, maxX: f.x + f.sizeX / 2, minZ: f.z - f.sizeZ / 2, maxZ: f.z + f.sizeZ / 2 });
             }
