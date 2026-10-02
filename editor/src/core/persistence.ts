@@ -297,10 +297,18 @@ export function keptAssets(doc: SceneDoc): AssetMeta[] {
     return doc.assets.filter((a) => a.purpose !== 'design' || design.has(a.id));
 }
 
-/** Drops IndexedDB blobs the project no longer keeps (keeping what its snapshots use). */
-export function collectGarbage(doc: SceneDoc) {
-    const keep = new Set(keptAssets(doc).map((a) => a.id));
-    for (const id of designAssetIds(doc.design)) keep.add(id);
+/**
+ * Drops IndexedDB blobs the project no longer keeps (keeping what its snapshots use).
+ * What it keeps is read from `doc()` when the files are dropped, not when this is called:
+ * files added since (an example built right after it is loaded) stay.
+ */
+export function collectGarbage(doc: () => SceneDoc) {
+    const keep = () => {
+        const d = doc();
+        const ids = new Set(keptAssets(d).map((a) => a.id));
+        for (const id of designAssetIds(d.design)) ids.add(id);
+        return ids;
+    };
     // The scene of another tab uses files this one does not list: clean up only when alone.
     void otherTabsOpen().then((others) => {
         if (others) return;
