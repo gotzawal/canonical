@@ -285,12 +285,22 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!eye) return;
         const at = [eye.x, eye.y, eye.z];
         this.modelLods.update(at, QUALITY[this.runtime.qualityLevel].lodDistance);
+        for (const g of this.grasses) g.grass?.update(at);
         if (!this.terrainStates.size && !this.scatterStates.size) return;
-        for (const t of this.terrainStates) t.view.update(at);
+        let eased = false;
+        for (const t of this.terrainStates) eased = t.view.update(at) || eased;
+        // Eased terrain heights move the shadows they cast (a few times a second at most).
+        const now = performance.now();
+        if (eased && now - this.shadowsEasedAt > 250) {
+            this.shadowsEasedAt = now;
+            this.runtime.redrawShadows();
+        }
         for (const s of this.scatterStates) s.view.update(at);
         if (this.terrainStates.size) this.updateWetness();
     }
 
+    /** When terrain heights eased last asked for the shadows again. */
+    private shadowsEasedAt = 0;
     /** The tier the mirrors, terrains and scatters were last fitted to. */
     private tierApplied: QualityLevel | null = null;
 
@@ -303,6 +313,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (e.mirror) this.applyMirror(e, node);
             if (e.terrain && node.terrain) e.terrain.view.material.setLook(node.terrain.blending, node.terrain.variation, QUALITY[level].terrainFar);
             if (e.scatter) e.scatter.view.setLodScale(QUALITY[level].lodDistance);
+            e.grass?.setLodScale(QUALITY[level].lodDistance);
         }
     }
 
@@ -438,7 +449,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         for (const [id, entry] of this.entries) {
             const mode = canMove(id) ? 'auto' : 'static';
             for (const r of this.renderersOf(id)) r.shadowCacheMode = mode;
-            if (entry.grass) entry.grass.renderer.shadowCacheMode = mode;
+            entry.grass?.setShadowCacheMode(mode);
             // Its copies move without it: a copy that can move makes it change every frame it moves.
             if (entry.instancer) {
                 const members = this.groupMembers.get(id) ?? [];
@@ -641,6 +652,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.instancer) this.dirtyGroups.add(entry.id);
         entry.grass?.remove((res) => this.disposeLater(res));
         entry.grass = null;
+        this.grasses.delete(entry);
         this.applyRain(entry, undefined);
         this.waters.delete(entry);
         if (entry.terrain) this.dropTerrain(entry);
@@ -1093,6 +1105,8 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** The objects with rain; their volumes follow them every frame (rainFrame). */
     private rains = new Set<Entry>();
+    /** The objects with grass (their chunks follow the camera every frame). */
+    private grasses = new Set<Entry>();
     /** Renderers of models placed one by one that draw simpler levels far away. */
     private modelLods = new ModelLods();
     /** The objects whose material shows what lies under them (water): terrains under them are wet. */
@@ -1148,6 +1162,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (entry.grass && build !== entry.grassBuild) {
             entry.grass.remove((res) => this.disposeLater(res));
             entry.grass = null;
+            this.grasses.delete(entry);
         }
         entry.grassBuild = build;
         if (!doc) {
@@ -1157,6 +1172,8 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!entry.grass) {
             entry.grass = new GrassField(this.runtime.scene, doc);
             entry.grass.setVisible(entry.visible);
+            entry.grass.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
+            this.grasses.add(entry);
             entry.grassPlaced = '';
         }
         const field = entry.grass;
@@ -1166,7 +1183,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         const blade = doc.texture ? this.loadTexture(doc.texture, 'color') : Promise.resolve(null);
         const gusts = doc.windMap ? this.loadTexture(doc.windMap, 'data') : Promise.resolve(null);
         // Plain until its textures are there.
-        if (!field.renderer.grassMaterial.baseMap) field.setTextures(plainBlades(ctx), this.gusts);
+        if (!field.hasTextures) field.setTextures(plainBlades(ctx), this.gusts);
         void Promise.all([blade, gusts]).then(([b, g]) => {
             if (entry.grass !== field) return;
             const now = this.store.node(entry.id)?.grass;
@@ -1190,7 +1207,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             const lands = doc.ground ? this.groundTerrains(doc.ground) : [];
             const m = entry.obj.transform.worldMatrix.rawData;
             const key = JSON.stringify([
-                doc.size, doc.count, doc.ground, Array.from(m, (v) => +v.toFixed(4)),
+                doc.size, doc.count, doc.ground, doc.heights, doc.widths, doc.sizes, doc.shapes, doc.shapeSpread, doc.curvature, doc.patchSize, doc.height, Array.from(m, (v) => +v.toFixed(4)),
                 ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))]),
                 lands.map((l) => [l.id, l.version]),
             ]);

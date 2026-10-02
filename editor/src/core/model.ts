@@ -6,6 +6,7 @@
 
 import { z } from 'zod';
 import { clampGIGrid } from './giLimits';
+import { SHAPE_DISTRIBUTIONS, SIZE_DISTRIBUTIONS } from './grass';
 import { asset, bool, color, group, int, num, oneOf, optionalFields, params, range, records, text, vec2, vec3 } from './schema';
 
 const enabled = (m = {}) => bool(false, { title: 'Enabled', ...m });
@@ -344,6 +345,25 @@ export const Grass = z.object({
     ground: z.string().min(1).nullable().catch(null).meta({ description: 'Object (a terrain, a floor or a group of them) the blades stand on, by id; null for a flat field at the object\'s height. Blades outside it or on slopes steeper than 60 degrees are left out.' }),
     height: num(0.45, 0.02, 5, { step: 0.01, precision: 2, description: 'Blade height in meters (each blade varies around it).' }),
     width: num(0.06, 0.005, 1, { step: 0.005, precision: 3, description: 'Blade width at its root in meters.' }),
+    heights: range([0.7, 1.3], 0.1, 4, { title: 'Height Spread', precision: 2, step: 0.05, description: 'Each blade\'s height is the height times a number in [least, most], spread by Size Spread.' }),
+    widths: range([0.7, 1.3], 0.1, 4, { title: 'Width Spread', precision: 2, step: 0.05, description: 'Each blade\'s width is the width times a number in [least, most], spread by Size Spread.' }),
+    sizes: oneOf(SIZE_DISTRIBUTIONS, 'uniform', {
+        title: 'Size Spread',
+        labels: { uniform: 'Uniform', bell: 'Mostly Middling', short: 'Mostly Short', patches: 'In Patches' },
+        description: 'How sizes spread within the height and width ranges: uniform (any size as likely), bell (most near the middle), short (most small, a few tall), patches (tall and short grass in patches of Patch Size).',
+    }),
+    shapes: group({
+        blade: num(1, 0, 10, { step: 0.1, description: 'Share of plain blades that taper evenly to a point.' }),
+        leaf: num(0, 0, 10, { step: 0.1, description: 'Share of broad leaves, widest in their lower middle, that bend more.' }),
+        needle: num(0, 0, 10, { step: 0.1, description: 'Share of thin, stiff needles.' }),
+    }, { description: 'The blade shapes, by their shares (relative to each other).' }),
+    shapeSpread: oneOf(SHAPE_DISTRIBUTIONS, 'mixed', {
+        title: 'Shape Spread',
+        labels: { mixed: 'Mixed', patches: 'In Patches' },
+        description: 'mixed: each blade takes a shape by the shares; patches: the shapes gather in patches of Patch Size (a few of the others among them).',
+    }),
+    curvature: range([0, 0.5], 0, 1, { precision: 2, step: 0.05, description: 'How much blades bend at rest, [least, most] (leaves bend more, needles less).' }),
+    patchSize: num(4, 0.5, 200, { title: 'Patch Size', step: 0.5, description: 'Meters across a patch, for sizes or shapes spread in patches.' }),
     bottomColor: color('#28461c', { title: 'Root Color' }),
     topColor: color('#7cab45', { title: 'Tip Color' }),
     wind: num(0.6, 0, 3, { step: 0.01, slider: true, description: 'How far gusts bend the blades.' }),

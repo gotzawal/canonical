@@ -5,7 +5,7 @@ import {
     Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player, Rain, Scatter, ScatterSource, Terrain,
     TerrainLayer,
 } from '../core/model';
-import { defaults } from '../core/schema';
+import { defaults, inner } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
 import { layerFromSlot, unassignSlot } from '../design/materialSlots';
@@ -997,7 +997,10 @@ export class InspectorPanel {
             h('div', { class: 'muted small pad', text: 'Blades over the area around the object, all in one draw, bent by gusts of wind. Each stands on the ground object below it, so the field follows any terrain; without a ground it is flat at the object\'s height.' }),
             ...this.componentRows('grass', ['count', 'size']),
             row('Ground', ground.el, 'Terrain, floor or a group of them; blades outside it are left out'),
-            ...this.componentRows('grass', ['height', 'width', 'bottomColor', 'topColor', 'wind', 'windSpeed', 'windDirection']),
+            ...this.componentRows('grass', ['height', 'width', 'heights', 'widths', 'sizes']),
+            h('div', { class: 'muted small pad', text: 'Shapes, by their shares:' }),
+            ...this.fieldRows(inner(Grass.shape.shapes) as z.ZodObject, (n: NodeDoc) => n.grass?.shapes, ['blade', 'leaf', 'needle']),
+            ...this.componentRows('grass', ['shapeSpread', 'curvature', 'patchSize', 'bottomColor', 'topColor', 'wind', 'windSpeed', 'windDirection']),
             row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
             row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
             ...this.componentRows('grass', ['distance', 'castShadow']),

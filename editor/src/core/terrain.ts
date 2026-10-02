@@ -262,6 +262,41 @@ export function refillChunk(map: Heightmap, frame: Pick<TerrainFrame, 'sizeX' | 
     fillChunk(map, frame, chunkGrid(map, cx, cz), skirt, positions, normals);
 }
 
+/**
+ * Writes a chunk's heights eased toward its next coarser level (geomorphing):
+ * at `level` the samples that the coarser level skips move a share `f`
+ * (0 to 1) of the way to where its triangles pass, so the switch to it
+ * changes nothing. Its skirt follows; x, z and the normals stay.
+ */
+export function morphChunk(map: Heightmap, frame: Pick<TerrainFrame, 'height'>, cx: number, cz: number, skirt: number, positions: Float32Array, level: number, f: number) {
+    const g = chunkGrid(map, cx, cz);
+    const { nx, nz } = g;
+    const w = map.width;
+    const h = (i: number, j: number) => map.data[(g.z0 + j) * w + g.x0 + i] * frame.height;
+    const s = 2 ** level;
+    const s2 = s * 2;
+    const morph = f > 0 && level < TERRAIN_LODS - 1;
+    for (let j = 0; j < nz; j++) {
+        for (let i = 0; i < nx; i++) {
+            let y = h(i, j);
+            if (morph && i % s === 0 && j % s === 0) {
+                const oi = i % s2 !== 0;
+                const oj = j % s2 !== 0;
+                const inX = i - s >= 0 && i + s < nx;
+                const inZ = j - s >= 0 && j + s < nz;
+                let to: number | null = null;
+                if (oi && !oj && inX) to = (h(i - s, j) + h(i + s, j)) / 2;
+                else if (!oi && oj && inZ) to = (h(i, j - s) + h(i, j + s)) / 2;
+                // A quad's middle lies on its diagonal, from its +x -z corner to its -x +z one (see chunkMesh).
+                else if (oi && oj && inX && inZ) to = (h(i + s, j - s) + h(i - s, j + s)) / 2;
+                if (to !== null) y += (to - y) * f;
+            }
+            positions[(j * nx + i) * 3 + 1] = y;
+        }
+    }
+    g.rim.forEach((v, k) => (positions[(nx * nz + k) * 3 + 1] = positions[v * 3 + 1] - skirt));
+}
+
 /** A chunk's samples as a region of the map (x0, z0 inclusive, x1, z1 exclusive). */
 export function chunkRegion(map: Heightmap, cx: number, cz: number): { x0: number; z0: number; x1: number; z1: number } {
     const g = chunkGrid(map, cx, cz);

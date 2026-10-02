@@ -1,5 +1,5 @@
 // Grass fields (packages/geometry): the blades of a Grass component drawn
-// by one renderer at the scene root. Each blade is a transform of its own
+// in chunks at the scene root, each chunk one renderer. Each blade is a transform of its own
 // in the engine's matrix table, placed here where a vertical line through
 // it meets the ground object, so a field follows any terrain.
 
@@ -7,6 +7,7 @@ import { Engine3D, Object3D, RendererMask, Uint8ArrayTexture, Vector2, Vector3, 
 import { GrassComponent } from '@orillusion/geometry/grass';
 import { covers, groundHeight, groundNormal, type TerrainSurface } from '../core/terrain';
 import type { GrassDoc } from '../core/types';
+import { bladeBend, bladeProfile, GRASS_SHAPES, patchNoise, shapeAt, sizeAt, type GrassShape } from '../core/grass';
 import { hexToColor } from './color';
 import { ownIndices } from './lod';
 
@@ -15,79 +16,221 @@ const MAX_SLOPE = 0.5;
 /** The engine's blade rises in five segments of 0.2, 0.4 ... 1.0 times its height setting: three times it in all. */
 const SEGMENT_SUM = 3;
 
-/** One field: its renderer and the blades' transforms. */
+/** Blades a chunk aims at, and the most chunks a side. */
+const PER_CHUNK = 1500;
+const MAX_CHUNKS = 6;
+/** Meters from the camera where chunks switch to blades of two segments, then one (times the tier's LOD distance). */
+const LOD_NEAR = 14;
+const LOD_FAR = 35;
+
+/** A part of a field: its renderer (one draw), its blades and the box they fill. */
+interface GrassChunk {
+    renderer: GrassComponent;
+    /** Its cell of the field: column, row. */
+    ci: number;
+    cj: number;
+    min: Vector3;
+    max: Vector3;
+    /** Whether it has blades standing (a box to cull by). */
+    placed: boolean;
+}
+
+/**
+ * One field: chunks of blades over its area, each its own renderer (one
+ * draw) with the box its blades fill, so chunks out of view are not drawn,
+ * those past the draw distance are switched off and far ones draw their
+ * blades with fewer segments (levels of detail). Blades vary in size and
+ * shape by the field's spreads.
+ */
 export class GrassField {
     readonly root: Object3D;
-    readonly renderer: GrassComponent;
+    private chunks: GrassChunk[] = [];
+    private side: number;
+    private visible = true;
+    private distance = 0;
+    private lodScale = 1;
+    /** The shapes the blades were last given (to reshape only when they change). */
+    private shaped = '';
 
     constructor(scene: Object3D, doc: GrassDoc) {
         this.root = new Object3D();
         this.root.name = 'Grass';
-        this.renderer = this.root.addComponent(GrassComponent);
-        // Blades are shaped in the vertex stage: the depth prepass would draw them flat.
-        this.renderer.addRendererMask(RendererMask.IgnoreDepthPass);
-        this.renderer.castGI = false;
-        this.renderer.setGrass(doc.width, doc.height, 5, 1, doc.count);
+        this.side = Math.max(1, Math.min(MAX_CHUNKS, Math.round(Math.sqrt(doc.count / PER_CHUNK))));
+        const n = this.side * this.side;
+        for (let k = 0; k < n; k++) {
+            const count = Math.floor(doc.count / n) + (k < doc.count % n ? 1 : 0);
+            if (count <= 0) continue;
+            const obj = new Object3D();
+            obj.name = 'Grass chunk';
+            this.root.addChild(obj);
+            const renderer = obj.addComponent(GrassComponent);
+            // Blades are shaped in the vertex stage: the depth prepass would draw them flat.
+            renderer.addRendererMask(RendererMask.IgnoreDepthPass);
+            renderer.castGI = false;
+            renderer.setGrass(doc.width, doc.height, 5, 1, count);
+            this.chunks.push({ renderer, ci: k % this.side, cj: Math.floor(k / this.side), min: new Vector3(), max: new Vector3(), placed: false });
+        }
         scene.addChild(this.root);
     }
 
-    /** Colors, wind, height and shadows (the blades stay where they are). */
+    /** The chunks' renderers. */
+    get renderers(): GrassComponent[] {
+        return this.chunks.map((c) => c.renderer);
+    }
+
+    /** Colors, wind, height, shadows and draw distance (the blades stay where they are). */
     apply(doc: GrassDoc) {
-        const m = this.renderer.grassMaterial;
-        m.grassBaseColor = hexToColor(doc.bottomColor);
-        m.grassTopColor = hexToColor(doc.topColor);
-        // The shader takes where the wind comes from; gusts move 100 texels (meters) a second at speed 1.
         const a = (doc.windDirection * Math.PI) / 180;
-        m.windDirection = new Vector2(-Math.sin(a), -Math.cos(a));
-        m.windPower = doc.wind;
-        m.windSpeed = doc.windSpeed / 100;
-        m.grassHeight = doc.height / SEGMENT_SUM;
-        m.castShadow = doc.castShadow;
-        m.drawDistance = doc.distance;
-        this.renderer.castShadow = doc.castShadow;
+        for (const { renderer } of this.chunks) {
+            const m = renderer.grassMaterial;
+            m.grassBaseColor = hexToColor(doc.bottomColor);
+            m.grassTopColor = hexToColor(doc.topColor);
+            // The shader takes where the wind comes from; gusts move 100 texels (meters) a second at speed 1.
+            m.windDirection = new Vector2(-Math.sin(a), -Math.cos(a));
+            m.windPower = doc.wind;
+            m.windSpeed = doc.windSpeed / 100;
+            m.grassHeight = doc.height / SEGMENT_SUM;
+            m.castShadow = doc.castShadow;
+            m.drawDistance = doc.distance;
+            renderer.castShadow = doc.castShadow;
+        }
+        this.distance = doc.distance;
+    }
+
+    /** Whether its textures are set yet. */
+    get hasTextures(): boolean {
+        return !!this.chunks[0]?.renderer.grassMaterial.baseMap;
     }
 
     setTextures(blade: Texture, gusts: Texture) {
-        const m = this.renderer.grassMaterial;
-        if (m.baseMap !== blade) m.baseMap = blade;
-        if (m.shader.getTexture('windMap') !== gusts) m.windMap = gusts;
+        for (const { renderer } of this.chunks) {
+            const m = renderer.grassMaterial;
+            if (m.baseMap !== blade) m.baseMap = blade;
+            if (m.shader.getTexture('windMap') !== gusts) m.windMap = gusts;
+        }
+    }
+
+    setShadowCacheMode(mode: 'auto' | 'static' | 'dynamic') {
+        for (const { renderer } of this.chunks) renderer.shadowCacheMode = mode;
+    }
+
+    /** Scales the distances where chunks switch to simpler blades (the graphics tier's). */
+    setLodScale(scale: number) {
+        this.lodScale = Math.max(0.1, scale);
     }
 
     /**
      * Scatters the blades over the area around the object (`frame`, see
-     * fieldFrame), each standing on `ground` below it, or flat at the
-     * object's height without one. `seed` keeps the layout the same.
+     * fieldFrame), each chunk's over its cell of it, each blade standing on
+     * `ground` below it, or flat at the object's height without one. Sizes
+     * and shapes follow the field's spreads. `seed` keeps the layout the
+     * same.
      */
     place(doc: GrassDoc, frame: FieldFrame, ground: Ground | null, seed: number) {
-        const nodes = this.renderer.nodes;
         const random = mulberry32(seed);
+        // Sizes and shapes draw from their own stream: a field without them keeps its blades.
+        const more = mulberry32(seed ^ 0x5bd1e995);
+        const noiseSeed = seed ^ 0x2f6b;
         const pos = new Vector3(), rot = new Vector3(), scale = new Vector3();
         const [w, d] = doc.size;
+        const cw = w / this.side, cd = d / this.side;
         const { origin: o, x: ax, z: az } = frame;
-        for (const node of nodes) {
-            // Drawn in the same order every time, so a blade keeps its place and size.
-            const u = (random() - 0.5) * w, v = (random() - 0.5) * d;
-            const yaw = random() * 360, wide = 0.7 + random() * 0.6, tall = 0.7 + random() * 0.6;
-            const x = o[0] + ax[0] * u + az[0] * v;
-            const z = o[2] + ax[2] * u + az[2] * v;
-            const y = ground ? ground.height(x, z) : o[1] + ax[1] * u + az[1] * v;
-            if (y === null) {
-                // No ground here: a blade of no size draws nothing.
-                scale.set(0, 0, 0);
-            } else {
-                pos.set(x, y, z);
-                rot.set(0, yaw, 0);
-                scale.set(wide, tall, wide);
-                node.localPosition = pos;
-                node.localRotation = rot;
+        const shapes: GrassShape[][] = [];
+        for (const chunk of this.chunks) {
+            const nodes = chunk.renderer.nodes;
+            const own: GrassShape[] = [];
+            const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
+            for (const node of nodes) {
+                // Drawn in the same order every time, so a blade keeps its place and size.
+                const u = -w / 2 + (chunk.ci + random()) * cw, v = -d / 2 + (chunk.cj + random()) * cd;
+                const yaw = random() * 360, rw = random(), rh = random();
+                const extra: [number, number] = [more(), more()];
+                const rs = more();
+                const x = o[0] + ax[0] * u + az[0] * v;
+                const z = o[2] + ax[2] * u + az[2] * v;
+                const patch = doc.sizes === 'patches' || doc.shapeSpread === 'patches' ? patchNoise(x, z, doc.patchSize, noiseSeed) : 0.5;
+                const tall = lerp(doc.heights, sizeAt(doc.sizes, rh, extra, patch));
+                // A blade's width follows its height in patches (tall and broad together), else its own number.
+                const wide = lerp(doc.widths, sizeAt(doc.sizes, doc.sizes === 'patches' ? rh : rw, [extra[1], extra[0]], patch));
+                own.push(shapeAt(doc.shapes, doc.shapeSpread, rs, patchNoise(x, z, doc.patchSize, noiseSeed ^ 0x77)));
+                const y = ground ? ground.height(x, z) : o[1] + ax[1] * u + az[1] * v;
+                if (y === null) {
+                    // No ground here: a blade of no size draws nothing.
+                    scale.set(0, 0, 0);
+                } else {
+                    pos.set(x, y, z);
+                    rot.set(0, yaw, 0);
+                    scale.set(wide, tall, wide);
+                    node.localPosition = pos;
+                    node.localRotation = rot;
+                    const top = y + doc.height * tall * 1.1;
+                    min[0] = Math.min(min[0], x - 0.5);
+                    max[0] = Math.max(max[0], x + 0.5);
+                    min[1] = Math.min(min[1], y);
+                    max[1] = Math.max(max[1], top);
+                    min[2] = Math.min(min[2], z - 0.5);
+                    max[2] = Math.max(max[2], z + 0.5);
+                }
+                node.localScale = scale;
+                node.updateWorldMatrix(true);
             }
-            node.localScale = scale;
-            node.updateWorldMatrix(true);
+            shapes.push(own);
+            chunk.placed = min[0] <= max[0];
+            if (chunk.placed) {
+                chunk.min.set(min[0], min[1], min[2]);
+                chunk.max.set(max[0], max[1], max[2]);
+                // Culled by the box its blades fill (the blades bend a little past it in the wind).
+                chunk.renderer.setMinMax(new Vector3(min[0] - 0.5, min[1] - 0.5, min[2] - 0.5), new Vector3(max[0] + 0.5, max[1] + 0.5, max[2] + 0.5));
+                chunk.renderer.alwaysRender = false;
+            }
         }
+        // Their shapes: the geometry is written again only when they changed.
+        const key = JSON.stringify([doc.shapes, doc.shapeSpread, doc.curvature, doc.patchSize, seed]);
+        if (key !== this.shaped) {
+            this.shaped = key;
+            const profiles = Object.fromEntries(GRASS_SHAPES.map((k) => [k, bladeProfile(k, 5)])) as Record<GrassShape, number[]>;
+            const bend = mulberry32(seed ^ 0x1b873593);
+            this.chunks.forEach((chunk, i) => {
+                chunk.renderer.grassGeometry.reshape((b) => {
+                    const shape = shapes[i][b] ?? 'blade';
+                    return { profile: profiles[shape], curvature: bladeBend(shape, lerp(doc.curvature, bend())) };
+                });
+            });
+        }
+        this.updateVisible();
     }
 
     setVisible(visible: boolean) {
-        this.renderer.enable = visible;
+        this.visible = visible;
+        this.updateVisible();
+    }
+
+    private updateVisible() {
+        for (const c of this.chunks) c.renderer.enable = this.visible && c.placed;
+    }
+
+    /**
+     * Fits the chunks to a camera at `eye` (world): those past the draw
+     * distance are switched off, the others draw the level of detail their
+     * distance calls for (with a margin, so one at a limit does not flicker).
+     */
+    update(eye: ArrayLike<number>) {
+        if (!this.visible) return;
+        for (const c of this.chunks) {
+            if (!c.placed) continue;
+            const dx = Math.max(c.min.x - eye[0], 0, eye[0] - c.max.x);
+            const dy = Math.max(c.min.y - eye[1], 0, eye[1] - c.max.y);
+            const dz = Math.max(c.min.z - eye[2], 0, eye[2] - c.max.z);
+            const d = Math.hypot(dx, dy, dz);
+            const on = !(this.distance > 0) || d <= this.distance;
+            if (c.renderer.enable !== on) c.renderer.enable = on;
+            if (!on) continue;
+            const cur = c.renderer.lodLevel;
+            const near = LOD_NEAR * this.lodScale * (cur === 0 ? 1.05 : 0.95);
+            const far = LOD_FAR * this.lodScale * (cur === 2 ? 0.95 : 1.05);
+            const level = d > far ? 2 : d > near ? 1 : 0;
+            if (level !== cur) c.renderer.lodLevel = level;
+        }
     }
 
     /** Takes it out of the scene; `dispose` frees it once the GPU is done with it. */
@@ -95,6 +238,10 @@ export class GrassField {
         this.root.removeFromParent();
         dispose(this.root);
     }
+}
+
+function lerp(range: readonly [number, number] | number[], t: number): number {
+    return range[0] + (range[1] - range[0]) * t;
 }
 
 /** Where a field lies: the object's position and its turned x and z axes, without its scale (sizes are meters). */
