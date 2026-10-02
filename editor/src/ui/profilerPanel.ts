@@ -159,6 +159,7 @@ export class ProfilerPanel {
                 ],
                 1,
             ),
+            ...this.environmentRows(),
             h('div', {
                 class: 'muted small',
                 text: timed
@@ -166,6 +167,13 @@ export class ProfilerPanel {
                     : 'GPU time per pass is not available here: it needs timestamp queries that the device reports back. The CPU times are what recording each pass costs.',
             }),
         );
+    }
+
+    /** What each part of the environment draws now (its cost is in the passes above: posts by name, the editor's work as Editor rows). */
+    private environmentRows(): HTMLElement[] {
+        const rows = this.editor.sync.environmentReport();
+        if (!rows.length) return [];
+        return [h('div', { class: 'group-label', text: 'Environment' }), table(['Part', 'What it draws now'], rows, 2)];
     }
 
     private renderMemory(s: GpuSnapshot, textures: TextureInfo[]) {

@@ -329,6 +329,14 @@ export class Runtime {
         this.lastEnv = '';
     }
 
+    /** What the clouds draw, for the Profiler. */
+    environmentReport(): [string, string][] {
+        const c = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (!c) return [];
+        const tier = QUALITY[this.qualityLevel];
+        return [['Clouds', `${c.coverage > 0 ? `${c.steps} steps a ray at a quarter resolution, to ${(c.farLimit / 1000).toFixed(0)} km` : 'stars only'}${c.reflections ? `; reflections a face every ${tier.cloudReflectionEvery} frame(s)` : ''}`]];
+    }
+
     /** How bright the stars and the moon's disc are (the weather's night), 0 for none: they show with the clouds. */
     setStars(stars: number) {
         this.stars = Math.max(0, stars);

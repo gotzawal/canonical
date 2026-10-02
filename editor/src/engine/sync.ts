@@ -310,9 +310,19 @@ export class SceneSync extends Emitter<SyncEvents> {
         const eye = this.runtime.activeCamera?.transform.worldPosition;
         if (!eye) return;
         const at = [eye.x, eye.y, eye.z];
+        // Each part's CPU time shows in the Profiler as a row of its own.
+        const stats = this.runtime.stats;
+        let t0 = performance.now();
+        const lap = (name: string) => {
+            const t = performance.now();
+            stats?.addCpu(name, t - t0);
+            t0 = t;
+        };
         this.modelLods.update(at, QUALITY[this.runtime.qualityLevel].lodDistance);
         for (const g of this.grasses) g.grass?.update(at);
+        lap('Editor: grass and model levels of detail');
         this.updateWeather(at);
+        lap('Editor: weather');
         if (!this.terrainStates.size && !this.scatterStates.size) return;
         let eased = false;
         for (const t of this.terrainStates) eased = t.view.update(at) || eased;
@@ -323,8 +333,24 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.runtime.redrawShadows();
         }
         for (const s of this.scatterStates) s.view.update(at);
+        lap('Editor: terrain and scatter levels of detail');
         if (this.terrainStates.size) this.updateWetness();
         this.updateGround(at);
+        lap('Editor: ground (contacts, stones, soil, wetness)');
+    }
+
+    /** What each part of the environment draws now, for the Profiler: its name and load. */
+    environmentReport(): [string, string][] {
+        const name = (id: string) => this.store.node(id)?.name ?? id;
+        const rows: [string, string][] = [];
+        for (const t of this.terrainStates) rows.push([`Terrain "${name(t.view.id)}"`, t.view.report()]);
+        for (const e of this.grasses) if (e.grass) rows.push([`Grass "${name(e.id)}"`, e.grass.report()]);
+        for (const e of this.entries.values()) if (e.scatter) rows.push([`Scatter "${name(e.id)}"`, e.scatter.view.report()]);
+        if (this.clutter) rows.push(['Loose stones', this.clutter.report()]);
+        const w = this.weather, env = this.store.doc.environment.weather;
+        if (w) rows.push(['Weather', `${env.preset}, sun ${w.sun.elevation.toFixed(0)}° ${w.night ? '(night, moon light)' : ''}, wind ${w.wind.speed.toFixed(1)} m/s${w.rain ? `, rain ${w.rain}` : ''}`]);
+        rows.push(...this.runtime.environmentReport());
+        return rows;
     }
 
     /** When terrain heights eased last asked for the shadows again. */
@@ -1791,6 +1817,21 @@ export class SceneSync extends Emitter<SyncEvents> {
         };
     }
 
+    /** The mean height of a scatter's copies, meters (what they sway over). */
+    private scatterHeight(doc: ScatterDoc, st: ScatterState): number {
+        let sum = 0, n = 0;
+        for (let k = 0; k < st.placements.length; k += Math.max(1, Math.floor(st.placements.length / 32))) {
+            const p = st.placements[k];
+            const model = doc.sources[p.source]?.model;
+            const piece = model ? this.scatterModelsLoaded.get(model)?.piece(p.variant) : null;
+            if (piece) {
+                sum += (piece.max[1] - piece.min[1]) * p.scale;
+                n++;
+            }
+        }
+        return n ? Math.max(0.1, sum / n) : 1;
+    }
+
     /** The mean color (linear rgb) of the terrains' ground at these points, as their layers show there; null off them or before their colors are read. */
     private groundColor(terrains: TerrainState[], points: [number, number][]): number[] | null {
         const sum = [0, 0, 0];
@@ -1859,7 +1900,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** A scatter's soil (the terrain's colors under its copies), moss and variation. */
     private applyRockGround(st: ScatterState, doc: ScatterDoc, terrains: TerrainState[]) {
         const place = this.shaders.terrainPlace;
-        const key = JSON.stringify([doc.soil, doc.moss, doc.mossColor, doc.vary, st.placements.length, this.groundKey, place.frame.x, place.frame.z, place.frame.w, place.level.x, place.level.y, place.level.z]);
+        const wind = this.weather?.wind ?? { speed: 5, direction: this.shownEnvironment.clouds.windDirection };
+        const key = JSON.stringify([doc.soil, doc.moss, doc.mossColor, doc.vary, doc.sway, wind, st.placements.length, this.groundKey, place.frame.x, place.frame.z, place.frame.w, place.level.x, place.level.y, place.level.z]);
         if (key === st.groundKey) return;
         st.groundKey = key;
         // The soil: the terrains' mean colors where the copies stand (a few of them).
@@ -1872,6 +1914,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             level: [place.level.x, place.level.y, place.level.z, doc.vary],
             soil: [color[0], color[1], color[2], n ? doc.soil : 0],
             moss: [...linearOf(doc.mossColor), doc.moss],
+            // The wind's way and strength (tops lean more in stronger wind), bent over the copies' mean height.
+            sway: [Math.cos((wind.direction * Math.PI) / 180), Math.sin((wind.direction * Math.PI) / 180), doc.sway * Math.max(0.15, Math.min(2.5, wind.speed / 6)), this.scatterHeight(doc, st)],
         });
     }
 

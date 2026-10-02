@@ -1240,7 +1240,7 @@ export class InspectorPanel {
             row('Ground', ground.el, 'What the copies stand on: a terrain, a floor or a group of them'),
             ...this.componentRows('scatter', ['height', 'slope', 'layer', 'clusters', 'clusterSize']),
             row('Avoid', h('div', {}, avoided, addAvoid.el), 'Objects whose ground area stays clear: buildings, paths, the play area'),
-            ...this.componentRows('scatter', ['margin', 'align', 'tilt', 'sink', 'bury', 'soil', 'moss', 'mossColor', 'vary', 'distance', 'castShadow']),
+            ...this.componentRows('scatter', ['margin', 'align', 'tilt', 'sink', 'bury', 'soil', 'moss', 'mossColor', 'vary', 'sway', 'distance', 'castShadow']),
             h('div', { class: 'design-actions' }, reseed, bake),
         ], [remove]);
     }

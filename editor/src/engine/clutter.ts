@@ -109,6 +109,17 @@ export class GroundClutter {
         for (const [, i, j] of missing.slice(0, BUILD_PER_FRAME)) this.cells.set(`${i},${j}`, this.build(i, j));
     }
 
+    /** What it draws, for the profiler: cells with stones, and the stones. */
+    report(): string {
+        let cells = 0, stones = 0;
+        for (const c of this.cells.values()) {
+            if (!c) continue;
+            cells++;
+            stones += (c.geometry.indicesBuffer?.indicesCount ?? 0) / 60;
+        }
+        return `${cells} cells, about ${Math.round(stones).toLocaleString('en-US')} stones`;
+    }
+
     private build(ci: number, cj: number): { obj: Object3D; geometry: GeometryBase } | null {
         const stones = clutterCell(ci, cj, CELL, this.ground!, SHAPES);
         if (!stones.length) return null;

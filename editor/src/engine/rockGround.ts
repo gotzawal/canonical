@@ -21,6 +21,8 @@ struct RockGround {
     soil: vec4f,
     // The moss's color (linear) and how much grows.
     moss: vec4f,
+    // The wind's direction x, z (unit), how far tops lean in it (meters at \`w\` meters up).
+    sway: vec4f,
 };
 @group(1) @binding(auto) var<uniform> rockGround: RockGround;
 @group(1) @binding(auto) var terrainHeightMapSampler: sampler;
@@ -56,6 +58,27 @@ fn rgGround(p: vec3f) -> f32 {
     return l.x + mix(mix(a, b, t.x), mix(c, d, t.x), t.y) * l.y;
 }
 
+// Sway in the wind: bent by the square of the height over the copy's origin, in slow gusts
+// (each copy a little out of step), with a fast flutter of what is high up.
+fn rgSway() {
+    let s = rockGround.sway;
+    if (s.z <= 0.0) { return; }
+    let base = ORI_MATRIX_M[3].xyz;
+    var wp = ORI_VertexOut.varying_WPos.xyz;
+    let h = max(wp.y - base.y, 0.0) / max(s.w, 0.1);
+    let t = TIME_time() * 0.001;
+    let phase = dot(base.xz, vec2f(0.37, 0.61));
+    let gust = 0.65 + 0.35 * sin(t * 0.7 + phase * 0.3) + 0.2 * sin(t * 2.3 + phase);
+    let bend = s.z * h * h * gust;
+    let flutter = 0.04 * s.z * h * sin(t * 9.0 + dot(wp, vec3f(3.1, 1.7, 2.3)));
+    wp += vec3f(s.x * bend + flutter, -bend * bend * 0.3 / max(s.w, 0.1), s.y * bend + flutter);
+    ORI_VertexOut.varying_WPos = vec4f(wp, ORI_VertexOut.varying_WPos.w);
+    let view = ORI_MATRIX_V * vec4f(wp, 1.0);
+    ORI_VertexOut.varying_ViewPos = view;
+    ORI_VertexOut.varying_Clip = ORI_MATRIX_P * view;
+    ORI_VertexOut.member = ORI_VertexOut.varying_Clip;
+}
+
 fn rockGroundSurface() {
     let p = ORI_VertexVarying.vWorldPos.xyz;
     let n = ORI_ShadingInput.Normal;
@@ -87,24 +110,28 @@ fn rockGroundSurface() {
 function registered(): string {
     if (!(NAME in ShaderLib)) {
         const lit = ShaderLib.getShader('PBRLItShader');
-        ShaderLib.register(NAME, lit.replace('fn frag(){', `${CODE}\nfn frag(){`).replace('BxDFShading();', 'rockGroundSurface();\n        BxDFShading();'));
+        ShaderLib.register(NAME, lit
+            .replace('fn vert(', `${CODE}\nfn vert(`)
+            .replace(/ORI_Vert\(inputData\)\s*;/, 'ORI_Vert(inputData);\n        rgSway();')
+            .replace('BxDFShading();', 'rockGroundSurface();\n        BxDFShading();'));
     }
     return NAME;
 }
 
 /** What one scatter's copies read: the terrain under them, their soil, moss and variation. */
 export class RockGround {
-    readonly buffer = new UniformGPUBuffer(16);
+    readonly buffer = new UniformGPUBuffer(20);
+    private values = { frame: [0, 0, 1, 1], level: [0, 0, 0, 0], soil: [0, 0, 0, 0], moss: [0, 0, 0, 0], sway: [0, 0, 0, 1] };
     constructor(readonly heights: Texture) {
-        this.set({ frame: [0, 0, 1, 1], level: [0, 0, 0, 0], soil: [0, 0, 0, 0], moss: [0, 0, 0, 0] });
+        this.set({});
     }
 
-    set(v: { frame: number[]; level: number[]; soil: number[]; moss: number[] }) {
+    /** Sets some of its values (the others stay). */
+    set(v: Partial<{ frame: number[]; level: number[]; soil: number[]; moss: number[]; sway: number[] }>) {
+        Object.assign(this.values, v);
         const b = this.buffer;
-        b.setFloat32Array('frame', new Float32Array(v.frame));
-        b.setFloat32Array('level', new Float32Array(v.level));
-        b.setFloat32Array('soil', new Float32Array(v.soil));
-        b.setFloat32Array('moss', new Float32Array(v.moss));
+        // Written in the order the shader's struct has them.
+        for (const k of ['frame', 'level', 'soil', 'moss', 'sway'] as const) b.setFloat32Array(k, new Float32Array(this.values[k]));
         b.apply();
     }
 

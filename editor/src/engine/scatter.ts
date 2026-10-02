@@ -371,6 +371,13 @@ export class ScatterView {
         }
     }
 
+    /** What it draws, for the profiler: copies, cells shown and their levels of detail. */
+    report(): string {
+        const on = this.cells.filter((c) => c.instancer.enable);
+        const levels = [0, 1, 2].map((l) => on.filter((c) => c.level === l).length);
+        return `${this.count.toLocaleString('en-US')} copies, ${on.length}/${this.cells.length} cells (levels ${levels.join(' / ')})`;
+    }
+
     /** The world box of every copy, or null without copies. */
     bounds(): { min: Vec3; max: Vec3 } | null {
         if (!this.cells.length) return null;

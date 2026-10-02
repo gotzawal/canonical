@@ -93,6 +93,12 @@ export class TerrainView {
     readonly material: TerrainMaterial;
     map: Heightmap = flatMap();
     frame: TerrainFrame = { x: 0, y: 0, z: 0, sizeX: 1, sizeZ: 1, height: 1 };
+    /** What it draws, for the profiler: chunks by level of detail. */
+    report(): string {
+        const levels = [0, 0, 0, 0];
+        for (const c of this.chunks) levels[Math.min(3, c.renderer.lodLevel)]++;
+        return `${this.chunks.length} chunks (levels ${levels.filter((n, i) => n || i < 3).join(' / ')})`;
+    }
     private chunks: Chunk[] = [];
     private skirt = 1;
     private castShadow = true;

@@ -78,6 +78,13 @@ const ids = await page.evaluate(async () => {
         r.position = [55, 6, 0];
         r.rain.size = [24, 12, 24];
     });
+    // Ferns swaying in the wind on the grass.
+    const fern = await ed.addFromLibrary(item('polyhaven/fern-02'), { place: false });
+    ed.createScatter({
+        sources: [{ model: fern.asset.id, weight: 1, scale: [0.8, 1.4], solid: 'none' }],
+        size: [20, 20], count: 60, seed: 5, spacing: 1, ground: terrain, height: [1, 1e4], slope: [0, 30], avoid: [], margin: 0,
+        align: 0.5, sink: 0, bury: 0, tilt: 0, clusters: 0.5, clusterSize: 6, layer: 0, distance: 0, castShadow: true, soil: 0, moss: 0, mossColor: '#55602f', vary: 0.3, sway: 0.25,
+    }, { name: 'Ferns', at: [30, 0, 14] });
     // Grass over the shore and the slope above it: it grows as the layers, rocks and water let it.
     const grass = ed.createGrass();
     ed.store.commit('Grass on the island', (d) => {
@@ -115,6 +122,9 @@ console.log('blades', await page.evaluate((id) => {
 }, ids.grass));
 await shot('grass', { target: [30, 6, 14], yaw: 95, pitch: 22, distance: 18, fov: 60 });
 await shot('grass-far', { target: [30, 6, 14], yaw: 95, pitch: 20, distance: 55, fov: 60 });
+await shot('sway-a', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
+await page.waitForTimeout(1500);
+await shot('sway-b', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
 await shot('grass-close', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
 await shot('detail', { target: [50, 2, -20], yaw: 260, pitch: 50, distance: 2.5, fov: 60 });
 console.log('stone cells', await page.evaluate(() => [...(window.__editor.sync.clutter?.cells.values() ?? [])].filter(Boolean).length));

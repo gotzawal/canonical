@@ -508,6 +508,7 @@ export const Scatter = z.object({
     soil: num(0.3, 0, 3, { step: 0.05, description: 'Meters the color of the terrain under a copy creeps up its base, to a ragged line, so it sits in the ground; 0 for none. Engine lit materials (Library and imported models).' }),
     moss: unit(0, { description: 'How much moss (or dust: its color) grows on what faces up; 0 for none.' }),
     mossColor: color('#55602f', { title: 'Moss Color' }),
+    sway: num(0, 0, 2, { step: 0.01, description: 'Meters the tops of copies lean in the wind, in slow gusts with a flutter (trees 0.2 to 0.5, shrubs 0.1; 0 for rocks). It follows the weather\'s wind (else the clouds\' direction). Engine lit materials.' }),
     vary: unit(0.4, { title: 'Variation', description: 'How much copies differ in brightness and warmth.' }),
     tilt: num(0, 0, 60, { step: 1, description: 'Degrees each copy tilts at random on top of its lean, so rocks do not all sit the same way up; 0 for none.' }),
     clusters: unit(0, { description: 'How much copies gather in groups with bare ground between them, the largest at the middle of a group (rocks, shrubs); 0 spreads them evenly.' }),

@@ -82,6 +82,14 @@ export class GrassField {
         scene.addChild(this.root);
     }
 
+    /** What it draws, for the profiler: chunks shown and their blades by level, chunks casting shadows. */
+    report(): string {
+        const on = this.chunks.filter((c) => c.placed && c.renderer.enable);
+        const levels = [0, 1, 2].map((l) => on.filter((c) => c.renderer.lodLevel === l).length);
+        const blades = on.reduce((n, c) => n + c.renderer.nodes.length, 0);
+        return `${on.length}/${this.chunks.length} chunks, ${blades.toLocaleString('en-US')} blades (levels ${levels.join(' / ')}), ${on.filter((c) => c.renderer.castShadow).length} casting shadows`;
+    }
+
     /** The chunks' renderers. */
     get renderers(): GrassComponent[] {
         return this.chunks.map((c) => c.renderer);
