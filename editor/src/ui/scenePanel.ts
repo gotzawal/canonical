@@ -11,7 +11,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere';
+type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere' | 'clouds';
 
 /** The stage a section's settings are made in, shown in its header. */
 function stageChip(stage: StageId): HTMLElement {
@@ -194,6 +194,8 @@ export class ScenePanel {
                 ...this.rows(['enable', 'strength', 'roughness', 'distance', 'resolution', 'reach'], 'ssr'),
                 label('Fog'),
                 ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
+                label('Clouds'),
+                ...this.rows(['enable', 'coverage', 'type', 'density', 'detail', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
                 label('Volumetric Fog'),
                 ...this.rows(['enable', 'density', 'scattering', 'anisotropy', 'distance', 'ambient'], 'volumetricFog'),
                 label('God Rays'),

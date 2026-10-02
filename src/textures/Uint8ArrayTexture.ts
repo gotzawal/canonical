@@ -11,6 +11,20 @@ export class Uint8ArrayTexture extends Texture {
     private _dataBuffer: GPUBuffer;
 
     /**
+     * Like {@link create} (without mipmaps), but writes the data through the
+     * device queue instead of the frame's command encoder, so it can be
+     * called while a frame is being encoded (from a post effect's render).
+     */
+    public createQueued(width: number, height: number, data: Uint8Array, ctx?: Context3D): this {
+        this._ensureBound(ctx);
+        this.format = GPUTextureFormat.rgba8unorm;
+        this.mipmapCount = 1;
+        this.createTextureDescriptor(width, height, this.mipmapCount, this.format);
+        this._boundCtx!.device.queue.writeTexture({ texture: this.getGPUTexture() }, data as BufferSource, { bytesPerRow: width * 4, rowsPerImage: height }, { width, height, depthOrArrayLayers: 1 });
+        return this;
+    }
+
+    /**
      * create texture by number array, which format is uint8
      * @param width width of texture
      * @param height height of texture

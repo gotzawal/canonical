@@ -666,6 +666,20 @@ export const Environment = z.object({
             description: 'Budget: how far a reflected ray is followed across the screen, as a share of its size; the steps (and the cost of misses) grow with it. Short reaches (0.15 to 0.3) suit floors that reflect what stands on them; long ones reach far-off walls and the sky.',
         }),
     }),
+    /** Volumetric clouds over the scene (whatever the sky), see engine CloudPost. */
+    clouds: group({
+        enable: bool(false, { description: 'Volumetric clouds: a layer of clouds drawn in 3D over any sky, drifting with the wind, lit by the sun and the sky, with shadows on the ground. They cost by the graphics tier (fewer steps on weak devices).' }),
+        coverage: unit(0.45, { description: 'How much of the sky they cover: 0.2 a few, 0.5 half, 0.9 overcast.' }),
+        type: unit(0.6, { description: '0 flat sheets (stratus) to 1 tall heaps (cumulus).' }),
+        density: num(1, 0.1, 4, { step: 0.05, slider: true, description: 'How thick and dark they are.' }),
+        detail: unit(0.6, { description: 'How much their edges are worn into wisps.' }),
+        bottom: num(1500, 100, 10000, { step: 50, precision: 0, title: 'Base', description: 'Altitude of their base, meters.' }),
+        thickness: num(2000, 100, 8000, { step: 50, precision: 0, description: 'Meters from their base to their top.' }),
+        wind: num(8, 0, 60, { step: 0.5, description: 'How fast they drift, m/s.' }),
+        windDirection: num(30, 0, 360, { step: 1, title: 'Wind Direction', description: 'Where they drift toward, degrees around +Y from +X.' }),
+        evolve: num(2, 0, 20, { step: 0.1, description: 'How fast their shapes change as they drift, m/s.' }),
+        shadows: unit(0.6, { description: 'How dark their shadows on the ground are; 0 for none.' }),
+    }),
     fog: group({
         enable: enabled(),
         mode: oneOf(['linear', 'exponential', 'height'], 'linear', {

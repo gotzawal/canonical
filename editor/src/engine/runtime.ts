@@ -1,5 +1,5 @@
 import {
-    AtmosphericComponent, BloomPost, Camera3D, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
+    AtmosphericComponent, BloomPost, Camera3D, CloudPost, Engine3D, EntityCollect, GTAOPost, GlobalFog, GodRayPost, GridObject,
     MeshRenderer, MirrorComponent, Object3D, PostBase, PostProcessingComponent, RenderGraph, Scene3D, ShadowPass, PointShadowPass, LightBase, SkyRenderer, SolidColorSky, SSRPost,
     Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
@@ -16,7 +16,7 @@ import { fitLightShadow } from './shadows';
 type PostCtor = new () => PostBase;
 
 /** The built-in effects in the order they run: reflections over ambient occlusion, fog over them, light shafts over fog, bloom of it all. */
-const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
+const BUILTIN_ORDER = ['GTAOPost', 'SSRPost', 'CloudPost', 'GlobalFog', 'VolumetricFogPost', 'GodRayPost', 'BloomPost'];
 const FOG_TYPES = { linear: 0, exponential: 1, height: 3 } as const;
 /** Least time between two bakes of the physical sky with clouds, ms. */
 const CLOUD_BAKE_MS = 250;
@@ -460,6 +460,20 @@ export class Runtime {
         const haze = tier.aerial ? Math.max(0, env.atmosphere.haze) : 0;
         fog.airDensity = haze * 5.6e-5;
         this.togglePost(GlobalFog, f.enable || haze > 0);
+
+        // Clouds go before the fog, which then hazes them like the sky.
+        const cl = env.clouds;
+        this.togglePost(CloudPost, cl.enable);
+        const clouds = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (clouds) {
+            const a = (cl.windDirection * Math.PI) / 180;
+            Object.assign(clouds, {
+                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail,
+                bottom: cl.bottom, top: cl.bottom + cl.thickness,
+                windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps,
+            });
+        }
 
         const vf = env.volumetricFog;
         const vol = (pp as any).volumetricFog;

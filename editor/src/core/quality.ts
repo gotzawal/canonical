@@ -49,12 +49,14 @@ export interface QualityTier {
     mirrorScale: number;
     /** Scattered models switch to simpler versions this much nearer (1 as set; less on weak devices). */
     lodDistance: number;
+    /** Steps along each ray through the volumetric clouds. */
+    cloudSteps: number;
 }
 
 export const QUALITY: Record<QualityLevel, QualityTier> = {
-    low: { shadowMapSize: 1024, shadowMapMax: 1024, pointShadowSize: 256, shadowAtlasMax: 2048, shadowRangeMax: 80, shadowEvery: 2, cascades: false, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, ssrScale: 0, textureMaxSize: 1024, anisotropy: 2, aerial: false, terrainFar: false, mirrorScale: 0.5, lodDistance: 0.6 },
-    medium: { shadowMapSize: 1024, shadowMapMax: 2048, pointShadowSize: 512, shadowAtlasMax: 4096, shadowRangeMax: 200, shadowEvery: 1, cascades: true, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, ssrScale: 0.5, textureMaxSize: 2048, anisotropy: 4, aerial: true, terrainFar: true, mirrorScale: 0.75, lodDistance: 0.8 },
-    high: { shadowMapSize: 2048, shadowMapMax: 4096, pointShadowSize: 1024, shadowAtlasMax: 4096, shadowRangeMax: Infinity, shadowEvery: 1, cascades: true, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, ssrScale: 1, textureMaxSize: Infinity, anisotropy: 8, aerial: true, terrainFar: true, mirrorScale: 1, lodDistance: 1 },
+    low: { shadowMapSize: 1024, shadowMapMax: 1024, pointShadowSize: 256, shadowAtlasMax: 2048, shadowRangeMax: 80, shadowEvery: 2, cascades: false, resolution: 'low', giRealtime: false, ao: false, fogSteps: 12, godRaySteps: 0, ssrScale: 0, textureMaxSize: 1024, anisotropy: 2, aerial: false, terrainFar: false, mirrorScale: 0.5, lodDistance: 0.6, cloudSteps: 20 },
+    medium: { shadowMapSize: 1024, shadowMapMax: 2048, pointShadowSize: 512, shadowAtlasMax: 4096, shadowRangeMax: 200, shadowEvery: 1, cascades: true, resolution: 'medium', giRealtime: false, ao: true, fogSteps: 20, godRaySteps: 12, ssrScale: 0.5, textureMaxSize: 2048, anisotropy: 4, aerial: true, terrainFar: true, mirrorScale: 0.75, lodDistance: 0.8, cloudSteps: 32 },
+    high: { shadowMapSize: 2048, shadowMapMax: 4096, pointShadowSize: 1024, shadowAtlasMax: 4096, shadowRangeMax: Infinity, shadowEvery: 1, cascades: true, resolution: 'high', giRealtime: true, ao: true, fogSteps: 32, godRaySteps: 16, ssrScale: 1, textureMaxSize: Infinity, anisotropy: 8, aerial: true, terrainFar: true, mirrorScale: 1, lodDistance: 1, cloudSteps: 48 },
 };
 
 /**
