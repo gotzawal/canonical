@@ -45,6 +45,7 @@ import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInsta
 import type { Viewport } from './viewport/viewport';
 import type { DerivedAssets } from './derive/derivedAssets';
 import { exampleGuard, exampleShowcase } from './examples';
+import { buildIsland } from './exampleIsland';
 import { UsageLog } from './ai/usage';
 
 /** What the editor works with; main.ts makes them. */
@@ -1675,8 +1676,18 @@ export class Editor extends Emitter<EditorEvents> {
         return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
     }
 
-    async newScene(kind: 'empty' | 'showcase' | 'guard' | 'laundromat' = 'empty') {
+    async newScene(kind: 'empty' | 'showcase' | 'guard' | 'laundromat' | 'island' = 'empty') {
         if (!(await this.confirmReplace('New scene', 'Discard'))) return;
+        if (kind === 'island') {
+            // Built with the editor's commands: its heightmap is made and the Library's files fetched.
+            toast('Building the Island example...', 'info', 3000);
+            try {
+                await buildIsland(this);
+            } catch (e: any) {
+                toast(`The example could not be built: ${e?.message || e}`, 'error');
+            }
+            return;
+        }
         if (kind === 'laundromat') {
             // A finished project, with its files: loaded from editor/examples (examples/ next to the editor).
             toast('Opening Night Laundromat...', 'info', 2000);
