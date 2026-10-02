@@ -13,6 +13,8 @@ import { ownIndices } from './lod';
 
 /** Blades on slopes steeper than this (the up component of the ground's normal) are left out: 60 degrees. */
 const MAX_SLOPE = 0.5;
+/** Other spots a blade tries where grass grows poorly. */
+const RETRIES = 6;
 /** The engine's blade rises in five segments of 0.2, 0.4 ... 1.0 times its height setting: three times it in all. */
 const SEGMENT_SUM = 3;
 
@@ -147,9 +149,9 @@ export class GrassField {
      * fieldFrame), each chunk's over its cell of it, each blade standing on
      * `ground` below it, or flat at the object's height without one. Sizes
      * and shapes follow the field's spreads. `seed` keeps the layout the
-     * same.
+     * same. `grow` says how well grass grows at a point (0 to 1).
      */
-    place(doc: GrassDoc, frame: FieldFrame, ground: Ground | null, seed: number) {
+    place(doc: GrassDoc, frame: FieldFrame, ground: Ground | null, seed: number, grow?: (x: number, z: number) => number) {
         const random = mulberry32(seed);
         // Sizes and shapes draw from their own stream: a field without them keeps its blades.
         const more = mulberry32(seed ^ 0x5bd1e995);
@@ -167,26 +169,35 @@ export class GrassField {
             const min = [Infinity, Infinity, Infinity], max = [-Infinity, -Infinity, -Infinity];
             for (const node of nodes) {
                 // Drawn in the same order every time, so a blade keeps its place and size.
-                const u = -w / 2 + (chunk.ci + random()) * cw, v = -d / 2 + (chunk.cj + random()) * cd;
+                let u = -w / 2 + (chunk.ci + random()) * cw, v = -d / 2 + (chunk.cj + random()) * cd;
                 const yaw = random() * 360, rw = random(), rh = random();
                 const extra: [number, number] = [more(), more()];
                 const rs = more();
-                const x = o[0] + ax[0] * u + az[0] * v;
-                const z = o[2] + ax[2] * u + az[2] * v;
+                let x = o[0] + ax[0] * u + az[0] * v;
+                let z = o[2] + ax[2] * u + az[2] * v;
+                // Where the ground suits grass less, a blade tries another spot in its chunk (a few times):
+                // the blades gather where grass grows, and none is drawn for nothing.
+                let here = grow ? grow(x, z) : 1;
+                for (let t = 0; t < RETRIES && keep() >= here; t++) {
+                    u = -w / 2 + (chunk.ci + keep()) * cw;
+                    v = -d / 2 + (chunk.cj + keep()) * cd;
+                    x = o[0] + ax[0] * u + az[0] * v;
+                    z = o[2] + ax[2] * u + az[2] * v;
+                    here = grow!(x, z);
+                }
                 const patch = doc.sizes === 'patches' || doc.shapeSpread === 'patches' ? patchNoise(x, z, doc.patchSize, noiseSeed) : 0.5;
                 const tall = lerp(doc.heights, sizeAt(doc.sizes, rh, extra, patch));
                 // A blade's width follows its height in patches (tall and broad together), else its own number.
                 const wide = lerp(doc.widths, sizeAt(doc.sizes, doc.sizes === 'patches' ? rh : rw, [extra[1], extra[0]], patch));
                 own.push(shapeAt(doc.shapes, doc.shapeSpread, rs, patchNoise(x, z, doc.patchSize, noiseSeed ^ 0x77)));
                 const y = ground ? ground.height(x, z) : o[1] + ax[1] * u + az[1] * v;
-                const grow = ground?.grow ? ground.grow(x, z) : 1;
-                if (y === null || keep() >= grow) {
+                if (y === null || keep() >= here) {
                     // No ground here: a blade of no size draws nothing.
                     scale.set(0, 0, 0);
                 } else {
                     pos.set(x, y, z);
                     rot.set(0, yaw, 0);
-                    scale.set(wide, tall * (0.55 + 0.45 * Math.min(1, grow)), wide);
+                    scale.set(wide, tall * (0.55 + 0.45 * Math.min(1, here)), wide);
                     node.localPosition = pos;
                     node.localRotation = rot;
                     const top = y + doc.height * tall * 1.1;
@@ -314,8 +325,6 @@ export function fieldArea(frame: FieldFrame, size: [number, number]): { minX: nu
 /** What things stand on: the height of the ground at (x, z), or null where there is none or it is too steep. */
 export interface Ground {
     height(x: number, z: number): number | null;
-    /** How well grass grows at (x, z), 0 to 1 (1 without saying). */
-    grow?(x: number, z: number): number;
 }
 
 /** The ground at a point, however steep: its height and normal (unit, up). */
@@ -330,7 +339,7 @@ export interface GroundPoint {
  * detail their chunks draw.
  */
 export class LayeredGround implements Ground {
-    constructor(private meshes: GroundGrid | null, private lands: TerrainSurface[], private maxSlope = MAX_SLOPE, readonly grow?: (x: number, z: number) => number) {}
+    constructor(private meshes: GroundGrid | null, private lands: TerrainSurface[], private maxSlope = MAX_SLOPE) {}
 
     height(x: number, z: number): number | null {
         let best: number | null = this.meshes?.height(x, z) ?? null;

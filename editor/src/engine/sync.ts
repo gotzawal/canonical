@@ -11,7 +11,7 @@ import type {
     TextureRole,
 } from '../core/types';
 import { placeScatter, type AvoidBox, type GroundSample, type Placement, type ScatterSolid } from '../core/scatter';
-import { contactMap, covers, groundHeight, groundNormal, layerWeights, paintAt, type Contact, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { contactMap, covers, groundHeight, groundNormal, layerWeights, paintAt, type Contact, type Cover, type TerrainFrame, type TerrainSurface } from '../core/terrain';
 import { quatRotate } from '../core/math';
 import type { ClutterGround } from '../core/clutter';
 import { GroundClutter } from './clutter';
@@ -26,6 +26,7 @@ import { castGI } from './gi';
 import { setLightShadow } from './shadows';
 import { QUALITY, type QualityLevel } from '../core/quality';
 import { movesInPlay } from '../core/motion';
+import { patchNoise } from '../core/grass';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
 import { ScatterModel, ScatterView } from './scatter';
@@ -267,6 +268,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** Counts scatter placements (things on the ground follow them), and what the ground details were made from. */
     private scatterVersion = 0;
     private groundKey = '';
+    private contactsKey = '';
     private contactMaps = new Map<TerrainState, { width: number; height: number; data: Uint8Array }>();
     private clutter: GroundClutter | null = null;
     private scatterTimer = 0;
@@ -1236,8 +1238,11 @@ export class SceneSync extends Emitter<SyncEvents> {
             const frame = fieldFrame(m);
             const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
             const states = [...this.terrainStates].filter((t) => lands.some((l) => l.id === t.view.id));
-            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface), undefined, this.grassGrowth(states)) : doc.ground ? new LayeredGround(null, []) : null;
-            entry.grass!.place(doc, frame, surface, hashString(entry.id));
+            // The steepest ground blades stand on: a little past the field's own limit, which thins them out before it.
+            const slope = Math.cos((Math.min(85, doc.maxSlope + 5) * Math.PI) / 180);
+            const grow = this.grassGrowth(states, doc, hashString(entry.id));
+            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface), slope) : doc.ground ? new LayeredGround(null, []) : null;
+            entry.grass!.place(doc, frame, surface, hashString(entry.id), grow);
         }
     }
 
@@ -1647,16 +1652,25 @@ export class SceneSync extends Emitter<SyncEvents> {
     private updateGround(eye: number[]) {
         const tier = QUALITY[this.runtime.qualityLevel];
         const terrains = [...this.terrainStates].filter((t) => this.entries.get(t.view.id)?.visible);
-        const key = [this.scatterVersion, ...terrains.map((t) => `${t.view.id}:${t.version}:${t.view.material.meansVersion}:${t.water}:${this.store.node(t.view.id)?.terrain?.layers.map((l) => [l.debris, l.grass])}`)].join('|');
-        if (key !== this.groundKey) {
-            this.groundKey = key;
+        const land = [this.scatterVersion, ...terrains.map((t) => `${t.view.id}:${t.version}:${t.water}:${this.store.node(t.view.id)?.terrain?.layers.map((l) => [l.debris, l.grass])}`)].join('|');
+        // What stands on the terrains and the grass covering them (the ground under far grass takes its color).
+        const fields = this.grassOnTerrains(terrains);
+        const contactsKey = land + JSON.stringify(fields.map(({ id, doc, m }) => [id, doc.size, doc.count, doc.maxSlope, doc.waterGap, doc.gaps, doc.patchSize, doc.bottomColor, doc.topColor, doc.dryness, doc.distance, Array.from(m, (v) => +v.toFixed(2))]));
+        if (contactsKey !== this.contactsKey) {
+            this.contactsKey = contactsKey;
             const contacts = this.scatterContacts();
             this.contactMaps.clear();
             for (const t of terrains) {
-                const map = contactMap(t.view.frame, contacts);
+                const mine = fields.filter((f) => f.lands.includes(t));
+                const map = contactMap(t.view.frame, contacts, 512, mine.map((f) => f.cover), (m) => this.contactMaps.set(t, m));
                 t.view.material.setContacts(map);
-                if (map) this.contactMaps.set(t, map);
+                if (!map) this.contactMaps.delete(t);
+                t.view.material.setGrass(mine.length ? grassTint(mine.map((f) => f.doc)) : null);
             }
+        }
+        const key = land + terrains.map((t) => t.view.material.meansVersion).join();
+        if (key !== this.groundKey) {
+            this.groundKey = key;
             this.clutter ??= new GroundClutter(this.runtime.scene, this.runtime.engine.context3D);
             this.clutter.setGround(this.clutterGround(terrains), terrains[0]?.view.material.means ?? []);
             // Grass grows where the ground suits it now, its roots in the ground's colors.
@@ -1677,6 +1691,35 @@ export class SceneSync extends Emitter<SyncEvents> {
             const doc = st ? this.store.node(entry.id)?.scatter : undefined;
             if (st && doc) this.applyRockGround(st, doc, terrains);
         }
+    }
+
+    /** The grass fields on these terrains: their ground, and how densely they cover it (see Cover). */
+    private grassOnTerrains(terrains: TerrainState[]): { id: string; doc: GrassDoc; m: ArrayLike<number>; lands: TerrainState[]; cover: Cover }[] {
+        const out: { id: string; doc: GrassDoc; m: ArrayLike<number>; lands: TerrainState[]; cover: Cover }[] = [];
+        for (const entry of this.entries.values()) {
+            const doc = entry.grass && entry.visible ? this.store.node(entry.id)?.grass : undefined;
+            if (!doc?.ground) continue;
+            const ids = new Set(this.groundTerrains(doc.ground).map((l) => l.id));
+            const lands = terrains.filter((t) => ids.has(t.view.id));
+            if (!lands.length) continue;
+            const m = entry.obj.transform.worldMatrix.rawData;
+            const { origin: o, x: ax, z: az } = fieldFrame(m);
+            const [w, d] = doc.size;
+            const grow = this.grassGrowth(lands, doc, hashString(entry.id));
+            // Full cover at about twenty blades a square meter, fading over the last meter of the field.
+            const dense = Math.min(1, doc.count / Math.max(1, w * d) / 20);
+            const reach = [Math.abs(ax[0]) * w + Math.abs(az[0]) * d, Math.abs(ax[2]) * w + Math.abs(az[2]) * d].map((r) => r / 2);
+            const cover: Cover = {
+                minX: o[0] - reach[0], maxX: o[0] + reach[0], minZ: o[2] - reach[1], maxZ: o[2] + reach[1],
+                at: (x, z) => {
+                    const u = (x - o[0]) * ax[0] + (z - o[2]) * ax[2], v = (x - o[0]) * az[0] + (z - o[2]) * az[2];
+                    const edge = Math.min(w / 2 - Math.abs(u), d / 2 - Math.abs(v));
+                    return edge <= 0 ? 0 : Math.min(1, edge) * dense * (grow ? grow(x, z) : 1);
+                },
+            };
+            out.push({ id: entry.id, doc, m, lands, cover });
+        }
+        return out;
     }
 
     /** Where scattered copies meet the ground: their trunks, rocks (wider than tall) with a ring of loose stones. */
@@ -1760,19 +1803,31 @@ export class SceneSync extends Emitter<SyncEvents> {
     }
 
     /**
-     * How well grass grows at (x, z) on these terrains: as their layers let
-     * it (TerrainLayer.grass), not under what stands there (the contact
-     * map), not under water and thinning just above it; 1 off them.
+     * How well a field's grass grows at (x, z): in its bare patches not at
+     * all (Grass.gaps), and on these terrains as their layers let it
+     * (TerrainLayer.grass), thinning toward its steepest slope, not under
+     * what stands there (the contact map), not under water and bare a gap
+     * above it.
      */
-    private grassGrowth(lands: TerrainState[]): ((x: number, z: number) => number) | undefined {
-        if (!lands.length) return undefined;
+    private grassGrowth(lands: TerrainState[], doc: GrassDoc, seed: number): ((x: number, z: number) => number) | undefined {
+        const gaps = Math.min(1, Math.max(0, doc.gaps));
+        if (!lands.length && !gaps) return undefined;
+        const steep = Math.cos((doc.maxSlope * Math.PI) / 180), soft = Math.cos((doc.maxSlope * 0.66 * Math.PI) / 180);
         return (x, z) => {
+            let bare = 1;
+            if (gaps > 0) {
+                const n = patchNoise(x, z, doc.patchSize * 3, seed ^ 0x3c6ef372);
+                bare = Math.min(1, Math.max(0, (n - gaps * 0.9 + 0.08) / 0.16));
+            }
             const t = lands.find((t) => covers(t.view.surface, x, z));
-            if (!t) return 1;
-            const doc = this.store.node(t.view.id)?.terrain;
+            if (!t || !bare) return bare;
+            const ny = groundNormal(t.view.surface, x, z)[1];
+            if (ny <= steep) return 0;
+            bare *= Math.min(1, (ny - steep) / Math.max(1e-6, soft - steep));
+            const land = this.store.node(t.view.id)?.terrain;
             const w = this.layersOn(t, x, z);
             let g = 0;
-            w?.forEach((v, i) => (g += v * (doc?.layers[i]?.grass ?? 1)));
+            w?.forEach((v, i) => (g += v * (land?.layers[i]?.grass ?? 1)));
             const c = this.contactMaps.get(t);
             if (c) {
                 const f = t.view.frame;
@@ -1781,9 +1836,9 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
             if (t.water !== null && t.water !== undefined) {
                 const y = groundHeight(t.view.surface, x, z);
-                g *= Math.min(1, Math.max(0, (y - t.water - 0.05) / 0.5));
+                g *= Math.min(1, Math.max(0, (y - t.water - doc.waterGap) / 0.4));
             }
-            return g;
+            return g * bare;
         };
     }
 
@@ -2457,3 +2512,22 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
             return new BoxGeometry(1, 1, 1);
     }
 }
+
+/** The color the ground under grass fields takes (linear rgb, as their blades look from afar) and how far they reach, or null. */
+function grassTint(fields: GrassDoc[]): { color: number[]; distance: number } {
+    const color = [0, 0, 0];
+    let area = 0, distance = 0;
+    for (const f of fields) {
+        const a = f.size[0] * f.size[1];
+        const lo = hexToColor(f.bottomColor), hi = hexToColor(f.topColor);
+        const c = [lo.r + (hi.r - lo.r) * 0.6, lo.g + (hi.g - lo.g) * 0.6, lo.b + (hi.b - lo.b) * 0.6];
+        // Its dry patches (as the grass shader makes them), on about a third of the field.
+        const dry = f.dryness * 0.35;
+        const tint = [1 + 0.35 * dry, 1 + 0.1 * dry, 1 - 0.55 * dry];
+        for (let k = 0; k < 3; k++) color[k] += c[k] * tint[k] * a;
+        area += a;
+        distance = Math.max(distance, f.distance);
+    }
+    return { color: color.map((v) => v / Math.max(area, 1e-6)), distance };
+}
+

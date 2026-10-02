@@ -31,6 +31,7 @@ const FIELDS = [
     '    terrainWater: vec4<f32>,',
     '    terrainRain: vec4<f32>,',
     '    terrainRelief: vec4<f32>,',
+    '    terrainGrass: vec4<f32>,',
 ].join('\n');
 
 const BINDINGS = [
@@ -274,6 +275,12 @@ fn frag() {
         ao *= 1.0 - c.r * 0.6;
         color *= 1.0 - c.r * 0.25 - c.g * 0.08;
         rough = mix(rough, 1.0, c.g * 0.3);
+        // Under grass the ground takes its color: a little near, most where its far blades are left out.
+        let gt = materialUniform.terrainGrass;
+        if (c.b > 0.0) {
+            let k = select(0.3, 0.3 + 0.45 * smoothstep(gt.w * 0.35, gt.w * 0.9, eyeDist), gt.w > 0.0);
+            color = mix(color, gt.rgb, c.b * k);
+        }
     }
 
     // Wet along the water, up a ragged band over the waterline, and under rain.
@@ -321,7 +328,7 @@ let shaderName: string | null = null;
 
 function registered(): string {
     if (!shaderName) {
-        shaderName = 'morglay_terrain_4';
+        shaderName = 'morglay_terrain_5';
         ShaderLib.register(shaderName, litMaterialSource(FIELDS, BINDINGS, BODY));
     }
     return shaderName;
@@ -411,6 +418,7 @@ export class TerrainMaterial {
         shader.setUniformVector4('terrainWater', new Vector4(-1e9, 0, 0, 0));
         shader.setUniformVector4('terrainRain', new Vector4(0, 0, 0, 0));
         shader.setUniformVector4('terrainRelief', this.relief);
+        shader.setUniformVector4('terrainGrass', new Vector4(0, 0, 0, 0));
         // The arrays are bound before the first draw: the pipeline's layout comes from them.
         this.albedo = new HeldTexture(ctx, '2d-array');
         this.normal = new HeldTexture(ctx, '2d-array');
@@ -576,6 +584,12 @@ export class TerrainMaterial {
         if (map) this.contacts.hold(uploadTexture(this.ctx, map.width, map.height, 'rgba8unorm', map.data, 'terrain contacts'));
         this.relief.z = map ? 1 : 0;
         this.shader.setUniformVector4('terrainRelief', this.relief);
+    }
+
+    /** The color the ground under grass takes (linear rgb) and the grass's draw distance (0: any), or none. */
+    setGrass(tint: { color: number[]; distance: number } | null) {
+        const c = tint?.color ?? [0, 0, 0];
+        this.shader.setUniformVector4('terrainGrass', new Vector4(c[0], c[1], c[2], tint?.distance ?? 0));
     }
 
     private writeInfo() {

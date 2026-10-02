@@ -997,7 +997,7 @@ export class InspectorPanel {
             h('div', { class: 'muted small pad', text: 'Blades over the area around the object, all in one draw, bent by gusts of wind. Each stands on the ground object below it, so the field follows any terrain; without a ground it is flat at the object\'s height.' }),
             ...this.componentRows('grass', ['count', 'size']),
             row('Ground', ground.el, 'Terrain, floor or a group of them; blades outside it are left out'),
-            ...this.componentRows('grass', ['height', 'width', 'heights', 'widths', 'sizes']),
+            ...this.componentRows('grass', ['height', 'width', 'heights', 'widths', 'sizes', 'maxSlope', 'waterGap', 'gaps']),
             h('div', { class: 'muted small pad', text: 'Shapes, by their shares:' }),
             ...this.fieldRows(inner(Grass.shape.shapes) as z.ZodObject, (n: NodeDoc) => n.grass?.shapes, ['blade', 'leaf', 'needle']),
             ...this.componentRows('grass', ['shapeSpread', 'curvature', 'patchSize', 'bottomColor', 'topColor', 'rootBlend', 'dryness', 'wind', 'windSpeed', 'windDirection']),

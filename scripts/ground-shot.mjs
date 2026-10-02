@@ -83,7 +83,7 @@ const ids = await page.evaluate(async () => {
     ed.store.commit('Grass on the island', (d) => {
         const g = d.nodes.find((n) => n.id === grass);
         g.position = [30, 0, 14];
-        g.grass = { ...g.grass, count: 30000, size: [20, 20], ground: terrain, heights: [0.6, 1.5], sizes: 'patches', distance: 80 };
+        g.grass = { ...g.grass, count: 30000, size: [20, 20], ground: terrain, heights: [0.6, 1.5], sizes: 'patches', distance: 30, gaps: 0.25 };
     });
     ed.store.select([]);
     return { terrain, water, scatter, rain, grass };
@@ -114,6 +114,7 @@ console.log('blades', await page.evaluate((id) => {
     return `${on}/${all}`;
 }, ids.grass));
 await shot('grass', { target: [30, 6, 14], yaw: 95, pitch: 22, distance: 18, fov: 60 });
+await shot('grass-far', { target: [30, 6, 14], yaw: 95, pitch: 20, distance: 55, fov: 60 });
 await shot('grass-close', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
 await shot('detail', { target: [50, 2, -20], yaw: 260, pitch: 50, distance: 2.5, fov: 60 });
 console.log('stone cells', await page.evaluate(() => [...(window.__editor.sync.clutter?.cells.values() ?? [])].filter(Boolean).length));

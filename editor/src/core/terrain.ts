@@ -401,14 +401,25 @@ export interface Contact {
     ring: number;
 }
 
+/** Ground a Grass field covers: its x-z box and how densely it grows at a point (0 to 1). */
+export interface Cover {
+    minX: number;
+    maxX: number;
+    minZ: number;
+    maxZ: number;
+    at(x: number, z: number): number;
+}
+
 /**
  * Where things stand on a terrain, as an RGBA8 map over it (row 0 at its
  * -z side): red the darkening around each foot (occlusion where it meets
- * the ground), green a ring of loose stones just outside it. Texels are a
- * quarter meter at most, `maxSide` a side at least; null without contacts.
+ * the ground), green a ring of loose stones just outside it, blue how
+ * densely grass covers it (`covers`, stamped last: they may read red).
+ * Texels are a quarter meter at most, `maxSide` a side at least; null
+ * with neither contacts nor covers.
  */
-export function contactMap(frame: TerrainFrame, contacts: readonly Contact[], maxSide = 512): { width: number; height: number; data: Uint8Array } | null {
-    if (!contacts.length) return null;
+export function contactMap(frame: TerrainFrame, contacts: readonly Contact[], maxSide = 512, covers: readonly Cover[] = [], read?: (map: { width: number; height: number; data: Uint8Array }) => void): { width: number; height: number; data: Uint8Array } | null {
+    if (!contacts.length && !covers.length) return null;
     const step = Math.max(0.25, Math.max(frame.sizeX, frame.sizeZ) / maxSide);
     const width = Math.max(1, Math.ceil(frame.sizeX / step)), height = Math.max(1, Math.ceil(frame.sizeZ / step));
     const x0 = frame.x - frame.sizeX / 2, z0 = frame.z - frame.sizeZ / 2;
@@ -431,5 +442,24 @@ export function contactMap(frame: TerrainFrame, contacts: readonly Contact[], ma
             }
         }
     }
-    return { width, height, data };
+    const map = { width, height, data };
+    read?.(map);
+    for (const c of covers) {
+        const i0 = Math.max(0, Math.floor((c.minX - x0) / step)), i1 = Math.min(width - 1, Math.ceil((c.maxX - x0) / step));
+        const j0 = Math.max(0, Math.floor((c.minZ - z0) / step)), j1 = Math.min(height - 1, Math.ceil((c.maxZ - z0) / step));
+        // At most about 40000 reads a cover (a large field is read in blocks of texels).
+        const k = Math.max(1, Math.ceil(Math.sqrt(((i1 - i0 + 1) * (j1 - j0 + 1)) / 40000)));
+        for (let jb = j0; jb <= j1; jb += k) {
+            for (let ib = i0; ib <= i1; ib += k) {
+                const v = Math.round(255 * Math.min(1, Math.max(0, c.at(x0 + (ib + k / 2) * step, z0 + (jb + k / 2) * step))));
+                for (let j = jb; j < Math.min(jb + k, j1 + 1); j++) {
+                    for (let i = ib; i < Math.min(ib + k, i1 + 1); i++) {
+                        const o = (j * width + i) * 4 + 2;
+                        data[o] = Math.max(data[o], v);
+                    }
+                }
+            }
+        }
+    }
+    return map;
 }
