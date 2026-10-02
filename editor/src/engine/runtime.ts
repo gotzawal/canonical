@@ -334,7 +334,7 @@ export class Runtime {
         const c = this.post.getPost(CloudPost as any) as CloudPost | null;
         if (!c) return [];
         const tier = QUALITY[this.qualityLevel];
-        return [['Clouds', `${c.coverage > 0 ? `${c.steps} steps a ray at a quarter resolution, to ${(c.farLimit / 1000).toFixed(0)} km` : 'stars only'}${c.reflections ? `; reflections a face every ${tier.cloudReflectionEvery} frame(s)` : ''}`]];
+        return [['Clouds', `${c.coverage > 0 ? `${c.steps} steps a ray, one ray a ${c.block}x${c.block} block a frame, to ${(c.farLimit / 1000).toFixed(0)} km` : 'stars only'}${c.reflections ? `; reflections a face every ${tier.cloudReflectionEvery} frame(s)` : ''}`]];
     }
 
     /** How bright the stars and the moon's disc are (the weather's night), 0 for none: they show with the clouds. */
@@ -509,7 +509,7 @@ export class Runtime {
                 coverage: clouded ? cl.coverage : 0, stars: this.stars, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, softness: cl.softness, seed: cl.seed,
                 bottom: cl.bottom, top: cl.bottom + cl.thickness,
                 windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
-                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, farLimit: tier.cloudFar, reflectionEvery: tier.cloudReflectionEvery,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, farLimit: tier.cloudFar, block: tier.cloudBlock, reflectionEvery: tier.cloudReflectionEvery,
             });
         }
 

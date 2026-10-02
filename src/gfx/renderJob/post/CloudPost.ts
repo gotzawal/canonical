@@ -24,8 +24,8 @@ import { PostBase } from './PostBase';
 
 /**
  * Volumetric clouds: a layer of clouds on a shell around the Earth, ray
- * marched at a quarter of the resolution each way (a different pixel of
- * each 4x4 block every frame) and gathered over frames at half resolution,
+ * marched at a quarter (or half, `block` 2) of the resolution each way (a
+ * different pixel of each block every frame) and gathered over frames at half resolution,
  * then put over the scene with their shadow on the ground. With
  * `reflections` the scene's environment cube becomes the sky with the
  * clouds in it (a face refreshed each frame), so reflections and the light
@@ -68,6 +68,9 @@ export class CloudPost extends PostBase {
     public steps = 48;
     /** Meters from the camera clouds are drawn to (the graphics tier's; past it they are left to the sky). */
     public farLimit = 60000;
+    /** Pixels a side of the block one ray is marched for each frame: 4 (cheap) or 2 (sharp, a quarter of the frames to settle). */
+    public block = 4;
+    private _block = 4;
     /** Clouds in the scene's environment cube (reflections, light from the sky). */
     public reflections = true;
     /** The reflection cube refreshes a face every this many frames. */
@@ -103,7 +106,7 @@ export class CloudPost extends PostBase {
             t.name = name;
             return t;
         };
-        this._marchTex = make(Math.ceil(w / 4), Math.ceil(h / 4), 'CloudMarch');
+        this._marchTex = make(Math.ceil(w / this._block), Math.ceil(h / this._block), 'CloudMarch');
         this._history = [make(Math.ceil(w / 2), Math.ceil(h / 2), 'CloudHistoryA'), make(Math.ceil(w / 2), Math.ceil(h / 2), 'CloudHistoryB')];
         this._outTex = make(w, h, 'CloudOut');
         const desc = new RTDescriptor();
@@ -177,15 +180,16 @@ export class CloudPost extends PostBase {
         this._lastTime = now;
         this._windOffset[0] += this.windX * dt;
         this._windOffset[1] += this.windZ * dt;
-        // Over 16 frames each pixel of a 4x4 block is marched once (a Bayer order spreads them).
-        const order = [0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12];
-        const k = order[this._frame % 16];
+        // Over B*B frames each pixel of a block is marched once (a Bayer order spreads them).
+        const B = this._block;
+        const order = B === 2 ? [0, 3, 1, 2] : [0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12];
+        const k = order[this._frame % order.length];
         const s = this._settings;
         s.setFloat32Array('prevViewProj', this._prevViewProj);
         s.setFloat32Array('layer', new Float32Array([this.bottom, Math.max(this.top, this.bottom + 10), Math.min(1, Math.max(0, this.coverage)), Math.max(0, this.density)]));
         s.setFloat32Array('shape', new Float32Array([this.type, this.detail, this.evolve, now % 100000]));
         s.setFloat32Array('wind', new Float32Array([this._windOffset[0], this._windOffset[1], this.haze, this.shadows]));
-        s.setFloat32Array('march', new Float32Array([this.steps, this._frame, k % 4, Math.floor(k / 4)]));
+        s.setFloat32Array('march', new Float32Array([this.steps, this._frame, k % B, Math.floor(k / B)]));
         // The reflection cube: all six faces when it is new, then one a frame.
         const env = this._env?.clear ? this._env : null;
         const every = Math.max(1, Math.floor(this.reflectionEvery));
@@ -197,7 +201,7 @@ export class CloudPost extends PostBase {
         const toward = 1 / Math.max(wind, 1e-6);
         s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
         s.setFloat32Array('lean', new Float32Array([this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping))]));
-        s.setFloat32Array('night', new Float32Array([this.stars, Math.max(1000, this.farLimit), 0, 0]));
+        s.setFloat32Array('night', new Float32Array([this.stars, Math.max(1000, this.farLimit), B, B === 2 ? 2.5 : 1]));
         s.apply();
     }
 
@@ -219,6 +223,12 @@ export class CloudPost extends PostBase {
         if (moved > 200 || turned < 0.95 || look !== this._lastLook) this._frame = 0;
         this._lastLook = look;
         last.set(m);
+        // Another block size (the graphics tier's): the march's texture and the history start again.
+        const block = this.block === 2 ? 2 : 4;
+        if (block !== this._block) {
+            this._block = block;
+            this.onResize();
+        }
         const sky = this._skyTexture(view);
         if (sky !== this._sky) {
             this._sky = sky;
@@ -250,13 +260,13 @@ export class CloudPost extends PostBase {
         const [w, h] = this._boundCtx!.presentationSize;
         if (!this._outTex) return;
         this._outTex.resize(w, h);
-        this._marchTex.resize(Math.max(1, Math.ceil(w / 4)), Math.max(1, Math.ceil(h / 4)));
+        this._marchTex.resize(Math.max(1, Math.ceil(w / this._block)), Math.max(1, Math.ceil(h / this._block)));
         for (const t of this._history) t.resize(Math.max(1, Math.ceil(w / 2)), Math.max(1, Math.ceil(h / 2)));
         // History from before the resize does not fit: start again.
         this._frame = 0;
         if (this._march) {
-            this._march.workerSizeX = Math.ceil(w / 4 / 8);
-            this._march.workerSizeY = Math.ceil(h / 4 / 8);
+            this._march.workerSizeX = Math.ceil(w / this._block / 8);
+            this._march.workerSizeY = Math.ceil(h / this._block / 8);
             this._march.workerSizeZ = 1;
             for (const c of this._composite) {
                 c.workerSizeX = Math.ceil(w / 8);
@@ -324,7 +334,11 @@ const ENV_SIZE = 512;
 /** Texels along each face of the small cube the reflected clouds are marched into. */
 const REFLECTION_SIZE = 128;
 
-/** An RGBA8 3D texture that tiles (a noise volume). */
+/**
+ * An RGBA8 3D texture that tiles (a noise volume), with its mip levels
+ * (each the average of eight texels of the one before, wrapping): far
+ * clouds read the levels their pixels' size calls for instead of aliasing.
+ */
 class VolumeTexture extends Texture {
     constructor(ctx: Context3D, size: number, data: Uint8Array) {
         super(size, size);
@@ -332,11 +346,27 @@ class VolumeTexture extends Texture {
         this.textureBindingLayout = { sampleType: 'float', viewDimension: '3d', multisampled: false };
         this.addressModeU = this.addressModeV = this.addressModeW = 'repeat';
         this.minFilter = this.magFilter = 'linear';
-        this.mipmapFilter = 'nearest';
-        const t = ctx.device.createTexture({ label: 'CloudNoise', size: [size, size, size], dimension: '3d', format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
-        ctx.device.queue.writeTexture({ texture: t }, data as BufferSource, { bytesPerRow: size * 4, rowsPerImage: size }, [size, size, size]);
+        this.mipmapFilter = 'linear';
+        const levels = Math.floor(Math.log2(size)) + 1;
+        const t = ctx.device.createTexture({ label: 'CloudNoise', size: [size, size, size], dimension: '3d', format: 'rgba8unorm', mipLevelCount: levels, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        let level = data, n = size;
+        for (let m = 0; m < levels; m++) {
+            ctx.device.queue.writeTexture({ texture: t, mipLevel: m }, level as BufferSource, { bytesPerRow: n * 4, rowsPerImage: n }, [n, n, n]);
+            if (n === 1) break;
+            const h = n >> 1, next = new Uint8Array(h * h * h * 4);
+            for (let z = 0; z < h; z++) for (let y = 0; y < h; y++) for (let x = 0; x < h; x++) {
+                for (let c = 0; c < 4; c++) {
+                    let sum = 0;
+                    for (let k = 0; k < 8; k++) sum += level[((((z * 2 + (k >> 2)) * n + y * 2 + ((k >> 1) & 1)) * n) + x * 2 + (k & 1)) * 4 + c];
+                    next[((z * h + y) * h + x) * 4 + c] = (sum + 4) >> 3;
+                }
+            }
+            level = next;
+            n = h;
+        }
         this.gpuTexture = t;
         this.view = t.createView({ dimension: '3d' });
+        this.mipmapCount = levels;
     }
 }
 
