@@ -85,9 +85,11 @@ export let VertexAttributeIndexShader: string = /*wgsl*/ `
         var worldPos = (ORI_MATRIX_M * vec4<f32>(vertexPosition.xyz, 1.0));
 
         #if TRANSFORMVERTEX
-            var transformVertex = transformVertex(worldPos.xyz,vertexNormal,vertex);
-            worldPos = vec4<f32>(transformVertex.position ,worldPos.w);
-            vertexNormal = transformVertex.normal ;
+            // Not named after the function it calls: Safari's WGSL compiler would then take
+            // the call for this variable and fail with "unresolved call target".
+            var transformed = transformVertex(worldPos.xyz,vertexNormal,vertex);
+            worldPos = vec4<f32>(transformed.position ,worldPos.w);
+            vertexNormal = transformed.normal ;
         #endif
 
         var viewPosition = ORI_MATRIX_V * worldPos;
