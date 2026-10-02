@@ -1,4 +1,6 @@
+import { View3D } from '../../../../core/View3D';
 import { RenderTexture } from '../../../../textures/RenderTexture';
+import { EntityCollect } from '../../collect/EntityCollect';
 import { GPUTextureFormat } from '../../../graphics/webGpu/WebGPUConst';
 import { RTResourceMap } from '../../frame/RTResourceMap';
 import { RenderGraphBuilder, RenderGraphPass, RenderGraphPassContext } from '../RenderGraphPass';
@@ -25,6 +27,9 @@ export const SCENE_DEPTH_COPY = '_SceneDepthCopy';
  * depth+stencil buffer it skips the copy (once warned) and readers see
  * the far plane.
  *
+ * It costs nothing while no material that reads the scene is drawn: the
+ * copy is skipped, and its texture is made the first time one is.
+ *
  * @group Graph
  */
 export class SceneDepthCopyPass extends RenderGraphPass {
@@ -37,11 +42,8 @@ export class SceneDepthCopyPass extends RenderGraphPass {
         // After the opaque world and the sky: the pyramid is taken from them.
         b.read(SCENE_COLOR_PYRAMID);
         b.read(TRANSPARENT_DRAW_CTX);
-        const ctx = b.context3D;
-        const [w, h] = ctx.presentationSize;
-        // Named and sized like the prepass depth (PreDepthPass), so the
-        // registry resizes it with the canvas the same way.
-        this._copy = RTResourceMap.createRTTexture(ctx, SCENE_DEPTH_COPY, Math.floor(w), Math.floor(h), GPUTextureFormat.depth32float, false);
+        // Made once a reader is drawn (see execute); kept from then on.
+        this._copy = RTResourceMap.getTexture(b.context3D, SCENE_DEPTH_COPY) ?? null;
         b.write(SCENE_DEPTH_COPY, () => this._copy);
     }
 
@@ -49,8 +51,15 @@ export class SceneDepthCopyPass extends RenderGraphPass {
         const state = ctx.get<TransparentDrawContext>(TRANSPARENT_DRAW_CTX);
         const ps = state?.rendererPassState;
         const src = ps?.zPreTexture ?? ps?.depthTexture;
+        if (!src || !this._readersDrawn(ctx.view)) return;
+        if (!this._copy) {
+            // Named and sized like the prepass depth (PreDepthPass), so the
+            // registry resizes it with the canvas the same way.
+            const c3d = ctx.view.engine3D.context3D;
+            const [w, h] = c3d.presentationSize;
+            this._copy = RTResourceMap.createRTTexture(c3d, SCENE_DEPTH_COPY, Math.floor(w), Math.floor(h), GPUTextureFormat.depth32float, false);
+        }
         const dst = this._copy;
-        if (!src || !dst) return;
         if (src.format !== GPUTextureFormat.depth32float || src.sampleCount > 1) {
             if (!this._warned) {
                 this._warned = true;
@@ -68,5 +77,19 @@ export class SceneDepthCopyPass extends RenderGraphPass {
             { width: src.width, height: src.height, depthOrArrayLayers: 1 },
         );
         gpu.endCommandEncoder(command);
+    }
+
+    /** Whether a shown renderer's material reads the scene (one look per shader: renderers of a shader share it). */
+    protected _readersDrawn(view: View3D): boolean {
+        const collect = EntityCollect.instance.getRenderShaderCollect(view);
+        if (!collect) return false;
+        for (const [, nodes] of collect) {
+            for (const [, node] of nodes) {
+                if (node.isDestroyed || !node.enable || !node.transform?.enable) continue;
+                if ((node.materials?.[0] as { readsScene?: boolean } | undefined)?.readsScene) return true;
+                break;
+            }
+        }
+        return false;
     }
 }

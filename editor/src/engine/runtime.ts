@@ -457,8 +457,9 @@ export class Runtime {
         fog.dirHeightLine = sunScatterToLine(f.sunScatter);
         fog.scatteringExponent = f.sunFocus;
         // A clear day (haze 1): half faded at about 12 km near the ground.
-        fog.airDensity = Math.max(0, env.atmosphere.haze) * 5.6e-5;
-        this.togglePost(GlobalFog, f.enable || env.atmosphere.haze > 0);
+        const haze = tier.aerial ? Math.max(0, env.atmosphere.haze) : 0;
+        fog.airDensity = haze * 5.6e-5;
+        this.togglePost(GlobalFog, f.enable || haze > 0);
 
         const vf = env.volumetricFog;
         const vol = (pp as any).volumetricFog;

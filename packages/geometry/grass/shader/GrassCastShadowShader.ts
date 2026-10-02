@@ -23,6 +23,8 @@ export let GrassCastShadowShader = /* wgsl */`
         roughness: f32,
         soft: f32,
         specular: f32,
+        // Meters from the camera where the last blades are gone (they thin out from half of it); 0 for none.
+        drawDistance: f32,
     };
       
     @group(2) @binding(0)

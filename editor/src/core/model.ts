@@ -351,6 +351,7 @@ export const Grass = z.object({
     windDirection: angle(35, 0, 360, { description: 'Where the wind blows toward, degrees around +Y from +X.' }),
     texture: asset({ description: 'Blade texture asset id (alpha below 0.3 is cut out), or null for plain blades.' }),
     windMap: asset({ title: 'Gust Map', description: 'Gust noise texture asset id (its red and green make the gusts, one pixel per meter), or null for built-in noise.' }),
+    distance: num(0, 0, 10000, { step: 1, title: 'Draw Distance', description: 'Meters from the camera where the last blades are gone: they thin out from half of it, so far grass costs less; 0 draws every blade at any distance. 30 to 60 suits most fields.' }),
     castShadow: bool(false, { title: 'Cast Shadows', description: 'Blades cast shadows (costly for many blades); they always receive them.' }),
 });
 export type GrassDoc = z.output<typeof Grass>;

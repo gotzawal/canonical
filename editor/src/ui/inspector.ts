@@ -1000,7 +1000,7 @@ export class InspectorPanel {
             ...this.componentRows('grass', ['height', 'width', 'bottomColor', 'topColor', 'wind', 'windSpeed', 'windDirection']),
             row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
             row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
-            ...this.componentRows('grass', ['castShadow']),
+            ...this.componentRows('grass', ['distance', 'castShadow']),
         ], [remove]);
     }
 

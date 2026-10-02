@@ -8,6 +8,7 @@ import type { ParamValue, ShaderDoc, ShaderKind, TextureRole } from '../core/typ
 import { hexToColor, normalizeHex } from './color';
 import { HeldTexture, uploadTexture } from './heldTexture';
 import type { Runtime } from './runtime';
+import type { QualityLevel } from '../core/quality';
 
 // Custom shaders are WGSL written against the engine's shader library. The
 // user writes `frag()` (and optionally `vert()`) for materials, or
@@ -364,6 +365,25 @@ fn sceneBehind(uv: vec2f, lod: f32) -> vec3f {
 }
 `;
 
+/**
+ * The graphics tier drawn (0 low, 1 medium, 2 high), for material shaders
+ * that do less on weaker devices (the Water template drops its caustics and
+ * finest ripples on low). Set by defines, so each tier compiles its own.
+ */
+const QUALITY_CODE = [
+    'fn qualityTier() -> i32 {',
+    '    #if QUALITY_LOW',
+    '        return 0;',
+    '    #else',
+    '        #if QUALITY_MEDIUM',
+    '            return 1;',
+    '        #else',
+    '            return 2;',
+    '        #endif',
+    '    #endif',
+    '}',
+].join('\n');
+
 /** Full shader source as registered in ShaderLib. */
 export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: ParsedShader): string {
     const includes = parsed.includes.map((n) => `#include "${n}"`).join('\n');
@@ -414,6 +434,7 @@ export function buildSource(doc: Pick<ShaderDoc, 'kind' | 'lighting'>, parsed: P
         parsed.usesTerrain ? TERRAIN_CODE : '',
         parsed.usesScene ? SCENE_CODE : '',
         'fn getTime() -> f32 { return globalUniform.time * 0.001; }',
+        QUALITY_CODE,
         parsed.hasVert ? '' : 'fn vert(inputData: VertexAttributes) -> VertexOutput { ORI_Vert(inputData); return ORI_VertexOut; }',
         USER_BEGIN,
         parsed.body,
@@ -445,12 +466,18 @@ export class ShaderManager extends Emitter<ShaderEvents> {
     private sceneReaders = new Set<WeakRef<Shader>>();
     private sceneBound: { color: Texture | null; depth: Texture | null } = { color: null, depth: null };
     private noSceneDepth: RenderTexture | null = null;
+    /** Every material shader made, and the tier they were last compiled for. */
+    private tierReaders = new Set<WeakRef<Shader>>();
+    private tierBound: QualityLevel | null = null;
 
     constructor(private runtime: Runtime, private store: Store) {
         super();
         // The scene textures appear once the render graph is built and are
         // made again when it is (a resize may): readers follow them.
-        runtime.onBeforeFrame(() => this.refreshScene());
+        runtime.onBeforeFrame(() => {
+            this.refreshScene();
+            this.refreshTier();
+        });
         const check = () => this.syncAll();
         store.on('change', (hint) => {
             if (!hint?.nodes && !hint?.env && !hint?.meta && !hint?.design && !hint?.behavior) check();
@@ -614,6 +641,8 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         state.acceptGI = false;
         state.useLight = lit;
         for (const [k, v] of Object.entries(materialDefines(valid.lighting))) shader.setDefine(k, v);
+        this.setTier(shader, this.runtime.qualityLevel);
+        this.tierReaders.add(new WeakRef(shader));
 
         setEngineDefaults(shader, ctx);
         // A Mirror component on the object binds its reflection here (and knows the material by it).
@@ -651,6 +680,23 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         this.noSceneDepth ??= new RenderTexture(1, 1, GPUTextureFormat.depth32float, false, undefined, 1, 0, false, false, ctx);
         const depth = RTResourceMap.getTexture(ctx, SCENE_DEPTH_COPY) ?? this.noSceneDepth;
         return { color, depth };
+    }
+
+    private setTier(shader: Shader, level: QualityLevel) {
+        shader.setDefine('QUALITY_LOW', level === 'low');
+        shader.setDefine('QUALITY_MEDIUM', level === 'medium');
+    }
+
+    /** Compiles the material shaders again for another tier (a preview, or the scene's setting). */
+    private refreshTier() {
+        const level = this.runtime.qualityLevel;
+        if (level === this.tierBound) return;
+        this.tierBound = level;
+        for (const ref of Array.from(this.tierReaders)) {
+            const shader = ref.deref();
+            if (!shader) this.tierReaders.delete(ref);
+            else this.setTier(shader, level);
+        }
     }
 
     /** Gives the readers the scene textures again when they changed. */

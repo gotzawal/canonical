@@ -49,6 +49,7 @@ export class GrassMaterial extends Material {
         colorPass.setUniformFloat("grassHeight", 10);
         colorPass.setUniformFloat("soft", 5);
         colorPass.setUniformFloat("specular", 0.15);
+        colorPass.setUniformFloat("drawDistance", 0);
 
         shadowPass.setUniformColor("baseColor", new Color(0.0, 1.0, 0.0, 1.0));
         shadowPass.setUniformColor("grassBottomColor", new Color(39 / 255, 87 / 255, 36 / 255));
@@ -64,6 +65,7 @@ export class GrassMaterial extends Material {
         shadowPass.setUniformFloat("grassHeight", 10);
         shadowPass.setUniformFloat("soft", 5);
         shadowPass.setUniformFloat("specular", 0.15);
+        shadowPass.setUniformFloat("drawDistance", 0);
 
         colorPass.doubleSide = true;
         shadowPass.doubleSide = true;
@@ -180,5 +182,14 @@ export class GrassMaterial extends Material {
 
     public get specular(): number {
         return this.shader.getUniformFloat("specular");
+    }
+
+    /** Meters from the camera where the last blades are gone: they thin out from half of it (0: every blade at any distance). */
+    public set drawDistance(v: number) {
+        this.shader.setUniformFloat("drawDistance", Math.max(0, v));
+    }
+
+    public get drawDistance(): number {
+        return this.shader.getUniformFloat("drawDistance");
     }
 }

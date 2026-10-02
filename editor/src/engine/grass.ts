@@ -8,6 +8,7 @@ import { GrassComponent } from '@orillusion/geometry/grass';
 import { covers, groundHeight, groundNormal, type TerrainSurface } from '../core/terrain';
 import type { GrassDoc } from '../core/types';
 import { hexToColor } from './color';
+import { ownIndices } from './lod';
 
 /** Blades on slopes steeper than this (the up component of the ground's normal) are left out: 60 degrees. */
 const MAX_SLOPE = 0.5;
@@ -42,6 +43,7 @@ export class GrassField {
         m.windSpeed = doc.windSpeed / 100;
         m.grassHeight = doc.height / SEGMENT_SUM;
         m.castShadow = doc.castShadow;
+        m.drawDistance = doc.distance;
         this.renderer.castShadow = doc.castShadow;
     }
 
@@ -198,7 +200,7 @@ export class GroundGrid implements Ground {
         const geo = r.geometry;
         const pos = geo?.getAttribute(VertexAttributeName.position)?.data as ArrayLike<number> | undefined;
         if (!pos || !r.object3D) return;
-        const idx = geo.getAttribute(VertexAttributeName.indices)?.data as ArrayLike<number> | undefined;
+        const idx = ownIndices(geo);
         const m = r.object3D.transform.worldMatrix.rawData;
         const count = Math.floor(pos.length / 3);
         const world = new Float64Array(count * 3);

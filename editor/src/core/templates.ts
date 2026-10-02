@@ -563,7 +563,12 @@ fn wWaves(p: vec2f, t: f32, px: f32) -> WaveSum {
     wAdd(&sum, wOctave(p, 1.70, vec2f(0.113), vec2f(-0.72, 0.51) * (t * 0.270)), 0.5, 0.113, px);
     wAdd(&sum, wOctave(p, 2.90, vec2f(0.317), vec2f(0.44, 0.90) * (t * 0.570)), 0.25, 0.317, px);
     wAdd(&sum, wOctave(p, 4.10, vec2f(0.907), vec2f(-0.86, 0.31) * (t * 1.270)), 0.125, 0.907, px);
-    wAdd(&sum, wOctave(p, 5.30, vec2f(2.31), vec2f(0.21, -0.98) * (t * 2.100)), 0.0625, 2.31, px);
+    // The low graphics tier skips the finest ripples: their slope goes into roughness.
+    if (qualityTier() > 0) {
+        wAdd(&sum, wOctave(p, 5.30, vec2f(2.31), vec2f(0.21, -0.98) * (t * 2.100)), 0.0625, 2.31, px);
+    } else {
+        sum.lost += (0.0625 * 2.31) * (0.0625 * 2.31);
+    }
     return sum;
 }
 
@@ -694,8 +699,12 @@ fn frag() {
     let inscatter = albedo * (1.0 - T) * inLight;
 
     // Caustics on the bed: none at the waterline, fading as it gets deep.
+    // (Not on the low graphics tier, nor where they would not show.)
     let causticFade = (1.0 - exp(-vdepth * 4.0)) * exp(-vdepth * 0.35);
-    let caustic = wCaustic(behind.xz * 1.2, t) * materialUniform.caustics * causticFade * shadow;
+    var caustic = 0.0;
+    if (qualityTier() > 0 && causticFade * materialUniform.caustics * shadow > 0.002) {
+        caustic = wCaustic(behind.xz * 1.2, t) * materialUniform.caustics * causticFade * shadow;
+    }
     // Deep or murky water blurs what is under it.
     let blur = clamp(path * dot(sigmaS, vec3f(0.333)) * 30.0, 0.0, 4.0);
     let under = sceneBehind(uv, blur) * (1.0 + caustic * 2.0);

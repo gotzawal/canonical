@@ -55,7 +55,7 @@ const BODY = /* wgsl */ `
 // tile size of each layer in meters. terrainInfo: layer count, whether
 // there is paint, normal map strength. terrainRect: the terrain's -x, -z
 // corner and its size, for the splat map. terrainLook: height blending
-// (x) and variation (y), 0 to 1. terrainWater: the water's height over
+// (x) and variation (y), 0 to 1, and the far copies (z, 0 or 1). terrainWater: the water's height over
 // the terrain (x, -1e9 without), meters above it that are wet (y), rain
 // (z, 0 to 1) and puddles (w, 0 to 1). terrainRain: the rain's box, its
 // -x, -z and +x, +z corners.
@@ -191,7 +191,7 @@ fn frag() {
     axes = axes / max(axes.x + axes.y + axes.z, 0.0001);
     axes = select(vec3f(0.0), axes, axes > vec3f(0.02));
     axes = axes / max(axes.x + axes.y + axes.z, 0.0001);
-    let far = smoothstep(12.0, 60.0, distance(globalUniform.CameraPos.xyz, p)) * 0.5 * look.y;
+    let far = smoothstep(12.0, 60.0, distance(globalUniform.CameraPos.xyz, p)) * 0.5 * look.y * look.z;
 
     // Each layer shown, and how high its texels stand where it is.
     var smp: array<LayerSample, 4>;
@@ -354,7 +354,7 @@ export class TerrainMaterial {
         shader.setUniformVector4('layerTile', new Vector4(4, 4, 4, 4));
         shader.setUniformVector4('terrainInfo', new Vector4(1, 0, 1, 0));
         shader.setUniformVector4('terrainRect', new Vector4(0, 0, 1, 1));
-        shader.setUniformVector4('terrainLook', new Vector4(0.7, 0.5, 0, 0));
+        shader.setUniformVector4('terrainLook', new Vector4(0.7, 0.5, 1, 0));
         shader.setUniformVector4('terrainWater', new Vector4(-1e9, 0, 0, 0));
         shader.setUniformVector4('terrainRain', new Vector4(0, 0, 0, 0));
         // The arrays are bound before the first draw: the pipeline's layout comes from them.
@@ -414,9 +414,13 @@ export class TerrainMaterial {
         this.normal.hold(buildLayerArray(this.ctx, normal, size, 'rgba8unorm', 'terrain normal'));
     }
 
-    /** How much the layers' heights decide where they meet (0: they fade evenly) and how much the land varies, 0 to 1. */
-    setLook(blending: number, variation: number) {
-        this.shader.setUniformVector4('terrainLook', new Vector4(blending, variation, 0, 0));
+    /**
+     * How much the layers' heights decide where they meet (0: they fade
+     * evenly) and how much the land varies, 0 to 1; `far` mixes the maps
+     * with a larger copy far away (the graphics tier's choice).
+     */
+    setLook(blending: number, variation: number, far: boolean) {
+        this.shader.setUniformVector4('terrainLook', new Vector4(blending, variation, far ? 1 : 0, 0));
     }
 
     /** Wet ground along a water surface over the terrain and under rain. */

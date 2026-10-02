@@ -11,6 +11,7 @@ import type { SceneDoc } from '../core/types';
 import type { Store } from '../core/store';
 import type { SceneSync } from '../engine/sync';
 import type { NavQuery } from './ai/agents';
+import { ownIndices } from '../engine/lod';
 
 /** The body the navigation mesh is made for: the widest and tallest walking character, the lowest step, the specs' slope. */
 export interface NavAgent {
@@ -78,7 +79,7 @@ export function levelTriangles(store: Store, sync: SceneSync, skip: (id: string)
             const pos = r.geometry?.getAttribute(VertexAttributeName.position)?.data as Float32Array | undefined;
             const obj = r.object3D as Object3D | undefined;
             if (!pos || !obj) continue;
-            const idx = (r.geometry.getAttribute(VertexAttributeName.indices)?.data as ArrayLike<number> | undefined) ?? null;
+            const idx = ownIndices(r.geometry) ?? null;
             chunks.push({ pos, idx, m: obj.transform.worldMatrix.rawData });
             verts += pos.length / 3;
             tris += Math.floor((idx ? idx.length : pos.length / 3) / 3);

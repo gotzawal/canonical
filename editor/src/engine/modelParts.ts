@@ -6,6 +6,7 @@ import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, TextureRole
 import { colorToHex, hexToColor } from './color';
 import { applyAlpha, applyUVTransform, createBuiltinMaterial, EngineAlpha, engineAlpha, MaterialMaps, BASE_MAP } from './materials';
 import { applyProps, MODEL_MAPS, type ShaderManager } from './shaders';
+import { ownIndices } from './lod';
 
 // An imported model is a single document node whose engine object is a
 // clone of the parsed glTF prefab. Its meshes ("parts") and materials
@@ -234,7 +235,7 @@ export function inspectModel(root: Object3D, ctx?: any): ModelInfo {
                 if (!r.geometry || !mat) return;
                 const p = paths.get(r)!;
                 const pos = r.geometry.getAttribute(VertexAttributeName.position)?.data;
-                const idx = r.geometry.getAttribute(VertexAttributeName.indices)?.data;
+                const idx = ownIndices(r.geometry);
                 const key = slotKey(mat);
                 // The loader puts each primitive in its own child named after
                 // the mesh; the glTF node above it has the meaningful name.

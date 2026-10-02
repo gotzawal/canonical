@@ -111,4 +111,9 @@ await page.evaluate(() => {
     });
 });
 await shot('sunset', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });
+// The levels of detail the rock cells draw from far away.
+console.log('scatter levels', JSON.stringify(await page.evaluate(() => window.__editor.sync.scatterViews().map(({ view }) => view.cells.map((c) => c.level)))));
+// The low graphics tier: lighter water, terrain and no aerial perspective.
+await page.evaluate(() => window.__editor.runtime.setQualityOverride('low'));
+await shot('low-tier', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
 await browser.close();

@@ -7,6 +7,7 @@ import { rayTerrain } from '../core/terrain';
 import type { Vec3 } from '../core/types';
 import type { Runtime } from './runtime';
 import type { SceneSync } from './sync';
+import { ownIndices } from './lod';
 
 export interface ScreenPoint {
     x: number;
@@ -200,7 +201,7 @@ export class Picker {
         if (boxT === null) return null;
 
         const pos = geo.getAttribute(VertexAttributeName.position)?.data as ArrayLike<number> | undefined;
-        const idx = geo.getAttribute(VertexAttributeName.indices)?.data as ArrayLike<number> | undefined;
+        const idx = ownIndices(geo);
         const topology = (r.materials?.[0] as any)?.topology;
         if (normal) normal[0] = normal[1] = normal[2] = 0;
         if (!pos || pos.length < 9 || (topology && topology !== 'triangle-list')) return boxT;

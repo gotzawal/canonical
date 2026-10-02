@@ -17,9 +17,10 @@ import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { skySunOf, sunlightThroughAir } from '../core/sky';
+import { ModelLods } from './lod';
 import { castGI } from './gi';
 import { setLightShadow } from './shadows';
-import { QUALITY } from '../core/quality';
+import { QUALITY, type QualityLevel } from '../core/quality';
 import { movesInPlay } from '../core/motion';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
@@ -279,13 +280,30 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** Terrain levels of detail and scatter draw distances for the camera, once a frame. */
     private eachFrame() {
-        if (!this.terrainStates.size && !this.scatterStates.size) return;
+        if (this.tierApplied !== this.runtime.qualityLevel) this.applyTier();
         const eye = this.runtime.activeCamera?.transform.worldPosition;
         if (!eye) return;
         const at = [eye.x, eye.y, eye.z];
+        this.modelLods.update(at, QUALITY[this.runtime.qualityLevel].lodDistance);
+        if (!this.terrainStates.size && !this.scatterStates.size) return;
         for (const t of this.terrainStates) t.view.update(at);
         for (const s of this.scatterStates) s.view.update(at);
         if (this.terrainStates.size) this.updateWetness();
+    }
+
+    /** The tier the mirrors, terrains and scatters were last fitted to. */
+    private tierApplied: QualityLevel | null = null;
+
+    /** Fits mirrors, terrains and scatters to the graphics tier drawn (a preview or the scene's setting changed it). */
+    private applyTier() {
+        const level = (this.tierApplied = this.runtime.qualityLevel);
+        for (const e of this.entries.values()) {
+            const node = this.store.node(e.id);
+            if (!node) continue;
+            if (e.mirror) this.applyMirror(e, node);
+            if (e.terrain && node.terrain) e.terrain.view.material.setLook(node.terrain.blending, node.terrain.variation, QUALITY[level].terrainFar);
+            if (e.scatter) e.scatter.view.setLodScale(QUALITY[level].lodDistance);
+        }
     }
 
     /**
@@ -969,6 +987,8 @@ export class SceneSync extends Emitter<SyncEvents> {
                 castGI(instance);
                 state.obj = instance;
                 state.status = 'ready';
+                // Outside an instancing group (which draws all its copies at one level), parts get simpler levels far away.
+                if (!group) void this.modelLods.add(staticRenderers(instance), () => entry.model === state && this.entries.get(entry.id) === entry);
                 const ctx = this.runtime.engine.context3D;
                 try {
                     state.info = inspectModel(instance, ctx);
@@ -1060,7 +1080,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.mirror = entry.obj.addComponent(MirrorComponent);
             if (!entry.visible) entry.mirror.enable = false;
         }
-        entry.mirror.resolutionScale = doc.resolution;
+        // Weaker tiers capture fewer pixels.
+        entry.mirror.resolutionScale = doc.resolution * QUALITY[this.runtime.qualityLevel].mirrorScale;
         // The top of its shape: a plane's face, a box's top.
         entry.mirror.surfaceOffset = shapeTop(node.mesh!.geometry);
     }
@@ -1072,6 +1093,8 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     /** The objects with rain; their volumes follow them every frame (rainFrame). */
     private rains = new Set<Entry>();
+    /** Renderers of models placed one by one that draw simpler levels far away. */
+    private modelLods = new ModelLods();
     /** The objects whose material shows what lies under them (water): terrains under them are wet. */
     private waters = new Set<Entry>();
     private rainFrame: (() => void) | null = null;
@@ -1227,7 +1250,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         }
         const state = t;
         state.view.setShadows(doc.castShadow);
-        state.view.material.setLook(doc.blending, doc.variation);
+        state.view.material.setLook(doc.blending, doc.variation, QUALITY[this.runtime.qualityLevel].terrainFar);
         state.wet = '';
         const built = JSON.stringify([doc.heightmap, doc.size, doc.height, doc.detail]);
         if (built !== state.built) {
@@ -1465,6 +1488,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         }
         if (!entry.scatter) {
             const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
+            view.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
             view.setVisible(entry.visible);
             entry.scatter = { view, placed: '', placements: [], solids: [] };
             this.scatterStates.add(entry.scatter);
@@ -1487,7 +1511,12 @@ export class SceneSync extends Emitter<SyncEvents> {
         let p = this.scatterModels.get(assetId);
         if (!p) {
             const made = this.loadPrefab(assetId).then(
-                (prefab) => new ScatterModel(prefab),
+                async (prefab) => {
+                    const m = new ScatterModel(prefab);
+                    // Simpler versions for the cells far from the camera.
+                    await m.addLods();
+                    return m;
+                },
                 (e) => {
                     console.warn('[editor] a scatter model could not be loaded', e);
                     return null;
@@ -2153,6 +2182,19 @@ function oneRange(g: GeometryBase): GeometryBase {
     subs.length = 0;
     g.addSubGeometry({ indexStart: start, indexCount: total, vertexStart: 0, vertexCount: 0, firstStart: 0, index: 0, topology: 0 });
     return g;
+}
+
+/** The renderers under an object that keep their shape (not skinned, not morphing): those that can have simpler levels. */
+function staticRenderers(root: Object3D): RenderNode[] {
+    const out: RenderNode[] = [];
+    root.traverse((o: Object3D) => {
+        o.components.forEach((c) => {
+            if (!(c instanceof MeshRenderer) || c instanceof SkinnedMeshRenderer || c instanceof SkinnedMeshRenderer2) return;
+            if (!c.geometry || (c as any).morphData?.enable) return;
+            out.push(c);
+        });
+    });
+    return out;
 }
 
 /** How far a shape's top is above its origin (shapes are centered on it): where a mirror on it reflects. */

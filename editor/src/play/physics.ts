@@ -19,6 +19,7 @@ import type { BodyDoc, BodyType, GeometryDoc, NodeDoc, SceneDoc } from '../core/
 import type { SceneSync } from '../engine/sync';
 import { TransformWatch } from '../engine/transformWatch';
 import type { Character } from './character';
+import { ownIndices } from '../engine/lod';
 
 export type Rapier = typeof RAPIER;
 
@@ -211,7 +212,7 @@ function gather(renderers: RenderNode[], inv: Mat4): { points: Float32Array; ind
         const m = mul(inv, r.object3D.transform.worldMatrix.rawData);
         const base = points.length / 3;
         for (let i = 0; i + 2 < pos.length; i += 3) points.push(...transformPoint(m, [pos[i], pos[i + 1], pos[i + 2]]));
-        const idx = r.geometry.getAttribute(VertexAttributeName.indices)?.data as ArrayLike<number> | undefined;
+        const idx = ownIndices(r.geometry);
         const count = points.length / 3 - base;
         if (idx) for (let i = 0; i < idx.length; i++) idx[i] < count && indices.push(base + idx[i]);
         else for (let i = 0; i < count; i++) indices.push(base + i);

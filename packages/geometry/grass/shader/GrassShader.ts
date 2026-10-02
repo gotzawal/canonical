@@ -30,6 +30,8 @@ export let GrassShader = /* wgsl */`
         roughness: f32,
         soft: f32,
         specular: f32,
+        // Meters from the camera where the last blades are gone (they thin out from half of it); 0 for none.
+        drawDistance: f32,
     };
       
     @group(2) @binding(0)
@@ -108,6 +110,17 @@ export let GrassShader = /* wgsl */`
         let nMat = mat3x3<f32>(finalMatrix[0].xyz,finalMatrix[1].xyz,finalMatrix[2].xyz) ;
         ORI_NORMALMATRIX = transpose(inverse( nMat ));
         transformVertex.normal = ORI_NORMALMATRIX * normal;
+
+        // Far blades thin out: past half the draw distance more and more of
+        // them (picked by where they stand) fold to their root and draw nothing.
+        let drawDistance = materialUniform.drawDistance;
+        if (drawDistance > 0.0) {
+            let d = distance(globalUniform.CameraPos.xyz, grassPivot);
+            let keep = fract(sin(dot(grassPivot.xz, vec2<f32>(12.9898, 78.233))) * 43758.5453);
+            if (keep < smoothstep(drawDistance * 0.5, drawDistance, d)) {
+                transformVertex.position = grassPivot;
+            }
+        }
 
         return transformVertex ;
     }
