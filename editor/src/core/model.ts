@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { clampGIGrid } from './giLimits';
 import { SHAPE_DISTRIBUTIONS, SIZE_DISTRIBUTIONS } from './grass';
+import { WEATHERS } from './weather';
 import { asset, bool, color, group, int, num, oneOf, optionalFields, params, range, records, text, vec2, vec3 } from './schema';
 
 const enabled = (m = {}) => bool(false, { title: 'Enabled', ...m });
@@ -696,6 +697,22 @@ export const Environment = z.object({
         windDirection: num(30, 0, 360, { step: 1, title: 'Wind Direction', description: 'Where they drift toward, degrees around +Y from +X.' }),
         evolve: num(2, 0, 20, { step: 0.1, description: 'How fast their shapes change as they drift, m/s.' }),
         shadows: unit(0.6, { description: 'How dark their shadows on the ground are; 0 for none.' }),
+    }),
+    /** Weather and the time of day: sets the sun, sky, key light, clouds, fog, rain and wind together (core/weather.ts). */
+    weather: group({
+        enable: bool(false, { description: 'The time of day and the weather set the sun (and the key light: the moon at night), the sky, clouds, fog, haze, rain around the camera and the wind of grass, clouds and rain together; their own settings are used as they say otherwise.' }),
+        time: num(10, 0, 24, { step: 0.05, precision: 2, slider: true, title: 'Time of Day', description: 'Hours: 6 sunrise, 12 noon, 18 sunset.' }),
+        cycle: num(0, 0, 240, { step: 0.5, title: 'Day Length', description: 'Real minutes a whole day takes to pass, from Time of Day; 0 stops time.' }),
+        sunrise: angle(90, 0, 360, { title: 'Sunrise Direction', description: 'Degrees around +Y from +X where the sun rises (it sets opposite).' }),
+        noon: num(60, 5, 90, { step: 1, title: 'Noon Height', description: 'Degrees the sun stands over the horizon at noon (lower far north or in winter).' }),
+        preset: oneOf(WEATHERS, 'fair', {
+            title: 'Weather',
+            labels: { clear: 'Clear', fair: 'Fair', cloudy: 'Cloudy', overcast: 'Overcast', rain: 'Rain', storm: 'Storm', fog: 'Fog' },
+            description: 'clear (no clouds), fair (small heaps), cloudy (broken), overcast (a grey deck, dimmer light), rain and storm (rain around the camera, wet ground, gusty), fog (thick haze, high veils).',
+        }),
+        wind: num(5, 0, 30, { step: 0.5, description: 'Wind m/s, shared by clouds, grass and rain (storms blow harder).' }),
+        windDirection: angle(30, 0, 360, { title: 'Wind Direction', description: 'Where the wind blows toward, degrees around +Y from +X.' }),
+        stars: unit(1, { description: 'How bright the stars are at night (and the moon\'s disc).' }),
     }),
     fog: group({
         enable: enabled(),

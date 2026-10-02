@@ -1,4 +1,5 @@
 import {
+    Vector3,
     BoxGeometry, Color, CompressedTexture2D, CylinderGeometry, DirectLight, GeometryBase, InstanceDrawComponent, isKTX2, LightBase, LitMaterial, Material,
     MeshRenderer, MirrorComponent, MirrorMaterial, Object3D, PlaneGeometry, PointLight, Reference, RenderNode, RendererMask, SkinnedMeshRenderer,
     SkinnedMeshRenderer2, SphereGeometry, SpotLight, Texture, TorusGeometry, UnLitMaterial,
@@ -21,6 +22,9 @@ import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
 import { hexToColor } from './color';
 import { skySunOf, sunlightThroughAir } from '../core/sky';
+import { weatherNow, type WeatherNow } from '../core/weather';
+import { defaults } from '../core/schema';
+import { Rain } from '../core/model';
 import { ModelLods } from './lod';
 import { castGI } from './gi';
 import { setLightShadow } from './shadows';
@@ -209,6 +213,13 @@ export class SceneSync extends Emitter<SyncEvents> {
     private isolateLights = false;
     /** Environment shown instead of the document's (the reference room). */
     private envOverride: EnvironmentDoc | null = null;
+    /** The weather and time of day shown (Environment.weather), when on; when it was worked out and from what. */
+    private weather: WeatherNow | null = null;
+    private weatherKey = '';
+    private weatherAt = 0;
+    private weatherTime = NaN;
+    private weatherStart = 0;
+    private weatherRain: RainVolume | null = null;
     private owner = new WeakMap<Object3D, string>();
     private prefabs = new Map<string, Promise<Object3D>>();
     /** Texture assets by `${asset}|${role}`: the texture, once it has data. */
@@ -301,6 +312,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         const at = [eye.x, eye.y, eye.z];
         this.modelLods.update(at, QUALITY[this.runtime.qualityLevel].lodDistance);
         for (const g of this.grasses) g.grass?.update(at);
+        this.updateWeather(at);
         if (!this.terrainStates.size && !this.scatterStates.size) return;
         let eased = false;
         for (const t of this.terrainStates) eased = t.view.update(at) || eased;
@@ -356,6 +368,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             const q = e.obj.transform.worldPosition;
             rains.push({ rect: [q.x - doc.size[0] / 2, q.z - doc.size[2] / 2, q.x + doc.size[0] / 2, q.z + doc.size[2] / 2], amount: doc.amount });
         }
+        // The weather's rain falls everywhere.
+        if (this.weather?.rain) rains.push({ rect: [-1e6, -1e6, 1e6, 1e6], amount: this.weather.rain });
         for (const t of this.terrainStates) {
             const doc = this.store.node(t.view.id)?.terrain;
             if (!doc) continue;
@@ -1197,7 +1211,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             entry.grassPlaced = '';
         }
         const field = entry.grass;
-        field.apply(doc);
+        field.apply(this.windOn(doc));
         const ctx = this.runtime.engine.context3D;
         this.gusts ??= gustTexture(ctx);
         const blade = doc.texture ? this.loadTexture(doc.texture, 'color') : Promise.resolve(null);
@@ -2095,15 +2109,90 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.refreshKeyLight();
     }
 
-    /** The environment shown: the override's or the document's. */
+    /** The environment shown: the override's or the document's, as its weather and time of day make it. */
     private get shownEnvironment(): EnvironmentDoc {
-        return this.envOverride ?? this.store.doc.environment;
+        return this.weather?.env ?? this.envOverride ?? this.store.doc.environment;
     }
 
     /** Whether the sky shown takes its sun from the key light (see Environment.atmosphere.followLight). */
     private followsLight(): boolean {
         const env = this.shownEnvironment;
         return (env.sky === 'atmospheric' || env.sky === 'physical') && env.atmosphere.followLight;
+    }
+
+    /**
+     * Weather and the time of day (Environment.weather), once a frame: the
+     * time passes by its Day Length, and when what it gives changes (at
+     * most a few times a second: the sky is drawn again) the sky, key light,
+     * grass wind and rain follow. The key light turns with it every frame.
+     */
+    private updateWeather(eye: number[]) {
+        const env = this.envOverride ?? this.store.doc.environment;
+        const w = env.weather;
+        const now = performance.now();
+        if (!w.enable) {
+            if (this.weather) {
+                this.weather = null;
+                this.weatherKey = '';
+                this.weatherChanged();
+                const key = this.keyLight();
+                const entry = key && this.entries.get(key.id);
+                if (key && entry) this.applyTransform(entry, key);
+            }
+            return;
+        }
+        if (w.time !== this.weatherTime) {
+            this.weatherTime = w.time;
+            this.weatherStart = now;
+        }
+        const time = w.cycle > 0 ? (w.time + ((now - this.weatherStart) / 60000 / w.cycle) * 24) % 24 : w.time;
+        const key = JSON.stringify([env.weather, env.clouds, env.fog, env.atmosphere, env.sky, Math.round(time * 240)]);
+        if (key !== this.weatherKey && (!this.weather || now - this.weatherAt > 200)) {
+            this.weatherKey = key;
+            this.weatherAt = now;
+            this.weather = weatherNow(env, time);
+            this.weatherChanged();
+        }
+        const light = this.keyLight();
+        const entry = light && this.entries.get(light.id);
+        if (entry && this.weather) {
+            const r = this.weather.light.rotation;
+            const t = entry.obj.transform;
+            if (Math.abs(t.rotationX - r[0]) + Math.abs(t.rotationY - r[1]) + Math.abs(t.rotationZ - r[2]) > 1e-3) t.localRotation = new Vector3(r[0], r[1], r[2]);
+        }
+        // Rain around the camera, its box resting a little under it.
+        const rain = this.weather?.rain ?? 0;
+        if (rain > 0) {
+            if (!this.weatherRain) {
+                this.shaders.ensure(RAIN_SHADER);
+                this.weatherRain = new RainVolume(this.runtime.scene, this.shaders);
+            }
+            const lean = Math.max(-0.5, Math.min(0.5, (this.weather!.wind.speed * Math.cos((this.weather!.wind.direction * Math.PI) / 180)) / 40));
+            this.weatherRain.update({ ...defaults(Rain), size: [36, 24, 36], amount: rain, wind: lean }, { center: [eye[0], eye[1] + 4, eye[2]], shelter: null, light: null }, true);
+        } else if (this.weatherRain) {
+            this.weatherRain.setVisible(false);
+        }
+    }
+
+    /** The weather changed: the sky, key light, stars, grass wind and wet ground follow. */
+    private weatherChanged() {
+        this.runtime.invalidateEnvironment();
+        this.runtime.setStars(this.weather?.stars ?? 0);
+        this.applySkyEnvironment();
+        this.refreshKeyLight();
+        for (const entry of this.grasses) {
+            const doc = this.store.node(entry.id)?.grass;
+            if (doc && entry.grass) entry.grass.apply(this.windOn(doc));
+        }
+        for (const t of this.terrainStates) t.wet = '';
+    }
+
+    /** A grass field's wind as the weather blows it (its own without weather). */
+    private windOn(doc: GrassDoc): GrassDoc {
+        const wind = this.weather?.wind;
+        if (!wind) return doc;
+        const k = Math.max(0.2, Math.min(3, wind.speed / 5));
+        return { ...doc, wind: doc.wind * k, windSpeed: doc.windSpeed * k, windDirection: wind.direction };
     }
 
     /** The key light: the first shown directional light (as apply_key_light picks it). */
@@ -2114,6 +2203,11 @@ export class SceneSync extends Emitter<SyncEvents> {
     /** Applies the environment, its sky's sun where the key light comes from when it follows the light. */
     private applySkyEnvironment() {
         const env = this.shownEnvironment;
+        // With weather the sky's sun is the sun, wherever the key light (the moon at night) is.
+        if (this.weather) {
+            this.runtime.applyEnvironment({ ...env, ...skySunOf(this.weather.sun.rotation) });
+            return;
+        }
         const key = this.followsLight() ? this.keyLight() : null;
         this.runtime.applyEnvironment(key ? { ...env, ...skySunOf(key.rotation) } : env);
     }
@@ -2140,6 +2234,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         if (!this.followsLight()) return null;
         const key = this.keyLight();
         if (!key || key.id !== id) return null;
+        if (this.weather) return this.weather.light;
         const elevation = (skySunOf(key.rotation).sunY - 0.5) * 180;
         return sunlightThroughAir(elevation, this.shownEnvironment.atmosphere.altitude);
     }

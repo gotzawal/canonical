@@ -95,4 +95,16 @@ await page.evaluate(() => window.__editor.shaders.whenIdle());
 await shot('chrome', { target: [0, 40, 0], yaw: 210, pitch: -5, distance: 22, fov: 60 });
 await setSun([6, 210, 0]);
 await shot('sunset', { target: [0, 60, 0], yaw: 210, pitch: -8, distance: 60, fov: 70 });
+// Weather and the time of day: noon, sunset, a clear night, rain.
+const weather = (w) => page.evaluate((w) => window.__editor.store.commit('Weather', (d) => {
+    d.environment.weather = { ...d.environment.weather, enable: true, ...w };
+}, { env: true }), w);
+await weather({ time: 12, preset: 'fair' });
+await shot('w-noon', sky);
+await weather({ time: 18.2, preset: 'cloudy' });
+await shot('w-sunset', { target: [0, 60, 0], yaw: 120, pitch: -6, distance: 60, fov: 70 });
+await weather({ time: 23, preset: 'clear' });
+await shot('w-night', { target: [0, 60, 0], yaw: 300, pitch: -25, distance: 60, fov: 70 });
+await weather({ time: 10, preset: 'rain' });
+await shot('w-rain', { target: [0, 32, 0], yaw: 30, pitch: 8, distance: 30, fov: 70 });
 await browser.close();

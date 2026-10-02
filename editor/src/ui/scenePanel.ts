@@ -12,7 +12,7 @@ import { clear, h } from './dom';
 import { schemaRows } from './schemaFields';
 import { CheckboxField, EditHooks, FieldSteps, NumberField, SelectField, SliderField, TextField, button, row, section } from './widgets';
 
-type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere' | 'clouds';
+type Group = 'bloom' | 'ao' | 'ssr' | 'fog' | 'gi' | 'shadow' | 'godRays' | 'volumetricFog' | 'atmosphere' | 'clouds' | 'weather';
 
 /** The stage a section's settings are made in, shown in its header. */
 function stageChip(stage: StageId): HTMLElement {
@@ -179,6 +179,14 @@ export class ScenePanel {
                 ...this.rows(['sky']),
                 ...(env.sky === 'physical' ? this.rows(['clouds'], 'atmosphere') : []),
                 h('div', { class: 'muted small pad', text: SKY_NOTES[env.sky] }),
+            ], [stageChip('effects')]),
+        );
+
+        // Weather and time of day (Effects)
+        this.body.append(
+            section('weather', 'Weather & Time', 'sun', [
+                ...this.rows(['enable', 'time', 'cycle', 'preset', 'wind', 'windDirection', 'sunrise', 'noon', 'stars'], 'weather'),
+                h('div', { class: 'muted small pad', text: 'Sets the sun (the key light; the moon at night), the sky, clouds, fog, haze, rain around the camera and the wind of grass, clouds and rain together.' }),
             ], [stageChip('effects')]),
         );
 

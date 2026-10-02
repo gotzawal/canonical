@@ -35,6 +35,8 @@ const CLOUD_COMMON = /* wgsl */ `
         look: vec4<f32>,
         // wind direction x, z (unit), how far tops lean (0..1), clumping (0 scattered puffs .. 1 big masses)
         lean: vec4<f32>,
+        // stars and the moon's disc (x: how bright, 0 none), how far clouds are drawn (y, meters)
+        night: vec4<f32>,
     };
 
     const PI: f32 = 3.14159265;
@@ -81,8 +83,8 @@ const CLOUD_COMMON = /* wgsl */ `
         return mix(stratus, cumulus, cloud.shape.x);
     }
 
-    // Cloud density at p; without detail for the light's march and the shadows.
-    fn density(p: vec3<f32>, detail: bool) -> f32 {
+    // Cloud density at p, its edges worn by \`detail\` (0 to 1: none for the light's march, the shadows and far clouds).
+    fn density(p: vec3<f32>, detail: f32) -> f32 {
         let alt = altitude(p);
         let h = (alt - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
         if (h <= 0.0 || h >= 1.0) { return 0.0; }
@@ -103,12 +105,12 @@ const CLOUD_COMMON = /* wgsl */ `
         base = mix(base, 1.0, c * c * c * w);
         // The weather decides how much of the shape stays: all at a cloud's heart, its peaks at its edges.
         var d = remap(base * g, 1.0 - w, 1.0);
-        if (detail && d > 0.0) {
+        if (detail > 0.0 && d > 0.0) {
             let eq = streak(q + cloud.wind.xy * 1.4);
             let e = textureSampleLevel(detailTex, detailTexSampler, vec3<f32>(eq.x, alt + rise * 1.5, eq.y) / (size * 0.2), 0.0).a;
             // Wisps at the base, billows (the noise turned inside out) toward the top.
             let worn = mix(e, 1.0 - e, clamp(h * 4.0, 0.0, 1.0));
-            d = remap(d, worn * cloud.shape.y * 0.45, 1.0);
+            d = remap(d, worn * cloud.shape.y * 0.45 * detail, 1.0);
         }
         // Crisp clouds reach full density right inside their edge; soft ones thicken slowly.
         // Thinner where the weather is weak (a cloud's fringe).
@@ -167,12 +169,14 @@ const SCENE_DISTANCE = /* wgsl */ `
 // The march itself, for the screen and for the reflection cube (needs prefilterMap, lightBuffer).
 const CLOUD_MARCH = /* wgsl */ `
     // How much sunlight reaches p through the cloud toward the sun (optical depth, a few long steps).
-    fn toSun(p: vec3<f32>, l: vec3<f32>) -> f32 {
+    // Far clouds take two long steps instead of five (the same reach).
+    fn toSun(p: vec3<f32>, l: vec3<f32>, far: bool) -> f32 {
         var od = 0.0;
-        var t = 30.0;
-        for (var i = 0; i < 5; i++) {
-            od += density(p + l * t, false) * t * 0.6;
-            t *= 1.9;
+        var t = select(30.0, 120.0, far);
+        let grow = select(1.9, 3.6, far);
+        for (var i = 0; i < select(5, 2, far); i++) {
+            od += density(p + l * t, 0.0) * t * select(0.6, 0.72, far);
+            t *= grow;
         }
         return od;
     }
@@ -196,7 +200,7 @@ const CLOUD_MARCH = /* wgsl */ `
             t1 = select(top.y, bottom.x, bottom.x > 0.0);
         }
         t1 = min(t1, far);
-        if (top.y < 0.0 || t1 <= t0) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
+        if (top.y < 0.0 || t1 <= t0 || cloud.layer.z <= 0.001) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 
         let sun = sunLight();
         let l = sunDir();
@@ -221,9 +225,11 @@ const CLOUD_MARCH = /* wgsl */ `
             if (t >= t1) { break; }
             let dt = base * (1.0 + (t - t0) / 12000.0);
             let p = cam + dir * t;
-            let d = density(p, true);
+            // Levels of detail by distance: worn edges and the full light march near, plainer far.
+            let lod = smoothstep(6000.0, 20000.0, t);
+            let d = density(p, 1.0 - lod);
             if (d > 0.002) {
-                let od = toSun(p, l) * sigma;
+                let od = toSun(p, l, lod > 0.5) * sigma;
                 // Beer with a powder darkening of thin edges, and two octaves of light scattered again.
                 let powder = 1.0 - exp(-od * 2.0);
                 let scattered = phase * exp(-od) + 0.5 * hg(c, 0.3) * exp(-od * 0.25) + 0.25 * hg(c, 0.1) * exp(-od * 0.06);
@@ -296,7 +302,7 @@ export let CloudMarch_cs: string = /* wgsl */ `
         // This frame's pixel within the 4x4 block the quarter pixel covers.
         let px = vec2<f32>(gid.xy) * 4.0 + cloud.march.zw + 0.5;
         let uv = px / full;
-        let far = min(sceneDistance(vec2<i32>(px), uv), 60000.0);
+        let far = min(sceneDistance(vec2<i32>(px), uv), cloud.night.y);
         // Interleaved gradient noise: a different start for each pixel and frame.
         let jitter = fract(52.9829189 * fract(dot(px + cloud.march.y * 5.588, vec2<f32>(0.06711056, 0.00583715))));
         let out = marchClouds(globalUniform.CameraPos.xyz, viewRay(uv), far, cloud.march.x, jitter);
@@ -348,7 +354,17 @@ export let CloudComposite_cs: string = /* wgsl */ `
         let puv = vec2<f32>(prev.x / prev.w * 0.5 + 0.5, 0.5 - prev.y / prev.w * 0.5);
         var result = now;
         if (prev.w > 0.0 && all(puv >= vec2<f32>(0.0)) && all(puv <= vec2<f32>(1.0)) && cloud.march.y > 0.5) {
-            let old = textureSampleLevel(historyTex, historyTexSampler, puv, 0.0);
+            var old = textureSampleLevel(historyTex, historyTexSampler, puv, 0.0);
+            // The history kept within what this frame's march sees around here (less smearing when things move).
+            let q0 = clamp(vec2<i32>(floor(quv * qsize - 0.5)), vec2<i32>(0), vec2<i32>(qsize) - 2);
+            let a = textureLoad(marchTex, q0, 0);
+            let b = textureLoad(marchTex, q0 + vec2<i32>(1, 0), 0);
+            let c = textureLoad(marchTex, q0 + vec2<i32>(0, 1), 0);
+            let e = textureLoad(marchTex, q0 + vec2<i32>(1, 1), 0);
+            let lo = min(min(a, b), min(c, e));
+            let hi = max(max(a, b), max(c, e));
+            let pad = (hi - lo) * 0.25 + vec4<f32>(0.02);
+            old = clamp(old, lo - pad, hi + pad);
             result = mix(old, now, select(0.04, 0.35, fresh));
         }
         if (all((px % 2) == vec2<i32>(0))) {
@@ -360,6 +376,16 @@ export let CloudComposite_cs: string = /* wgsl */ `
         // Not over what is nearer than the layer (a sharp edge, not the quarter resolution's).
         let below = shell(cam, dir, cloud.layer.x);
         let near = select(0.0, max(below.y, 0.0), cam.y < cloud.layer.x && below.y > 0.0);
+        // At night, stars and the moon's disc on the sky, behind the clouds.
+        if (far > 1e8 && cloud.night.x > 0.0 && dir.y > 0.0) {
+            let cellDir = dir * 420.0;
+            let cell = floor(cellDir);
+            let h = fract(sin(dot(cell, vec3<f32>(12.9898, 78.233, 37.719))) * 43758.5453);
+            let spot = 1.0 - smoothstep(0.08, 0.35, length(cellDir - cell - 0.5));
+            let star = step(0.985, h) * spot * pow(h, 40.0) * 3.0;
+            let moon = smoothstep(0.99985, 0.9999, dot(dir, sunDir()));
+            out += (vec3<f32>(star) * smoothstep(0.0, 0.15, dir.y) + vec3<f32>(0.9, 0.93, 1.0) * moon * 1.5) * cloud.night.x * result.a;
+        }
         if (far > near) {
             out = out * result.a + result.rgb;
         }
@@ -371,7 +397,7 @@ export let CloudComposite_cs: string = /* wgsl */ `
                 // The cloud's own shape a third of the way up the layer, where they are thickest.
                 let mid = mix(cloud.layer.x, cloud.layer.y, 0.3);
                 let at = wp + l * ((mid - wp.y) / l.y);
-                let shade = clamp(density(at, false) * 3.0, 0.0, 1.0) * cloud.wind.w;
+                let shade = clamp(density(at, 0.0) * 3.0, 0.0, 1.0) * cloud.wind.w;
                 out *= 1.0 - shade * 0.65;
             }
         }
@@ -419,7 +445,7 @@ export let CloudEnvMarch_cs: string = /* wgsl */ `
         let dir = cubeDir(face, (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size));
         // A fixed start for each texel: the cube is not gathered over frames.
         let jitter = fract(52.9829189 * fract(dot(vec2<f32>(gid.xy) + f32(face) * 17.0, vec2<f32>(0.06711056, 0.00583715))));
-        let c = marchClouds(globalUniform.CameraPos.xyz, dir, 60000.0, cloud.env.y, jitter);
+        let c = marchClouds(globalUniform.CameraPos.xyz, dir, cloud.night.y, cloud.env.y, jitter);
         textureStore(outTex, vec2<i32>(gid.xy), face, vec4<f32>(c.rgb / max(globalUniform.skyExposure, 1e-4), c.a));
     }
 `;

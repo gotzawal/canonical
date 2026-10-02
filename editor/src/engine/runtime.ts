@@ -329,6 +329,12 @@ export class Runtime {
         this.lastEnv = '';
     }
 
+    /** How bright the stars and the moon's disc are (the weather's night), 0 for none: they show with the clouds. */
+    setStars(stars: number) {
+        this.stars = Math.max(0, stars);
+    }
+    private stars = 0;
+
     /** The tier drawn now: the previewed one, else the document's, else the device's. */
     get qualityLevel(): QualityLevel {
         return resolveQuality(this.qualitySetting, this.deviceQuality, this.qualityOverride);
@@ -485,16 +491,17 @@ export class Runtime {
 
         // Clouds go before the fog, which then hazes them like the sky.
         const cl = env.clouds;
-        // No clouds to draw: no cost at all.
-        this.togglePost(CloudPost, cl.enable && cl.coverage > 0);
+        // No clouds (or stars) to draw: no cost at all.
+        const clouded = cl.enable && cl.coverage > 0;
+        this.togglePost(CloudPost, clouded || this.stars > 0);
         const clouds = this.post.getPost(CloudPost as any) as CloudPost | null;
         if (clouds) {
             const a = (cl.windDirection * Math.PI) / 180;
             Object.assign(clouds, {
-                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, softness: cl.softness, seed: cl.seed,
+                coverage: clouded ? cl.coverage : 0, stars: this.stars, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, softness: cl.softness, seed: cl.seed,
                 bottom: cl.bottom, top: cl.bottom + cl.thickness,
                 windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
-                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, reflectionEvery: tier.cloudReflectionEvery,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, farLimit: tier.cloudFar, reflectionEvery: tier.cloudReflectionEvery,
             });
         }
 
