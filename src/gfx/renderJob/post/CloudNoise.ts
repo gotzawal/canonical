@@ -33,7 +33,7 @@ let made: Promise<CloudVolumes> | null = null;
 function inWorker(): Promise<CloudVolumes> {
     return new Promise((resolve, reject) => {
         if (typeof Worker === 'undefined' || typeof Blob === 'undefined') return reject(new Error('no workers'));
-        const code = `const generateVolumes = ${generateVolumes.toString()};\nconst v = generateVolumes();\npostMessage(v, [v.shape.buffer, v.detail.buffer]);`;
+        const code = `${workerSource('generateVolumes', generateVolumes)}\nconst v = generateVolumes();\npostMessage(v, [v.shape.buffer, v.detail.buffer]);`;
         const url = URL.createObjectURL(new Blob([code], { type: 'text/javascript' }));
         let worker: Worker;
         try {
@@ -55,6 +55,19 @@ function inWorker(): Promise<CloudVolumes> {
             reject(e);
         };
     });
+}
+
+/**
+ * A function's source as a worker's `const name = ...`. A build that keeps
+ * function names (esbuild's keepNames) follows each named function inside
+ * it with a call to a helper of its own (`h(fn, "name")`), which the worker
+ * does not have (Safari: "Can't find variable: h"): each such helper is
+ * defined there as one that does nothing.
+ */
+function workerSource(name: string, fn: (...args: any[]) => unknown): string {
+    const src = fn.toString();
+    const helpers = new Set([...src.matchAll(/([\w$]+)\([^()]*?,\s*"[\w$]+"\)/g)].map((m) => m[1]));
+    return [...[...helpers].map((h) => `var ${h} = (f) => f;`), `const ${name} = ${src};`].join('\n');
 }
 
 /** Makes the volumes. Self-contained: a worker runs it from its source. */
