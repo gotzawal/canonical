@@ -1,11 +1,14 @@
 // The assistant's terrain tools: make a terrain of a shape, sculpt and paint
-// it along strokes, and scatter copies of models over it by rules (trees,
-// rocks, grass tufts), which can also be turned into objects of their own.
+// it along strokes, and scatter copies of models or trees grown from rules
+// over it (trees, rocks, grass tufts), which can also be turned into
+// objects of their own.
 
-import { Scatter, SCATTER_SOLIDS, ScatterSource, TerrainLayer } from '../core/model';
-import { defaults, patch } from '../core/schema';
+import { defaultTree } from '../core/defaults';
+import { Scatter, SCATTER_SOLIDS, ScatterSource, TerrainLayer, Tree } from '../core/model';
+import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import { SCULPT_OPS, TERRAIN_SHAPES, type TerrainShape } from '../core/terrainGen';
-import type { ScatterDoc, TerrainLayerDoc } from '../core/types';
+import { TREE_SPECIES, type TreeSpecies } from '../core/trees';
+import type { ScatterDoc, TerrainLayerDoc, TreeDoc } from '../core/types';
 import { layerFromSlot } from '../design/materialSlots';
 import { allItems } from './libraryTools';
 import { findSlot } from './materialTools';
@@ -101,6 +104,24 @@ async function sourceModel(env: ToolEnv, v: unknown, what: string): Promise<stri
     return res.asset.id;
 }
 
+/** A tree's species, seed and height, and its other fields that differ from a new tree's. */
+export function treeSummary(t: TreeDoc): Json {
+    const d = defaults(Tree) as Record<string, unknown>;
+    const changed = Object.fromEntries(Object.entries(t).filter(([k, v]) => k !== 'species' && k !== 'seed' && k !== 'height' && v !== d[k]));
+    return { species: t.species, seed: t.seed, height: t.height, ...(snakeKeys(changed) as Json) };
+}
+
+/**
+ * A tree component from a tool's tree fields over the current one (only the
+ * fields given change, as in the inspector); a new tree starts as a new one
+ * of its species (an oak by default), at the species' usual height.
+ */
+export function treeFrom(current: TreeDoc | undefined, fields: Json, what: string): TreeDoc {
+    const species = fields.species;
+    if (species !== undefined && !TREE_SPECIES.includes(species)) throw new ToolError(`${what}.species: one of ${TREE_SPECIES.join(', ')}.`);
+    return patch(Tree, current ?? defaultTree((species ?? 'oak') as TreeSpecies), fields, what, hex);
+}
+
 /** A scatter's copies and solids as the tools report them, once they are placed. */
 async function scatterSummary(env: ToolEnv, id: string): Promise<Json> {
     const ed = env.editor;
@@ -110,8 +131,10 @@ async function scatterSummary(env: ToolEnv, id: string): Promise<Json> {
     if (!n || !doc) return { object: id };
     const placements = ed.sync.scatterPlacements(id);
     const bySource = doc.sources.map((s, i) => {
+        const copies = placements.filter((p) => p.source === i).length;
+        if (s.tree) return { tree: s.tree.species, copies };
         const model = s.model ? ed.sync.scatterModelOf(s.model) : null;
-        return { model: s.model, copies: placements.filter((p) => p.source === i).length, ...(model && model.pieces.length > 1 ? { pieces: model.pieces.length } : {}), ...(s.model && !model ? { note: 'model not loaded' } : {}) };
+        return { model: s.model, copies, ...(model && model.pieces.length > 1 ? { pieces: model.pieces.length } : {}), ...(s.model && !model ? { note: 'model not loaded' } : {}) };
     });
     const solids = ed.sync.scatterSolids().find((x) => x.id === id)?.solids.length ?? 0;
     const bounds = ed.sync.scatterView(id)?.bounds();
@@ -242,7 +265,7 @@ export const terrainTools = tools({
     scatter: {
         groups: ['objects', 'materials'],
         description:
-            'Spread copies of models over an area by rules, drawn instanced (thousands cost little): trees and rocks in the Level stage, grass tufts, flowers and pebbles in the Materials stage. Only the rules are kept; the copies are placed again from them and the seed whenever the rules, the ground or what to avoid change. Copies stand on ground (a terrain or meshes) where its world height and slope are within range, keep spacing apart and stay out of the boxes of the objects to avoid (plus margin). A model that is a set of pieces side by side (a rock set, grass clumps) gives each copy one piece. Natural rocks: clusters with a cluster size, layer to follow a terrain layer, tilt, align about 0.7 and bury so they sit in the ground. Solid sources (trunk for trees, box for rocks) stop characters and bodies and are holes in the navigation mesh. Give object to change a scatter (only the fields given change); bake: true turns its copies into objects of their own (to edit one by one); remove: true deletes it. Returns the copies placed per source.',
+            'Spread copies of models or of trees grown from rules over an area by rules, drawn instanced (thousands cost little): trees and rocks in the Level stage, grass tufts, flowers and pebbles in the Materials stage. A source is a model or a tree (tree: species oak, birch or spruce, its height, seed and look; no model needed): each tree source grows a few variants of its tree with three levels of detail, swaying in the weather\'s wind, so woods and forests of a thousand trees are cheap (forest: oak, birch and spruce sources, spacing 4 to 6, clusters 0.3 with cluster_size 40, slope [0, 35], solid trunk, above the water). Only the rules are kept; the copies are placed again from them and the seed whenever the rules, the ground or what to avoid change. Copies stand on ground (a terrain or meshes) where its world height and slope are within range, keep spacing apart and stay out of the boxes of the objects to avoid (plus margin). A model that is a set of pieces side by side (a rock set, grass clumps) gives each copy one piece. Natural rocks: clusters with a cluster size, layer to follow a terrain layer, tilt, align about 0.7 and bury so they sit in the ground. Solid sources (trunk for trees, box for rocks) stop characters and bodies and are holes in the navigation mesh. Give object to change a scatter (only the fields given change); bake: true turns its copies into objects of their own (to edit one by one); remove: true deletes it. Returns the copies placed per source.',
         params: {
             object: ref('An existing scatter to change (id or name); leave out to make one.'),
             name: { type: 'string' },
@@ -254,11 +277,11 @@ export const terrainTools = tools({
                     type: 'object',
                     properties: {
                         model: ref('A model asset (id or name) or a Library model id (copied in).'),
+                        tree: { ...toolSchema(Tree), description: 'A tree grown from rules in place of a model: species, height (a species\' usual height when a new tree leaves it out: oak 14, birch 15, spruce 18), seed and how it grows and looks. A copy\'s height is the tree\'s height times its scale; cast_shadow and solid are the scatter\'s and the source\'s.' },
                         weight: { type: 'number', description: 'How often it is picked, relative to the others (default 1).' },
                         scale: pair('Scale [smallest, largest] each copy picks from (default [0.8, 1.2]).'),
-                        solid: { type: 'string', enum: SCATTER_SOLIDS },
+                        solid: { type: 'string', enum: SCATTER_SOLIDS, description: 'Default none for models, trunk for trees.' },
                     },
-                    required: ['model'],
                 },
             },
             size: pair('Area [x, z] in meters, centered on the object.'),
@@ -279,7 +302,7 @@ export const terrainTools = tools({
             layer: { type: 'number', description: '1 to 4: stand only where that layer of the ground terrain shows, as much as it shows (pebbles on the gravel layer, rocks on the rock layer); 0 anywhere.' },
             distance: { type: 'number', description: 'Draw distance in meters; 0 draws at any distance (grass tufts 40 to 80).' },
             cast_shadow: { type: 'boolean' },
-            bake: { type: 'boolean', description: 'Turn the copies into objects under an instanced group; the scatter goes.' },
+            bake: { type: 'boolean', description: 'Turn the copies into objects under an instanced group; the scatter goes. Tree copies become tree objects, each drawn on its own (keep forests as scatters).' },
             remove: { type: 'boolean' },
         },
         async run({ env, args, ed, doc }) {
@@ -302,13 +325,22 @@ export const terrainTools = tools({
             let scatter: ScatterDoc = patch(Scatter, existing?.scatter ?? defaults(Scatter), fields, 'scatter', hex);
             if (castShadow !== undefined) scatter.castShadow = !!castShadow;
             if (sources !== undefined) {
-                if (!Array.isArray(sources) || !sources.length) throw new ToolError('sources must list at least one model.');
+                if (!Array.isArray(sources) || !sources.length) throw new ToolError('sources must list at least one model or tree.');
                 if (sources.length > 8) throw new ToolError('At most eight sources.');
                 const list = [];
                 for (const [i, s] of sources.entries()) {
-                    const { model, ...rest } = (s ?? {}) as Json;
-                    const asset = await sourceModel(env, model, `sources[${i}].model`);
-                    list.push({ ...patch(ScatterSource, scatter.sources[i] ?? defaults(ScatterSource), rest, `sources[${i}]`, hex), model: asset });
+                    const { model, tree, ...rest } = (s ?? {}) as Json;
+                    const what = `sources[${i}]`;
+                    const { tree: was, ...before } = scatter.sources[i] ?? defaults(ScatterSource);
+                    if (tree !== undefined && tree !== null) {
+                        if (model !== undefined && model !== null) throw new ToolError(`${what}: a model or a tree, not both.`);
+                        // A tree is solid at its trunk unless the source says otherwise.
+                        const fresh = !was && rest.solid === undefined;
+                        list.push({ ...patch(ScatterSource, before, rest, what, hex), model: null, tree: treeFrom(was, tree as Json, `${what}.tree`), ...(fresh ? { solid: 'trunk' as const } : {}) });
+                    } else {
+                        if (model === undefined || model === null) throw new ToolError(`${what} needs a model or a tree.`);
+                        list.push({ ...patch(ScatterSource, before, rest, what, hex), model: await sourceModel(env, model, `${what}.model`) });
+                    }
                 }
                 scatter = { ...scatter, sources: list };
             } else if (!existing) {

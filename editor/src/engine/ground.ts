@@ -40,6 +40,8 @@ export interface GroundTerrain {
 export interface GroundScatter {
     view: ScatterView;
     placements: Placement[];
+    /** Its copies that are trees grown from rules, when it has some. */
+    trees?: { trunks(): { center: number[]; size: number[] }[] } | null;
     /** What its soil and moss were last set from (set here). */
     groundKey?: string;
 }
@@ -268,6 +270,7 @@ export class GroundDetails {
                 const tall = (piece.max[1] - piece.min[1]) / Math.max(1e-6, piece.max[0] - piece.min[0], piece.max[2] - piece.min[2]);
                 out.push({ x: p.position[0] + c[0], z: p.position[2] + c[2], r: piece.trunk.radius * p.scale, ring: tall < 1.5 ? 1 : 0 });
             }
+            for (const t of s.state.trees?.trunks() ?? []) out.push({ x: t.center[0], z: t.center[2], r: t.size[0], ring: 0 });
         }
         return out;
     }

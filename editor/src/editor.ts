@@ -9,11 +9,12 @@ import { clampGIGrid, GI_MAX_PER_AXIS, giGridFits } from './core/giLimits';
 import { MATERIAL_PRESETS } from './core/materialPresets';
 import { covers } from './core/terrain';
 import {
-    defaultCamera, emptyScene, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
+    defaultCamera, defaultTree, emptyScene, forestScatter, makeCameraNode, makeLightNode, makeMeshNode, makeNode, uid,
 } from './core/defaults';
 import { Emitter } from './core/events';
 import { ask, confirmDialog, toast } from './core/messages';
 import { AudioSource, Grass, Mirror, Rain, Scatter, ScatterSource } from './core/model';
+import { SPECIES_NAME, TREE_SPECIES, TREE_VARIANTS, variantIndex, variantSeed, type TreeSpecies } from './core/trees';
 import { defaults } from './core/schema';
 import { DEG, add, compose, decompose, eulerFromQuat, invert, len, mat4, mul, sub, tidy3, transformDir, transformPoint } from './core/math';
 import {
@@ -276,6 +277,15 @@ export class Editor extends Emitter<EditorEvents> {
         return id;
     }
 
+    /** A tree of a species where new objects go (or at `at`), a new one each time (its own seed). Returns its id. */
+    createTree(species: TreeSpecies = 'oak', at?: Vec3): string {
+        const p = at ?? this.viewport.spawnPoint();
+        const node: NodeDoc = { ...makeNode(this.uniqueName(SPECIES_NAME[species], null), null, [round(p[0]), round(p[1]), round(p[2])]) };
+        node.tree = defaultTree(species);
+        this.insert([node], 'Create ' + node.name);
+        return node.id;
+    }
+
     /** A scatter object with these rules, its area around `at` (where new objects go without one). Returns its id. */
     createScatter(scatter: ScatterDoc, opts: { name?: string; at?: Vec3 } = {}): string {
         const node: NodeDoc = { ...makeNode(this.uniqueName(opts.name ?? 'Scatter', null), null, tidy3(opts.at ?? this.viewport.spawnPoint(), 3)), scatter };
@@ -342,11 +352,75 @@ export class Editor extends Emitter<EditorEvents> {
     }
 
     /**
+     * A forest from the Create menu: a scatter of oaks, birches and spruces
+     * over the selected terrain or the one where new objects go (all of it),
+     * else over 80 meters around that point on what is there; above any
+     * water over it. Returns its id.
+     */
+    newForest(): string {
+        const selected = this.store.selection.map((id) => this.store.node(id)).filter((n): n is NodeDoc => !!n);
+        const spawn = this.viewport.spawnPoint();
+        const land = selected.find((n) => n.terrain) ?? this.store.node(this.sync.terrains().find((t) => covers(t.surface, spawn[0], spawn[2]))?.id ?? '');
+        const at = land?.terrain ? land.position : spawn;
+        const size: [number, number] = land?.terrain ? [land.terrain.size[0], land.terrain.size[1]] : [80, 80];
+        const weights = { oak: 3, birch: 2, spruce: 3 };
+        const scatter = forestScatter(TREE_SPECIES.map((sp) => ({ tree: defaultTree(sp), weight: weights[sp] })), size);
+        scatter.ground = land?.terrain ? land.id : this.groundUnder(at);
+        const water = this.waterOver(at, size);
+        if (water !== null) scatter.height = [round(water + 1), 10000];
+        return this.createScatter(scatter, { name: 'Forest', at });
+    }
+
+    /**
+     * A forest of trees like a tree object, around it: a scatter whose one
+     * source grows its tree (copies of a few variants of it) over 60 meters,
+     * on the ground under it and above any water, as far from its trunk as
+     * from each other. The tree stays. Returns the scatter's id, or null
+     * when the object is not a tree.
+     */
+    forestFrom(id: string): string | null {
+        const n = this.store.node(id);
+        if (!n?.tree) return null;
+        this.picker.update();
+        const world = this.picker.worldMatrix(id);
+        const at = tidy3(world ? decompose(world).position : n.position, 3);
+        const size: [number, number] = [60, 60];
+        const scatter = forestScatter([{ tree: { ...n.tree }, weight: 1 }], size);
+        scatter.ground = this.groundUnder(at, id);
+        // The tree is one of the forest: copies keep the spacing from its trunk too.
+        scatter.avoid = [id];
+        scatter.margin = scatter.spacing;
+        const water = this.waterOver(at, size);
+        if (water !== null) scatter.height = [round(water + 1), 10000];
+        return this.createScatter(scatter, { name: `${n.name} Forest`, at });
+    }
+
+    /** The object under a point (a terrain or a mesh, not a scatter), a few meters around it, or null. */
+    private groundUnder(p: Vec3, skip?: string): string | null {
+        this.picker.update();
+        const hit = this.picker.raycast([p[0], p[1] + 4, p[2]], [0, -1, 0], 12, (id) => id === skip || !!this.store.node(id)?.scatter);
+        return hit?.id ?? null;
+    }
+
+    /** The world height of the highest water surface (a mirror) over an area around a point, or null. */
+    private waterOver(p: Vec3, size: [number, number]): number | null {
+        let top: number | null = null;
+        for (const n of this.store.doc.nodes) {
+            if (!n.mirror || !n.mesh) continue;
+            const b = this.picker.bounds(n.id, false);
+            if (!b || b.max[0] < p[0] - size[0] / 2 || b.min[0] > p[0] + size[0] / 2 || b.max[2] < p[2] - size[1] / 2 || b.min[2] > p[2] + size[1] / 2) continue;
+            top = Math.max(top ?? -Infinity, b.max[1]);
+        }
+        return top;
+    }
+
+    /**
      * Turns a scatter's copies into objects of their own, to edit one by one:
      * a group at the scene's root (drawn instanced) holding a model object
      * where each copy stood; a copy of one piece of a set hides the other
-     * pieces. The scatter component goes. Returns the group, or null when
-     * the scatter has no copies (or its models are not loaded yet).
+     * pieces. A tree copy becomes a tree object growing the variant it grew
+     * as. The scatter component goes. Returns the group, or null when the
+     * scatter has no copies (or its models are not loaded yet).
      */
     bakeScatter(id: string): string | null {
         const node = this.store.node(id);
@@ -356,6 +430,21 @@ export class Editor extends Emitter<EditorEvents> {
         const group: NodeDoc = { ...makeNode(this.uniqueName(`${node.name} Objects`, null), null), instancing: {} };
         const copies: NodeDoc[] = [];
         for (const [i, p] of placements.entries()) {
+            const tree = doc.sources[p.source]?.tree;
+            if (tree) {
+                copies.push({
+                    ...makeNode(`${SPECIES_NAME[tree.species]} ${i + 1}`, group.id, tidy3(p.position, 4)),
+                    rotation: tidy3(eulerFromQuat(p.rotation), 3),
+                    scale: tidy3([p.scale, p.scale, p.scale], 4),
+                    tree: {
+                        ...tree,
+                        seed: variantSeed(tree.seed, variantIndex(p.variant, TREE_VARIANTS)),
+                        castShadow: tree.castShadow && doc.castShadow,
+                        solid: tree.solid && doc.sources[p.source].solid !== 'none',
+                    },
+                } as NodeDoc);
+                continue;
+            }
             const asset = doc.sources[p.source]?.model;
             const model = asset ? this.sync.scatterModelOf(asset) : null;
             const piece = model?.piece(p.variant);

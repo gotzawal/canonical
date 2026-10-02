@@ -7,6 +7,7 @@
 import { z } from 'zod';
 import { clampGIGrid } from './giLimits';
 import { SHAPE_DISTRIBUTIONS, SIZE_DISTRIBUTIONS } from './grass';
+import { SPECIES_NAME, TREE_SPECIES } from './trees';
 import { WEATHERS } from './weather';
 import { asset, bool, color, group, int, num, oneOf, optionalFields, params, range, records, text, vec2, vec3 } from './schema';
 
@@ -464,6 +465,38 @@ export const Terrain = z.object({
 });
 export type TerrainDoc = z.output<typeof Terrain>;
 
+// -------------------------------------------------------------------- trees
+
+/**
+ * A tree grown from rules (core/trees.ts): a species, its size and how it
+ * grows, its colors and how the wind moves it. Only these are kept: the
+ * same tree grows again from the seed, in three levels of detail. Many
+ * trees: a scatter whose sources are trees.
+ */
+export const Tree = z.object({
+    species: oneOf(TREE_SPECIES, 'oak', {
+        labels: SPECIES_NAME,
+        description: 'oak: a broad round crown on a stout trunk; birch: slender with white bark and an airy crown of hanging twigs; spruce: a conifer, a narrow cone of drooping limbs down to the ground.',
+    }),
+    seed: int(1, 0, 999999, { description: 'Another seed grows another tree of the species.' }),
+    height: num(14, 2, 60, { step: 0.5, description: 'Meters from the ground to its top.' }),
+    width: num(1, 0.4, 2, { step: 0.05, slider: true, title: 'Crown Width', description: 'How wide the crown spreads, times the species\' own.' }),
+    trunk: num(1, 0.4, 2.5, { step: 0.05, slider: true, title: 'Trunk Thickness', description: 'How thick the trunk and limbs are, times the species\' own.' }),
+    branches: num(1, 0.3, 2, { step: 0.05, slider: true, title: 'Branch Density', description: 'How many branches, times the species\' own.' }),
+    leaves: num(1, 0, 2, { step: 0.05, slider: true, title: 'Leaf Density', description: 'How many leaves, times the species\' own (0 bare).' }),
+    leafSize: num(1, 0.4, 2.5, { step: 0.05, slider: true, title: 'Leaf Size', description: 'How large the sprigs of leaves are, times the species\' own.' }),
+    gnarl: unit(0.5, { description: 'How crooked the trunk and branches grow: 0 straight, 1 gnarled.' }),
+    autumn: unit(0, { description: 'How far the leaves have turned: 0 summer green, 1 full autumn (oak brown and orange, birch yellow; spruce stays green). They turn unevenly.' }),
+    leafTint: color('#ffffff', { title: 'Leaf Tint', description: 'Multiplies the leaves\' color: white keeps the species\' own.' }),
+    barkTint: color('#ffffff', { title: 'Bark Tint', description: 'Multiplies the bark\'s color: white keeps the species\' own.' }),
+    translucency: unit(0.6, { description: 'How much sunlight shines through the leaves when the sun is behind them.' }),
+    vary: unit(0.5, { title: 'Variation', description: 'How much trees differ in color (in a scatter).' }),
+    wind: num(1, 0, 3, { step: 0.05, slider: true, description: 'How much the wind moves it, times the species\' own: the weather\'s wind (else the clouds\' direction).' }),
+    castShadow: bool(true, { title: 'Cast Shadows' }),
+    solid: bool(true, { description: 'In Play characters and bodies run into its trunk, and the navigation mesh goes around it.' }),
+});
+export type TreeDoc = z.output<typeof Tree>;
+
 // ------------------------------------------------------------------ scatter
 
 export const SCATTER_SOLIDS = ['none', 'trunk', 'box'] as const;
@@ -471,6 +504,7 @@ export const SCATTER_SOLIDS = ['none', 'trunk', 'box'] as const;
 /** A kind of copy a scatter places: a model, how often it is picked and how large. */
 export const ScatterSource = z.object({
     model: asset({ description: 'Model asset id (a tree, rock, bush).' }),
+    tree: Tree.optional().catch(undefined).meta({ description: 'A tree grown from rules, in place of a model: each copy is one of a few variants of it (its scale times its height).' }),
     weight: num(1, 0, 100, { step: 0.1, description: 'How often it is picked, relative to the other sources.' }),
     scale: range([0.8, 1.2], 0.01, 100, { precision: 2, step: 0.01, description: 'Scale [smallest, largest] each copy picks from.' }),
     solid: oneOf(SCATTER_SOLIDS, 'none', {

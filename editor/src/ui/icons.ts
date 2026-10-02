@@ -16,6 +16,7 @@ const PATHS: Record<string, string> = {
     grass: '<path d="M3 21h18"/><path d="M6 21c0-5-1-9-3-12M10 21c0-6 1-10 4-14M14.5 21c0-4 .5-7 3-10M19 21c0-3-.5-5-2-7"/>',
     terrain: '<path d="M2.5 19.5 8.5 9l3.2 5 2.8-4 7 9.5Z"/><path d="m6.6 12.3 1.9 1.2 1.6-1.4"/>',
     scatter: '<path d="M3 20.5h18M8 20.5V17M4.5 17 8 9.5l3.5 7.5ZM16.5 20.5V16M13.5 16l3-6 3 6Z"/>',
+    plant: '<path d="M8 16.5a4 4 0 0 1-1.7-7.6 5.7 5.7 0 0 1 11.4 0A4 4 0 0 1 16 16.5Z"/><path d="M12 21v-8.5M12 15.5l-2.5-2M12 14l2.5-2"/>',
     mirror: '<ellipse cx="12" cy="10" rx="6" ry="7.5"/><path d="M9.5 8.5 12 6M9.5 12l4.5-4.5M12 17.5V21M8.5 21h7"/>',
     prefab: '<path d="M12 3 20 7.5v9L12 21 4 16.5v-9Z"/><path d="m9 10.5 3-1.7 3 1.7v3.4l-3 1.7-3-1.7Z"/>',
     empty: '<path d="M12 4v4M12 16v4M4 12h4M16 12h4"/><circle cx="12" cy="12" r="1.5"/>',
@@ -126,6 +127,7 @@ export function nodeIcon(node: {
     grass?: unknown;
     terrain?: unknown;
     scatter?: unknown;
+    tree?: unknown;
     character?: unknown;
     audio?: unknown;
 }): string {
@@ -139,6 +141,7 @@ export function nodeIcon(node: {
         const t = node.mesh.geometry.type;
         return t === 'box' ? 'cube' : t;
     }
+    if (node.tree) return 'plant';
     if (node.grass) return 'grass';
     if (node.terrain) return 'terrain';
     if (node.scatter) return 'scatter';

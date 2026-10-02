@@ -1,5 +1,6 @@
 import { PARTICLE_PRESETS } from './core/particles';
 import { TERRAIN_SHAPES } from './core/terrainGen';
+import { SPECIES_NAME, TREE_SPECIES } from './core/trees';
 import { version as engineVersion } from '../../package.json';
 import type { Commands } from './commands';
 import type { Editor } from './editor';
@@ -62,6 +63,15 @@ export function createMenu(editor: Editor): MenuItem[] {
             })),
         },
         { label: 'Scatter', icon: 'scatter', action: () => editor.newScatter() },
+        {
+            label: 'Tree',
+            icon: 'plant',
+            submenu: [
+                ...TREE_SPECIES.map((sp) => ({ label: SPECIES_NAME[sp], icon: 'plant', action: () => void editor.createTree(sp) })),
+                { separator: true },
+                { label: 'Forest', icon: 'scatter', action: () => void editor.newForest() },
+            ],
+        },
         { separator: true },
         { label: 'Camera', icon: 'camera', action: () => editor.createCamera() },
         { label: 'Model from File...', icon: 'model', action: () => void editor.importModelDialog() },

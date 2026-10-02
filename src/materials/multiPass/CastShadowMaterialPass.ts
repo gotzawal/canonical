@@ -65,7 +65,19 @@ export class CastShadowMaterialPass extends RenderShaderPass {
         this.shaderState.depthBiasSlopeScale = 0;
         this.shaderState.depthBiasClamp = 0;
 
-        this.setDefine(`USE_ALPHACUT`, true);
-        // this.alphaCutoff = 0.5 ;
+        // Cut-outs follow the color pass (see cutsAlpha): an opaque
+        // material casts its whole shape, whatever its texture's alpha.
+        this.setDefine(`USE_ALPHACUT`, false);
+        this.setUniformFloat(`alphaCutoff`, 0.5);
+    }
+
+    /**
+     * Whether a color pass cuts texels out by their alpha (MASK, or an
+     * alpha cutoff set on a lit material): its shadow passes then cut the
+     * same texels out, so leaves on a card cast leaves, not the card.
+     */
+    public static cutsAlpha(colorPass: RenderShaderPass | undefined): boolean {
+        if (!colorPass) return false;
+        return colorPass.defineValue[`USE_ALPHACUT`] === true || colorPass.shaderState.alphaToCoverageEnabled === true;
     }
 }

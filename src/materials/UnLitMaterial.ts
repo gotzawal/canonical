@@ -84,6 +84,7 @@ export class UnLitMaterial extends Material {
         }
         // Live alphaMode toggles change which EntityCollect bucket
         // attached renderers should be in. See LitMaterial setter.
+        this._syncShadowAlphaCut();
         this._notifyRenderClassificationDirty();
     }
 

@@ -121,6 +121,7 @@ export class Picker {
             }
         }
         best = this.scatterHit(ray, best?.distance ?? Infinity) ?? best;
+        best = this.treeHit(ray, best?.distance ?? Infinity) ?? best;
         return this.terrainHit(ray, best?.distance ?? Infinity) ?? best;
     }
 
@@ -133,6 +134,19 @@ export class Picker {
             if (!h) continue;
             const t = h.distance;
             best = { id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer: h.renderer };
+        }
+        return best;
+    }
+
+    /** The nearest tree a ray meets within `maxDist`: its trunk or crown (a tree object, or the scatter it is in). */
+    treeHit(ray: Ray, maxDist: number, skip?: (id: string) => boolean): Hit | null {
+        let best: Hit | null = null;
+        for (const { id, view } of this.sync.treeViews()) {
+            if (skip?.(id)) continue;
+            const t = view.hit(ray, Math.min(maxDist, best?.distance ?? Infinity));
+            const renderer = view.renderer;
+            if (t === null || !renderer) continue;
+            best = { id, distance: t, point: add(ray.origin, [ray.dir[0] * t, ray.dir[1] * t, ray.dir[2] * t]), renderer };
         }
         return best;
     }
@@ -300,9 +314,9 @@ export class Picker {
                 grow([f.x - f.sizeX / 2, f.y, f.z - f.sizeZ / 2]);
                 grow([f.x + f.sizeX / 2, f.y + f.height, f.z + f.sizeZ / 2]);
             }
-            // A scatter, what its copies fill.
-            const copies = this.sync.scatterView(nid)?.bounds();
-            if (copies) {
+            // A scatter, what its copies fill; a tree, what it fills.
+            for (const copies of [this.sync.scatterView(nid)?.bounds(), this.sync.treeView(nid)?.bounds()]) {
+                if (!copies) continue;
                 grow(copies.min);
                 grow(copies.max);
             }
@@ -332,8 +346,8 @@ export class Picker {
     /** Oriented box corners (8 world points) for each renderer of a node (one box around a scatter's copies). */
     localBoxes(id: string): Vec3[][] {
         const out: Vec3[][] = [];
-        const copies = this.sync.scatterView(id)?.bounds();
-        if (copies) {
+        for (const copies of [this.sync.scatterView(id)?.bounds(), this.sync.treeView(id)?.bounds()]) {
+            if (!copies) continue;
             const { min, max } = copies;
             out.push(Array.from({ length: 8 }, (_, i): Vec3 => [i & 1 ? max[0] : min[0], i & 2 ? max[1] : min[1], i & 4 ? max[2] : min[2]]));
         }

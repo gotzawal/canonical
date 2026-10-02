@@ -105,6 +105,7 @@ export class LambertMaterial extends Material {
                 colorPass.renderOrder = 3000;
                 break;
         }
+        this._syncShadowAlphaCut();
         this._notifyRenderClassificationDirty();
     }
 

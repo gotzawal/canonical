@@ -1,12 +1,13 @@
 import { defaultMemory } from './behavior/format';
 import { defaultDesign } from './design';
-import { Camera, Environment, Geometry, GI, Light, Material } from './model';
+import { Camera, Environment, Geometry, GI, Light, Material, Scatter, ScatterSource, Tree } from './model';
 import { defaults } from './schema';
 import { skySunOf } from './sky';
+import { SPECIES_HEIGHT, type TreeSpecies } from './trees';
 import {
     SCENE_VERSION, UNTITLED_SCENE, type CameraDoc, type CameraState, type EnvironmentDoc, type GeometryDoc, type GeometryType, type GIDoc,
     type LightDoc, type LightType, type MaterialDoc, type MeshDoc, type NodeDoc, type NodeWith, type RenderGraphDoc, type SceneDoc,
-    type Vec3,
+    type ScatterDoc, type TreeDoc, type Vec3,
 } from './types';
 
 export { uid } from './ids';
@@ -20,6 +21,28 @@ export const defaultLight = (type: LightType): LightDoc =>
     Light.parse({ type, intensity: type === 'directional' ? 3 : type === 'point' ? 4 : 6, castShadow: type === 'directional' });
 
 export const defaultEnvironment = (): EnvironmentDoc => defaults(Environment);
+
+/** A tree of a species at its usual height, a new one each time (its own seed) unless given one. */
+export const defaultTree = (species: TreeSpecies, seed = Math.floor(Math.random() * 999999)): TreeDoc => ({ ...defaults(Tree), species, height: SPECIES_HEIGHT[species], seed });
+
+/**
+ * Scatter rules for a wood of these trees (picked by weight) over an area
+ * in meters: about a tree per 50 square meters, gathered in stands with
+ * glades between, upright on slopes up to 35 degrees, their trunks solid.
+ */
+export function forestScatter(trees: readonly { tree: TreeDoc; weight: number }[], size: [number, number]): ScatterDoc {
+    return {
+        ...defaults(Scatter),
+        sources: trees.map(({ tree, weight }) => ({ ...defaults(ScatterSource), tree, weight, scale: [0.75, 1.2] as [number, number], solid: 'trunk' as const })),
+        size,
+        count: Math.max(20, Math.min(1500, Math.round((size[0] * size[1]) / 50))),
+        spacing: 4.5,
+        slope: [0, 35],
+        bury: 0,
+        clusters: 0.35,
+        clusterSize: 40,
+    };
+}
 
 /** 8 x 3 x 8 probes, 2 units apart: covers the default 20 x 20 ground. */
 export const defaultGI = (): GIDoc => defaults(GI);

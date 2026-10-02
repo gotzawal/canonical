@@ -9,8 +9,10 @@ import { getAssetUrl } from '../core/assets';
 import type { ChangeHint, Store } from '../core/store';
 import type {
     AnimationDoc, AssetMeta, EnvironmentDoc, GeometryDoc, GrassDoc, RainDoc, InstancingDoc, LightDoc, LightType, MaterialDoc, MeshDoc, ModelDoc, NodeDoc, ParticlesDoc, ScatterDoc, TerrainDoc,
-    TextureRole,
+    TextureRole, TreeDoc,
 } from '../core/types';
+import { decompose, type Vec3 } from '../core/math';
+import { TREE_VARIANTS, variantIndex, type TreeShape } from '../core/trees';
 import { placeScatter, type AvoidBox, type GroundSample, type Placement, type ScatterSolid } from '../core/scatter';
 import { covers, groundHeight, layerWeights, paintAt, type TerrainFrame, type TerrainSurface } from '../core/terrain';
 import { GroundDetails, type GroundHost } from './ground';
@@ -30,6 +32,7 @@ import { movesInPlay } from '../core/motion';
 import { fieldArea, fieldFrame, GrassField, gustTexture, GroundGrid, hashString, LayeredGround, plainBlades } from './grass';
 import { flatMap, heightmapOf, paintOf, TerrainView } from './terrain';
 import { ScatterModel, ScatterView } from './scatter';
+import { TreeView, treeModel, treeModelStats, type TreeCopy, type TreeLook, type TreeModel } from './trees';
 import { rendererWorldBox } from './picking';
 import { objectWorldBox, RAIN_SHADER, RainVolume } from './rain';
 import type { MaterialLayer } from './terrainMaterial';
@@ -103,11 +106,23 @@ export interface Entry {
     terrain: TerrainState | null;
     /** Its scatter: the copies and what they were placed from. */
     scatter: ScatterState | null;
+    /** Its tree: the engine side and what it was grown and placed from. */
+    tree: TreeState | null;
+}
+
+/** A tree object's engine side (engine/trees.ts): one copy, at the object. */
+interface TreeState {
+    view: TreeView;
+    /** What it was grown from, and the object's world matrix it was placed at. */
+    grown: string;
+    placed: string;
 }
 
 /** A scatter's engine side (engine/scatter.ts), and what its copies were placed from. */
 interface ScatterState {
     view: ScatterView;
+    /** The trees among its copies (sources that are trees), once it has any. */
+    trees: TreeView | null;
     /** Its rules, place, ground, what it avoids and the models loaded when it was last placed. */
     placed: string;
     placements: Placement[];
@@ -276,6 +291,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     private scatterModelsLoaded = new Map<string, ScatterModel | null>();
     /** Scatters in the scene; a placement waiting to run, and what resolves once it ran. */
     private scatterStates = new Set<ScatterState>();
+    /** Objects with a tree. */
+    private trees = new Set<Entry>();
     /** What lies on and colors the ground (contacts, loose stones, soil, wetness). */
     private ground: GroundDetails;
     private scatterTimer = 0;
@@ -325,6 +342,23 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.runtime.setCloudSun(this.cloudSunlight());
         }
         lap('Editor: weather');
+        if (this.trees.size) {
+            const wind = this.wind();
+            for (const e of this.trees) {
+                const st = e.tree;
+                if (!st) continue;
+                // A tree object follows its object (moved, or its parent moved).
+                const placed = matrixKey(e.obj.transform.worldMatrix.rawData);
+                if (placed !== st.placed) {
+                    st.placed = placed;
+                    st.view.move(0, [treeCopyAt(e.obj.transform.worldMatrix.rawData)]);
+                    this.runtime.redrawShadows();
+                }
+                st.view.setWind(wind.direction, wind.speed);
+                st.view.update(at);
+            }
+            lap('Editor: trees');
+        }
         if (!this.terrainStates.size && !this.scatterStates.size) return;
         let eased = false;
         for (const t of this.terrainStates) eased = t.view.update(at) || eased;
@@ -334,7 +368,14 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.shadowsEasedAt = now;
             this.runtime.redrawShadows();
         }
-        for (const s of this.scatterStates) s.view.update(at);
+        for (const s of this.scatterStates) {
+            s.view.update(at);
+            if (s.trees) {
+                const wind = this.wind();
+                s.trees.setWind(wind.direction, wind.speed);
+                s.trees.update(at);
+            }
+        }
         lap('Editor: terrain and scatter levels of detail');
         const tier = QUALITY[this.runtime.qualityLevel];
         this.ground.update(at, tier.clutterDistance * tier.lodDistance);
@@ -369,7 +410,13 @@ export class SceneSync extends Emitter<SyncEvents> {
         const rows: [string, string][] = [];
         for (const t of this.terrainStates) rows.push([`Terrain "${name(t.view.id)}"`, t.view.report()]);
         for (const e of this.grasses) if (e.grass) rows.push([`Grass "${name(e.id)}"`, e.grass.report()]);
-        for (const e of this.entries.values()) if (e.scatter) rows.push([`Scatter "${name(e.id)}"`, e.scatter.view.report()]);
+        for (const e of this.entries.values()) {
+            if (e.scatter?.view.count) rows.push([`Scatter "${name(e.id)}"`, e.scatter.view.report()]);
+            if (e.scatter?.trees) rows.push([`Scatter "${name(e.id)}" trees`, e.scatter.trees.report()]);
+        }
+        for (const e of this.trees) if (e.tree) rows.push([`Tree "${name(e.id)}"`, e.tree.view.report()]);
+        const grown = treeModelStats(this.runtime.engine.context3D);
+        if (grown.kinds) rows.push(['Tree models', `${grown.kinds} grown (${grown.unused} unused, kept for undo), ${(grown.bytes / 1048576).toFixed(1)} MB`]);
         const stones = this.ground.report();
         if (stones) rows.push(['Loose stones', stones]);
         const w = this.weather, env = this.store.doc.environment.weather;
@@ -395,6 +442,8 @@ export class SceneSync extends Emitter<SyncEvents> {
                 e.terrain.view.material.setRelief(node.terrain.relief, QUALITY[level].terrainRelief);
             }
             if (e.scatter) e.scatter.view.setLodScale(QUALITY[level].lodDistance);
+            e.scatter?.trees?.setLodScale(QUALITY[level].lodDistance);
+            e.tree?.view.setLodScale(QUALITY[level].lodDistance);
             e.grass?.setLodScale(QUALITY[level].lodDistance);
         }
     }
@@ -641,6 +690,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             group: '',
             terrain: null,
             scatter: null,
+            tree: null,
         };
         this.entries.set(node.id, entry);
         this.owner.set(obj, node.id);
@@ -688,6 +738,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.waters.delete(entry);
         if (entry.terrain) this.dropTerrain(entry);
         if (entry.scatter) this.dropScatter(entry);
+        if (entry.tree) this.dropTree(entry);
         entry.obj.removeFromParent();
         entry.obj.destroy();
     }
@@ -710,6 +761,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         this.applyInstancing(entry, node.instancing);
         this.applyTerrain(entry, node);
         this.applyScatter(entry, node.scatter);
+        this.applyTree(entry, node.tree);
     }
 
     /** Emitters are built again when their settings change (the simulator bakes its particles). */
@@ -1547,16 +1599,18 @@ export class SceneSync extends Emitter<SyncEvents> {
             const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id, this.shaders.terrainTexture());
             view.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
             view.setVisible(entry.visible);
-            entry.scatter = { view, placed: '', placements: [], solids: [] };
+            entry.scatter = { view, trees: null, placed: '', placements: [], solids: [] };
             this.scatterStates.add(entry.scatter);
         }
         entry.scatter.view.setDrawDistance(doc.distance);
-        for (const s of doc.sources) if (s.model) void this.scatterModel(s.model);
+        entry.scatter.trees?.setDrawDistance(doc.distance);
+        for (const s of doc.sources) if (s.model && !s.tree) void this.scatterModel(s.model);
         this.schedulePlaceScatters();
     }
 
     private dropScatter(entry: Entry) {
         entry.scatter!.view.dispose((res) => this.disposeLater(res));
+        entry.scatter!.trees?.dispose((res) => this.disposeLater(res));
         this.scatterStates.delete(entry.scatter!);
         entry.scatter = null;
         this.runtime.redrawShadows();
@@ -1590,6 +1644,36 @@ export class SceneSync extends Emitter<SyncEvents> {
         return p;
     }
 
+    /** The trees among a scatter's copies: a kind per source that is a tree, each copy one of its variants. */
+    private buildScatterTrees(entry: Entry, st: ScatterState, doc: ScatterDoc, trees: (TreeModel | null)[], looks: (TreeLook | null)[]) {
+        const kinds: { model: TreeModel; look: TreeLook; copies: TreeCopy[]; id: number }[] = [];
+        doc.sources.forEach((src, i) => {
+            const model = trees[i];
+            if (!model || !src.tree) return;
+            const copies: TreeCopy[] = [];
+            for (const p of st.placements) {
+                if (p.source !== i) continue;
+                const variant = variantIndex(p.variant, model.variants.length);
+                // Each copy's own color shift and seed, from where it stands.
+                const h = hashString(`${p.position[0].toFixed(2)},${p.position[2].toFixed(2)}`);
+                copies.push({ position: p.position, rotation: p.rotation, scale: p.scale, variant, hue: ((h & 1023) / 1023) * 2 - 1, seed: ((h >>> 10) & 1023) / 1023 });
+            }
+            if (copies.length) kinds.push({ model, look: looks[i]!, copies, id: i });
+        });
+        if (!kinds.length) {
+            st.trees?.dispose((res) => this.disposeLater(res));
+            st.trees = null;
+            return;
+        }
+        if (!st.trees) {
+            st.trees = new TreeView(this.runtime.scene, this.runtime.engine.context3D, 'Scatter trees');
+            st.trees.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
+            st.trees.setVisible(entry.visible);
+            st.trees.setDrawDistance(doc.distance);
+        }
+        st.trees.build(kinds, doc.castShadow && doc.sources.some((s) => s.tree?.castShadow), (res) => this.disposeLater(res));
+    }
+
     /** Places the scatters again a moment after the last change: a drag moves their ground many times a second. */
     private schedulePlaceScatters() {
         if (!this.scatterStates.size) return;
@@ -1619,14 +1703,19 @@ export class SceneSync extends Emitter<SyncEvents> {
             const st = entry.scatter;
             const doc = st ? this.store.node(entry.id)?.scatter : undefined;
             if (!st || !doc) continue;
-            const models = doc.sources.map((s) => (s.model ? (this.scatterModelsLoaded.get(s.model) ?? null) : null));
+            const models = doc.sources.map((s) => (s.model && !s.tree ? (this.scatterModelsLoaded.get(s.model) ?? null) : null));
+            // Sources that are trees grow (once per kind) in a few variants the copies pick from.
+            const ctx = this.runtime.engine.context3D;
+            const trees = doc.sources.map((s) => (s.tree ? treeModel(treeShapeOf(s.tree), s.tree.seed, TREE_VARIANTS, ctx) : null));
             const m = entry.obj.transform.worldMatrix.rawData;
             const ground = doc.ground ? this.groundRenderers(doc.ground) : null;
             const lands = doc.ground ? this.groundTerrains(doc.ground) : [];
             const avoid = this.avoidBoxes(doc.avoid);
             const round = (v: number) => +v.toFixed(3);
+            // Only what changes where the copies stand and what they are: trees' colors and wind change in place.
+            const placing = { ...doc, distance: 0, sources: doc.sources.map((src) => (src.tree ? { ...src, tree: [treeShapeOf(src.tree), src.tree.seed, src.tree.castShadow, src.tree.solid] } : src)) };
             const key = JSON.stringify([
-                { ...doc, distance: 0 }, Array.from(m, round),
+                placing, Array.from(m, round),
                 ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, round)]),
                 lands.map((l) => [l.id, l.version]),
                 // A scatter that follows a layer moves with the layers' rules and paint.
@@ -1634,7 +1723,12 @@ export class SceneSync extends Emitter<SyncEvents> {
                 avoid.map((b) => [b.minX, b.maxX, b.minZ, b.maxZ].map(round)),
                 models.map((x) => !!x),
             ]);
-            if (key === st.placed) continue;
+            // The trees' look and wind change without placing them again.
+            const looks = doc.sources.map((s) => (s.tree ? treeLookOf(s.tree) : null));
+            if (key === st.placed) {
+                st.trees?.setLooks(looks);
+                continue;
+            }
             st.placed = key;
             this.ground.scattersPlaced();
             const frame = fieldFrame(m);
@@ -1644,10 +1738,11 @@ export class SceneSync extends Emitter<SyncEvents> {
             const query = doc.ground ? (x: number, z: number) => layered?.sample(x, z) ?? null : null;
             st.placements = placeScatter(doc, frame, query, avoid, hashString(entry.id), {
                 layers: doc.layer > 0 && lands.length ? (x, z, g) => this.terrainLayersAt(lands, x, z, g) : undefined,
-                base: (source, variant) => models[source]?.piece(variant)?.base ?? [],
+                base: (source, variant) => models[source]?.piece(variant)?.base ?? (trees[source] ? treeBase(trees[source]!, variant) : []),
             });
             st.view.build(st.placements, models, doc.castShadow, (res) => this.disposeLater(res));
-            st.solids = scatterSolids(doc, st.placements, models);
+            this.buildScatterTrees(entry, st, doc, trees, looks);
+            st.solids = [...scatterSolids(doc, st.placements, models), ...treeSolids(doc, st.placements, trees)];
             this.runtime.gi.invalidate();
             this.runtime.redrawShadows();
             this.emit('scatter', entry.id);
@@ -1673,7 +1768,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         return null;
     }
 
-    /** The x-z boxes of the shown meshes of objects to avoid (and of the objects under them). */
+    /** The x-z boxes of the shown meshes and tree trunks of objects to avoid (and of the objects under them). */
     private avoidBoxes(ids: readonly string[]): AvoidBox[] {
         const out: AvoidBox[] = [];
         for (const id of ids) {
@@ -1682,6 +1777,10 @@ export class SceneSync extends Emitter<SyncEvents> {
                 for (const r of this.renderersOf(nid)) {
                     const b = rendererWorldBox(r);
                     if (b) out.push({ minX: b.min[0], maxX: b.max[0], minZ: b.min[2], maxZ: b.max[2] });
+                }
+                // A tree keeps its trunk clear: what grows under its crown may stay.
+                for (const t of this.entries.get(nid)?.tree?.view.trunks() ?? []) {
+                    out.push({ minX: t.center[0] - t.size[0], maxX: t.center[0] + t.size[0], minZ: t.center[2] - t.size[2], maxZ: t.center[2] + t.size[2] });
                 }
                 const f = this.terrainView(nid)?.frame;
                 if (f) out.push({ minX: f.x - f.sizeX / 2, maxX: f.x + f.sizeX / 2, minZ: f.z - f.sizeZ / 2, maxZ: f.z + f.sizeZ / 2 });
@@ -1712,14 +1811,74 @@ export class SceneSync extends Emitter<SyncEvents> {
         return this.scatterModelsLoaded.get(assetId) ?? null;
     }
 
-    /** The solid copies of the shown scatters: what characters, bodies and the navigation mesh run into. */
+    /** The solid copies of the shown scatters, and the trunks of solid trees: what characters, bodies and the navigation mesh run into. */
     scatterSolids(): { id: string; solids: ScatterSolid[] }[] {
         const out: { id: string; solids: ScatterSolid[] }[] = [];
         for (const e of this.entries.values()) {
-            if (!e.scatter?.solids.length || !e.visible || this.detached.has(e.id)) continue;
-            out.push({ id: e.id, solids: e.scatter.solids });
+            if (!e.visible || this.detached.has(e.id)) continue;
+            if (e.scatter?.solids.length) out.push({ id: e.id, solids: e.scatter.solids });
+            if (e.tree && this.store.node(e.id)?.tree?.solid) out.push({ id: e.id, solids: e.tree.view.trunks() });
         }
         return out;
+    }
+
+    // ----------------------------------------------------------------- trees
+
+    /** The wind trees sway in: the weather's, else the clouds' direction at a breeze. */
+    private wind(): { speed: number; direction: number } {
+        return this.weather?.wind ?? { speed: 5, direction: this.shownEnvironment.clouds.windDirection };
+    }
+
+    /** A tree object: grown (again) when its rules change, its look set when only its colors or wind do. */
+    private applyTree(entry: Entry, doc: TreeDoc | undefined) {
+        if (!doc) {
+            if (entry.tree) this.dropTree(entry);
+            return;
+        }
+        const ctx = this.runtime.engine.context3D;
+        if (!entry.tree) {
+            const view = new TreeView(this.runtime.scene, ctx, 'Tree');
+            view.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
+            view.setVisible(entry.visible);
+            entry.tree = { view, grown: '', placed: '' };
+            this.trees.add(entry);
+        }
+        const st = entry.tree;
+        const grown = JSON.stringify([treeShapeOf(doc), doc.seed, doc.castShadow]);
+        if (grown !== st.grown) {
+            st.grown = grown;
+            entry.obj.transform.updateWorldMatrix(true);
+            const m = entry.obj.transform.worldMatrix.rawData;
+            st.placed = matrixKey(m);
+            st.view.build([{ model: treeModel(treeShapeOf(doc), doc.seed, 1, ctx), look: treeLookOf(doc), copies: [treeCopyAt(m)] }], doc.castShadow, (res) => this.disposeLater(res));
+            this.runtime.redrawShadows();
+        } else {
+            st.view.setLook(treeLookOf(doc));
+        }
+    }
+
+    private dropTree(entry: Entry) {
+        entry.tree!.view.dispose((res) => this.disposeLater(res));
+        this.trees.delete(entry);
+        entry.tree = null;
+        this.runtime.redrawShadows();
+    }
+
+    /** The shown trees, for picking: tree objects, and the trees of scatters (the scatter is what is hit). */
+    treeViews(): { id: string; view: TreeView }[] {
+        const out: { id: string; view: TreeView }[] = [];
+        for (const e of this.entries.values()) {
+            if (!e.visible || this.detached.has(e.id)) continue;
+            if (e.tree) out.push({ id: e.id, view: e.tree.view });
+            if (e.scatter?.trees) out.push({ id: e.id, view: e.scatter.trees });
+        }
+        return out;
+    }
+
+    /** What a tree object or a scatter's trees draw, for its box. */
+    treeView(id: string): TreeView | null {
+        const e = this.entries.get(id);
+        return e?.tree?.view ?? e?.scatter?.trees ?? null;
     }
 
     // ------------------------------------------------------------ instancing
@@ -2077,6 +2236,8 @@ export class SceneSync extends Emitter<SyncEvents> {
         entry.rain?.setVisible(visible);
         entry.terrain?.view.setVisible(visible);
         entry.scatter?.view.setVisible(visible);
+        entry.scatter?.trees?.setVisible(visible);
+        entry.tree?.view.setVisible(visible);
         const model = this.store.node(entry.id)?.model;
         if (entry.model?.overrides && model) {
             entry.model.overrides.setVisible(model, visible);
@@ -2397,4 +2558,49 @@ export function buildGeometry(g: GeometryDoc): GeometryBase {
         default:
             return new BoxGeometry(1, 1, 1);
     }
+}
+
+/** What a tree is grown from (core/trees.ts), from its component. */
+export function treeShapeOf(doc: TreeDoc): TreeShape {
+    return { species: doc.species, height: doc.height, width: doc.width, trunk: doc.trunk, branches: doc.branches, leaves: doc.leaves, leafSize: doc.leafSize, gnarl: doc.gnarl };
+}
+
+/** How a tree looks beyond its shape (engine/trees.ts), from its component. */
+export function treeLookOf(doc: TreeDoc): TreeLook {
+    const tint = (hex: string): [number, number, number] => {
+        const c = hexToColor(hex);
+        return [c.r, c.g, c.b];
+    };
+    return { leafTint: tint(doc.leafTint), barkTint: tint(doc.barkTint), autumn: doc.autumn, translucency: doc.translucency, vary: doc.vary, wind: doc.wind };
+}
+
+/** The one copy of a tree object at its world matrix: its place, turn and height scale. */
+function treeCopyAt(m: ArrayLike<number>): TreeCopy {
+    const t = decompose(m);
+    return { position: t.position, rotation: t.rotation, scale: Math.max(0.01, t.scale[1]), variant: 0, hue: 0, seed: 0.5 };
+}
+
+/** A world matrix as a key, rounded (a matrix taken again is the same). */
+function matrixKey(m: ArrayLike<number>): string {
+    return Array.from(m, (v) => v.toFixed(4)).join(',');
+}
+
+/** Points around the foot of a tree's trunk at scale 1 (where it meets the ground). */
+function treeBase(model: TreeModel, variant: number): Vec3[] {
+    const v = model.variants[variantIndex(variant, model.variants.length)];
+    const r = v.trunk.radius * 1.4;
+    return Array.from({ length: 8 }, (_, k) => [Math.cos((k * Math.PI) / 4) * r, 0, Math.sin((k * Math.PI) / 4) * r] as Vec3);
+}
+
+/** The trunks of a scatter's trees that are solid: upright cylinders as high as the bare trunk and a little more. */
+function treeSolids(doc: ScatterDoc, placements: readonly Placement[], trees: readonly (TreeModel | null)[]): ScatterSolid[] {
+    const out: ScatterSolid[] = [];
+    for (const p of placements) {
+        const src = doc.sources[p.source];
+        const model = trees[p.source];
+        if (!model || !src?.tree || !src.tree.solid || src.solid === 'none') continue;
+        const v = model.variants[variantIndex(p.variant, model.variants.length)];
+        out.push({ kind: 'trunk', center: [p.position[0], p.position[1], p.position[2]], size: [v.trunk.radius * p.scale, Math.max(2, v.trunk.height * 1.2) * p.scale, v.trunk.radius * p.scale], yaw: 0 });
+    }
+    return out;
 }

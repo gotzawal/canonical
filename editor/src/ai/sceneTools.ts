@@ -2,11 +2,12 @@
 // deleting objects with their components (fields from core/model.ts), the
 // environment, imported models' materials and parts, selection and views.
 
-import { defaultCameraDoc, defaultGeometry, defaultLight, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
+import { defaultCameraDoc, defaultGeometry, defaultLight, defaultTree, makeCameraNode, makeLightNode, makeMeshNode, makeNode } from '../core/defaults';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { defaultCharacter, defaultPlayer } from '../core/character';
-import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player, Rain, Terrain } from '../core/model';
-import { layersOf } from './terrainTools';
+import { Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Environment, GEOMETRY_TYPES, Grass, Instancing, Light, Material, MaterialOverride, Mirror, Player, Rain, Terrain, Tree } from '../core/model';
+import { SPECIES_NAME } from '../core/trees';
+import { layersOf, treeFrom, treeSummary } from './terrainTools';
 import { defaults, patch, snakeKeys, toolSchema } from '../core/schema';
 import type { GeometryType, LightType, MaterialDoc, NodeDoc, PartOverride, SceneDoc } from '../core/types';
 import { assetImageDataUrl } from '../core/images';
@@ -76,6 +77,10 @@ const objectFields = {
         type: ['object', 'null'],
     },
     scatter: { type: 'null', description: 'null removes the object\'s scatter (the scatter tool makes and changes scatters).' },
+    tree: {
+        ...toolSchema(Tree, 'A tree grown from rules at the object (create_objects type tree makes one): no model needed. species, seed (another seed grows another tree of the species) and height in meters (a species\' usual height when a new tree leaves it out: oak 14, birch 15, spruce 18), how it grows (crown width, trunk thickness, branch and leaf density, leaf size, gnarl), its colors (leaf and bark tint, autumn, translucency) and how much the weather\'s wind sways it. Three levels of detail take over with distance; in Play its trunk stops characters when solid. For woods and forests use the scatter tool with tree sources instead of many tree objects. Only on an object without a mesh or model. null removes it.'),
+        type: ['object', 'null'],
+    },
     instancing: {
         ...toolSchema(Instancing, 'Instanced drawing for placing many copies (trees, rocks, fence posts, crates): the meshes of this object and of every object under it that share a shape and a material (primitives, prefab instances, the same imported model) draw in one draw call per shape and material. Put the copies under one group with instancing ({}); moving them is free, adding or restyling regroups them. Skinned or animated meshes, transparent materials and mirrors draw on their own. null removes it.'),
         type: ['object', 'null'],
@@ -84,7 +89,7 @@ const objectFields = {
     receive_shadow: { type: 'boolean' },
 };
 const SHAPES = GEOMETRY_TYPES;
-const TYPES = [...SHAPES, 'empty', 'grass', 'sound', 'directional_light', 'point_light', 'spot_light', 'camera'];
+const TYPES = [...SHAPES, 'empty', 'tree', 'grass', 'sound', 'directional_light', 'point_light', 'spot_light', 'camera'];
 
 /** get_scene stays below this many characters (the agent cuts longer tool results at 30 000). */
 const SCENE_RESULT_CHARS = 28_000;
@@ -169,7 +174,7 @@ export const sceneTools = tools({
     },
     create_objects: {
         groups: ['objects', 'lights', 'effects'],
-        description: 'Create primitives, lights, cameras or empty groups. Returns their ids.',
+        description: 'Create primitives, lights, cameras, empty groups or trees (type tree: grown from rules, its species and look in tree). Returns their ids.',
         params: {
             objects: { type: 'array', items: { type: 'object', properties: { type: { type: 'string', enum: TYPES }, ...objectFields }, required: ['type'] } },
         },
@@ -188,6 +193,10 @@ export const sceneTools = tools({
                 const n = makeTyped(String(spec.type));
                 if (!n.camera && spec.camera) throw new ToolError('camera settings need type "camera".');
                 applyFields(env, d, n, spec, created);
+                if (spec.type === 'tree') {
+                    n.tree ??= defaultTree('oak');
+                    if (!spec.name) n.name = SPECIES_NAME[n.tree.species];
+                }
                 n.name = uniqueIn(d, created, spec.name ? n.name : n.name, n.parent);
                 created.push(n);
             }
@@ -208,7 +217,7 @@ export const sceneTools = tools({
     },
     update_objects: {
         groups: ['objects', 'lights', 'materials', 'effects'],
-        description: 'Change objects: name, parent, transform, visibility, material, primitive size, light or camera settings.',
+        description: 'Change objects: name, parent, transform, visibility, material, primitive size, light, camera or tree settings.',
         params: {
             updates: {
                 type: 'array',
@@ -475,6 +484,7 @@ function nodeType(n: NodeDoc): string {
     if (n.model) return 'model';
     if (n.mesh) return n.mesh.geometry.type;
     if (n.particles) return 'particles';
+    if (n.tree) return 'tree';
     if (n.grass) return 'grass';
     if (n.rain && !n.mesh && !n.model) return 'rain';
     if (n.terrain) return 'terrain';
@@ -572,10 +582,11 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
             ...(t.collide ? {} : { collide: false }),
         };
     }
+    if (n.tree) out.tree = treeSummary(n.tree);
     if (n.scatter) {
         const s = n.scatter;
         out.scatter = {
-            sources: s.sources.map((x) => ({ model: doc.assets.find((a) => a.id === x.model)?.name ?? x.model, weight: x.weight, solid: x.solid })),
+            sources: s.sources.map((x) => ({ ...(x.tree ? { tree: treeSummary(x.tree) } : { model: doc.assets.find((a) => a.id === x.model)?.name ?? x.model }), weight: x.weight, solid: x.solid })),
             count: s.count,
             size: s.size,
             spacing: s.spacing,
@@ -699,6 +710,11 @@ function applyFields(env: ToolEnv, doc: SceneDoc, n: NodeDoc, spec: Json, batch:
         if (!n.mesh) throw new ToolError(`"${n.name}" has no mesh: a mirror is a mesh (a plane, a box) whose top reflects.`);
         n.mirror = patch(Mirror, n.mirror ?? defaults(Mirror), spec.mirror, 'mirror');
     }
+    if (spec.tree === null) delete n.tree;
+    else if (spec.tree) {
+        if (n.mesh || n.model) throw new ToolError(`"${n.name}" has a ${n.mesh ? 'mesh' : 'model'}: a tree goes on an object without one (create_objects type tree).`);
+        n.tree = treeFrom(n.tree, spec.tree as Json, 'tree');
+    }
     if (spec.grass === null) delete n.grass;
     else if (spec.grass) {
         const { ground, texture, wind_map: windMap, ...fields } = spec.grass as Json;
@@ -800,6 +816,9 @@ function makeTyped(type: string): NodeDoc {
             return makeMeshNode(type);
         case 'empty':
             return makeNode('Empty');
+        case 'tree':
+            // Grown from its tree fields when given (applyFields), else an oak.
+            return makeNode('Tree');
         case 'grass': {
             const n = makeNode('Grass');
             n.grass = defaults(Grass);
@@ -894,7 +913,7 @@ class StagePolicy {
         if (spec.camera !== undefined && !this.any('objects', 'lights', 'shots')) return `Cameras cannot be changed ${limited}.`;
         if (['player', 'character', 'body', 'animation'].some((k) => spec[k] !== undefined) && !this.any('objects', 'code', 'play')) return `Characters, the player, physics bodies and animation cannot be changed ${limited}.`;
         if ((spec.mirror !== undefined || spec.grass !== undefined) && !this.any('objects', 'materials', 'effects')) return `Mirrors and grass cannot be changed ${limited}.`;
-        if ((spec.terrain !== undefined || spec.scatter !== undefined) && !this.any('objects', 'materials')) return `Terrains and scatters cannot be changed ${limited}.`;
+        if ((spec.terrain !== undefined || spec.scatter !== undefined || spec.tree !== undefined) && !this.any('objects', 'materials')) return `Terrains, scatters and trees cannot be changed ${limited}.`;
         if (spec.instancing !== undefined && !this.allowed.has('objects')) return `Instancing cannot be changed ${limited}.`;
         if (spec.audio !== undefined && !this.any('objects', 'audio')) return `Sounds cannot be changed ${limited}.`;
         if (this.stage === 'Level' && spec.material) {

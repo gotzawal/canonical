@@ -541,9 +541,19 @@ export function layoutSignature(doc: SceneDoc): string {
             text(sc.avoid.join(','));
             for (const src of sc.sources) {
                 text(src.model ?? '');
+                if (src.tree) {
+                    text(src.tree.species);
+                    for (const v of [src.tree.seed, src.tree.height, src.tree.width, src.tree.solid ? 1 : 0]) num(v);
+                }
                 num(src.weight);
                 text(src.solid);
             }
+        }
+        // A tree's size and whether its trunk stops characters.
+        const tr = n.tree;
+        if (tr) {
+            text(tr.species);
+            for (const v of [tr.seed, tr.height, tr.width, tr.solid ? 1 : 0]) num(v);
         }
     }
     return `L${count}:${h.toString(36)}`;
@@ -557,6 +567,8 @@ export function levelSignature(doc: SceneDoc): string {
             n.id, n.parent, n.visible, n.position, n.rotation, n.scale, n.mesh?.geometry ?? null, n.model?.asset ?? null, n.model?.parts ?? null,
             n.terrain ? [n.terrain.heightmap, n.terrain.size, n.terrain.height, n.terrain.collide] : null,
             n.scatter ? [n.scatter.sources, n.scatter.size, n.scatter.count, n.scatter.seed, n.scatter.spacing, n.scatter.ground, n.scatter.slope, n.scatter.height, n.scatter.avoid, n.scatter.margin] : null,
+            // Only trees add to it: the signatures of scenes without them stay as they were.
+            ...(n.tree ? [[n.tree.species, n.tree.seed, n.tree.height, n.tree.width, n.tree.trunk, n.tree.solid]] : []),
         ]),
     );
     for (let i = 0; i < text.length; i++) h = ((h * 33) ^ text.charCodeAt(i)) >>> 0;

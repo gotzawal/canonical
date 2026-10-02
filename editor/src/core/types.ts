@@ -5,7 +5,7 @@
 import type { Vec3 } from './math';
 import type {
     AnimationDoc, AudioSourceDoc, BodyDoc, CameraDoc, CharacterDoc, EnvironmentDoc, GrassDoc, InstancingDoc, LightDoc, MeshDoc, MirrorDoc, ModelDoc, ParticlesDoc, PlayerDoc, RainDoc,
-    ScatterDoc, SpecsDoc, TerrainDoc,
+    ScatterDoc, SpecsDoc, TerrainDoc, TreeDoc,
 } from './model';
 
 export type { Vec3 };
@@ -14,7 +14,7 @@ export type { Vec3 };
 export type {
     AlphaMode, AnimationDoc, AudioSourceDoc, BodyDoc, BodyType, CameraDoc, CharacterDoc, EnvironmentDoc, GeometryDoc, GeometryType, GIDoc, GrassDoc, InstancingDoc, LightDoc, LightType, RainDoc,
     MaterialDoc, MaterialOverride, MaterialType, MeshDoc, MirrorDoc, ModelDoc, ParticleShape, ParticlesDoc, PartOverride, PlayerDoc, PlayerView, ScatterDoc, ScatterSourceDoc, SkyType,
-    SlotShading, SpecsDoc, TerrainDoc, TerrainLayerDoc,
+    SlotShading, SpecsDoc, TerrainDoc, TerrainLayerDoc, TreeDoc,
 } from './model';
 
 /** Value of a script property or a shader property. Colors are #rrggbb strings, vectors number arrays. */
@@ -67,6 +67,8 @@ export interface NodeDoc {
     terrain?: TerrainDoc;
     /** Copies of models spread over an area around the object by rules. */
     scatter?: ScatterDoc;
+    /** A tree grown from rules, standing at the object. */
+    tree?: TreeDoc;
     /** A sound source: plays an audio asset in Play mode, heard from the object's place. */
     audio?: AudioSourceDoc;
     scripts?: ScriptRef[];
