@@ -28,6 +28,8 @@ const CLOUD_COMMON = /* wgsl */ `
         wind: vec4<f32>,
         // steps, frame, jitter x, jitter y (quarter pixels)
         march: vec4<f32>,
+        // reflection cube: first face, steps, face size, cloud face size
+        env: vec4<f32>,
     };
 
     const PI: f32 = 3.14159265;
@@ -139,7 +141,10 @@ const CLOUD_COMMON = /* wgsl */ `
         return normalize((globalUniform.cameraWorldMatrix * vec4<f32>(v.xyz, 0.0)).xyz);
     }
 
-    // How far the scene is along the ray at a full-resolution pixel (very far for the sky).
+`;
+
+// How far the scene is along the ray at a full-resolution pixel (needs GBufferStand).
+const SCENE_DISTANCE = /* wgsl */ `
     fn sceneDistance(px: vec2<i32>, uv: vec2<f32>) -> f32 {
         let g = getGBuffer(px);
         if (getRoughnessFromGBuffer(g) <= 0.0) { return 1e9; }
@@ -147,21 +152,8 @@ const CLOUD_COMMON = /* wgsl */ `
     }
 `;
 
-export let CloudMarch_cs: string = /* wgsl */ `
-    #include "GlobalUniform"
-    #include "GBufferStand"
-    #include "LightData"
-
-    @group(0) @binding(2) var<uniform> cloud: CloudSettings;
-    @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
-    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
-    @group(0) @binding(5) var noiseTexSampler: sampler;
-    @group(0) @binding(6) var prefilterMap: texture_cube<f32>;
-    @group(0) @binding(7) var prefilterMapSampler: sampler;
-    @group(0) @binding(8) var outTex: texture_storage_2d<rgba16float, write>;
-
-    ${CLOUD_COMMON}
-
+// The march itself, for the screen and for the reflection cube (needs prefilterMap, lightBuffer).
+const CLOUD_MARCH = /* wgsl */ `
     // How much sunlight reaches p through the cloud toward the sun (optical depth, a few long steps).
     fn toSun(p: vec3<f32>, l: vec3<f32>) -> f32 {
         var od = 0.0;
@@ -173,18 +165,8 @@ export let CloudMarch_cs: string = /* wgsl */ `
         return od;
     }
 
-    @compute @workgroup_size(8, 8, 1)
-    fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
-        let size = textureDimensions(outTex);
-        if (gid.x >= size.x || gid.y >= size.y) { return; }
-        let full = vec2<f32>(textureDimensions(gBufferTexture));
-        // This frame's pixel within the 4x4 block the quarter pixel covers.
-        let px = vec2<f32>(gid.xy) * 4.0 + cloud.march.zw + 0.5;
-        let uv = px / full;
-        let cam = globalUniform.CameraPos.xyz;
-        let dir = viewRay(uv);
-        let far = min(sceneDistance(vec2<i32>(px), uv), 60000.0);
-
+    // The clouds along a ray from cam up to far: (in-scattered light, transmittance).
+    fn marchClouds(cam: vec3<f32>, dir: vec3<f32>, far: f32, steps: f32, jitter: f32) -> vec4<f32> {
         // The part of the ray inside the layer (from the ground up: the camera under it).
         let bottom = shell(cam, dir, cloud.layer.x);
         let top = shell(cam, dir, cloud.layer.y);
@@ -202,10 +184,7 @@ export let CloudMarch_cs: string = /* wgsl */ `
             t1 = select(top.y, bottom.x, bottom.x > 0.0);
         }
         t1 = min(t1, far);
-        if (top.y < 0.0 || t1 <= t0) {
-            textureStore(outTex, vec2<i32>(gid.xy), vec4<f32>(0.0, 0.0, 0.0, 1.0));
-            return;
-        }
+        if (top.y < 0.0 || t1 <= t0) { return vec4<f32>(0.0, 0.0, 0.0, 1.0); }
 
         let sun = sunLight();
         let l = sunDir();
@@ -216,17 +195,14 @@ export let CloudMarch_cs: string = /* wgsl */ `
         let skyTop = textureSampleLevel(prefilterMap, prefilterMapSampler, vec3<f32>(0.0, 1.0, 0.0), 5.0).rgb * globalUniform.skyExposure;
         let skyLow = textureSampleLevel(prefilterMap, prefilterMapSampler, normalize(vec3<f32>(dir.x, 0.05, dir.z)), 5.0).rgb * globalUniform.skyExposure;
 
-        let steps = max(cloud.march.x, 8.0);
-        let len = t1 - t0;
-        let dt = len / steps;
-        // Interleaved gradient noise: a different start for each pixel and frame.
-        let jitter = fract(52.9829189 * fract(dot(px + cloud.march.y * 5.588, vec2<f32>(0.06711056, 0.00583715))));
+        let n = max(steps, 8.0);
+        let dt = (t1 - t0) / n;
         let sigma = 0.05;
         var trans = 1.0;
         var light = vec3<f32>(0.0);
         var depthSum = 0.0;
         var weight = 0.0;
-        for (var i = 0.0; i < steps; i += 1.0) {
+        for (var i = 0.0; i < n; i += 1.0) {
             let t = t0 + (i + jitter) * dt;
             let p = cam + dir * t;
             let d = density(p, true);
@@ -238,8 +214,7 @@ export let CloudMarch_cs: string = /* wgsl */ `
                 let sunPart = sunColor * scattered * mix(0.6, 1.0, powder);
                 let h = (altitude(p) - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
                 let ambient = mix(skyLow * 0.5, skyTop, h) * 0.9;
-                let ext = d * sigma;
-                let stepT = exp(-ext * dt);
+                let stepT = exp(-d * sigma * dt);
                 light += trans * (sunPart + ambient) * (1.0 - stepT);
                 depthSum += t * trans * (1.0 - stepT);
                 weight += trans * (1.0 - stepT);
@@ -251,8 +226,56 @@ export let CloudMarch_cs: string = /* wgsl */ `
         let dist = select(t0, depthSum / max(weight, 1e-4), weight > 0.0);
         let haze = 1.0 - exp(-dist * 1.6e-5 * cloud.wind.z);
         let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, dir, 2.0).rgb * globalUniform.skyExposure;
-        light = mix(light, sky * (1.0 - trans), haze);
-        textureStore(outTex, vec2<i32>(gid.xy), vec4<f32>(light, trans));
+        return vec4<f32>(mix(light, sky * (1.0 - trans), haze), trans);
+    }
+`;
+
+// A cube face's texel (0..1 from the top left) as a direction, as WebGPU samples cubes.
+const CUBE_DIR = /* wgsl */ `
+    fn cubeDir(face: i32, uv: vec2<f32>) -> vec3<f32> {
+        let s = uv.x * 2.0 - 1.0;
+        let t = uv.y * 2.0 - 1.0;
+        switch (face) {
+            case 0: { return normalize(vec3<f32>(1.0, -t, -s)); }
+            case 1: { return normalize(vec3<f32>(-1.0, -t, s)); }
+            case 2: { return normalize(vec3<f32>(s, 1.0, t)); }
+            case 3: { return normalize(vec3<f32>(s, -1.0, -t)); }
+            case 4: { return normalize(vec3<f32>(s, -t, 1.0)); }
+            default: { return normalize(vec3<f32>(-s, -t, -1.0)); }
+        }
+    }
+`;
+
+export let CloudMarch_cs: string = /* wgsl */ `
+    #include "GlobalUniform"
+    #include "GBufferStand"
+    #include "LightData"
+
+    @group(0) @binding(2) var<uniform> cloud: CloudSettings;
+    @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
+    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
+    @group(0) @binding(5) var noiseTexSampler: sampler;
+    @group(0) @binding(6) var prefilterMap: texture_cube<f32>;
+    @group(0) @binding(7) var prefilterMapSampler: sampler;
+    @group(0) @binding(8) var outTex: texture_storage_2d<rgba16float, write>;
+
+    ${CLOUD_COMMON}
+    ${SCENE_DISTANCE}
+    ${CLOUD_MARCH}
+
+    @compute @workgroup_size(8, 8, 1)
+    fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
+        let size = textureDimensions(outTex);
+        if (gid.x >= size.x || gid.y >= size.y) { return; }
+        let full = vec2<f32>(textureDimensions(gBufferTexture));
+        // This frame's pixel within the 4x4 block the quarter pixel covers.
+        let px = vec2<f32>(gid.xy) * 4.0 + cloud.march.zw + 0.5;
+        let uv = px / full;
+        let far = min(sceneDistance(vec2<i32>(px), uv), 60000.0);
+        // Interleaved gradient noise: a different start for each pixel and frame.
+        let jitter = fract(52.9829189 * fract(dot(px + cloud.march.y * 5.588, vec2<f32>(0.06711056, 0.00583715))));
+        let out = marchClouds(globalUniform.CameraPos.xyz, viewRay(uv), far, cloud.march.x, jitter);
+        textureStore(outTex, vec2<i32>(gid.xy), out);
     }
 `;
 
@@ -273,6 +296,7 @@ export let CloudComposite_cs: string = /* wgsl */ `
     @group(0) @binding(11) var outTex: texture_storage_2d<rgba16float, write>;
 
     ${CLOUD_COMMON}
+    ${SCENE_DISTANCE}
 
     @compute @workgroup_size(8, 8, 1)
     fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
@@ -324,5 +348,112 @@ export let CloudComposite_cs: string = /* wgsl */ `
             }
         }
         textureStore(outTex, px, vec4<f32>(out, color.a));
+    }
+`;
+
+/**
+ * Clouds in the reflection cube (CloudPost.reflections): the scene's
+ * environment cube becomes the sky with the clouds in it, so water, glossy
+ * materials and the light from the sky show them. A face or all six per
+ * frame (cloud.env.x the first, the dispatch's z the rest):
+ *
+ * - `CloudEnvMarch_cs` marches the clouds seen from the camera into a small
+ *   cube (cloud.env.w per face), light divided by the sky's exposure.
+ * - `CloudEnvDown_cs` averages a level of it into the next, smaller one.
+ * - `CloudEnvComposite_cs` writes one level of the environment cube: the sky
+ *   at the matching blur, through the clouds at a matching blur.
+ *
+ * @internal
+ */
+export let CloudEnvMarch_cs: string = /* wgsl */ `
+    #include "GlobalUniform"
+    #include "LightData"
+
+    @group(0) @binding(2) var<uniform> cloud: CloudSettings;
+    @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
+    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
+    @group(0) @binding(5) var noiseTexSampler: sampler;
+    @group(0) @binding(6) var prefilterMap: texture_cube<f32>;
+    @group(0) @binding(7) var prefilterMapSampler: sampler;
+    @group(0) @binding(8) var outTex: texture_storage_2d_array<rgba16float, write>;
+
+    ${CLOUD_COMMON}
+    ${CLOUD_MARCH}
+    ${CUBE_DIR}
+
+    @compute @workgroup_size(8, 8, 1)
+    fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
+        let size = textureDimensions(outTex);
+        if (gid.x >= size.x || gid.y >= size.y) { return; }
+        let face = (i32(cloud.env.x) + i32(gid.z)) % 6;
+        let dir = cubeDir(face, (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size));
+        // A fixed start for each texel: the cube is not gathered over frames.
+        let jitter = fract(52.9829189 * fract(dot(vec2<f32>(gid.xy) + f32(face) * 17.0, vec2<f32>(0.06711056, 0.00583715))));
+        let c = marchClouds(globalUniform.CameraPos.xyz, dir, 60000.0, cloud.env.y, jitter);
+        textureStore(outTex, vec2<i32>(gid.xy), face, vec4<f32>(c.rgb / max(globalUniform.skyExposure, 1e-4), c.a));
+    }
+`;
+
+export let CloudEnvDown_cs: string = /* wgsl */ `
+    struct CloudSettings {
+        prevViewProj: mat4x4<f32>,
+        layer: vec4<f32>,
+        shape: vec4<f32>,
+        wind: vec4<f32>,
+        march: vec4<f32>,
+        env: vec4<f32>,
+    };
+
+    @group(0) @binding(0) var<uniform> cloud: CloudSettings;
+    @group(0) @binding(1) var inTex: texture_2d_array<f32>;
+    @group(0) @binding(2) var outTex: texture_storage_2d_array<rgba16float, write>;
+
+    @compute @workgroup_size(8, 8, 1)
+    fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
+        let size = textureDimensions(outTex);
+        if (gid.x >= size.x || gid.y >= size.y) { return; }
+        let face = (i32(cloud.env.x) + i32(gid.z)) % 6;
+        let p = vec2<i32>(gid.xy) * 2;
+        let sum = textureLoad(inTex, p, face, 0) + textureLoad(inTex, p + vec2<i32>(1, 0), face, 0)
+            + textureLoad(inTex, p + vec2<i32>(0, 1), face, 0) + textureLoad(inTex, p + vec2<i32>(1, 1), face, 0);
+        textureStore(outTex, vec2<i32>(gid.xy), face, sum * 0.25);
+    }
+`;
+
+export let CloudEnvComposite_cs: string = /* wgsl */ `
+    struct CloudSettings {
+        prevViewProj: mat4x4<f32>,
+        layer: vec4<f32>,
+        shape: vec4<f32>,
+        wind: vec4<f32>,
+        march: vec4<f32>,
+        env: vec4<f32>,
+    };
+
+    @group(0) @binding(2) var<uniform> cloud: CloudSettings;
+    @group(0) @binding(3) var prefilterMap: texture_cube<f32>;
+    @group(0) @binding(4) var prefilterMapSampler: sampler;
+    @group(0) @binding(5) var cloudCube: texture_cube<f32>;
+    @group(0) @binding(6) var cloudCubeSampler: sampler;
+    @group(0) @binding(7) var outTex: texture_storage_2d_array<rgba16float, write>;
+
+    ${CUBE_DIR}
+
+    @compute @workgroup_size(8, 8, 1)
+    fn CsMain(@builtin(global_invocation_id) gid: vec3<u32>) {
+        let size = textureDimensions(outTex);
+        if (gid.x >= size.x || gid.y >= size.y) { return; }
+        let face = (i32(cloud.env.x) + i32(gid.z)) % 6;
+        let dir = cubeDir(face, (vec2<f32>(gid.xy) + 0.5) / vec2<f32>(size));
+        // This level of the cube (0 the sharpest) and the matching level of the sky's own cube.
+        let level = log2(cloud.env.z / f32(size.x));
+        let levels = max(log2(cloud.env.z / 16.0), 1.0);
+        let skyLevels = f32(textureNumLevels(prefilterMap)) - 1.0;
+        let sky = textureSampleLevel(prefilterMap, prefilterMapSampler, dir, level / levels * skyLevels).rgb;
+        // The clouds as blurred: as fine as this level's texels, more for the rough levels.
+        let cloudLevels = f32(textureNumLevels(cloudCube)) - 1.0;
+        let blur = clamp(log2(cloud.env.w / f32(size.x)) + max(level - 2.0, 0.0) * 0.75, 0.0, cloudLevels);
+        let c = textureSampleLevel(cloudCube, cloudCubeSampler, dir, blur);
+        textureStore(outTex, vec2<i32>(gid.xy), face, vec4<f32>(sky * c.a + c.rgb, 1.0));
     }
 `;

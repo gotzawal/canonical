@@ -1,4 +1,9 @@
-import { CloudComposite_cs, CloudMarch_cs } from '../../../assets/shader/compute/Cloud_cs';
+import { CloudComposite_cs, CloudEnvComposite_cs, CloudEnvDown_cs, CloudEnvMarch_cs, CloudMarch_cs } from '../../../assets/shader/compute/Cloud_cs';
+import { Object3D } from '../../../core/entities/Object3D';
+import { Scene3D } from '../../../core/Scene3D';
+import { RenderNode } from '../../../components/renderer/RenderNode';
+import { TextureCube } from '../../graphics/webGpu/core/texture/TextureCube';
+import { Context3D } from '../../graphics/webGpu/Context3D';
 import { View3D } from '../../../core/View3D';
 import { Uint8ArrayTexture } from '../../../textures/Uint8ArrayTexture';
 import { VirtualTexture } from '../../../textures/VirtualTexture';
@@ -20,8 +25,11 @@ import { PostBase } from './PostBase';
  * Volumetric clouds: a layer of clouds on a shell around the Earth, ray
  * marched at a quarter of the resolution each way (a different pixel of
  * each 4x4 block every frame) and gathered over frames at half resolution,
- * then put over the scene with their shadow on the ground. See Cloud_cs.
- * The settings are the public fields; the editor sets them.
+ * then put over the scene with their shadow on the ground. With
+ * `reflections` the scene's environment cube becomes the sky with the
+ * clouds in it (a face refreshed each frame), so reflections and the light
+ * from the sky have them too; the sky drawn behind the scene stays clear.
+ * See Cloud_cs. The settings are the public fields; the editor sets them.
  *
  * @group Post Effects
  */
@@ -47,6 +55,8 @@ export class CloudPost extends PostBase {
     public shadows = 0.6;
     /** Steps along each ray (the graphics tier's budget). */
     public steps = 48;
+    /** Clouds in the scene's environment cube (reflections, light from the sky). */
+    public reflections = true;
 
     private _march: ComputeShader;
     private _composite: ComputeShader[] = [];
@@ -61,6 +71,7 @@ export class CloudPost extends PostBase {
     private _lastTime = 0;
     private _prevViewProj = new Float32Array(16);
     private _sky: Texture | null = null;
+    private _env: Reflection | null = null;
 
     private _createResources() {
         const ctx = this._boundCtx!;
@@ -84,7 +95,7 @@ export class CloudPost extends PostBase {
 
     private _createCompute(view: View3D) {
         const ctx = view.engine3D.context3D;
-        this._settings = new UniformGPUBuffer(32);
+        this._settings = new UniformGPUBuffer(40);
         const lights = GlobalBindGroup.getLightEntries(view.scene).storageGPUBuffer;
         const gBuffer = GBufferFrame.getGBufferFrame(GBufferFrame.colorPass_GBuffer, ctx).getCompressGBufferTexture();
         this._march = new ComputeShader(CloudMarch_cs);
@@ -128,6 +139,10 @@ export class CloudPost extends PostBase {
         s.setFloat32Array('shape', new Float32Array([this.type, this.detail, this.evolve, now % 100000]));
         s.setFloat32Array('wind', new Float32Array([this._windOffset[0], this._windOffset[1], this.haze, this.shadows]));
         s.setFloat32Array('march', new Float32Array([this.steps, this._frame, k % 4, Math.floor(k / 4)]));
+        // The reflection cube: all six faces when it is new, then one a frame.
+        const env = this._env?.clear ? this._env : null;
+        const face = env && env.fresh ? 0 : this._frame % 6;
+        s.setFloat32Array('env', new Float32Array([face, Math.max(12, Math.round(this.steps * 0.5)), ENV_SIZE, env?.cloudSize ?? 0]));
         s.apply();
     }
 
@@ -148,8 +163,18 @@ export class CloudPost extends PostBase {
         this.bindCamera(this._march, view);
         this.bindCamera(composite, view);
         this.bindUpstream(composite, 'inTex');
+        this._updateReflection(view, sky);
         this._upload(view);
-        this._boundCtx!.gpuContext.computeCommand(command, [this._march, composite]);
+        const env = this._env?.clear ? this._env : null;
+        const computes = [this._march, composite];
+        if (env) {
+            const faces = env.fresh ? 6 : 1;
+            this.bindCamera(env.computes[0], view);
+            for (const c of env.computes) c.workerSizeZ = faces;
+            computes.push(...env.computes);
+            env.fresh = false;
+        }
+        this._boundCtx!.gpuContext.computeCommand(command, computes);
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
         this._prevViewProj.set(view.camera.pvMatrix.rawData);
         this._frame++;
@@ -175,10 +200,178 @@ export class CloudPost extends PostBase {
         }
     }
 
+    /**
+     * Makes and keeps the reflection cube: the scene's environment map
+     * becomes it (the sky renderer keeps the clear sky), and every material
+     * bound to the clear sky is bound to it instead. Without `reflections`
+     * the scene gets its clear sky back; the cube stays for when they return.
+     */
+    private _updateReflection(view: View3D, sky: Texture) {
+        const scene = view.scene;
+        if (this._env && this._env.scene !== scene) this._dropReflection();
+        if (!this.reflections) {
+            this._releaseReflection();
+            return;
+        }
+        this._env ??= new Reflection(this._boundCtx!, scene, REFLECTION_SIZE, this._settings, this._noise, GlobalBindGroup.getLightEntries(scene).storageGPUBuffer);
+        const env = this._env;
+        env.setSky(sky);
+        if (scene.envMap !== env.cube) {
+            // A new sky (or the first): it stays on the sky renderer, everything else gets the cube.
+            const clear = scene.envMap;
+            if (!env.clear) env.fresh = true;
+            env.cube.isHDRTexture = clear?.isHDRTexture;
+            scene.envMap = env.cube;
+            const dome = EntityCollect.instance.getSky(scene);
+            if (dome instanceof SkyRenderer) dome.map = clear;
+            rebind(scene, [clear, env.clear].filter((t): t is Texture => !!t && t !== env.cube), env.cube);
+            env.clear = clear;
+        }
+    }
+
+    /** Gives the scene its clear sky back (the cube stays). */
+    private _releaseReflection() {
+        const env = this._env;
+        if (!env?.clear) return;
+        const scene = env.scene;
+        if (scene.envMap === env.cube) scene.envMap = env.clear;
+        rebind(scene, [env.cube], scene.envMap);
+        env.clear = null;
+    }
+
+    private _dropReflection() {
+        this._releaseReflection();
+        this._env?.destroy();
+        this._env = null;
+    }
+
     public destroy(force?: boolean) {
+        this._dropReflection();
         this.destroyOwned(this._march, ...this._composite, this._settings, this._marchTex, ...this._history, this._outTex, this._noise);
         super.destroy(force);
     }
+}
+
+/** Texels along each face of the reflection cube's sharpest level (levels down to 16). */
+const ENV_SIZE = 512;
+/** Texels along each face of the small cube the reflected clouds are marched into. */
+const REFLECTION_SIZE = 128;
+
+/** One level of a cube texture as a 2D array of its six faces (to write in a compute shader). */
+class CubeLevel extends Texture {
+    constructor(cube: Texture, level: number, ctx: Context3D) {
+        super(1, 1);
+        this._ensureBound(ctx);
+        const t = cube.getGPUTexture() as GPUTexture;
+        this.view = t.createView({ dimension: '2d-array', baseMipLevel: level, mipLevelCount: 1, baseArrayLayer: 0, arrayLayerCount: 6 });
+    }
+}
+
+function makeCube(ctx: Context3D, size: number, name: string): TextureCube {
+    const cube = new (class extends TextureCube {
+        constructor() {
+            super();
+            this.name = name;
+            this.format = GPUTextureFormat.rgba16float;
+            this.useMipmap = true;
+            let levels = 1;
+            for (let s = size; s > 16; s /= 2) levels++;
+            this.mipmapCount = levels;
+            this.createTextureDescriptor(size, size, levels, this.format);
+            this._ensureBound(ctx);
+        }
+    })();
+    return cube;
+}
+
+/**
+ * The reflection cube and what fills it: the clouds marched into a small
+ * cube and its blurrier levels, then each level of the environment cube
+ * (the clear sky through those clouds).
+ */
+class Reflection {
+    /** The environment cube the scene's materials read. */
+    public readonly cube: TextureCube;
+    /** The clear sky the scene had before (what it goes back to). */
+    public clear: Texture | null = null;
+    /** Made this frame: all six faces get filled at once. */
+    public fresh = true;
+    public readonly computes: ComputeShader[] = [];
+    private _clouds: TextureCube;
+    private _views: Texture[] = [];
+    private _composites: ComputeShader[] = [];
+    private _march: ComputeShader;
+
+    constructor(ctx: Context3D, public readonly scene: Scene3D, public readonly cloudSize: number, settings: UniformGPUBuffer, noise: Texture, lights: any) {
+        this.cube = makeCube(ctx, ENV_SIZE, 'CloudReflection');
+        this._clouds = makeCube(ctx, cloudSize, 'CloudReflectionClouds');
+        const cloudLevels = this._clouds.mipmapCount;
+        const cloudViews = Array.from({ length: cloudLevels }, (_, i) => new CubeLevel(this._clouds, i, ctx));
+        const envViews = Array.from({ length: this.cube.mipmapCount }, (_, i) => new CubeLevel(this.cube, i, ctx));
+        this._views = [...cloudViews, ...envViews];
+        const sized = (c: ComputeShader, s: number) => {
+            c.workerSizeX = c.workerSizeY = Math.ceil(s / 8);
+            c.workerSizeZ = 1;
+            return c;
+        };
+        this._march = sized(new ComputeShader(CloudEnvMarch_cs), cloudSize);
+        this._march.setUniformBuffer('cloud', settings);
+        this._march.setStorageBuffer('lightBuffer', lights);
+        this._march.setSamplerTexture('noiseTex', noise);
+        this._march.setStorageTexture('outTex', cloudViews[0]);
+        this.computes.push(this._march);
+        for (let i = 1; i < cloudLevels; i++) {
+            const c = sized(new ComputeShader(CloudEnvDown_cs), cloudSize >> i);
+            c.setUniformBuffer('cloud', settings);
+            c.setSamplerTexture('inTex', cloudViews[i - 1]);
+            c.setStorageTexture('outTex', cloudViews[i]);
+            this.computes.push(c);
+        }
+        for (let i = 0; i < this.cube.mipmapCount; i++) {
+            const c = sized(new ComputeShader(CloudEnvComposite_cs), ENV_SIZE >> i);
+            c.setUniformBuffer('cloud', settings);
+            c.setSamplerTexture('cloudCube', this._clouds);
+            c.setStorageTexture('outTex', envViews[i]);
+            this._composites.push(c);
+            this.computes.push(c);
+        }
+    }
+
+    private _sky: Texture | null = null;
+
+    /** The clear sky the clouds are lit by and put over. */
+    public setSky(sky: Texture) {
+        if (sky === this._sky) return;
+        this._sky = sky;
+        this._march.setSamplerTexture('prefilterMap', sky);
+        for (const c of this._composites) c.setSamplerTexture('prefilterMap', sky);
+    }
+
+    public destroy() {
+        for (const c of this.computes) c.destroy(true);
+        for (const v of this._views) v.destroy(true);
+        this._clouds.destroy(true);
+        this.cube.destroy(true);
+    }
+}
+
+/** Binds every material in the scene that reads one of `from` as its environment to `to`. */
+function rebind(scene: Scene3D, from: Texture[], to: Texture) {
+    if (!from.length || !to) return;
+    const visit = (o: Object3D) => {
+        o.components.forEach((c) => {
+            if (!(c instanceof RenderNode) || c instanceof SkyRenderer) return;
+            for (const m of c.materials) {
+                if (!m?.shader) continue;
+                for (const passes of m.shader.passShader.values()) for (const p of passes) {
+                    if (p.envMap && from.includes(p.envMap)) p.setTexture('envMap', to);
+                    if (p.prefilterMap && from.includes(p.prefilterMap)) p.setTexture('prefilterMap', to);
+                }
+            }
+        });
+        for (const child of o.entityChildren) if (child instanceof Object3D) visit(child);
+    };
+    visit(scene);
 }
 
 /** Voxels along each side of the noise volume, and each slice's side with its wrapped border. */

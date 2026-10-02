@@ -54,6 +54,39 @@ const sky = { target: [0, 60, 0], yaw: 30, pitch: -12, distance: 60, fov: 70 };
 await setSun([40, 150, 0]);
 await shot('day', sky);
 await shot('ground', { target: [0, 10, 0], yaw: 30, pitch: 35, distance: 260, fov: 60 });
+// Water over the valleys: the clouds in its reflection (the environment cube).
+await page.evaluate(() => {
+    const ed = window.__editor;
+    const water = ed.createWater();
+    ed.store.commit('Place water', (d) => {
+        const w = d.nodes.find((n) => n.id === water);
+        w.position = [0, 30, 0];
+        w.mesh.geometry = { ...w.mesh.geometry, width: 2000, height: 2000 };
+    });
+    ed.store.select([]);
+});
+await page.evaluate(() => window.__editor.shaders.whenIdle());
+await shot('water', { target: [0, 32, 0], yaw: 30, pitch: 10, distance: 40, fov: 70 });
+// The same without the clouds in the environment cube, to compare.
+await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = false; });
+await shot('water-plain', { target: [0, 32, 0], yaw: 30, pitch: 10, distance: 40, fov: 70 });
+await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = true; });
+// A chrome ball: the clouds on a glossy material.
+await page.evaluate(() => {
+    const ed = window.__editor;
+    ed.createPrimitive('sphere');
+    ed.store.commit('Chrome', (d) => {
+        const n = d.nodes.at(-1);
+        n.position = [0, 40, 0];
+        n.scale = [8, 8, 8];
+        Object.assign(n.mesh.material, { color: '#ffffff', metallic: 1, roughness: 0.05 });
+    });
+    ed.store.select([]);
+});
+await shot('chrome', { target: [0, 40, 0], yaw: 210, pitch: -5, distance: 22, fov: 60 });
+await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = false; });
+await shot('chrome-plain', { target: [0, 40, 0], yaw: 210, pitch: -5, distance: 22, fov: 60 });
+await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = true; });
 await page.evaluate(() => window.__editor.store.commit('Overcast', (d) => { d.environment.clouds.coverage = 0.85; d.environment.clouds.type = 0.2; }, { env: true }));
 await shot('overcast', sky);
 await page.evaluate(() => window.__editor.store.commit('Fair', (d) => { d.environment.clouds.coverage = 0.45; d.environment.clouds.type = 0.8; }, { env: true }));
