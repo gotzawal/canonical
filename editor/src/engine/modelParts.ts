@@ -1,5 +1,5 @@
 import {
-    AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, RendererMask, RendererMaskUtil, Shader, SkinnedMeshRenderer2, Texture, Vector4,
+    AnimatorComponent, BlendMode, Engine3D, LitMaterial, Material, Object3D, PassType, RenderNode, RendererMask, RendererMaskUtil, Shader, type RenderShaderPass, SkinnedMeshRenderer2, Texture, Vector4,
     VertexAttributeName,
 } from '@orillusion/core';
 import type { MaterialOverride, ModelDoc, PartOverride, SlotShading, TextureRole, Vec3 } from '../core/types';
@@ -138,11 +138,12 @@ function destroyKeepTextures(shader: Shader) {
  * for the new material, and copying them through Shader.clone() fails for
  * pass classes whose constructors take other arguments. A copy of a
  * LitMaterial stays a LitMaterial: the renderer sends transmissive (glass)
- * materials to their own pass by asking for `transmissionFactor`.
+ * materials to their own pass by asking for `transmissionFactor`. `copyPass`
+ * makes each pass of the copy (a variant of the shader, say).
  */
-export function cloneMaterial(src: Material, ctx?: any): Material {
+export function cloneMaterial(src: Material, ctx?: any, copyPass = (pass: RenderShaderPass) => pass.clone()): Material {
     const shader = new Shader();
-    for (const pass of src.shader.getSubShaders(PassType.COLOR)) shader.addRenderPass(pass.clone());
+    for (const pass of src.shader.getSubShaders(PassType.COLOR)) shader.addRenderPass(copyPass(pass));
     let mat: Material;
     if (src instanceof LitMaterial) {
         const lit = new LitMaterial(ctx);

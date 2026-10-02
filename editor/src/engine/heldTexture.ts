@@ -140,7 +140,8 @@ export function buildLayerArray(ctx: Context3D, layers: ArrayLayer[], size: numb
         size: { width: size, height: size, depthOrArrayLayers: Math.max(1, layers.length) },
         format,
         mipLevelCount: mips,
-        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT,
+        // Copied from by reads of its last level (mean colors).
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC,
     });
     const sampler = device.createSampler({ minFilter: 'linear', magFilter: 'linear', mipmapFilter: 'linear' });
     const encoder = device.createCommandEncoder({ label });

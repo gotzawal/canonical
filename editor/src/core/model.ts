@@ -426,6 +426,7 @@ export const TerrainLayer = z.object({
     heightBlend: num(1, 0, 100, { step: 0.1, description: 'Meters over which the layer fades in at its height limits.' }),
     slopeBlend: num(5, 0, 45, { step: 0.5, description: 'Degrees over which the layer fades in at its slope limits.' }),
     onlyPainted: bool(false, { title: 'Only Where Painted', description: 'Shows only where it is painted (paths, fields), not by its rules.' }),
+    debris: unit(0, { title: 'Loose Stones', description: 'Small stones lying on this layer near the camera, in its colors (0 none, 1 about three a square meter). Not on the low graphics tier.' }),
 });
 export type TerrainLayerDoc = z.output<typeof TerrainLayer>;
 
@@ -449,6 +450,7 @@ export const Terrain = z.object({
     variation: unit(0.5, { description: 'Large patches of lighter and darker ground, and the maps mixed with a larger copy far away, so the tiles do not repeat visibly; 0 for none.' }),
     wetShore: num(1.2, 0, 5, { title: 'Wet Shore', step: 0.05, description: 'Meters over a water surface on the terrain (a Water plane) that are wet: darker and glossy; 0 for none.' }),
     puddles: unit(0.5, { description: 'Under a Rain box the ground is wet; this is how much of its flat ground puddles cover (in the hollows); 0 for none.' }),
+    relief: unit(0.5, { description: 'How deep the layers\' height maps look up close (stones and gravel standing out of the ground); 0 flat. Not on the low graphics tier.' }),
     compress: bool(false, { title: 'Compress Layers', description: 'Keeps the layers\' textures block compressed on the GPU (BC3): a quarter of the memory and less bandwidth, a little less sharp color and normals. Where the device cannot (most phones) they stay as they are.' }),
     collide: bool(true, { description: 'Characters and bodies stand on it in Play, and the navigation mesh covers it.' }),
     castShadow: bool(true, { title: 'Cast Shadows' }),
@@ -495,7 +497,11 @@ export const Scatter = z.object({
     margin: num(1, 0, 100, { step: 0.1, description: 'Meters kept clear around the objects to avoid.' }),
     align: unit(0, { description: 'How much copies lean with the ground: 0 upright (trees), 1 along the slope (rocks, grass tufts).' }),
     sink: num(0, 0, 10, { step: 0.01, description: 'Meters the copies sink into the ground (so roots and rock bottoms do not float on slopes).' }),
-    bury: unit(0.5, { description: 'On a slope, how much of the gap under the downhill side of a copy is filled by sinking it further (by the copy\'s width and how much it does not lean with the ground): rocks sit in a hillside instead of on it.' }),
+    bury: unit(0.5, { description: 'Copies always sit with no side of their base over the ground (slopes, tilt); this sinks them further by part of how unevenly they sit: rocks set into a hillside instead of on it.' }),
+    soil: num(0.3, 0, 3, { step: 0.05, description: 'Meters the color of the terrain under a copy creeps up its base, to a ragged line, so it sits in the ground; 0 for none. Engine lit materials (Library and imported models).' }),
+    moss: unit(0, { description: 'How much moss (or dust: its color) grows on what faces up; 0 for none.' }),
+    mossColor: color('#55602f', { title: 'Moss Color' }),
+    vary: unit(0.4, { title: 'Variation', description: 'How much copies differ in brightness and warmth.' }),
     tilt: num(0, 0, 60, { step: 1, description: 'Degrees each copy tilts at random on top of its lean, so rocks do not all sit the same way up; 0 for none.' }),
     clusters: unit(0, { description: 'How much copies gather in groups with bare ground between them, the largest at the middle of a group (rocks, shrubs); 0 spreads them evenly.' }),
     clusterSize: num(15, 1, 1000, { title: 'Cluster Size', step: 0.5, description: 'Meters across a group of copies (with clusters above 0).' }),

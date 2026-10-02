@@ -11,7 +11,11 @@ import type {
     TextureRole,
 } from '../core/types';
 import { placeScatter, type AvoidBox, type GroundSample, type Placement, type ScatterSolid } from '../core/scatter';
-import { covers, groundHeight, layerWeights, paintAt, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { contactMap, covers, groundHeight, groundNormal, layerWeights, paintAt, type Contact, type TerrainFrame, type TerrainSurface } from '../core/terrain';
+import { quatRotate } from '../core/math';
+import type { ClutterGround } from '../core/clutter';
+import { GroundClutter } from './clutter';
+import { linearOf } from './rockGround';
 import type { DerivedRole } from '../core/derived';
 import { ParticleSystem } from '@orillusion/particle';
 import { buildParticles, dotTextureUrl } from './particles';
@@ -108,6 +112,8 @@ interface ScatterState {
     placements: Placement[];
     /** The solid copies, as trunks and boxes. */
     solids: ScatterSolid[];
+    /** What its soil and moss were last set from. */
+    groundKey?: string;
 }
 
 /** Scatters are placed again this long after the last change (a drag changes things many times a second). */
@@ -256,6 +262,11 @@ export class SceneSync extends Emitter<SyncEvents> {
     private scatterModelsLoaded = new Map<string, ScatterModel | null>();
     /** Scatters in the scene; a placement waiting to run, and what resolves once it ran. */
     private scatterStates = new Set<ScatterState>();
+    /** Counts scatter placements (things on the ground follow them), and what the ground details were made from. */
+    private scatterVersion = 0;
+    private groundKey = '';
+    private contactMaps = new Map<TerrainState, { width: number; height: number; data: Uint8Array }>();
+    private clutter: GroundClutter | null = null;
     private scatterTimer = 0;
     private scatterPending: Promise<void> | null = null;
     private scatterRan: (() => void) | null = null;
@@ -297,6 +308,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         }
         for (const s of this.scatterStates) s.view.update(at);
         if (this.terrainStates.size) this.updateWetness();
+        this.updateGround(at);
     }
 
     /** When terrain heights eased last asked for the shadows again. */
@@ -311,7 +323,10 @@ export class SceneSync extends Emitter<SyncEvents> {
             const node = this.store.node(e.id);
             if (!node) continue;
             if (e.mirror) this.applyMirror(e, node);
-            if (e.terrain && node.terrain) e.terrain.view.material.setLook(node.terrain.blending, node.terrain.variation, QUALITY[level].terrainFar);
+            if (e.terrain && node.terrain) {
+                e.terrain.view.material.setLook(node.terrain.blending, node.terrain.variation, QUALITY[level].terrainFar);
+                e.terrain.view.material.setRelief(node.terrain.relief, QUALITY[level].terrainRelief);
+            }
             if (e.scatter) e.scatter.view.setLodScale(QUALITY[level].lodDistance);
             e.grass?.setLodScale(QUALITY[level].lodDistance);
         }
@@ -1269,6 +1284,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         state.view.setShadows(doc.castShadow);
         state.view.material.setLook(doc.blending, doc.variation, QUALITY[this.runtime.qualityLevel].terrainFar);
         state.view.material.setCompressed(doc.compress);
+        state.view.material.setRelief(doc.relief, QUALITY[this.runtime.qualityLevel].terrainRelief);
         state.wet = '';
         const built = JSON.stringify([doc.heightmap, doc.size, doc.height, doc.detail]);
         if (built !== state.built) {
@@ -1381,7 +1397,8 @@ export class SceneSync extends Emitter<SyncEvents> {
 
     private applyTerrainLayers(entry: Entry, t: TerrainState, doc: TerrainDoc) {
         const size = this.layerArraySize(doc);
-        const key = JSON.stringify([doc.layers, size]);
+        // Loose stones are drawn apart (GroundClutter): they leave the arrays as they are.
+        const key = JSON.stringify([doc.layers.map(({ debris: _, ...l }) => l), size]);
         if (key === t.layers) return;
         t.layers = key;
         const layers = doc.layers.length ? doc.layers : [];
@@ -1505,7 +1522,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             return;
         }
         if (!entry.scatter) {
-            const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id);
+            const view = new ScatterView(this.runtime.scene, this.runtime.engine.context3D, entry.id, this.shaders.terrainTexture());
             view.setLodScale(QUALITY[this.runtime.qualityLevel].lodDistance);
             view.setVisible(entry.visible);
             entry.scatter = { view, placed: '', placements: [], solids: [] };
@@ -1597,6 +1614,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             ]);
             if (key === st.placed) continue;
             st.placed = key;
+            this.scatterVersion++;
             const frame = fieldFrame(m);
             const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
             const layered = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : null;
@@ -1604,10 +1622,7 @@ export class SceneSync extends Emitter<SyncEvents> {
             const query = doc.ground ? (x: number, z: number) => layered?.sample(x, z) ?? null : null;
             st.placements = placeScatter(doc, frame, query, avoid, hashString(entry.id), {
                 layers: doc.layer > 0 && lands.length ? (x, z, g) => this.terrainLayersAt(lands, x, z, g) : undefined,
-                footprint: (source, variant) => {
-                    const piece = models[source]?.piece(variant);
-                    return piece && piece.max[0] >= piece.min[0] ? Math.max(piece.max[0] - piece.min[0], piece.max[2] - piece.min[2]) / 2 : 0;
-                },
+                base: (source, variant) => models[source]?.piece(variant)?.base ?? [],
             });
             st.view.build(st.placements, models, doc.castShadow, (res) => this.disposeLater(res));
             st.solids = scatterSolids(doc, st.placements, models);
@@ -1615,6 +1630,123 @@ export class SceneSync extends Emitter<SyncEvents> {
             this.runtime.redrawShadows();
             this.emit('scatter', entry.id);
         }
+    }
+
+    /**
+     * What lies on and around the ground, once a frame (made again only when
+     * what it comes from changes): the contacts of scattered copies on each
+     * terrain, the soil and moss of each scatter, and the loose stones near
+     * the camera.
+     */
+    private updateGround(eye: number[]) {
+        const tier = QUALITY[this.runtime.qualityLevel];
+        const terrains = [...this.terrainStates].filter((t) => this.entries.get(t.view.id)?.visible);
+        const key = [this.scatterVersion, ...terrains.map((t) => `${t.view.id}:${t.version}:${t.view.material.meansVersion}:${this.store.node(t.view.id)?.terrain?.layers.map((l) => l.debris)}`)].join('|');
+        if (key !== this.groundKey) {
+            this.groundKey = key;
+            const contacts = this.scatterContacts();
+            this.contactMaps.clear();
+            for (const t of terrains) {
+                const map = contactMap(t.view.frame, contacts);
+                t.view.material.setContacts(map);
+                if (map) this.contactMaps.set(t, map);
+            }
+            this.clutter ??= new GroundClutter(this.runtime.scene, this.runtime.engine.context3D);
+            this.clutter.setGround(this.clutterGround(terrains), terrains[0]?.view.material.means ?? []);
+        }
+        this.clutter?.update(eye, tier.clutterDistance * tier.lodDistance);
+        for (const entry of this.entries.values()) {
+            const st = entry.scatter;
+            const doc = st ? this.store.node(entry.id)?.scatter : undefined;
+            if (st && doc) this.applyRockGround(st, doc, terrains);
+        }
+    }
+
+    /** Where scattered copies meet the ground: their trunks, rocks (wider than tall) with a ring of loose stones. */
+    private scatterContacts(): Contact[] {
+        const out: Contact[] = [];
+        for (const entry of this.entries.values()) {
+            const st = entry.scatter;
+            const doc = st && entry.visible ? this.store.node(entry.id)?.scatter : undefined;
+            if (!st || !doc) continue;
+            for (const p of st.placements) {
+                const model = doc.sources[p.source]?.model;
+                const piece = model ? this.scatterModelsLoaded.get(model)?.piece(p.variant) : null;
+                if (!piece) continue;
+                const c = quatRotate(p.rotation, [piece.trunk.x * p.scale, 0, piece.trunk.z * p.scale]);
+                const tall = (piece.max[1] - piece.min[1]) / Math.max(1e-6, piece.max[0] - piece.min[0], piece.max[2] - piece.min[2]);
+                out.push({ x: p.position[0] + c[0], z: p.position[2] + c[2], r: piece.trunk.radius * p.scale, ring: tall < 1.5 ? 1 : 0 });
+            }
+        }
+        return out;
+    }
+
+    /** The ground loose stones lie on: the terrains shown, their layers' Loose Stones, and rings around rocks; null with none. */
+    private clutterGround(terrains: TerrainState[]): ClutterGround | null {
+        const lands = terrains.flatMap((t) => {
+            const doc = this.store.node(t.view.id)?.terrain;
+            const ring = this.contactMaps.get(t);
+            return doc && (doc.layers.some((l) => l.debris > 0) || ring) ? [{ t, doc, surface: t.view.surface, ring }] : [];
+        });
+        if (!lands.length) return null;
+        const landAt = (x: number, z: number) => lands.find((l) => covers(l.surface, x, z));
+        return {
+            at: (x, z) => {
+                const l = landAt(x, z);
+                return l ? { y: groundHeight(l.surface, x, z), ny: groundNormal(l.surface, x, z)[1] } : null;
+            },
+            amount: (x, z) => {
+                const l = landAt(x, z);
+                if (!l) return { amount: 0, layer: 0 };
+                const y = groundHeight(l.surface, x, z);
+                const slope = (Math.acos(Math.min(1, groundNormal(l.surface, x, z)[1])) * 180) / Math.PI;
+                const paint = l.t.paintData;
+                const w = layerWeights(l.doc.layers, y, slope, paint ? paintAt(l.surface.frame, paint, x, z) : null);
+                let amount = 0, layer = 0;
+                w.forEach((v, i) => {
+                    amount += v * (l.doc.layers[i]?.debris ?? 0);
+                    if (v > w[layer]) layer = i;
+                });
+                if (l.ring) {
+                    const f = l.surface.frame;
+                    const i = Math.floor(((x - f.x + f.sizeX / 2) / f.sizeX) * l.ring.width), j = Math.floor(((z - f.z + f.sizeZ / 2) / f.sizeZ) * l.ring.height);
+                    if (i >= 0 && j >= 0 && i < l.ring.width && j < l.ring.height) amount += (l.ring.data[(j * l.ring.width + i) * 4 + 1] / 255) * 0.8;
+                }
+                return { amount, layer };
+            },
+        };
+    }
+
+    /** A scatter's soil (the terrain's colors under its copies), moss and variation. */
+    private applyRockGround(st: ScatterState, doc: ScatterDoc, terrains: TerrainState[]) {
+        const place = this.shaders.terrainPlace;
+        const key = JSON.stringify([doc.soil, doc.moss, doc.mossColor, doc.vary, st.placements.length, this.groundKey, place.frame.x, place.frame.z, place.frame.w, place.level.x, place.level.y, place.level.z]);
+        if (key === st.groundKey) return;
+        st.groundKey = key;
+        // The soil: the terrains' mean colors where the copies stand (a few of them), as the layers show there.
+        const soil = [0, 0, 0];
+        let n = 0;
+        const step = Math.max(1, Math.floor(st.placements.length / 24));
+        for (let k = 0; k < st.placements.length; k += step) {
+            const [x, , z] = st.placements[k].position;
+            const t = terrains.find((t) => covers(t.view.surface, x, z));
+            const doc = t && this.store.node(t.view.id)?.terrain;
+            if (!t || !doc || !t.view.material.means.length) continue;
+            const slope = (Math.acos(Math.min(1, groundNormal(t.view.surface, x, z)[1])) * 180) / Math.PI;
+            const w = layerWeights(doc.layers, groundHeight(t.view.surface, x, z), slope, t.paintData ? paintAt(t.view.surface.frame, t.paintData, x, z) : null);
+            w.forEach((v, i) => {
+                const m = t.view.material.means[i];
+                if (m) for (let c = 0; c < 3; c++) soil[c] += m[c] * v;
+            });
+            n++;
+        }
+        const color = n ? soil.map((v) => (v / n) * 0.85) : linearOf('#6a5c4c');
+        st.view.ground.set({
+            frame: [place.frame.x, place.frame.y, place.frame.z, place.frame.w],
+            level: [place.level.x, place.level.y, place.level.z, doc.vary],
+            soil: [color[0], color[1], color[2], n ? doc.soil : 0],
+            moss: [...linearOf(doc.mossColor), doc.moss],
+        });
     }
 
     /** How much each layer shows on the terrain (of these) whose ground a copy stands on, or null on other ground. */

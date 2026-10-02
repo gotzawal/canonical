@@ -10,13 +10,14 @@
 
 import {
     BoundingBox, InstanceDrawComponent, Material, MeshRenderer, Object3D, Quaternion, RenderNode, SkinnedMeshRenderer, SkinnedMeshRenderer2, Vector3,
-    VertexAttributeName, type Context3D, type GeometryBase,
+    VertexAttributeName, type Context3D, type GeometryBase, type Texture,
 } from '@orillusion/core';
 import { compose, decompose, invert, mul, rayBox, type Mat4, type Ray } from '../core/math';
 import type { Placement } from '../core/scatter';
 import type { Vec3 } from '../core/types';
 import { geometryWithLods } from './lod';
-import { cloneMaterial, partPaths } from './modelParts';
+import { partPaths } from './modelParts';
+import { RockGround } from './rockGround';
 
 /** A part of a source model: its shape and materials, and its matrix in the model's space. */
 interface Part {
@@ -35,6 +36,8 @@ export interface ScatterPiece {
     max: Vec3;
     /** The middle and radius of what reaches the ground, in the piece's space. */
     trunk: { x: number; z: number; radius: number };
+    /** Eight points around its bottom, in its space (where it meets the ground). */
+    base: Vec3[];
 }
 
 /**
@@ -89,7 +92,7 @@ function rendererOf(o: Object3D): boolean {
 
 /** The static mesh parts under `root`, in the model's space, with their box and trunk. */
 function pieceOf(root: Object3D, toModel: ArrayLike<number>): ScatterPiece {
-    const piece: ScatterPiece = { parts: [], renderers: [], offset: [0, 0, 0], min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity], trunk: { x: 0, z: 0, radius: 0.1 } };
+    const piece: ScatterPiece = { parts: [], renderers: [], offset: [0, 0, 0], min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity], trunk: { x: 0, z: 0, radius: 0.1 }, base: [] };
     const points: number[] = [];
     root.traverse((o: Object3D) => {
         o.components.forEach((c) => {
@@ -142,6 +145,19 @@ function fitTrunk(piece: ScatterPiece, points: number[]) {
     reach.sort((a, b) => a - b);
     const footprint = Math.max(piece.max[0] - piece.min[0], piece.max[2] - piece.min[2]);
     piece.trunk = { x: cx, z: cz, radius: Math.max(0.03, Math.min(reach[Math.floor(reach.length * 0.8)] ?? 0.1, footprint / 2)) };
+    // The base: the low points farthest out in eight directions.
+    const best = new Array<number>(8).fill(-Infinity);
+    for (let i = 0; i < points.length; i += 3) {
+        if (points[i + 1] > low) continue;
+        for (let k = 0; k < 8; k++) {
+            const a = (k * Math.PI) / 4;
+            const out = (points[i] - cx) * Math.cos(a) + (points[i + 2] - cz) * Math.sin(a);
+            if (out > best[k]) {
+                best[k] = out;
+                piece.base[k] = [points[i], points[i + 1], points[i + 2]];
+            }
+        }
+    }
 }
 
 /** Whether pieces stand apart on the ground (a set), rather than together (a trunk and its leaves). */
@@ -177,6 +193,7 @@ function standing(p: ScatterPiece): ScatterPiece {
         min: [p.min[0] + dx, p.min[1] + dy, p.min[2] + dz],
         max: [p.max[0] + dx, p.max[1] + dy, p.max[2] + dz],
         trunk: { x: p.trunk.x + dx, z: p.trunk.z + dz, radius: p.trunk.radius },
+        base: p.base.map((b) => [b[0] + dx, b[1] + dy, b[2] + dz] as Vec3),
     };
 }
 
@@ -216,10 +233,13 @@ export class ScatterView {
     private lodScale = 1;
     /** Copies made. */
     count = 0;
+    /** What its copies read to sit in the ground (soil, moss, variation). */
+    readonly ground: RockGround;
 
-    constructor(scene: Object3D, private ctx: Context3D, readonly id: string) {
+    constructor(scene: Object3D, private ctx: Context3D, readonly id: string, heights: Texture) {
         this.root.name = 'Scatter';
         scene.addChild(this.root);
+        this.ground = new RockGround(heights);
     }
 
     /**
@@ -260,7 +280,7 @@ export class ScatterView {
         const copies = new Map<Material, Material>();
         const materialOf = (m: Material) => {
             let c = copies.get(m);
-            if (!c) copies.set(m, (c = cloneMaterial(m, this.ctx)));
+            if (!c) copies.set(m, (c = this.ground.material(m, this.ctx)));
             return c;
         };
         const renderers: MeshRenderer[] = [];
@@ -403,6 +423,7 @@ export class ScatterView {
         this.clear(dispose);
         this.root.removeFromParent();
         this.root.destroy();
+        dispose(this.ground);
     }
 }
 

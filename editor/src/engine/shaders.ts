@@ -716,8 +716,13 @@ export class ShaderManager extends Emitter<ShaderEvents> {
         }
     }
 
+    /** Where the terrain material shaders read lies: its middle and size (frame), its base, height and whether there is one (level). */
+    get terrainPlace(): { frame: Vector4; level: Vector4 } {
+        return this.terrainValues;
+    }
+
     /** The heights material shaders read (one texel of 0 until a terrain is set). */
-    private terrainTexture(): HeldTexture {
+    terrainTexture(): HeldTexture {
         if (!this.terrainHeights) {
             const ctx = this.runtime.engine.context3D;
             this.terrainHeights = new HeldTexture(ctx, '2d', 'unfilterable-float', false);

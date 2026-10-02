@@ -4,7 +4,7 @@
 // engine (engine/scatter.ts) draws the copies, and Play, the level check
 // and the navigation mesh take the solid ones as trunks and boxes.
 
-import type { Quat, Vec3 } from './math';
+import { quatRotate, type Quat, type Vec3 } from './math';
 import type { ScatterDoc } from './types';
 import { seededRandom } from './terrainGen';
 
@@ -20,13 +20,13 @@ export type GroundQuery = (x: number, z: number) => GroundSample | null;
 /** How much each layer of the terrain shows where a copy stands (see core/terrain.ts layerWeights), or null off a terrain. */
 export type LayerQuery = (x: number, z: number, ground: GroundSample) => readonly number[] | null;
 
-/** Half the width of a source's piece at scale 1, meters (how far its downhill side reaches on a slope). */
-export type FootprintQuery = (source: number, variant: number) => number;
+/** Points around the bottom of a source's piece at scale 1, in its space (where it meets the ground). */
+export type BaseQuery = (source: number, variant: number) => readonly Vec3[];
 
 /** What placement knows of the ground and the models beyond the ground's height. */
 export interface PlaceExtras {
     layers?: LayerQuery;
-    footprint?: FootprintQuery;
+    base?: BaseQuery;
 }
 
 /** Where a scatter lies: its object's world position and its turned x and z axes (sizes are meters). */
@@ -149,11 +149,19 @@ export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: Groun
             const half = (tilt * tiltBy * tiltBy) / 2;
             rotation = mulQuat([Math.cos(a) * Math.sin(half), 0, Math.sin(a) * Math.sin(half), Math.cos(half)], rotation);
         }
-        // On a slope the downhill side of a copy that does not lean with it floats: sink it by part of that gap.
+        // No side of its base floats over the ground (slopes, tilt): the highest gap closes,
+        // and bury sinks it further by part of how unevenly it sits.
         let drop = doc.sink;
-        if (bury > 0 && extras.footprint && slope > 0.5) {
-            const unleaned = ((slope * (1 - Math.min(1, Math.max(0, doc.align)))) * Math.PI) / 180;
-            drop += extras.footprint(source, variant) * scale * Math.tan(Math.min(unleaned, 1.2)) * bury;
+        const base = extras.base?.(source, variant);
+        if (base?.length) {
+            let hi = -Infinity, lo = Infinity;
+            for (const b of base) {
+                const q = quatRotate(rotation, [b[0] * scale, b[1] * scale, b[2] * scale]);
+                const gap = g.y + q[1] - (ground?.(x + q[0], z + q[2])?.y ?? g.y);
+                hi = Math.max(hi, gap);
+                lo = Math.min(lo, gap);
+            }
+            drop += Math.max(0, hi) + (hi - lo) * 0.35 * bury;
         }
         out.push({
             source,

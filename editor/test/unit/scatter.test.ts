@@ -45,11 +45,12 @@ describe('scatter', () => {
         // Tilt turns copies off upright; bury sinks them on a slope by their width.
         const tilted = placeScatter({ ...base, tilt: 40 }, frame, flat, [], 3);
         expect(tilted.some((c) => Math.abs(c.rotation[0]) + Math.abs(c.rotation[2]) > 0.05)).toBe(true);
-        const slope = () => ({ y: 0, normal: [-Math.SQRT1_2, Math.SQRT1_2, 0] as Vec3 });
-        const buried = placeScatter({ ...base, slope: [0, 90], bury: 1 }, frame, slope, [], 3, { footprint: () => 1 });
-        for (const c of buried) expect(c.position[1]).toBeLessThan(-0.4 * c.scale);
+        const slope = (x: number) => ({ y: -x, normal: [-Math.SQRT1_2, Math.SQRT1_2, 0] as Vec3 });
+        const foot = { base: () => [[1, 0, 0], [-1, 0, 0], [0, 0, 1], [0, 0, -1]] as Vec3[] };
+        const buried = placeScatter({ ...base, slope: [0, 90], bury: 1, align: 0 }, frame, slope, [], 3, foot);
+        for (const c of buried) expect(c.position[1] + c.position[0]).toBeLessThan(-0.4 * c.scale);
         // Without the newer rules the copies are where they were.
-        const again = placeScatter({ ...base, bury: 1, tilt: 0 }, frame, flat, [], 3, { footprint: () => 1 });
+        const again = placeScatter({ ...base, bury: 1, tilt: 0 }, frame, flat, [], 3, foot);
         expect(again.map((c) => c.position)).toEqual(plain.map((c) => c.position));
     });
 

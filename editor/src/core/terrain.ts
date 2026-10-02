@@ -392,3 +392,44 @@ export function paintAt(frame: TerrainFrame, paint: { width: number; height: num
     const o = (j * paint.width + i) * 4;
     return [paint.data[o] / 255, paint.data[o + 1] / 255, paint.data[o + 2] / 255, paint.data[o + 3] / 255];
 }
+
+/** Something standing on the ground: its middle and the radius of its foot, meters, and how much loose stone lies around it (0 to 1: rocks, not trees). */
+export interface Contact {
+    x: number;
+    z: number;
+    r: number;
+    ring: number;
+}
+
+/**
+ * Where things stand on a terrain, as an RGBA8 map over it (row 0 at its
+ * -z side): red the darkening around each foot (occlusion where it meets
+ * the ground), green a ring of loose stones just outside it. Texels are a
+ * quarter meter at most, `maxSide` a side at least; null without contacts.
+ */
+export function contactMap(frame: TerrainFrame, contacts: readonly Contact[], maxSide = 512): { width: number; height: number; data: Uint8Array } | null {
+    if (!contacts.length) return null;
+    const step = Math.max(0.25, Math.max(frame.sizeX, frame.sizeZ) / maxSide);
+    const width = Math.max(1, Math.ceil(frame.sizeX / step)), height = Math.max(1, Math.ceil(frame.sizeZ / step));
+    const x0 = frame.x - frame.sizeX / 2, z0 = frame.z - frame.sizeZ / 2;
+    const data = new Uint8Array(width * height * 4);
+    const ss = (a: number, b: number, v: number) => {
+        const t = Math.min(1, Math.max(0, (v - a) / (b - a)));
+        return t * t * (3 - 2 * t);
+    };
+    for (const c of contacts) {
+        const r = Math.max(0.05, c.r), reach = r * 2.6;
+        const i0 = Math.max(0, Math.floor((c.x - reach - x0) / step)), i1 = Math.min(width - 1, Math.ceil((c.x + reach - x0) / step));
+        const j0 = Math.max(0, Math.floor((c.z - reach - z0) / step)), j1 = Math.min(height - 1, Math.ceil((c.z + reach - z0) / step));
+        for (let j = j0; j <= j1; j++) {
+            for (let i = i0; i <= i1; i++) {
+                const d = Math.hypot(x0 + (i + 0.5) * step - c.x, z0 + (j + 0.5) * step - c.z) / r;
+                if (d > 2.6) continue;
+                const o = (j * width + i) * 4;
+                data[o] = Math.max(data[o], Math.round(255 * (1 - ss(0.85, 1.7, d))));
+                data[o + 1] = Math.max(data[o + 1], Math.round(255 * c.ring * ss(0.8, 1.15, d) * (1 - ss(1.4, 2.6, d))));
+            }
+        }
+    }
+    return { width, height, data };
+}

@@ -112,7 +112,12 @@ export interface GenerateOptions {
     seed: number;
     /** 0 smooth .. 1 rugged. */
     roughness?: number;
+    /** How much water has worn it (gullies down its slopes, fans where they end), 0 to 1: by its shape when left out. */
+    erosion?: number;
 }
+
+/** How much each shape is worn by water when a terrain does not say. */
+const EROSION: Record<TerrainShape, number> = { island: 0.5, hills: 0.4, mountains: 0.7, plains: 0.15, flat: 0 };
 
 const smoothstep = (a: number, b: number, x: number) => {
     const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -171,6 +176,7 @@ export function generateHeightmap(o: GenerateOptions): Heightmap {
         for (const a of above) top = Math.max(top, a);
         const k = top > 0 ? 1 / top : 0;
         for (let i = 0; i < data.length; i++) data[i] = 0.03 + (ISLAND_COAST - 0.03) * shelf[i] + (1 - ISLAND_COAST) * above[i] * k;
+        erode(map, o.erosion ?? EROSION[o.shape], o.seed);
         return map;
     }
     let lo = Infinity;
@@ -181,7 +187,80 @@ export function generateHeightmap(o: GenerateOptions): Heightmap {
     }
     const span = hi - lo || 1;
     for (let i = 0; i < data.length; i++) data[i] = (data[i] - lo) / span;
+    erode(map, o.erosion ?? EROSION[o.shape], o.seed);
     return map;
+}
+
+/**
+ * Hydraulic erosion: drops of rain run downhill, taking soil from where
+ * they speed up (more the more water and the steeper) and leaving it where
+ * they slow, so slopes get gullies and ridges and their feet fans. `amount`
+ * 0 to 1 (drops: about a quarter of the samples at 1).
+ */
+export function erode(map: Heightmap, amount: number, seed: number) {
+    const n = map.width, m = map.height, h = map.data;
+    const drops = Math.round(n * m * 0.25 * Math.min(1, Math.max(0, amount)));
+    if (drops <= 0 || n < 8 || m < 8) return;
+    const random = seededRandom(seed ^ 0x51ed270b);
+    // Heights are 0..1 over the map: steps of a sample are slopes of about 1/n.
+    const scale = Math.max(n, m) / 256;
+    const INERTIA = 0.05, CAPACITY = 4, MIN_CAPACITY = 0.01 / scale, DEPOSIT = 0.3, ERODE = 0.3, EVAPORATE = 0.02, GRAVITY = 4 / scale, LIFE = 30;
+    // A drop takes soil from a disc of samples around it, more near its middle.
+    const R = 2, brush: [number, number, number][] = [];
+    let total = 0;
+    for (let dz = -R; dz <= R; dz++) for (let dx = -R; dx <= R; dx++) {
+        const w = Math.max(0, 1 - Math.hypot(dx, dz) / (R + 0.5));
+        if (w > 0) {
+            brush.push([dx, dz, w]);
+            total += w;
+        }
+    }
+    for (const b of brush) b[2] /= total;
+    const sample = (x: number, z: number) => {
+        const i = Math.floor(x), j = Math.floor(z), u = x - i, v = z - j, o = j * n + i;
+        const a = h[o], b = h[o + 1], c = h[o + n], d = h[o + n + 1];
+        return { y: a * (1 - u) * (1 - v) + b * u * (1 - v) + c * (1 - u) * v + d * u * v, gx: (b - a) * (1 - v) + (d - c) * v, gz: (c - a) * (1 - u) + (d - b) * u };
+    };
+    for (let k = 0; k < drops; k++) {
+        let x = random() * (n - 2), z = random() * (m - 2), dx = 0, dz = 0, speed = 1, water = 1, sediment = 0;
+        for (let life = 0; life < LIFE; life++) {
+            const i = Math.floor(x), j = Math.floor(z), u = x - i, v = z - j;
+            const here = sample(x, z);
+            dx = dx * INERTIA - here.gx * (1 - INERTIA);
+            dz = dz * INERTIA - here.gz * (1 - INERTIA);
+            const len = Math.hypot(dx, dz);
+            if (len < 1e-9) break;
+            dx /= len;
+            dz /= len;
+            x += dx;
+            z += dz;
+            if (x < 0 || z < 0 || x >= n - 1 || z >= m - 1) break;
+            const dy = sample(x, z).y - here.y;
+            const capacity = Math.max(-dy * speed * water * CAPACITY, MIN_CAPACITY);
+            if (sediment > capacity || dy > 0) {
+                // Leave soil at the four samples around where it was (fills a pit it ran up into).
+                const put = dy > 0 ? Math.min(dy, sediment) : (sediment - capacity) * DEPOSIT;
+                sediment -= put;
+                const o = j * n + i;
+                h[o] += put * (1 - u) * (1 - v);
+                h[o + 1] += put * u * (1 - v);
+                h[o + n] += put * (1 - u) * v;
+                h[o + n + 1] += put * u * v;
+            } else {
+                const take = Math.min((capacity - sediment) * ERODE, -dy);
+                for (const [bx, bz, w] of brush) {
+                    const ci = i + bx, cj = j + bz;
+                    if (ci < 0 || cj < 0 || ci >= n || cj >= m) continue;
+                    const o = cj * n + ci;
+                    const t = Math.min(h[o], take * w);
+                    h[o] -= t;
+                    sediment += t;
+                }
+            }
+            speed = Math.sqrt(Math.max(0, speed * speed - dy * GRAVITY));
+            water *= 1 - EVAPORATE;
+        }
+    }
 }
 
 export const SCULPT_OPS = ['raise', 'lower', 'flatten', 'smooth', 'path'] as const;
