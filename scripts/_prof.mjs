@@ -1,14 +1,3 @@
-// Visual check of the ground, rocks and sky: opens the built editor (vite
-// preview on :8101) with WebGPU on SwiftShader, makes an island with four
-// layers from Library materials (dirt, sand by the water, stones, rock on
-// cliffs), the Water around it, clustered rocks on the stones layer and a
-// rain box on the beach, and screenshots the shore, the puddles, a wide
-// view (aerial perspective) and the same view at sunset. Prints console
-// errors and WebGPU messages.
-//
-//   pnpm editor:build
-//   npx vite preview --config editor/vite.config.js --port 8101 --strictPort &
-//   xvfb-run -a node scripts/ground-shot.mjs <out dir> <label>
 import { mkdirSync } from 'fs';
 import { chromium } from '@playwright/test';
 
@@ -95,62 +84,46 @@ const ids = await page.evaluate(async () => {
     ed.store.select([]);
     return { terrain, water, scatter, rain, grass };
 });
-console.log('created', JSON.stringify(ids));
-
 await page.evaluate(() => window.__editor.shaders.whenIdle());
-await page.evaluate(() => window.__editor.sync.whenLoaded?.());
-await page.waitForTimeout(10000);
-
-// A page screenshot clipped to the view: SwiftShader draws this scene slowly, and an element
-// screenshot waits for the canvas to settle.
-const shot = async (name, c) => {
-    await page.evaluate((c) => window.__editor.store.setCamera(c), c);
-    await page.waitForTimeout(7000);
-    const clip = await page.locator('.viewport canvas.gpu').boundingBox();
-    await page.screenshot({ path: `${out}/${label}-${name}.png`, clip: clip ?? undefined, timeout: 180_000 });
-    console.log('shot', name);
-};
-process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
-await shot('shore', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
-await shot('close', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
-// Up close: rock bases in the soil, loose stones, the ground's relief.
-console.log('blades', await page.evaluate((id) => {
-    const g = window.__editor.sync.entries.get(id).grass;
-    let on = 0, all = 0;
-    for (const r of g.renderers) for (const n of r.nodes) { all++; if (n.localScale.y > 0) on++; }
-    return `${on}/${all}`;
-}, ids.grass));
-await shot('grass', { target: [30, 6, 14], yaw: 95, pitch: 22, distance: 18, fov: 60 });
-await shot('grass-far', { target: [30, 6, 14], yaw: 95, pitch: 20, distance: 55, fov: 60 });
-await shot('sway-a', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
-await page.waitForTimeout(1500);
-await shot('sway-b', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
-await shot('grass-close', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
-await shot('detail', { target: [50, 2, -20], yaw: 260, pitch: 50, distance: 2.5, fov: 60 });
-console.log('stone cells', await page.evaluate(() => [...(window.__editor.sync.ground?.clutter?.cells.values() ?? [])].filter(Boolean).length));
-// The same with the layers block compressed on the GPU (Terrain.compress).
-console.log('bc', await page.evaluate((id) => {
-    const ed = window.__editor;
-    ed.store.commit('Compress', (d) => { d.nodes.find((n) => n.id === id).terrain.compress = true; });
-    return ed.runtime.engine.context3D.device.features.has('texture-compression-bc');
-}, ids.terrain));
-await shot('close-bc', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
-await page.evaluate((id) => window.__editor.store.commit('Uncompress', (d) => { d.nodes.find((n) => n.id === id).terrain.compress = false; }), ids.terrain);
-await shot('beach', { target: [62, 0.3, 14], yaw: 100, pitch: 55, distance: 10, fov: 60 });
-await shot('rain', { target: [55, 0.5, 0], yaw: 90, pitch: 32, distance: 16, fov: 60 });
-await shot('wide', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });
-// Sunset: the key light low in the west; the sky's sun and the light's color follow it.
 await page.evaluate(() => {
     const ed = window.__editor;
-    ed.store.commit('Sunset', (d) => {
-        const sun = d.nodes.find((n) => n.light?.type === 'directional');
-        sun.rotation = [5, 120, 0];
-    });
+    ed.runtime.setQualityOverride('high');
+    ed.store.commit('Env', (d) => { d.environment.weather = { ...d.environment.weather, enable: true, time: 16, preset: 'fair' }; d.environment.clouds = { ...d.environment.clouds, enable: true }; }, { env: true });
+    ed.store.setCamera({ target: [30, 6, 14], yaw: 95, pitch: 12, distance: 30, fov: 60 });
 });
-await shot('sunset', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });
-// The levels of detail the rock cells draw from far away.
-console.log('scatter levels', JSON.stringify(await page.evaluate(() => window.__editor.sync.scatterViews().map(({ view }) => view.cells.map((c) => c.level)))));
-// The low graphics tier: lighter water, terrain and no aerial perspective.
+// Frame interval (SwiftShader: a rough stand-in for GPU cost) and the profiler's rows.
+const measure = async (label) => {
+    await page.waitForTimeout(8000);
+    const r = await page.evaluate(async () => {
+        const t = [];
+        let last = performance.now();
+        await new Promise((res) => { let n = 0; const f = () => { const now = performance.now(); t.push(now - last); last = now; if (++n < 40) requestAnimationFrame(f); else res(); }; requestAnimationFrame(f); });
+        t.sort((a, b) => a - b);
+        const ed = window.__editor;
+        const s = ed.runtime.stats;
+        const snap = s.snapshot();
+        return {
+            frameMs: t[Math.floor(t.length / 2)].toFixed(0),
+            cpu: snap.cpu.median.toFixed(2),
+            draws: snap.peak.draws, tris: snap.peak.triangles, dispatches: snap.peak.dispatches, passes: snap.peak.renderPasses, bindGroups: snap.peak.bindGroups, upload: snap.peak.uploadBytes,
+            mem: Object.fromEntries(Object.entries(snap.memory).map(([k, v]) => [k, typeof v === 'object' ? JSON.stringify(v) : v])),
+            rows: s.passes(40).filter((p) => p.cpu > 0.05 || p.draws > 0).map((p) => `${p.name}: cpu ${p.cpu.toFixed(2)} gpu ${p.gpu?.toFixed(2) ?? '-'} draws ${p.draws.toFixed(0)} tris ${Math.round(p.triangles)}`),
+            env: [...(ed.sync.environmentReport?.() ?? []), ...(ed.runtime.environmentReport?.() ?? [])].map((x) => x.join(': ')),
+        };
+    });
+    console.log(`\n== ${label}: frame ${r.frameMs} ms, cpu ${r.cpu} ms, draws ${r.draws}, tris ${r.tris}, dispatches ${r.dispatches}, renderPasses ${r.passes}, bindGroups ${r.bindGroups}, upload ${r.upload}`);
+    if (label === 'all') { console.log(r.rows.join('\n')); console.log(r.env.join('\n')); console.log(JSON.stringify(r.mem)); }
+};
+await measure('all');
+await page.evaluate(() => window.__editor.store.commit('x', (d) => { d.environment.clouds.enable = false; d.environment.weather.preset = 'clear'; }, { env: true }));
+await measure('no clouds');
+await page.evaluate(() => window.__editor.store.commit('x', (d) => { for (const n of d.nodes) if (n.grass) n.visible = false; }));
+await measure('no clouds, no grass');
+await page.evaluate(() => window.__editor.store.commit('x', (d) => { for (const n of d.nodes) if (n.scatter) n.visible = false; }));
+await measure('no clouds, grass, scatter');
+await page.evaluate(() => window.__editor.store.commit('x', (d) => { for (const n of d.nodes) if (n.mesh && n.name?.toLowerCase().includes('water')) n.visible = false; }));
+await measure('and no water');
 await page.evaluate(() => window.__editor.runtime.setQualityOverride('low'));
-await shot('low-tier', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
+await measure('low tier, same');
+console.log('LOGS\n' + logs.join('\n'));
 await browser.close();

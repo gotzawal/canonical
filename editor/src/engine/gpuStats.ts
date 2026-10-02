@@ -238,6 +238,8 @@ export class GpuStats {
     internal = false;
     /** Work timed before the engine's frame (addCpu), outside its CPU time. */
     private before = new Set<string>();
+    /** Milliseconds given to addCpu so far (work timed within other work subtracts it). */
+    added = 0;
 
     /** @internal Counts go to the frame being drawn. */
     get counts(): FrameCounts {
@@ -286,6 +288,7 @@ export class GpuStats {
 
     /** CPU time of work before the engine's frame (scripts in Play), shown as a pass of its own. */
     addCpu(name: string, ms: number) {
+        this.added += ms;
         this.before.add(name);
         let p = this.passFrame.get(name);
         if (!p) this.passFrame.set(name, (p = { cpu: 0, draws: 0, triangles: 0 }));

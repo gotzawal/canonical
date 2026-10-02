@@ -147,6 +147,8 @@ export class TerrainView {
                 renderer.castGI = true;
                 // It never moves; its shadow is drawn again when its level of detail changes.
                 renderer.shadowCacheMode = 'static';
+                // Culled by its box (fitBounds: easing toward a coarser level stays within it).
+                renderer.frustumCulled = true;
                 const chunk: Chunk = { obj, renderer, geometry, cx, cz, center: [0, 0, 0], radius: 0, morph: -1 };
                 this.fitBounds(chunk, mesh.positions);
                 this.chunks.push(chunk);

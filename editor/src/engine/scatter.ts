@@ -15,6 +15,7 @@ import {
 import { compose, decompose, invert, mul, rayBox, type Mat4, type Ray } from '../core/math';
 import type { Placement } from '../core/scatter';
 import type { Vec3 } from '../core/types';
+import { boxDistance, levelAt } from './chunks';
 import { geometryWithLods } from './lod';
 import { partPaths } from './modelParts';
 import { RockGround } from './rockGround';
@@ -349,21 +350,15 @@ export class ScatterView {
     update(eye: ArrayLike<number>) {
         if (!this.visible) return;
         for (const c of this.cells) {
-            let d2 = 0;
-            for (let k = 0; k < 3; k++) {
-                const e = Math.max(c.min[k] - eye[k], 0, eye[k] - c.max[k]);
-                d2 += e * e;
-            }
+            const d = boxDistance(c.min, c.max, eye);
             if (this.drawDistance > 0) {
-                const on = d2 <= this.drawDistance * this.drawDistance;
+                const on = d <= this.drawDistance;
                 if (c.instancer.enable !== on) c.instancer.enable = on;
                 if (!on) continue;
             }
-            const d = Math.sqrt(d2);
             const near = Math.max(LOD_NEAR.meters, LOD_NEAR.radii * c.radius) * this.lodScale;
             const far = Math.max(LOD_FAR.meters, LOD_FAR.radii * c.radius) * this.lodScale;
-            const margin = c.level === 0 ? 1.05 : 0.95;
-            const level = d > far * (c.level === 2 ? 0.95 : 1.05) ? 2 : d > near * margin ? 1 : 0;
+            const level = levelAt(d, near, far, c.level);
             if (level === c.level) continue;
             c.level = level;
             // The instancer draws each group at its first renderer's level; all of them say the same.

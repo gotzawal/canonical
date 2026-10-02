@@ -300,6 +300,7 @@ export class Runtime {
         this.stats?.beginFrame();
         this.fitShadowLights();
         const start = performance.now();
+        const timed = this.stats?.added ?? 0;
         for (const cb of this.beforeListeners) {
             try {
                 cb();
@@ -308,8 +309,8 @@ export class Runtime {
             }
         }
         this.engineStart = performance.now();
-        // Play (scripts, behavior trees, physics) and the walk camera run here.
-        if (this.beforeListeners.size) this.stats?.addCpu('Play and walk', this.engineStart - start);
+        // Play (scripts, behavior trees, physics) and the walk camera run here, besides the editor's own work (timed by itself).
+        if (this.beforeListeners.size && this.stats) this.stats.addCpu('Play and walk', this.engineStart - start - (this.stats.added - timed));
     }
 
     /** The camera the view renders through: the editor camera, or a scene camera in Play mode. */
@@ -345,9 +346,11 @@ export class Runtime {
 
     /** The sunlight the clouds get (linear rgb times brightness), or null for the key light's own. */
     setCloudSun(sun: [number, number, number] | null) {
+        this.cloudSun = sun;
         const c = this.post.getPost(CloudPost as any) as CloudPost | null;
         if (c) c.sunlight = sun;
     }
+    private cloudSun: [number, number, number] | null = null;
 
     /** The tier drawn now: the previewed one, else the document's, else the device's. */
     get qualityLevel(): QualityLevel {
@@ -515,7 +518,7 @@ export class Runtime {
                 coverage: clouded ? cl.coverage : 0, stars: this.stars, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, variety: cl.variety, softness: cl.softness, seed: cl.seed,
                 bottom: cl.bottom, top: cl.bottom + cl.thickness,
                 windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
-                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, farLimit: tier.cloudFar, block: tier.cloudBlock, reflectionEvery: tier.cloudReflectionEvery,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, sunlight: this.cloudSun, steps: tier.cloudSteps, farLimit: tier.cloudFar, block: tier.cloudBlock, reflectionEvery: tier.cloudReflectionEvery,
             });
         }
 

@@ -87,3 +87,38 @@ export function weatherNow(env: EnvironmentDoc, time: number): WeatherNow {
         wind: { speed, direction: w.windDirection },
     };
 }
+
+/**
+ * The weather as time passes: `tick` gives the weather at the time of day
+ * the environment sets (moving on by its Day Length) when that changed
+ * since the last it gave, at most every `minMs` (each change draws the sky
+ * again), else null. Keyed on `stamp` (what changes with the environment)
+ * and the time in fifteen-second steps, so an unchanged frame costs nothing.
+ */
+export class WeatherClock {
+    now: WeatherNow | null = null;
+    private time = NaN;
+    private start = 0;
+    private at = -Infinity;
+    private key = '';
+
+    tick(env: EnvironmentDoc, stamp: string, ms: number, minMs = 200): WeatherNow | null {
+        const w = env.weather;
+        if (w.time !== this.time) {
+            this.time = w.time;
+            this.start = ms;
+        }
+        const time = w.cycle > 0 ? (w.time + ((ms - this.start) / 60000 / w.cycle) * 24) % 24 : w.time;
+        const key = `${stamp}|${Math.round(time * 240)}`;
+        if (key === this.key || (this.now && ms - this.at <= minMs)) return null;
+        this.key = key;
+        this.at = ms;
+        return (this.now = weatherNow(env, time));
+    }
+
+    /** Forgets the weather (turned off): the next tick gives it again. */
+    reset() {
+        this.now = null;
+        this.key = '';
+    }
+}

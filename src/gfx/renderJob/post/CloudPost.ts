@@ -86,7 +86,9 @@ export class CloudPost extends PostBase {
     private _shapeNoise: Texture;
     private _detailNoise: Texture;
     private _destroyed = false;
-    private _lastLook = '';
+    /** What the gathered clouds were made with (a change starts them again), and a vec4 to upload from. */
+    private _lastLook: number[] = [];
+    private _vec = new Float32Array(4);
     private _lastView = new Float32Array(16);
     private _marchTex: VirtualTexture;
     private _history: VirtualTexture[] = [];
@@ -125,7 +127,7 @@ export class CloudPost extends PostBase {
             this._shapeNoise = new VolumeTexture(ctx, v.shapeSize, v.shape);
             this._detailNoise = new VolumeTexture(ctx, v.detailSize, v.detail);
             for (const c of this._noiseUsers()) this._bindNoise(c);
-            this._lastLook = '';
+            this._lastLook = [];
             for (const t of old) Texture.delayDestroyTexture(ctx, t.getGPUTexture() as GPUTexture);
         });
     }
@@ -186,27 +188,36 @@ export class CloudPost extends PostBase {
         this._windOffset[1] += this.windZ * dt;
         // Over B*B frames each pixel of a block is marched once (a Bayer order spreads them).
         const B = this._block;
-        const order = B === 2 ? [0, 3, 1, 2] : [0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12];
+        const order = B === 2 ? BAYER_2 : BAYER_4;
         const k = order[this._frame % order.length];
         const s = this._settings;
+        const v = (name: string, a: number, b: number, c: number, d: number) => {
+            const x = this._vec;
+            x[0] = a;
+            x[1] = b;
+            x[2] = c;
+            x[3] = d;
+            s.setFloat32Array(name, x);
+        };
         s.setFloat32Array('prevViewProj', this._prevViewProj);
-        s.setFloat32Array('layer', new Float32Array([this.bottom, Math.max(this.top, this.bottom + 10), Math.min(1, Math.max(0, this.coverage)), Math.max(0, this.density)]));
-        s.setFloat32Array('shape', new Float32Array([this.type, this.detail, this.evolve, now % 100000]));
-        s.setFloat32Array('wind', new Float32Array([this._windOffset[0], this._windOffset[1], this.haze, this.shadows]));
-        s.setFloat32Array('march', new Float32Array([this.steps, this._frame, k % B, Math.floor(k / B)]));
+        v('layer', this.bottom, Math.max(this.top, this.bottom + 10), Math.min(1, Math.max(0, this.coverage)), Math.max(0, this.density));
+        v('shape', this.type, this.detail, this.evolve, now % 100000);
+        v('wind', this._windOffset[0], this._windOffset[1], this.haze, this.shadows);
+        v('march', this.steps, this._frame, k % B, Math.floor(k / B));
         // The reflection cube: all six faces when it is new, then one a frame.
         const env = this._env?.clear ? this._env : null;
         const every = Math.max(1, Math.floor(this.reflectionEvery));
         const face = env && env.fresh ? 0 : Math.floor(this._envFrame / every) % 6;
-        s.setFloat32Array('env', new Float32Array([face, Math.max(12, Math.round(this.steps * 0.5)), ENV_SIZE, env?.cloudSize ?? 0]));
+        v('env', face, Math.max(12, Math.round(this.steps * 0.5)), ENV_SIZE, env?.cloudSize ?? 0);
         // The pattern moves to another place of the noise for another seed.
         const seed = Math.floor(this.seed) || 0;
         const wind = Math.hypot(this.windX, this.windZ);
         const toward = 1 / Math.max(wind, 1e-6);
-        s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
-        s.setFloat32Array('lean', new Float32Array([this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping))]));
-        s.setFloat32Array('night', new Float32Array([this.stars, Math.max(1000, this.farLimit), B, B === 2 ? 2.5 : 1]));
-        s.setFloat32Array('vary', new Float32Array([Math.min(1, Math.max(0, this.variety)), ...(this.sunlight ?? [-1, 0, 0])]));
+        v('look', Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41);
+        v('lean', this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping)));
+        v('night', this.stars, Math.max(1000, this.farLimit), B, B === 2 ? 2.5 : 1);
+        const sun = this.sunlight;
+        v('vary', Math.min(1, Math.max(0, this.variety)), sun ? sun[0] : -1, sun ? sun[1] : 0, sun ? sun[2] : 0);
         s.apply();
     }
 
@@ -224,9 +235,15 @@ export class CloudPost extends PostBase {
         const moved = Math.hypot(m[12] - last[12], m[13] - last[13], m[14] - last[14]);
         const turned = m[8] * last[8] + m[9] * last[9] + m[10] * last[10];
         const sun = this._sunDir(view);
-        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.clumping, this.variety, this.haze, this.stars > 0].join();
-        if (moved > 200 || turned < 0.95 || look !== this._lastLook) this._frame = 0;
-        this._lastLook = look;
+        const look = [Math.round(sun[0] * 30), Math.round(sun[1] * 30), Math.round(sun[2] * 30), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.clumping, this.variety, this.haze, this.stars > 0 ? 1 : 0];
+        let changed = false;
+        for (let i = 0; i < look.length; i++) {
+            if (this._lastLook[i] !== look[i]) {
+                this._lastLook[i] = look[i];
+                changed = true;
+            }
+        }
+        if (moved > 200 || turned < 0.95 || changed) this._frame = 0;
         last.set(m);
         // Another block size (the graphics tier's): the march's texture and the history start again.
         const block = this.block === 2 ? 2 : 4;
@@ -336,6 +353,9 @@ export class CloudPost extends PostBase {
 
 /** Texels along each face of the reflection cube's sharpest level (levels down to 16). */
 const ENV_SIZE = 512;
+/** The order the pixels of a block are marched in over its frames (Bayer). */
+const BAYER_2 = [0, 3, 1, 2];
+const BAYER_4 = [0, 10, 2, 8, 5, 15, 7, 13, 1, 11, 3, 9, 4, 14, 6, 12];
 /** Texels along each face of the small cube the reflected clouds are marched into. */
 const REFLECTION_SIZE = 128;
 

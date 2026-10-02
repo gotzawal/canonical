@@ -8,6 +8,7 @@ import { GrassComponent } from '@orillusion/geometry/grass';
 import { covers, groundHeight, groundNormal, type TerrainSurface } from '../core/terrain';
 import type { GrassDoc } from '../core/types';
 import { bladeBend, bladeProfile, GRASS_SHAPES, patchNoise, shapeAt, sizeAt, type GrassShape } from '../core/grass';
+import { boxDistance, levelAt } from './chunks';
 import { hexToColor } from './color';
 import { ownIndices } from './lod';
 
@@ -33,8 +34,8 @@ interface GrassChunk {
     /** Its cell of the field: column, row. */
     ci: number;
     cj: number;
-    min: Vector3;
-    max: Vector3;
+    min: number[];
+    max: number[];
     /** Whether it has blades standing (a box to cull by). */
     placed: boolean;
 }
@@ -77,7 +78,7 @@ export class GrassField {
             renderer.addRendererMask(RendererMask.IgnoreDepthPass);
             renderer.castGI = false;
             renderer.setGrass(doc.width, doc.height, 5, 1, count);
-            this.chunks.push({ renderer, ci: k % this.side, cj: Math.floor(k / this.side), min: new Vector3(), max: new Vector3(), placed: false });
+            this.chunks.push({ renderer, ci: k % this.side, cj: Math.floor(k / this.side), min: [0, 0, 0], max: [0, 0, 0], placed: false });
         }
         scene.addChild(this.root);
     }
@@ -222,11 +223,13 @@ export class GrassField {
             shapes.push(own);
             chunk.placed = min[0] <= max[0];
             if (chunk.placed) {
-                chunk.min.set(min[0], min[1], min[2]);
-                chunk.max.set(max[0], max[1], max[2]);
-                // Culled by the box its blades fill (the blades bend a little past it in the wind).
-                chunk.renderer.setMinMax(new Vector3(min[0] - 0.5, min[1] - 0.5, min[2] - 0.5), new Vector3(max[0] + 0.5, max[1] + 0.5, max[2] + 0.5));
+                chunk.min = min;
+                chunk.max = max;
+                // Culled by the box its blades fill (the blades bend past it in the wind: up to their height).
+                const bend = Math.max(0.5, max[1] - min[1]);
+                chunk.renderer.setMinMax(new Vector3(min[0] - bend, min[1] - 0.5, min[2] - bend), new Vector3(max[0] + bend, max[1] + 0.5, max[2] + bend));
                 chunk.renderer.alwaysRender = false;
+                chunk.renderer.frustumCulled = true;
             }
         }
         // Their shapes: the geometry is written again only when they changed.
@@ -272,21 +275,15 @@ export class GrassField {
         }
         for (const c of this.chunks) {
             if (!c.placed) continue;
-            const dx = Math.max(c.min.x - eye[0], 0, eye[0] - c.max.x);
-            const dy = Math.max(c.min.y - eye[1], 0, eye[1] - c.max.y);
-            const dz = Math.max(c.min.z - eye[2], 0, eye[2] - c.max.z);
-            const d = Math.hypot(dx, dy, dz);
+            const d = boxDistance(c.min, c.max, eye);
             const on = !(this.distance > 0) || d <= this.distance;
             if (c.renderer.enable !== on) c.renderer.enable = on;
             if (!on) continue;
             const shadow = this.castShadow && d <= shadowDistance * (c.renderer.castShadow ? 1.05 : 0.95);
             if (c.renderer.castShadow !== shadow) c.renderer.castShadow = shadow;
             if (refit && shadow) c.renderer.grassMaterial.setShadowView(eye, shadowDistance);
-            const cur = c.renderer.lodLevel;
-            const near = LOD_NEAR * this.lodScale * (cur === 0 ? 1.05 : 0.95);
-            const far = LOD_FAR * this.lodScale * (cur === 2 ? 0.95 : 1.05);
-            const level = d > far ? 2 : d > near ? 1 : 0;
-            if (level !== cur) c.renderer.lodLevel = level;
+            const level = levelAt(d, LOD_NEAR * this.lodScale, LOD_FAR * this.lodScale, c.renderer.lodLevel);
+            if (level !== c.renderer.lodLevel) c.renderer.lodLevel = level;
         }
     }
 

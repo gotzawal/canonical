@@ -15,6 +15,16 @@ const SHADES = 8;
 const ROWS = 4;
 /** Cells made at most in a frame. */
 const BUILD_PER_FRAME = 3;
+/** Cells a side the keys tell apart (about 390 km of them), centered on the origin. */
+const SPAN = 65536;
+const HALF = SPAN / 2;
+
+type Cell = { obj: Object3D; geometry: GeometryBase };
+
+/** A number for cell (i, j). */
+function cellKey(i: number, j: number): number {
+    return (i + HALF) * SPAN + (j + HALF);
+}
 
 interface Shape {
     positions: number[];
@@ -40,11 +50,15 @@ function stoneShapes(): Shape[] {
 
 export class GroundClutter {
     private root = new Object3D();
-    private cells = new Map<string, { obj: Object3D; geometry: GeometryBase } | null>();
+    /** The cells made, by key (see cellKey): their stones, or null for none. */
+    private cells = new Map<number, Cell | null>();
     private shapes = stoneShapes();
     private material: LitMaterial;
     private palette: Uint8ArrayTexture | null = null;
     private ground: ClutterGround | null = null;
+    /** The cell the camera was in and the reach when the cells were last looked at, and whether all within it were made. */
+    private at = [NaN, NaN, NaN];
+    private complete = false;
 
     constructor(scene: Object3D, private ctx: Context3D) {
         this.root.name = 'Ground clutter';
@@ -89,8 +103,12 @@ export class GroundClutter {
             return;
         }
         const [ex, ez] = [eye[0], eye[2]];
+        const c0 = Math.floor(ex / CELL), c1 = Math.floor(ez / CELL);
+        // Nothing to make or let go while the camera stays in its cell and all within reach are made.
+        if (c0 === this.at[0] && c1 === this.at[1] && radius === this.at[2] && this.complete) return;
+        this.at = [c0, c1, radius];
         for (const [key, cell] of this.cells) {
-            const [ci, cj] = key.split(',').map(Number);
+            const ci = Math.floor(key / SPAN) - HALF, cj = (key % SPAN) - HALF;
             if (Math.hypot((ci + 0.5) * CELL - ex, (cj + 0.5) * CELL - ez) > radius + CELL * 1.5) {
                 this.cells.delete(key);
                 this.drop(cell);
@@ -98,15 +116,15 @@ export class GroundClutter {
         }
         const missing: [number, number, number][] = [];
         const r = Math.ceil(radius / CELL);
-        const c0 = Math.floor(ex / CELL), c1 = Math.floor(ez / CELL);
         for (let j = c1 - r; j <= c1 + r; j++) {
             for (let i = c0 - r; i <= c0 + r; i++) {
                 const d = Math.hypot((i + 0.5) * CELL - ex, (j + 0.5) * CELL - ez);
-                if (d <= radius + CELL && !this.cells.has(`${i},${j}`)) missing.push([d, i, j]);
+                if (d <= radius + CELL && !this.cells.has(cellKey(i, j))) missing.push([d, i, j]);
             }
         }
         missing.sort((a, b) => a[0] - b[0]);
-        for (const [, i, j] of missing.slice(0, BUILD_PER_FRAME)) this.cells.set(`${i},${j}`, this.build(i, j));
+        for (const [, i, j] of missing.slice(0, BUILD_PER_FRAME)) this.cells.set(cellKey(i, j), this.build(i, j));
+        this.complete = missing.length <= BUILD_PER_FRAME;
     }
 
     /** What it draws, for the profiler: cells with stones, and the stones. */
@@ -120,7 +138,7 @@ export class GroundClutter {
         return `${cells} cells, about ${Math.round(stones).toLocaleString('en-US')} stones`;
     }
 
-    private build(ci: number, cj: number): { obj: Object3D; geometry: GeometryBase } | null {
+    private build(ci: number, cj: number): Cell | null {
         const stones = clutterCell(ci, cj, CELL, this.ground!, SHAPES);
         if (!stones.length) return null;
         const verts = this.shapes[0].positions.length / 3, tris = this.shapes[0].indices.length;
@@ -165,11 +183,13 @@ export class GroundClutter {
         renderer.castShadow = false;
         renderer.receiveShadow = true;
         renderer.castGI = false;
+        // Culled by its stones' box (the geometry's, from its positions in world space).
+        renderer.frustumCulled = true;
         this.root.addChild(obj);
         return { obj, geometry };
     }
 
-    private drop(cell: { obj: Object3D; geometry: GeometryBase } | null) {
+    private drop(cell: Cell | null) {
         if (!cell) return;
         // Not destroyed: that would take the shared material with it.
         cell.obj.removeFromParent();
@@ -179,6 +199,7 @@ export class GroundClutter {
     private clear() {
         for (const cell of this.cells.values()) this.drop(cell);
         this.cells.clear();
+        this.complete = false;
     }
 
     dispose() {
