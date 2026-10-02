@@ -212,7 +212,7 @@ export class ScenePanel {
                     b.title = p.description;
                     return b;
                 }))),
-                ...this.rows(['coverage', 'type', 'size', 'clumping', 'softness', 'detail', 'density', 'seed', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
+                ...this.rows(['coverage', 'type', 'size', 'clumping', 'variety', 'softness', 'detail', 'density', 'seed', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
                 label('Volumetric Fog'),
                 ...this.rows(['enable', 'density', 'scattering', 'anisotropy', 'distance', 'ambient'], 'volumetricFog'),
                 label('God Rays'),

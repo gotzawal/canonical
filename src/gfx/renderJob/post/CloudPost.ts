@@ -54,6 +54,8 @@ export class CloudPost extends PostBase {
     public seed = 0;
     /** 0 scattered small puffs to 1 clouds gathered in big masses. */
     public clumping = 0.6;
+    /** How much clouds differ from one another: 0 all alike, 1 hazy veils beside crisp heaps. */
+    public variety = 0.5;
     /** How bright the stars and the moon's disc (at the key light, the moon at night) are, 0 for none. */
     public stars = 0;
     /** Wind over the layer, m/s along x and z, and how fast shapes change, m/s. */
@@ -128,7 +130,7 @@ export class CloudPost extends PostBase {
 
     private _createCompute(view: View3D) {
         const ctx = view.engine3D.context3D;
-        this._settings = new UniformGPUBuffer(52);
+        this._settings = new UniformGPUBuffer(56);
         const lights = GlobalBindGroup.getLightEntries(view.scene).storageGPUBuffer;
         const gBuffer = GBufferFrame.getGBufferFrame(GBufferFrame.colorPass_GBuffer, ctx).getCompressGBufferTexture();
         this._march = new ComputeShader(CloudMarch_cs);
@@ -202,6 +204,7 @@ export class CloudPost extends PostBase {
         s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
         s.setFloat32Array('lean', new Float32Array([this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping))]));
         s.setFloat32Array('night', new Float32Array([this.stars, Math.max(1000, this.farLimit), B, B === 2 ? 2.5 : 1]));
+        s.setFloat32Array('vary', new Float32Array([Math.min(1, Math.max(0, this.variety)), 0, 0, 0]));
         s.apply();
     }
 
@@ -219,7 +222,7 @@ export class CloudPost extends PostBase {
         const moved = Math.hypot(m[12] - last[12], m[13] - last[13], m[14] - last[14]);
         const turned = m[8] * last[8] + m[9] * last[9] + m[10] * last[10];
         const sun = this._sunDir(view);
-        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.clumping, this.haze, this.stars > 0].join();
+        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.clumping, this.variety, this.haze, this.stars > 0].join();
         if (moved > 200 || turned < 0.95 || look !== this._lastLook) this._frame = 0;
         this._lastLook = look;
         last.set(m);

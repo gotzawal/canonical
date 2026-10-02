@@ -38,6 +38,8 @@ const CLOUD_COMMON = /* wgsl */ `
         // stars and the moon's disc (x: how bright, 0 none), how far clouds are drawn (y, meters),
         // the march's block (z: 2 or 4 pixels a side), how fast new marches replace the history (w)
         night: vec4<f32>,
+        // how much clouds differ from one another (x: 0 all alike .. 1 hazy veils beside crisp heaps), spare
+        vary: vec4<f32>,
     };
 
     const PI: f32 = 3.14159265;
@@ -79,17 +81,20 @@ const CLOUD_COMMON = /* wgsl */ `
         return xz + d * dot(xz, d) * (1.0 / k - 1.0);
     }
 
-    fn weather(xz: vec2<f32>) -> f32 {
+    // (x) how strongly clouds gather at xz, and (y) which kind of cloud is there, 0..1 (a field of
+    // patches a cloud or two across, from the same sample: hazy where high, crisp heaps where low).
+    fn weather(xz: vec2<f32>) -> vec2<f32> {
         let c = cloud.layer.z;
-        if (c <= 0.001) { return 0.0; }
+        if (c <= 0.001) { return vec2<f32>(0.0); }
         // Clumping: many small cells (scattered puffs) to few large ones (big masses).
         let scale = 12000.0 * cloud.look.x * mix(0.3, 1.5, cloud.lean.w);
         let w = streak(xz + cloud.wind.xy + cloud.look.zw) / scale;
         // Slowly changing over time as well as drifting.
         let t = cloud.shape.w * cloud.shape.z / scale * 0.25;
-        let n = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(w.x, w.y, t), 0.0).b;
+        let s = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(w.x, w.y, t), 0.0);
+        let n = s.b;
         // About c of the sky past the threshold; a soft rise into each cloud's heart.
-        return remap(n, 1.0 - c, min(1.0 - c + 0.35, 1.0)) * step(1.0 - c, n);
+        return vec2<f32>(remap(n, 1.0 - c, min(1.0 - c + 0.35, 1.0)) * step(1.0 - c, n), s.g);
     }
 
     // How the layer fills with height (0 base .. 1 top) where the weather is w: flat sheets
@@ -108,9 +113,13 @@ const CLOUD_COMMON = /* wgsl */ `
         if (h <= 0.0 || h >= 1.0) { return 0.0; }
         // Tops lean ahead with the wind (it blows harder higher up).
         let q = p.xz - cloud.lean.xy * cloud.lean.z * h * h * (cloud.layer.y - cloud.layer.x) * 0.5;
-        let w = weather(q);
+        let wk = weather(q);
+        let w = wk.x;
         if (w <= 0.0) { return 0.0; }
-        let g = profile(h, w);
+        // This cloud's kind: hazy (soft, thin, low, more worn) or a crisp heap (sharp, taller).
+        let hazy = smoothstep(0.45, 0.8, wk.y) * cloud.vary.x;
+        let crisp = smoothstep(0.4, 0.1, wk.y) * cloud.vary.x;
+        let g = profile(h, min(w * (1.0 - 0.6 * hazy + 0.4 * crisp), 1.0));
         if (g <= 0.0) { return 0.0; }
         let size = 3200.0 * cloud.look.x;
         let rise = cloud.shape.w * cloud.shape.z;
@@ -130,11 +139,12 @@ const CLOUD_COMMON = /* wgsl */ `
             let e = textureSampleLevel(detailTex, detailTexSampler, vec3<f32>(eq.x, alt + rise * 1.5 + warp.x, eq.y) / (size * 0.13), noiseLod(size * 0.13 / 32.0)).a;
             // Wisps at the base, billows (the noise turned inside out) toward the top.
             let worn = mix(e, 1.0 - e, clamp(h * 4.0, 0.0, 1.0));
-            d = remap(d, worn * cloud.shape.y * 0.55 * detail, 1.0);
+            d = remap(d, worn * cloud.shape.y * 0.55 * detail * (1.0 + 0.8 * hazy), 1.0);
         }
         // Crisp clouds reach full density right inside their edge; soft ones thicken slowly.
         // Thinner where the weather is weak (a cloud's fringe).
-        return min(d * mix(5.0, 1.2, cloud.look.y), 1.0) * smoothstep(0.0, 0.35, w) * cloud.layer.w;
+        let soft = mix(mix(cloud.look.y, 1.0, hazy), cloud.look.y * 0.3, crisp);
+        return min(d * mix(5.0, 1.2, soft), 1.0) * smoothstep(0.0, 0.35, w) * cloud.layer.w * (1.0 - 0.9 * hazy + 0.5 * crisp);
     }
 
     // Distances along a ray from the camera to a sphere around the Earth's middle at altitude r (-1 where it misses).
