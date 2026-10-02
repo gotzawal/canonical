@@ -343,6 +343,12 @@ export class Runtime {
     }
     private stars = 0;
 
+    /** The sunlight the clouds get (linear rgb times brightness), or null for the key light's own. */
+    setCloudSun(sun: [number, number, number] | null) {
+        const c = this.post.getPost(CloudPost as any) as CloudPost | null;
+        if (c) c.sunlight = sun;
+    }
+
     /** The tier drawn now: the previewed one, else the document's, else the device's. */
     get qualityLevel(): QualityLevel {
         return resolveQuality(this.qualitySetting, this.deviceQuality, this.qualityOverride);

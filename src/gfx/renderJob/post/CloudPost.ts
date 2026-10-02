@@ -56,6 +56,8 @@ export class CloudPost extends PostBase {
     public clumping = 0.6;
     /** How much clouds differ from one another: 0 all alike, 1 hazy veils beside crisp heaps. */
     public variety = 0.5;
+    /** The sunlight they get (linear rgb times brightness), or null for the sun light's own (through the air at their height it is brighter at sunset than below). */
+    public sunlight: [number, number, number] | null = null;
     /** How bright the stars and the moon's disc (at the key light, the moon at night) are, 0 for none. */
     public stars = 0;
     /** Wind over the layer, m/s along x and z, and how fast shapes change, m/s. */
@@ -204,7 +206,7 @@ export class CloudPost extends PostBase {
         s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
         s.setFloat32Array('lean', new Float32Array([this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping))]));
         s.setFloat32Array('night', new Float32Array([this.stars, Math.max(1000, this.farLimit), B, B === 2 ? 2.5 : 1]));
-        s.setFloat32Array('vary', new Float32Array([Math.min(1, Math.max(0, this.variety)), 0, 0, 0]));
+        s.setFloat32Array('vary', new Float32Array([Math.min(1, Math.max(0, this.variety)), ...(this.sunlight ?? [-1, 0, 0])]));
         s.apply();
     }
 

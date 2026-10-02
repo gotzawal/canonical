@@ -80,10 +80,12 @@ export function sunlightThroughAir(elevation: number, altitude = 0): { color: [n
         return out;
     };
     const overhead = depth(90);
-    // Below the horizon the Earth hides the sun: fade out over the last degree.
-    const at = depth(Math.max(elevation, 0.5));
+    // Below the horizon the Earth hides the sun: fade out over the last degree. From up high the
+    // horizon is lower (clouds stay sunlit a while after sunset on the ground).
+    const dip = (Math.acos(R / (R + Math.max(0, altitude))) * 180) / Math.PI;
+    const at = depth(Math.max(elevation, 0.5 - dip));
     const t = at.map((d, c) => Math.exp(-(d - overhead[c])));
-    const fade = Math.min(1, Math.max(0, (elevation + 1) / 2));
+    const fade = Math.min(1, Math.max(0, (elevation + dip + 1) / 2));
     const max = Math.max(t[0], t[1], t[2], 1e-6);
     const luminance = 0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2];
     return { color: [t[0] / max, t[1] / max, t[2] / max], strength: Math.min(1, luminance) * fade };

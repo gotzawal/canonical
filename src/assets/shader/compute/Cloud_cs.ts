@@ -38,7 +38,8 @@ const CLOUD_COMMON = /* wgsl */ `
         // stars and the moon's disc (x: how bright, 0 none), how far clouds are drawn (y, meters),
         // the march's block (z: 2 or 4 pixels a side), how fast new marches replace the history (w)
         night: vec4<f32>,
-        // how much clouds differ from one another (x: 0 all alike .. 1 hazy veils beside crisp heaps), spare
+        // how much clouds differ from one another (x: 0 all alike .. 1 hazy veils beside crisp heaps),
+        // the sunlight at their height (yzw, linear rgb; y < 0 for the light's own)
         vary: vec4<f32>,
     };
 
@@ -236,7 +237,7 @@ const CLOUD_MARCH = /* wgsl */ `
 
         let sun = sunLight();
         let l = sunDir();
-        let sunColor = sun.lightColor.rgb * sun.intensity;
+        let sunColor = select(sun.lightColor.rgb * sun.intensity, cloud.vary.yzw, cloud.vary.y >= 0.0);
         let c = dot(dir, l);
         // Two lobes: forward (silver lining toward the sun) and back.
         let phase = mix(hg(c, 0.75), hg(c, -0.25), 0.3);
@@ -281,11 +282,13 @@ const CLOUD_MARCH = /* wgsl */ `
                 let sunPart = sunColor * (single + multi) * powder;
                 let h = (altitude(p) - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
                 // Light from all around: the sky's, half of its color taken out (clouds are grey, not blue).
-                let sky = mix(skyLow * 0.5, skyTop, h) * 0.9;
+                let sky = mix(skyLow * mix(0.5, 0.8, smoothstep(0.35, 0.02, l.y)), skyTop, h) * 0.9;
                 // With the sun low its light reaches under the clouds too, warmest at their bases.
-                let glow = sunColor * 0.12 * smoothstep(0.35, 0.02, l.y) * step(0.0, l.y) * mix(1.0, 0.4, h);
+                let low = smoothstep(0.35, 0.02, l.y) * step(-0.05, l.y);
+                let glow = sunColor * 0.3 * low * mix(1.0, 0.4, h) * exp(-od * 0.12);
                 // Less of it low inside the cloud (the cloud above shades it): dark bases, bright tops.
-                let ambient = (mix(vec3<f32>(dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722))), sky, 0.5) + glow) * mix(0.45, 1.0, h);
+                // At sunset more of the sky's color stays (pink and violet shadows).
+                let ambient = (mix(vec3<f32>(dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722))), sky, mix(0.5, 0.85, low)) + glow) * mix(0.45, 1.0, h);
                 let stepT = exp(-d * sigma * dt);
                 light += trans * (sunPart + ambient) * (1.0 - stepT);
                 depthSum += t * trans * (1.0 - stepT);

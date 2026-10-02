@@ -31,6 +31,8 @@ export interface WeatherNow {
     night: boolean;
     /** How bright the stars are, 0 to 1. */
     stars: number;
+    /** How much direct sunlight gets through the weather's clouds and haze, 0 to 1. */
+    sunlight: number;
     /** How hard it rains around the camera, 0 to 1. */
     rain: number;
     /** The wind: m/s, and where it blows toward (degrees around +Y from +X). */
@@ -80,6 +82,7 @@ export function weatherNow(env: EnvironmentDoc, time: number): WeatherNow {
         sun: { rotation: [elevation > 0 ? Math.max(elevation, 1.5) : elevation > -12 ? 1.5 * (1 + elevation / 6) : elevation, azimuth, 0], elevation },
         night,
         stars: w.stars * Math.min(1, Math.max(0, (-elevation - 4) / 8)),
+        sunlight: look.light,
         rain: look.rain,
         wind: { speed, direction: w.windDirection },
     };

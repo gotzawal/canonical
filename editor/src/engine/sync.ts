@@ -322,6 +322,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         for (const g of this.grasses) g.grass?.update(at);
         lap('Editor: grass and model levels of detail');
         this.updateWeather(at);
+        this.runtime.setCloudSun(this.cloudSunlight());
         lap('Editor: weather');
         if (!this.terrainStates.size && !this.scatterStates.size) return;
         let eased = false;
@@ -2216,6 +2217,25 @@ export class SceneSync extends Emitter<SyncEvents> {
         } else if (this.weatherRain) {
             this.weatherRain.setVisible(false);
         }
+    }
+
+    /**
+     * The sunlight the clouds get (linear rgb times brightness), when the sky follows the key
+     * light: through the thinner air at their height, brighter and more golden at sunset than
+     * on the ground, and still there a while after the sun has set below. Null otherwise.
+     */
+    private cloudSunlight(): [number, number, number] | null {
+        const key = this.followsLight() ? this.keyLight() : null;
+        const env = this.shownEnvironment;
+        if (!key?.light || !env.clouds.enable || this.weather?.night) return null;
+        const elevation = this.weather ? this.weather.sun.elevation : (skySunOf(key.rotation).sunY - 0.5) * 180;
+        const air = sunlightThroughAir(elevation, env.atmosphere.altitude + env.clouds.bottom + env.clouds.thickness * 0.3);
+        const c = hexToColor(key.light.color);
+        // Its dimming eased (as eyes adapt to dusk): sunset clouds glow gold and red rather than turning brown.
+        const k = Math.max(0, key.light.intensity) * Math.sqrt(air.strength) * (this.weather?.sunlight ?? 1);
+        // And its color deepened a little (tone mapping washes bright orange toward white).
+        const [r, g, b] = air.color.map((v) => Math.pow(v, 1.4));
+        return [c.r * r * k, c.g * g * k, c.b * b * k];
     }
 
     /** The weather changed: the sky, key light, stars, grass wind and wet ground follow. */
