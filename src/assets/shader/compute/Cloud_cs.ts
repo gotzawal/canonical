@@ -5,9 +5,10 @@
  *   marches its view ray through a cloud layer on a shell around the Earth
  *   (from the scene's depth: terrain hides what is behind it), offset each
  *   frame within its 4x4 block of the screen. Density is a weather pattern
- *   (coverage) times a height profile (stratus to cumulus), carved by a
- *   tiling noise volume (32^3, kept as slices in a 2D texture) and eroded
- *   at its edges; light is the sun's (Beer, powder, two-lobe phase, two
+ *   (where clouds gather and how strongly) shaping each cloud's height
+ *   (flat bases; domes that rise higher where the weather is stronger;
+ *   tops leaning with the wind), carved by a tiling noise volume and worn
+ *   at its edges (wisps below, billows above; see CloudNoise); light is the sun's (Beer, powder, two-lobe phase, two
  *   octaves of multiple scattering) plus the sky's, and far clouds fade
  *   into the sky behind them. Out: (in-scattered light, transmittance).
  * - `CloudComposite_cs`: at full resolution, blends that with the history
@@ -30,31 +31,14 @@ const CLOUD_COMMON = /* wgsl */ `
         march: vec4<f32>,
         // reflection cube: first face, steps, face size, cloud face size
         env: vec4<f32>,
+        // size (1 as usual), softness (0 crisp .. 1 soft), pattern offset x, z (m)
+        look: vec4<f32>,
+        // wind direction x, z (unit), unused
+        lean: vec4<f32>,
     };
 
     const PI: f32 = 3.14159265;
     const EARTH: f32 = 6360000.0;
-    const SLICE: f32 = 32.0;
-    const CELL: f32 = 34.0;
-    // The atlas is 320 wide (rows of whole 256 bytes for the upload): 8 slices and unused columns.
-    const ATLAS: vec2<f32> = vec2<f32>(320.0, 136.0);
-
-    // One slice of the noise volume (with its wrapped border), bilinear.
-    fn noiseSlice(s: i32, xy: vec2<f32>) -> vec2<f32> {
-        let cell = vec2<f32>(f32(s % 8), f32(s / 8)) * CELL;
-        let uv = (cell + 1.0 + xy) / ATLAS;
-        return textureSampleLevel(noiseTex, noiseTexSampler, uv, 0.0).rg;
-    }
-
-    // The tiling noise volume at p (one tile per unit): base shape (x) and erosion (y).
-    fn noise3(p: vec3<f32>) -> vec2<f32> {
-        let q = fract(p) * SLICE;
-        let z = q.z - 0.5;
-        let z0 = floor(z);
-        let s0 = (i32(z0) + 32) % 32;
-        let s1 = (s0 + 1) % 32;
-        return mix(noiseSlice(s0, q.xy), noiseSlice(s1, q.xy), z - z0);
-    }
 
     fn remap(v: f32, a: f32, b: f32) -> f32 {
         return clamp((v - a) / max(b - a, 1e-4), 0.0, 1.0);
@@ -67,40 +51,58 @@ const CLOUD_COMMON = /* wgsl */ `
         return length(vec3<f32>(d.x, p.y + EARTH, d.y)) - EARTH;
     }
 
-    // Where clouds may be (0..1): the weather pattern drifting with the wind.
-    fn coverageAt(xz: vec2<f32>) -> f32 {
-        let w = (xz + cloud.wind.xy) / 9000.0;
-        let n = noise3(vec3<f32>(w, 0.37 + cloud.shape.w * cloud.shape.z * 0.00002)).x * 0.65
-            + noise3(vec3<f32>(w * 2.7, 0.71)).x * 0.35;
-        // Spread over 0..1, then as much of it as the coverage asks for is cloudy.
-        let spread = remap(n, 0.2, 0.75);
+    // How strongly clouds gather at xz (0 clear sky .. 1 the heart of a cloud), drifting with the wind.
+    fn weather(xz: vec2<f32>) -> f32 {
         let c = cloud.layer.z;
-        return smoothstep(1.0 - c - 0.15, 1.0 - c + 0.15, spread) * step(0.001, c);
+        if (c <= 0.001) { return 0.0; }
+        let scale = 12000.0 * cloud.look.x;
+        let w = (xz + cloud.wind.xy + cloud.look.zw) / scale;
+        // Slowly changing over time as well as drifting.
+        let t = cloud.shape.w * cloud.shape.z / scale * 0.25;
+        let n = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(w.x, w.y, t), 0.0).b;
+        // About c of the sky past the threshold; a soft rise into each cloud's heart.
+        return remap(n, 1.0 - c, min(1.0 - c + 0.35, 1.0)) * step(1.0 - c, n);
     }
 
-    // How the layer fills with height (0 bottom .. 1 top): flat stratus to tall cumulus.
-    fn profile(h: f32) -> f32 {
-        let t = cloud.shape.x;
-        let stratus = smoothstep(0.0, 0.08, h) * (1.0 - smoothstep(0.15, 0.35, h));
-        let cumulus = smoothstep(0.0, 0.12, h) * (1.0 - smoothstep(0.55, 1.0, h));
-        return mix(stratus, cumulus, t);
+    // How the layer fills with height (0 base .. 1 top) where the weather is w: flat sheets
+    // (stratus) to heaps (cumulus) whose tops rise with the weather into domes.
+    fn profile(h: f32, w: f32) -> f32 {
+        let stratus = smoothstep(0.0, 0.05, h) * (1.0 - smoothstep(0.12, 0.3, h));
+        let top = mix(0.3, 1.0, w);
+        let cumulus = smoothstep(0.0, 0.07, h) * (1.0 - smoothstep(top * 0.7, top, h));
+        return mix(stratus, cumulus, cloud.shape.x);
     }
 
-    // Cloud density at p; without detail for the light's march.
+    // Cloud density at p; without detail for the light's march and the shadows.
     fn density(p: vec3<f32>, detail: bool) -> f32 {
-        let h = (altitude(p) - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
+        let alt = altitude(p);
+        let h = (alt - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
         if (h <= 0.0 || h >= 1.0) { return 0.0; }
-        let cov = coverageAt(p.xz);
-        if (cov <= 0.0) { return 0.0; }
-        let drift = vec3<f32>(cloud.wind.x, cloud.shape.w * cloud.shape.z, cloud.wind.y);
-        let base = noise3((p + drift) / 3800.0).x;
-        // Thin weather leaves only the densest parts of the shape; full weather fills it.
-        var d = remap(base * profile(h), 0.62 - 0.72 * cov, 1.0);
+        // Tops lean ahead with the wind (it blows harder higher up).
+        let q = p.xz - cloud.lean.xy * h * h * (cloud.layer.y - cloud.layer.x) * 0.5;
+        let w = weather(q);
+        if (w <= 0.0) { return 0.0; }
+        let g = profile(h, w);
+        if (g <= 0.0) { return 0.0; }
+        let size = 3200.0 * cloud.look.x;
+        let rise = cloud.shape.w * cloud.shape.z;
+        let s = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(q.x + cloud.wind.x, alt + rise, q.y + cloud.wind.y) / size, 0.0);
+        // Shape: Perlin-Worley lumps rounded off by the Worley billows.
+        var base = remap(s.r, (1.0 - s.g) * 0.55 - 0.1, 1.0);
+        // A full sky closes up: its holes fill as coverage nears 1.
+        let c = cloud.layer.z;
+        base = mix(base, 1.0, c * c * c * w);
+        // The weather decides how much of the shape stays: all at a cloud's heart, its peaks at its edges.
+        var d = remap(base * g, 1.0 - w, 1.0);
         if (detail && d > 0.0) {
-            let e = noise3((p + drift * 1.6) / 640.0).y;
-            d = remap(d, e * cloud.shape.y * (0.25 + 0.3 * h), 1.0);
+            let e = textureSampleLevel(detailTex, detailTexSampler, vec3<f32>(q.x + cloud.wind.x * 1.4, alt + rise * 1.5, q.y + cloud.wind.y * 1.4) / (size * 0.2), 0.0).a;
+            // Wisps at the base, billows (the noise turned inside out) toward the top.
+            let worn = mix(e, 1.0 - e, clamp(h * 4.0, 0.0, 1.0));
+            d = remap(d, worn * cloud.shape.y * 0.45, 1.0);
         }
-        return d * cloud.layer.w;
+        // Crisp clouds reach full density right inside their edge; soft ones thicken slowly.
+        // Thinner where the weather is weak (a cloud's fringe).
+        return min(d * mix(5.0, 1.2, cloud.look.y), 1.0) * smoothstep(0.0, 0.35, w) * cloud.layer.w;
     }
 
     // Distances along a ray from the camera to a sphere around the Earth's middle at altitude r (-1 where it misses).
@@ -196,30 +198,39 @@ const CLOUD_MARCH = /* wgsl */ `
         let skyLow = textureSampleLevel(prefilterMap, prefilterMapSampler, normalize(vec3<f32>(dir.x, 0.05, dir.z)), 5.0).rgb * globalUniform.skyExposure;
 
         let n = max(steps, 8.0);
-        let dt = (t1 - t0) / n;
+        // Short steps inside a cloud, twice as long through clear air, all growing with distance:
+        // a tall layer seen far off is still sampled through its clouds.
+        let base = clamp((t1 - t0) / n, 40.0, 320.0);
         let sigma = 0.05;
         var trans = 1.0;
         var light = vec3<f32>(0.0);
         var depthSum = 0.0;
         var weight = 0.0;
-        for (var i = 0.0; i < n; i += 1.0) {
-            let t = t0 + (i + jitter) * dt;
+        var t = t0 + jitter * base;
+        for (var i = 0.0; i < n * 2.0; i += 1.0) {
+            if (t >= t1) { break; }
+            let dt = base * (1.0 + (t - t0) / 12000.0);
             let p = cam + dir * t;
             let d = density(p, true);
             if (d > 0.002) {
                 let od = toSun(p, l) * sigma;
                 // Beer with a powder darkening of thin edges, and two octaves of light scattered again.
                 let powder = 1.0 - exp(-od * 2.0);
-                let scattered = phase * exp(-od) + 0.5 * hg(c, 0.3) * exp(-od * 0.25);
+                let scattered = phase * exp(-od) + 0.5 * hg(c, 0.3) * exp(-od * 0.25) + 0.25 * hg(c, 0.1) * exp(-od * 0.06);
                 let sunPart = sunColor * scattered * mix(0.6, 1.0, powder);
                 let h = (altitude(p) - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
-                let ambient = mix(skyLow * 0.5, skyTop, h) * 0.9;
+                // Light from all around: the sky's, half of its color taken out (clouds are grey, not blue).
+                let sky = mix(skyLow * 0.5, skyTop, h) * 0.9;
+                let ambient = mix(vec3<f32>(dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722))), sky, 0.5);
                 let stepT = exp(-d * sigma * dt);
                 light += trans * (sunPart + ambient) * (1.0 - stepT);
                 depthSum += t * trans * (1.0 - stepT);
                 weight += trans * (1.0 - stepT);
                 trans *= stepT;
                 if (trans < 0.02) { break; }
+                t += dt;
+            } else {
+                t += dt * 2.0;
             }
         }
         // Far clouds fade into the sky behind them through the air.
@@ -253,8 +264,10 @@ export let CloudMarch_cs: string = /* wgsl */ `
 
     @group(0) @binding(2) var<uniform> cloud: CloudSettings;
     @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
-    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
-    @group(0) @binding(5) var noiseTexSampler: sampler;
+    @group(0) @binding(4) var shapeTex: texture_3d<f32>;
+    @group(0) @binding(5) var shapeTexSampler: sampler;
+    @group(0) @binding(20) var detailTex: texture_3d<f32>;
+    @group(0) @binding(21) var detailTexSampler: sampler;
     @group(0) @binding(6) var prefilterMap: texture_cube<f32>;
     @group(0) @binding(7) var prefilterMapSampler: sampler;
     @group(0) @binding(8) var outTex: texture_storage_2d<rgba16float, write>;
@@ -286,10 +299,13 @@ export let CloudComposite_cs: string = /* wgsl */ `
 
     @group(0) @binding(2) var<uniform> cloud: CloudSettings;
     @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
-    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
-    @group(0) @binding(5) var noiseTexSampler: sampler;
+    @group(0) @binding(4) var shapeTex: texture_3d<f32>;
+    @group(0) @binding(5) var shapeTexSampler: sampler;
+    @group(0) @binding(20) var detailTex: texture_3d<f32>;
+    @group(0) @binding(21) var detailTexSampler: sampler;
     @group(0) @binding(6) var inTex: texture_2d<f32>;
     @group(0) @binding(7) var marchTex: texture_2d<f32>;
+    @group(0) @binding(12) var marchTexSampler: sampler;
     @group(0) @binding(8) var historyTex: texture_2d<f32>;
     @group(0) @binding(9) var historyTexSampler: sampler;
     @group(0) @binding(10) var historyOut: texture_storage_2d<rgba16float, write>;
@@ -308,11 +324,11 @@ export let CloudComposite_cs: string = /* wgsl */ `
         let cam = globalUniform.CameraPos.xyz;
         let dir = viewRay(uv);
 
-        // This frame's march at this pixel: the nearest quarter pixel whose sample fell here, else the nearest.
-        let qsize = vec2<i32>(textureDimensions(marchTex));
-        let q = clamp(px / 4, vec2<i32>(0), qsize - 1);
+        // This frame's march at this pixel, filtered between the quarter pixels (each marched at its offset in the block).
+        let qsize = vec2<f32>(textureDimensions(marchTex));
         let fresh = all((px % 4) == vec2<i32>(cloud.march.zw));
-        let now = textureLoad(marchTex, q, 0);
+        let quv = ((vec2<f32>(px) - cloud.march.zw) / 4.0 + 0.5) / qsize;
+        let now = textureSampleLevel(marchTex, marchTexSampler, quv, 0.0);
 
         // The history where this point of the sky was last frame (clouds are far: by direction from the camera).
         let p = cam + dir * 4000.0;
@@ -371,8 +387,10 @@ export let CloudEnvMarch_cs: string = /* wgsl */ `
 
     @group(0) @binding(2) var<uniform> cloud: CloudSettings;
     @group(0) @binding(3) var<storage, read> lightBuffer: array<LightData>;
-    @group(0) @binding(4) var noiseTex: texture_2d<f32>;
-    @group(0) @binding(5) var noiseTexSampler: sampler;
+    @group(0) @binding(4) var shapeTex: texture_3d<f32>;
+    @group(0) @binding(5) var shapeTexSampler: sampler;
+    @group(0) @binding(20) var detailTex: texture_3d<f32>;
+    @group(0) @binding(21) var detailTexSampler: sampler;
     @group(0) @binding(6) var prefilterMap: texture_cube<f32>;
     @group(0) @binding(7) var prefilterMapSampler: sampler;
     @group(0) @binding(8) var outTex: texture_storage_2d_array<rgba16float, write>;

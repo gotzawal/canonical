@@ -27,7 +27,7 @@ export function sharedEditor(setup?: (page: Page) => Promise<void>, opts: { simp
             const prefs = JSON.parse(localStorage.getItem('canonical-editor/prefs') || '{}');
             // Compression runs only where a test asks for it: it is CPU work SwiftShader competes with, and tests look at the files they import.
             // The viewport draws as on a phone (30 fps, low quality): SwiftShader draws on the CPU.
-            const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'low' };
+            const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'low', adaptiveResolution: false };
             localStorage.setItem('canonical-editor/prefs', JSON.stringify({ ...pinned, ...prefs, editMode: edit }));
         }, !opts.simple);
         await setup?.(page);

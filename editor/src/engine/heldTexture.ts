@@ -193,3 +193,156 @@ export function uploadTexture(ctx: Context3D, width: number, height: number, for
     device.queue.writeTexture({ texture: tex }, data as BufferSource, { bytesPerRow: width * 4, rowsPerImage: height }, { width, height });
     return tex;
 }
+
+/**
+ * Block compression on the GPU: a compute shader packs each 4x4 block of
+ * every layer and level of an RGBA8 array into BC3 (16 bytes: 8 for alpha,
+ * 8 for color), a quarter of the memory and bandwidth. Real-time quality:
+ * the block's color range (inset a little) and the nearest of its four
+ * colors and eight alphas. `swizzle` moves a normal layer's channels
+ * (x, y, roughness, occlusion) to (roughness, y, occlusion, x): x gets the
+ * eight bit alpha, y the six bit green; readers swap them back.
+ */
+const BC3 = /* wgsl */ `
+struct Params { blocks: vec2u, stride: u32, mip: u32, swizzle: u32, srgb: u32, pad0: u32, pad1: u32 };
+@group(0) @binding(0) var src: texture_2d_array<f32>;
+@group(0) @binding(1) var<storage, read_write> out: array<vec4u>;
+@group(0) @binding(2) var<uniform> params: Params;
+
+fn toSrgb(c: vec3f) -> vec3f {
+    let lo = c * 12.92;
+    let hi = 1.055 * pow(max(c, vec3f(0.0)), vec3f(1.0 / 2.4)) - 0.055;
+    return select(hi, lo, c <= vec3f(0.0031308));
+}
+fn to565(c: vec3f) -> u32 {
+    let q = vec3u(round(clamp(c, vec3f(0.0), vec3f(1.0)) * vec3f(31.0, 63.0, 31.0)));
+    return (q.x << 11u) | (q.y << 5u) | q.z;
+}
+fn from565(v: u32) -> vec3f {
+    return vec3f(f32((v >> 11u) & 31u) / 31.0, f32((v >> 5u) & 63u) / 63.0, f32(v & 31u) / 31.0);
+}
+
+@compute @workgroup_size(8, 8, 1)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+    if (id.x >= params.blocks.x || id.y >= params.blocks.y) { return; }
+    let size = vec2i(textureDimensions(src, i32(params.mip)));
+    var px: array<vec4f, 16>;
+    var lo = vec4f(1.0);
+    var hi = vec4f(0.0);
+    for (var i = 0u; i < 16u; i++) {
+        let at = min(vec2i(id.xy * 4u + vec2u(i % 4u, i / 4u)), size - 1);
+        var c = textureLoad(src, at, i32(id.z), i32(params.mip));
+        if (params.srgb == 1u) { c = vec4f(toSrgb(c.rgb), c.a); }
+        if (params.swizzle == 1u) { c = vec4f(c.b, c.g, c.a, c.r); }
+        px[i] = c;
+        lo = min(lo, c);
+        hi = max(hi, c);
+    }
+    // Color: the box's ends, pulled in by a sixteenth of it.
+    let inset = (hi.rgb - lo.rgb) / 16.0;
+    let c0 = to565(hi.rgb - inset);
+    let c1 = to565(lo.rgb + inset);
+    let p0 = from565(c0);
+    let p1 = from565(c1);
+    let pal = array<vec3f, 4>(p0, p1, (2.0 * p0 + p1) / 3.0, (p0 + 2.0 * p1) / 3.0);
+    var colorBits = 0u;
+    // Alpha: eight steps between the block's highest and lowest.
+    let a0 = u32(round(hi.a * 255.0));
+    let a1 = u32(round(lo.a * 255.0));
+    var aLo = 0u;
+    var aHi = 0u;
+    for (var i = 0u; i < 16u; i++) {
+        let c = px[i];
+        var best = 0u;
+        var bestD = 1e9;
+        for (var k = 0u; k < 4u; k++) {
+            let d = c.rgb - pal[k];
+            let dd = dot(d, d);
+            if (dd < bestD) { bestD = dd; best = k; }
+        }
+        colorBits |= best << (2u * i);
+        var ai = 0u;
+        if (a0 > a1) {
+            let a = c.a * 255.0;
+            var bestA = abs(a - f32(a0));
+            let d1 = abs(a - f32(a1));
+            if (d1 < bestA) { bestA = d1; ai = 1u; }
+            for (var k = 2u; k < 8u; k++) {
+                let v = (f32(8u - k) * f32(a0) + f32(k - 1u) * f32(a1)) / 7.0;
+                let d = abs(a - v);
+                if (d < bestA) { bestA = d; ai = k; }
+            }
+        }
+        let bit = 3u * i;
+        if (bit < 32u) { aLo |= ai << bit; }
+        if (bit + 3u > 32u) { aHi |= select(ai << (bit - 32u), ai >> (32u - bit), bit < 32u); }
+    }
+    let w0 = a0 | (a1 << 8u) | ((aLo & 0xffffu) << 16u);
+    let w1 = (aLo >> 16u) | (aHi << 16u);
+    out[(id.z * params.blocks.y + id.y) * params.stride + id.x] = vec4u(w0, w1, c0 | (c1 << 16u), colorBits);
+}`;
+
+const bc3Pipelines = new WeakMap<GPUDevice, GPUComputePipeline>();
+
+/** Whether the device can sample BC formats (most computers; few phones). */
+export function canCompressBC(ctx: Context3D): boolean {
+    return !!ctx.device.features?.has('texture-compression-bc');
+}
+
+/**
+ * A BC3 copy of an RGBA8 2D array with all its levels (`swizzle` for a
+ * normal array, see BC3), or null where the device cannot sample BC.
+ * The source stays; the caller lets it go.
+ */
+export function compressLayerArray(ctx: Context3D, src: GPUTexture, swizzle: boolean, label: string): GPUTexture | null {
+    if (!canCompressBC(ctx)) return null;
+    const device = ctx.device;
+    const srgb = src.format === 'rgba8unorm-srgb';
+    if (!srgb && src.format !== 'rgba8unorm') return null;
+    let pipeline = bc3Pipelines.get(device);
+    if (!pipeline) {
+        pipeline = device.createComputePipeline({ label: 'morglay-bc3', layout: 'auto', compute: { module: device.createShaderModule({ code: BC3, label: 'morglay-bc3' }), entryPoint: 'main' } });
+        bc3Pipelines.set(device, pipeline);
+    }
+    const layers = src.depthOrArrayLayers;
+    const dst = device.createTexture({
+        label,
+        size: { width: src.width, height: src.height, depthOrArrayLayers: layers },
+        format: srgb ? 'bc3-rgba-unorm-srgb' : 'bc3-rgba-unorm',
+        mipLevelCount: src.mipLevelCount,
+        usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST,
+    });
+    const view = src.createView({ dimension: '2d-array' });
+    const encoder = device.createCommandEncoder({ label });
+    const temp: GPUBuffer[] = [];
+    for (let m = 0; m < src.mipLevelCount; m++) {
+        const w = Math.max(1, src.width >> m), h = Math.max(1, src.height >> m);
+        const bw = Math.ceil(w / 4), bh = Math.ceil(h / 4);
+        // Rows of whole 256 bytes, as copies from a buffer want them.
+        const stride = Math.ceil((bw * 16) / 256) * 16;
+        const out = device.createBuffer({ size: stride * 16 * bh * layers, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
+        const params = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+        device.queue.writeBuffer(params, 0, new Uint32Array([bw, bh, stride, m, swizzle ? 1 : 0, srgb ? 1 : 0, 0, 0]));
+        temp.push(out, params);
+        const pass = encoder.beginComputePass({ label });
+        pass.setPipeline(pipeline);
+        pass.setBindGroup(0, device.createBindGroup({
+            layout: pipeline.getBindGroupLayout(0),
+            entries: [
+                { binding: 0, resource: view },
+                { binding: 1, resource: { buffer: out } },
+                { binding: 2, resource: { buffer: params } },
+            ],
+        }));
+        pass.dispatchWorkgroups(Math.ceil(bw / 8), Math.ceil(bh / 8), layers);
+        pass.end();
+        encoder.copyBufferToTexture(
+            { buffer: out, bytesPerRow: stride * 16, rowsPerImage: bh },
+            { texture: dst, mipLevel: m },
+            { width: bw * 4, height: bh * 4, depthOrArrayLayers: layers },
+        );
+    }
+    device.queue.submit([encoder.finish()]);
+    void device.queue.onSubmittedWorkDone().then(() => temp.forEach((b) => b.destroy()));
+    return dst;
+}

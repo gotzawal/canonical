@@ -24,7 +24,7 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 await page.addInitScript(() => {
-    const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', editMode: true };
+    const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', adaptiveResolution: false, editMode: true };
     localStorage.setItem('canonical-editor/prefs', JSON.stringify(pinned));
 });
 await page.goto('http://localhost:8101/');

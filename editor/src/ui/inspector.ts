@@ -1058,7 +1058,7 @@ export class InspectorPanel {
             h('div', { class: 'muted small pad', text: 'Ground from a heightmap over the area around the object, drawn in chunks that get coarser far away. In Play characters and bodies stand on it; grass and scatters grow on it. Choose a brush and drag on it in the view to shape or paint it.' }),
             row('Ground', shape, 'Lowest and highest ground'),
             row('Heightmap', h('div', { class: 'inline grow' }, heights, load), 'Each sculpt stroke saves the heights as a new file (one undo step)'),
-            ...this.componentRows('terrain', ['size', 'height', 'detail', 'blending', 'variation', 'wetShore', 'puddles', 'collide', 'castShadow']),
+            ...this.componentRows('terrain', ['size', 'height', 'detail', 'blending', 'variation', 'wetShore', 'puddles', 'compress', 'collide', 'castShadow']),
             ...this.brushRows(),
             ...this.terrainLayerRows(),
         ], [remove]);

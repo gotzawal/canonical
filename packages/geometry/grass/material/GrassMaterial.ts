@@ -50,6 +50,10 @@ export class GrassMaterial extends Material {
         colorPass.setUniformFloat("soft", 5);
         colorPass.setUniformFloat("specular", 0.15);
         colorPass.setUniformFloat("drawDistance", 0);
+        colorPass.setUniformFloat("shadowEyeX", 0);
+        colorPass.setUniformFloat("shadowEyeY", 0);
+        colorPass.setUniformFloat("shadowEyeZ", 0);
+        colorPass.setUniformFloat("shadowDistance", 0);
 
         shadowPass.setUniformColor("baseColor", new Color(0.0, 1.0, 0.0, 1.0));
         shadowPass.setUniformColor("grassBottomColor", new Color(39 / 255, 87 / 255, 36 / 255));
@@ -66,6 +70,10 @@ export class GrassMaterial extends Material {
         shadowPass.setUniformFloat("soft", 5);
         shadowPass.setUniformFloat("specular", 0.15);
         shadowPass.setUniformFloat("drawDistance", 0);
+        shadowPass.setUniformFloat("shadowEyeX", 0);
+        shadowPass.setUniformFloat("shadowEyeY", 0);
+        shadowPass.setUniformFloat("shadowEyeZ", 0);
+        shadowPass.setUniformFloat("shadowDistance", 0);
 
         colorPass.doubleSide = true;
         shadowPass.doubleSide = true;
@@ -191,5 +199,16 @@ export class GrassMaterial extends Material {
 
     public get drawDistance(): number {
         return this.shader.getUniformFloat("drawDistance");
+    }
+
+    /**
+     * Blades past `distance` meters from the viewer at `eye` thin out of the
+     * shadows (from half of it); 0 keeps every blade's shadow.
+     */
+    public setShadowView(eye: ArrayLike<number>, distance: number) {
+        this.shader.setUniformFloat("shadowEyeX", eye[0]);
+        this.shader.setUniformFloat("shadowEyeY", eye[1]);
+        this.shader.setUniformFloat("shadowEyeZ", eye[2]);
+        this.shader.setUniformFloat("shadowDistance", Math.max(0, distance));
     }
 }

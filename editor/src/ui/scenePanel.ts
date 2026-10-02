@@ -3,6 +3,7 @@ import type { Editor } from '../editor';
 import { onChanges, touches } from './batch';
 import { Environment } from '../core/model';
 import { QUALITY } from '../core/quality';
+import { CLOUD_PRESETS } from '../core/clouds';
 import { describeShadowCost, shadowCasters, shadowCost } from '../engine/shadows';
 import { inner } from '../core/schema';
 import type { EnvironmentDoc, SkyType, StageId } from '../core/types';
@@ -195,7 +196,15 @@ export class ScenePanel {
                 label('Fog'),
                 ...this.rows(['enable', 'mode', 'color', 'near', ...(env.fog.mode === 'linear' ? ['far'] : ['density']), ...(env.fog.mode === 'height' ? ['height', 'heightFalloff'] : []), 'intensity', 'sky', 'sunScatter', 'sunFocus'], 'fog'),
                 label('Clouds'),
-                ...this.rows(['enable', 'coverage', 'type', 'density', 'detail', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
+                ...this.rows(['enable'], 'clouds'),
+                row('Presets', h('div', { class: 'button-row' }, ...CLOUD_PRESETS.map((p) => {
+                    const b = button(p.label, () => store.commit(`Clouds: ${p.label}`, (d) => {
+                        d.environment.clouds = { ...d.environment.clouds, ...p.look, enable: true };
+                    }, { env: true }), 'small');
+                    b.title = p.description;
+                    return b;
+                }))),
+                ...this.rows(['coverage', 'type', 'size', 'softness', 'detail', 'density', 'seed', 'bottom', 'thickness', 'wind', 'windDirection', 'evolve', 'shadows'], 'clouds'),
                 label('Volumetric Fog'),
                 ...this.rows(['enable', 'density', 'scattering', 'anisotropy', 'distance', 'ambient'], 'volumetricFog'),
                 label('God Rays'),

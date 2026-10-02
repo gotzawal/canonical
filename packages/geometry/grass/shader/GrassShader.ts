@@ -32,6 +32,11 @@ export let GrassShader = /* wgsl */`
         specular: f32,
         // Meters from the camera where the last blades are gone (they thin out from half of it); 0 for none.
         drawDistance: f32,
+        // The viewer (the shadow pass's camera is the light's) and how far from it blades cast shadows; 0 for all.
+        shadowEyeX: f32,
+        shadowEyeY: f32,
+        shadowEyeZ: f32,
+        shadowDistance: f32,
     };
       
     @group(2) @binding(0)

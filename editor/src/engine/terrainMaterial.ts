@@ -14,10 +14,10 @@
 // are. Each layer is projected along the axes the surface faces, so cliffs
 // keep their texture size.
 
-import { Material, PassType, RenderShaderPass, Shader, ShaderLib, Vector4, type Context3D, type Texture } from '@orillusion/core';
+import { Material, PassType, RenderShaderPass, Shader, ShaderLib, Texture, Vector4, type Context3D } from '@orillusion/core';
 import type { TerrainFrame } from '../core/terrain';
 import { hexToColor } from './color';
-import { buildLayerArray, HeldTexture, uploadTexture, type ArrayLayer } from './heldTexture';
+import { buildLayerArray, compressLayerArray, HeldTexture, uploadTexture, type ArrayLayer } from './heldTexture';
 import { litMaterialSource, setEngineDefaults } from './shaders';
 
 const LAYERS = 4;
@@ -113,6 +113,8 @@ fn tap(i: i32, uv: vec2f, gx: vec2f, gy: vec2f, far: f32) -> Tap {
         t.a = mix(t.a, fa, far);
         t.n = mix(t.n, fnm, far);
     }
+    // A compressed normal array keeps x in alpha and roughness in red (heldTexture's BC3).
+    if (materialUniform.terrainLook.w > 0.5) { t.n = vec4f(t.n.a, t.n.g, t.n.r, t.n.b); }
     return t;
 }
 
@@ -278,7 +280,7 @@ let shaderName: string | null = null;
 
 function registered(): string {
     if (!shaderName) {
-        shaderName = 'morglay_terrain_2';
+        shaderName = 'morglay_terrain_3';
         ShaderLib.register(shaderName, litMaterialSource(FIELDS, BINDINGS, BODY));
     }
     return shaderName;
@@ -326,6 +328,11 @@ export class TerrainMaterial {
     private splat: HeldTexture;
     /** What the arrays were built from, to build them again only when that changes. */
     private arraysKey = '';
+    /** Keep the arrays block compressed (Terrain.compress), and whether the ones held are. */
+    private compress = false;
+    private compressed = false;
+    private look = new Vector4(0.7, 0.5, 1, 0);
+    private lastArrays: { layers: (MaterialLayer | null)[]; size: number } | null = null;
     /** Layers shown, and whether there is paint (terrainInfo). */
     private count = 1;
     private painted = false;
@@ -410,8 +417,33 @@ export class TerrainMaterial {
         // Color with height in alpha; normal with roughness and occlusion (an ARM map's G and R) in blue and alpha.
         const albedo: ArrayLayer[] = layers.map((l) => ({ sources: [{ texture: l?.albedo ?? null, channels: 'rgb' }, { texture: l?.heightMap ?? null, channels: 'a' }], fill: WHITE }));
         const normal: ArrayLayer[] = layers.map((l) => ({ sources: [{ texture: l?.normal ?? null, channels: 'rg' }, { texture: l?.arm ?? null, channels: 'ba' }], fill: FLAT }));
-        this.albedo.hold(buildLayerArray(this.ctx, albedo, size, 'rgba8unorm-srgb', 'terrain albedo'));
-        this.normal.hold(buildLayerArray(this.ctx, normal, size, 'rgba8unorm', 'terrain normal'));
+        this.lastArrays = { layers, size };
+        let a = buildLayerArray(this.ctx, albedo, size, 'rgba8unorm-srgb', 'terrain albedo');
+        let n = buildLayerArray(this.ctx, normal, size, 'rgba8unorm', 'terrain normal');
+        const ca = this.compress ? compressLayerArray(this.ctx, a, false, 'terrain albedo (BC3)') : null;
+        const cn = ca ? compressLayerArray(this.ctx, n, true, 'terrain normal (BC3)') : null;
+        if (ca && cn) {
+            Texture.delayDestroyTexture(this.ctx, a);
+            Texture.delayDestroyTexture(this.ctx, n);
+            a = ca;
+            n = cn;
+        }
+        this.compressed = !!(ca && cn);
+        this.albedo.hold(a);
+        this.normal.hold(n);
+        this.writeLook();
+    }
+
+    /** Keeps the layers block compressed (where the device can): the arrays are made again when this changes. */
+    setCompressed(on: boolean) {
+        if (on === this.compress) return;
+        this.compress = on;
+        if (this.lastArrays) this.rebuildArrays(this.lastArrays.layers, this.lastArrays.size);
+    }
+
+    private writeLook() {
+        this.look.w = this.compressed ? 1 : 0;
+        this.shader.setUniformVector4('terrainLook', this.look);
     }
 
     /**
@@ -420,7 +452,8 @@ export class TerrainMaterial {
      * with a larger copy far away (the graphics tier's choice).
      */
     setLook(blending: number, variation: number, far: boolean) {
-        this.shader.setUniformVector4('terrainLook', new Vector4(blending, variation, far ? 1 : 0, 0));
+        this.look = new Vector4(blending, variation, far ? 1 : 0, this.compressed ? 1 : 0);
+        this.writeLook();
     }
 
     /** Wet ground along a water surface over the terrain and under rain. */

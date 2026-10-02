@@ -19,6 +19,8 @@ const SEGMENT_SUM = 3;
 /** Blades a chunk aims at, and the most chunks a side. */
 const PER_CHUNK = 1500;
 const MAX_CHUNKS = 6;
+/** Meters from the camera past which blades cast no shadow (they thin out from half of it; times the tier's LOD distance). */
+const SHADOW_DISTANCE = 30;
 /** Meters from the camera where chunks switch to blades of two segments, then one (times the tier's LOD distance). */
 const LOD_NEAR = 14;
 const LOD_FAR = 35;
@@ -49,6 +51,9 @@ export class GrassField {
     private visible = true;
     private distance = 0;
     private lodScale = 1;
+    private castShadow = true;
+    /** Where the shadows were last fitted to the viewer. */
+    private shadowEye = [Infinity, 0, 0];
     /** The shapes the blades were last given (to reshape only when they change). */
     private shaped = '';
 
@@ -95,6 +100,8 @@ export class GrassField {
             renderer.castShadow = doc.castShadow;
         }
         this.distance = doc.distance;
+        this.castShadow = doc.castShadow;
+        this.shadowEye[0] = Infinity;
     }
 
     /** Whether its textures are set yet. */
@@ -216,6 +223,15 @@ export class GrassField {
      */
     update(eye: ArrayLike<number>) {
         if (!this.visible) return;
+        // Blades cast shadows only near the viewer: far ones thin out of them, far chunks cast none.
+        const shadowDistance = Math.min(this.distance > 0 ? this.distance : Infinity, SHADOW_DISTANCE * this.lodScale);
+        const se = this.shadowEye;
+        const refit = Math.hypot(eye[0] - se[0], eye[1] - se[1], eye[2] - se[2]) > 0.5;
+        if (refit) {
+            se[0] = eye[0];
+            se[1] = eye[1];
+            se[2] = eye[2];
+        }
         for (const c of this.chunks) {
             if (!c.placed) continue;
             const dx = Math.max(c.min.x - eye[0], 0, eye[0] - c.max.x);
@@ -225,6 +241,9 @@ export class GrassField {
             const on = !(this.distance > 0) || d <= this.distance;
             if (c.renderer.enable !== on) c.renderer.enable = on;
             if (!on) continue;
+            const shadow = this.castShadow && d <= shadowDistance * (c.renderer.castShadow ? 1.05 : 0.95);
+            if (c.renderer.castShadow !== shadow) c.renderer.castShadow = shadow;
+            if (refit && shadow) c.renderer.grassMaterial.setShadowView(eye, shadowDistance);
             const cur = c.renderer.lodLevel;
             const near = LOD_NEAR * this.lodScale * (cur === 0 ? 1.05 : 0.95);
             const far = LOD_FAR * this.lodScale * (cur === 2 ? 0.95 : 1.05);

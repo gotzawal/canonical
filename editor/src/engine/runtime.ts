@@ -4,6 +4,7 @@ import {
     Texture, View3D, VolumetricFogPost,
 } from '@orillusion/core';
 import { AtmosphericComponent as PhysicalSkyComponent } from '@orillusion/atmosphere';
+import { AdaptiveResolution } from '../core/adaptive';
 import { QUALITY, resolveQuality, sunScatterToLine, type QualityLevel, type QualitySetting } from '../core/quality';
 import { skyParams } from '../core/sky';
 import type { ViewportFps, ViewportQuality } from '../core/store';
@@ -78,6 +79,9 @@ export class Runtime {
     private watchingRatio = false;
     /** Captures in progress, which draw at full resolution. */
     private sharp = 0;
+    /** Draws at fewer pixels while frames run late (setAdaptive). */
+    private adaptive: AdaptiveResolution | null = null;
+    private lastFrameAt = 0;
     private frameListeners = new Set<() => void>();
     private beforeListeners = new Set<() => void>();
     private graphListeners = new Set<() => void>();
@@ -200,6 +204,21 @@ export class Runtime {
         this.watchRatio();
     }
 
+    /**
+     * Lowers the resolution a step at a time while frames take longer than
+     * the frame rate aims at, and raises it back when there is room.
+     */
+    setAdaptive(on: boolean) {
+        if (on === !!this.adaptive) return;
+        this.adaptive = on ? new AdaptiveResolution() : null;
+        this.applyResolution();
+    }
+
+    /** The share of the chosen resolution drawn now (1 without adaptive resolution or while it has room). */
+    get resolutionScale(): number {
+        return this.adaptive?.scale ?? 1;
+    }
+
     /** Sets the resolution again when the screen's pixel ratio changes (the engine's own resize keeps the ratio it was given). */
     private watchRatio() {
         if (this.watchingRatio || typeof matchMedia !== 'function') return;
@@ -222,7 +241,8 @@ export class Runtime {
     private applyResolution(): boolean {
         if (!this.quality) return false;
         const ctx = this.engine.context3D;
-        const ratio = this.sharp > 0 ? screenRatio() : VIEWPORT_QUALITY.find((q) => q.value === this.quality)!.ratio();
+        // Never under half a pixel per CSS pixel, whatever the adaptive step.
+        const ratio = this.sharp > 0 ? screenRatio() : Math.max(Math.min(0.5, screenRatio()), VIEWPORT_QUALITY.find((q) => q.value === this.quality)!.ratio() * this.resolutionScale);
         if (ctx.canvasConfig?.devicePixelRatio === ratio) return false;
         ctx.canvasConfig = { ...ctx.canvasConfig, devicePixelRatio: ratio };
         const size = [ctx.windowWidth, ctx.windowHeight];
@@ -360,6 +380,8 @@ export class Runtime {
         }
         this.frames++;
         const now = performance.now();
+        if (this.adaptive && this.lastFrameAt && !this.sharp && this.adaptive.frame(now - this.lastFrameAt, 1000 / this.fpsTarget, now)) this.applyResolution();
+        this.lastFrameAt = now;
         if (now - this.fpsTime >= 500) {
             this.fps = (this.frames * 1000) / (now - this.fpsTime);
             this.frames = 0;
@@ -463,15 +485,16 @@ export class Runtime {
 
         // Clouds go before the fog, which then hazes them like the sky.
         const cl = env.clouds;
-        this.togglePost(CloudPost, cl.enable);
+        // No clouds to draw: no cost at all.
+        this.togglePost(CloudPost, cl.enable && cl.coverage > 0);
         const clouds = this.post.getPost(CloudPost as any) as CloudPost | null;
         if (clouds) {
             const a = (cl.windDirection * Math.PI) / 180;
             Object.assign(clouds, {
-                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail,
+                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, softness: cl.softness, seed: cl.seed,
                 bottom: cl.bottom, top: cl.bottom + cl.thickness,
                 windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
-                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps,
+                haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, reflectionEvery: tier.cloudReflectionEvery,
             });
         }
 
@@ -499,6 +522,7 @@ export class Runtime {
         const shadow = setting.shadow;
         shadow.pcfKernelScale = env.shadow.softness;
         shadow.updateFrameRate = tier.shadowEvery;
+        shadow.farCascadeEvery = tier.farCascadeEvery;
         shadow.pointShadowAtlasMax = tier.shadowAtlasMax;
         this.fitShadowLights();
 

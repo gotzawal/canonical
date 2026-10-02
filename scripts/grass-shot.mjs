@@ -26,7 +26,7 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await page.addInitScript(() => {
-    localStorage.setItem('canonical-editor/prefs', JSON.stringify({ v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', editMode: true }));
+    localStorage.setItem('canonical-editor/prefs', JSON.stringify({ v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', adaptiveResolution: false, editMode: true }));
 });
 await page.goto('http://localhost:8101/');
 await page.waitForFunction(() => !!window.__editor && !!document.querySelector('.viewport canvas.gpu') && !document.querySelector('.viewport-loading'), null, { polling: 200, timeout: 240_000 });

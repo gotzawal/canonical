@@ -25,7 +25,7 @@ page.on('console', (m) => {
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await page.addInitScript(() => {
-    localStorage.setItem('canonical-editor/prefs', JSON.stringify({ v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', editMode: true }));
+    localStorage.setItem('canonical-editor/prefs', JSON.stringify({ v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', adaptiveResolution: false, editMode: true }));
 });
 await page.goto('http://localhost:8101/');
 await page.waitForFunction(() => !!window.__editor && !!document.querySelector('.viewport canvas.gpu') && !document.querySelector('.viewport-loading'), null, { polling: 200, timeout: 240_000 });
@@ -39,6 +39,8 @@ await page.evaluate(async () => {
     ed.store.select([]);
 });
 await page.evaluate(() => window.__editor.shaders.whenIdle());
+// The noise volumes are made in a worker: wait for them.
+await page.waitForFunction(() => (window.__editor.runtime.postList().get('CloudPost')?._shapeNoise?.width ?? 0) > 1, null, { polling: 500, timeout: 120_000 });
 await page.waitForTimeout(8000);
 const setSun = (rot) => page.evaluate((rot) => window.__editor.store.commit('Sun', (d) => {
     d.nodes.find((n) => n.light?.type === 'directional').rotation = rot;
@@ -51,10 +53,26 @@ const shot = async (name, c) => {
     console.log('shot', name);
 };
 const sky = { target: [0, 60, 0], yaw: 30, pitch: -12, distance: 60, fov: 70 };
+const preset = (look) => page.evaluate((look) => window.__editor.store.commit('Look', (d) => {
+    d.environment.clouds = { ...d.environment.clouds, ...look };
+}, { env: true }), look);
 await setSun([40, 150, 0]);
 await shot('day', sky);
 await shot('ground', { target: [0, 10, 0], yaw: 30, pitch: 35, distance: 260, fov: 60 });
-// Water over the valleys: the clouds in its reflection (the environment cube).
+// The presets of the Scene tab (core/clouds.ts).
+const presets = {
+    fair: { coverage: 0.35, type: 0.85, size: 0.8, softness: 0.2, detail: 0.6, density: 1, bottom: 1200, thickness: 1500 },
+    broken: { coverage: 0.7, type: 0.6, size: 1.6, softness: 0.35, detail: 0.5, density: 1.2, bottom: 1500, thickness: 2200 },
+    overcast: { coverage: 0.95, type: 0.2, size: 2.5, softness: 0.6, detail: 0.3, density: 1.5, bottom: 1200, thickness: 1800 },
+    towering: { coverage: 0.55, type: 1, size: 1.5, softness: 0.15, detail: 0.7, density: 1.4, bottom: 1200, thickness: 5000 },
+    sheets: { coverage: 0.6, type: 0.05, size: 2.5, softness: 0.8, detail: 0.8, density: 0.5, bottom: 6000, thickness: 800 },
+};
+for (const [name, look] of Object.entries(presets)) {
+    await preset(look);
+    await shot(name, sky);
+}
+await preset({ coverage: 0.5, type: 0.75, size: 1.2, softness: 0.3, detail: 0.6, density: 1, bottom: 1500, thickness: 2000 });
+// Water over the valleys and a chrome ball: the clouds in reflections (the environment cube).
 await page.evaluate(() => {
     const ed = window.__editor;
     const water = ed.createWater();
@@ -63,17 +81,6 @@ await page.evaluate(() => {
         w.position = [0, 30, 0];
         w.mesh.geometry = { ...w.mesh.geometry, width: 2000, height: 2000 };
     });
-    ed.store.select([]);
-});
-await page.evaluate(() => window.__editor.shaders.whenIdle());
-await shot('water', { target: [0, 32, 0], yaw: 30, pitch: 10, distance: 40, fov: 70 });
-// The same without the clouds in the environment cube, to compare.
-await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = false; });
-await shot('water-plain', { target: [0, 32, 0], yaw: 30, pitch: 10, distance: 40, fov: 70 });
-await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = true; });
-// A chrome ball: the clouds on a glossy material.
-await page.evaluate(() => {
-    const ed = window.__editor;
     ed.createPrimitive('sphere');
     ed.store.commit('Chrome', (d) => {
         const n = d.nodes.at(-1);
@@ -83,13 +90,8 @@ await page.evaluate(() => {
     });
     ed.store.select([]);
 });
+await page.evaluate(() => window.__editor.shaders.whenIdle());
 await shot('chrome', { target: [0, 40, 0], yaw: 210, pitch: -5, distance: 22, fov: 60 });
-await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = false; });
-await shot('chrome-plain', { target: [0, 40, 0], yaw: 210, pitch: -5, distance: 22, fov: 60 });
-await page.evaluate(() => { window.__editor.runtime.postList().get('CloudPost').reflections = true; });
-await page.evaluate(() => window.__editor.store.commit('Overcast', (d) => { d.environment.clouds.coverage = 0.85; d.environment.clouds.type = 0.2; }, { env: true }));
-await shot('overcast', sky);
-await page.evaluate(() => window.__editor.store.commit('Fair', (d) => { d.environment.clouds.coverage = 0.45; d.environment.clouds.type = 0.8; }, { env: true }));
 await setSun([6, 210, 0]);
 await shot('sunset', { target: [0, 60, 0], yaw: 210, pitch: -8, distance: 60, fov: 70 });
 await browser.close();

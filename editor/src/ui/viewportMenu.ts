@@ -13,6 +13,11 @@ export function viewportMenu(store: Store, flat = false): MenuItem[] {
         checked: () => store.prefs.viewportQuality === value,
         action: () => store.setPrefs({ viewportQuality: value }),
     }));
+    qualities.push({ separator: true }, {
+        label: 'Adaptive (fewer pixels while slow)',
+        checked: () => store.prefs.adaptiveResolution,
+        action: () => store.setPrefs({ adaptiveResolution: !store.prefs.adaptiveResolution }),
+    });
     if (flat) return [...rates, { separator: true }, ...qualities];
     const tiers: MenuItem[] = (['scene', 'low', 'medium', 'high'] as const).map((value) => ({
         label: value === 'scene' ? 'As the Scene Sets It' : `${value[0].toUpperCase()}${value.slice(1)}`,

@@ -5,7 +5,7 @@ import { RenderNode } from '../../../components/renderer/RenderNode';
 import { TextureCube } from '../../graphics/webGpu/core/texture/TextureCube';
 import { Context3D } from '../../graphics/webGpu/Context3D';
 import { View3D } from '../../../core/View3D';
-import { Uint8ArrayTexture } from '../../../textures/Uint8ArrayTexture';
+import { cloudVolumes } from './CloudNoise';
 import { VirtualTexture } from '../../../textures/VirtualTexture';
 import { Texture } from '../../graphics/webGpu/core/texture/Texture';
 import { GlobalBindGroup } from '../../graphics/webGpu/core/bindGroups/GlobalBindGroup';
@@ -19,6 +19,7 @@ import { RTFrame } from '../frame/RTFrame';
 import { EntityCollect } from '../collect/EntityCollect';
 import { SkyRenderer } from '../../../components/renderer/SkyRenderer';
 import { Engine3D } from '../../../Engine3D';
+import { DirectLight } from '../../../components/lights/DirectLight';
 import { PostBase } from './PostBase';
 
 /**
@@ -45,6 +46,12 @@ export class CloudPost extends PostBase {
     public type = 0.6;
     /** How much their edges are worn into wisps, 0 to 1. */
     public detail = 0.6;
+    /** How big each cloud is (1 as usual: heaps a kilometer or two across). */
+    public size = 1;
+    /** 0 crisp, sharply edged clouds to 1 soft, hazy ones. */
+    public softness = 0.3;
+    /** Picks another pattern of clouds (any number). */
+    public seed = 0;
     /** Wind over the layer, m/s along x and z, and how fast shapes change, m/s. */
     public windX = 6;
     public windZ = 3;
@@ -57,16 +64,24 @@ export class CloudPost extends PostBase {
     public steps = 48;
     /** Clouds in the scene's environment cube (reflections, light from the sky). */
     public reflections = true;
+    /** The reflection cube refreshes a face every this many frames. */
+    public reflectionEvery = 1;
 
     private _march: ComputeShader;
     private _composite: ComputeShader[] = [];
     private _settings: UniformGPUBuffer;
-    private _noise: Uint8ArrayTexture;
+    private _shapeNoise: Texture;
+    private _detailNoise: Texture;
+    private _destroyed = false;
+    private _lastLook = '';
+    private _lastView = new Float32Array(16);
     private _marchTex: VirtualTexture;
     private _history: VirtualTexture[] = [];
     private _outTex: VirtualTexture;
     private _rtFrame: RTFrame;
     private _frame = 0;
+    /** Frames drawn (never reset: the reflection cube's faces go round by it). */
+    private _envFrame = 0;
     private _windOffset = [0, 0];
     private _lastTime = 0;
     private _prevViewProj = new Float32Array(16);
@@ -88,21 +103,30 @@ export class CloudPost extends PostBase {
         const desc = new RTDescriptor();
         desc.loadOp = 'load';
         this._rtFrame = new RTFrame([this._outTex], [desc]);
-        this._noise = new Uint8ArrayTexture().createQueued(ATLAS_W, CELL * 4, cloudNoise(), ctx);
-        this._noise.addressModeU = 'clamp-to-edge';
-        this._noise.addressModeV = 'clamp-to-edge';
+        // Clear until the noise is made (a second or so): then the clouds come in.
+        this._shapeNoise = new VolumeTexture(ctx, 1, new Uint8Array(4));
+        this._detailNoise = new VolumeTexture(ctx, 1, new Uint8Array(4));
+        void cloudVolumes().then((v) => {
+            if (this._destroyed) return;
+            const old = [this._shapeNoise, this._detailNoise];
+            this._shapeNoise = new VolumeTexture(ctx, v.shapeSize, v.shape);
+            this._detailNoise = new VolumeTexture(ctx, v.detailSize, v.detail);
+            for (const c of this._noiseUsers()) this._bindNoise(c);
+            this._lastLook = '';
+            for (const t of old) Texture.delayDestroyTexture(ctx, t.getGPUTexture() as GPUTexture);
+        });
     }
 
     private _createCompute(view: View3D) {
         const ctx = view.engine3D.context3D;
-        this._settings = new UniformGPUBuffer(40);
+        this._settings = new UniformGPUBuffer(48);
         const lights = GlobalBindGroup.getLightEntries(view.scene).storageGPUBuffer;
         const gBuffer = GBufferFrame.getGBufferFrame(GBufferFrame.colorPass_GBuffer, ctx).getCompressGBufferTexture();
         this._march = new ComputeShader(CloudMarch_cs);
         this._march.setUniformBuffer('cloud', this._settings);
         this._march.setStorageBuffer('lightBuffer', lights);
         this._march.setSamplerTexture('gBufferTexture', gBuffer);
-        this._march.setSamplerTexture('noiseTex', this._noise);
+        this._bindNoise(this._march);
         this._march.setStorageTexture('outTex', this._marchTex);
         // Two composites: each reads one history and writes the other.
         this._composite = [0, 1].map((i) => {
@@ -110,13 +134,30 @@ export class CloudPost extends PostBase {
             c.setUniformBuffer('cloud', this._settings);
             c.setStorageBuffer('lightBuffer', lights);
             c.setSamplerTexture('gBufferTexture', gBuffer);
-            c.setSamplerTexture('noiseTex', this._noise);
+            this._bindNoise(c);
             c.setSamplerTexture('marchTex', this._marchTex);
             c.setSamplerTexture('historyTex', this._history[i]);
             c.setStorageTexture('historyOut', this._history[1 - i]);
             c.setStorageTexture('outTex', this._outTex);
             return c;
         });
+    }
+
+    /** Where the sun is (as the shaders find it: the first directional light that casts shadows, else the first light), coarsely. */
+    private _sunDir(view: View3D): number[] {
+        const lights = EntityCollect.instance.getLights(view.scene).filter((l): l is DirectLight => l instanceof DirectLight);
+        const sun = lights.find((l) => l.castShadow) ?? lights[0];
+        const f = sun?.transform.worldMatrix.rawData;
+        return f ? [f[8], f[9], f[10]] : [0, 0, 0];
+    }
+
+    private _bindNoise(c: ComputeShader) {
+        c.setSamplerTexture('shapeTex', this._shapeNoise);
+        c.setSamplerTexture('detailTex', this._detailNoise);
+    }
+
+    private _noiseUsers(): ComputeShader[] {
+        return [this._march, ...this._composite, ...(this._env ? [this._env.computes[0]] : [])];
     }
 
     private _skyTexture(view: View3D): Texture {
@@ -141,8 +182,15 @@ export class CloudPost extends PostBase {
         s.setFloat32Array('march', new Float32Array([this.steps, this._frame, k % 4, Math.floor(k / 4)]));
         // The reflection cube: all six faces when it is new, then one a frame.
         const env = this._env?.clear ? this._env : null;
-        const face = env && env.fresh ? 0 : this._frame % 6;
+        const every = Math.max(1, Math.floor(this.reflectionEvery));
+        const face = env && env.fresh ? 0 : Math.floor(this._envFrame / every) % 6;
         s.setFloat32Array('env', new Float32Array([face, Math.max(12, Math.round(this.steps * 0.5)), ENV_SIZE, env?.cloudSize ?? 0]));
+        // The pattern moves to another place of the noise for another seed.
+        const seed = Math.floor(this.seed) || 0;
+        const wind = Math.hypot(this.windX, this.windZ);
+        const lean = Math.min(1, wind / 15) / Math.max(wind, 1e-6);
+        s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
+        s.setFloat32Array('lean', new Float32Array([this.windX * lean, this.windZ * lean, 0, 0]));
         s.apply();
     }
 
@@ -154,6 +202,16 @@ export class CloudPost extends PostBase {
             this.rendererPassState = WebGPUDescriptorCreator.createRendererPassState(view.engine3D.context3D, this._rtFrame, null);
             this.rendererPassState.label = 'Clouds';
         }
+        // A jump of the camera or a change of the clouds: what was gathered before no longer fits.
+        const m = view.camera.transform.worldMatrix.rawData;
+        const last = this._lastView;
+        const moved = Math.hypot(m[12] - last[12], m[13] - last[13], m[14] - last[14]);
+        const turned = m[8] * last[8] + m[9] * last[9] + m[10] * last[10];
+        const sun = this._sunDir(view);
+        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.haze].join();
+        if (moved > 200 || turned < 0.95 || look !== this._lastLook) this._frame = 0;
+        this._lastLook = look;
+        last.set(m);
         const sky = this._skyTexture(view);
         if (sky !== this._sky) {
             this._sky = sky;
@@ -167,7 +225,7 @@ export class CloudPost extends PostBase {
         this._upload(view);
         const env = this._env?.clear ? this._env : null;
         const computes = [this._march, composite];
-        if (env) {
+        if (env && (env.fresh || this._envFrame % Math.max(1, Math.floor(this.reflectionEvery)) === 0)) {
             const faces = env.fresh ? 6 : 1;
             this.bindCamera(env.computes[0], view);
             for (const c of env.computes) c.workerSizeZ = faces;
@@ -178,6 +236,7 @@ export class CloudPost extends PostBase {
         this._boundCtx!.gpuContext.lastRenderPassState = this.rendererPassState;
         this._prevViewProj.set(view.camera.pvMatrix.rawData);
         this._frame++;
+        this._envFrame++;
     }
 
     public onResize() {
@@ -213,7 +272,7 @@ export class CloudPost extends PostBase {
             this._releaseReflection();
             return;
         }
-        this._env ??= new Reflection(this._boundCtx!, scene, REFLECTION_SIZE, this._settings, this._noise, GlobalBindGroup.getLightEntries(scene).storageGPUBuffer);
+        this._env ??= new Reflection(this._boundCtx!, scene, REFLECTION_SIZE, this._settings, (c) => this._bindNoise(c), GlobalBindGroup.getLightEntries(scene).storageGPUBuffer);
         const env = this._env;
         env.setSky(sky);
         if (scene.envMap !== env.cube) {
@@ -246,8 +305,9 @@ export class CloudPost extends PostBase {
     }
 
     public destroy(force?: boolean) {
+        this._destroyed = true;
         this._dropReflection();
-        this.destroyOwned(this._march, ...this._composite, this._settings, this._marchTex, ...this._history, this._outTex, this._noise);
+        this.destroyOwned(this._march, ...this._composite, this._settings, this._marchTex, ...this._history, this._outTex, this._shapeNoise, this._detailNoise);
         super.destroy(force);
     }
 }
@@ -256,6 +316,22 @@ export class CloudPost extends PostBase {
 const ENV_SIZE = 512;
 /** Texels along each face of the small cube the reflected clouds are marched into. */
 const REFLECTION_SIZE = 128;
+
+/** An RGBA8 3D texture that tiles (a noise volume). */
+class VolumeTexture extends Texture {
+    constructor(ctx: Context3D, size: number, data: Uint8Array) {
+        super(size, size);
+        this._ensureBound(ctx);
+        this.textureBindingLayout = { sampleType: 'float', viewDimension: '3d', multisampled: false };
+        this.addressModeU = this.addressModeV = this.addressModeW = 'repeat';
+        this.minFilter = this.magFilter = 'linear';
+        this.mipmapFilter = 'nearest';
+        const t = ctx.device.createTexture({ label: 'CloudNoise', size: [size, size, size], dimension: '3d', format: 'rgba8unorm', usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+        ctx.device.queue.writeTexture({ texture: t }, data as BufferSource, { bytesPerRow: size * 4, rowsPerImage: size }, [size, size, size]);
+        this.gpuTexture = t;
+        this.view = t.createView({ dimension: '3d' });
+    }
+}
 
 /** One level of a cube texture as a 2D array of its six faces (to write in a compute shader). */
 class CubeLevel extends Texture {
@@ -302,7 +378,7 @@ class Reflection {
     private _composites: ComputeShader[] = [];
     private _march: ComputeShader;
 
-    constructor(ctx: Context3D, public readonly scene: Scene3D, public readonly cloudSize: number, settings: UniformGPUBuffer, noise: Texture, lights: any) {
+    constructor(ctx: Context3D, public readonly scene: Scene3D, public readonly cloudSize: number, settings: UniformGPUBuffer, bindNoise: (c: ComputeShader) => void, lights: any) {
         this.cube = makeCube(ctx, ENV_SIZE, 'CloudReflection');
         this._clouds = makeCube(ctx, cloudSize, 'CloudReflectionClouds');
         const cloudLevels = this._clouds.mipmapCount;
@@ -317,7 +393,7 @@ class Reflection {
         this._march = sized(new ComputeShader(CloudEnvMarch_cs), cloudSize);
         this._march.setUniformBuffer('cloud', settings);
         this._march.setStorageBuffer('lightBuffer', lights);
-        this._march.setSamplerTexture('noiseTex', noise);
+        bindNoise(this._march);
         this._march.setStorageTexture('outTex', cloudViews[0]);
         this.computes.push(this._march);
         for (let i = 1; i < cloudLevels; i++) {
@@ -372,91 +448,4 @@ function rebind(scene: Scene3D, from: Texture[], to: Texture) {
         for (const child of o.entityChildren) if (child instanceof Object3D) visit(child);
     };
     visit(scene);
-}
-
-/** Voxels along each side of the noise volume, and each slice's side with its wrapped border. */
-const SIZE = 32;
-const CELL = SIZE + 2;
-/** The atlas's width: 8 slices, padded so each row is whole 256 bytes (as an upload needs). */
-const ATLAS_W = 320;
-
-/**
- * The noise volume (tiling, 32^3) as 32 slices of 34x34 (a wrapped border
- * each) in an 8x4 grid: red the base shape (Perlin carved by Worley),
- * green the erosion (Worley over three octaves). Made once, on the CPU.
- */
-function cloudNoise(): Uint8Array {
-    const rand = mulberry(7);
-    const worley = (period: number) => {
-        const pts = new Float32Array(period * period * period * 3).map(() => rand());
-        return (x: number, y: number, z: number) => {
-            const px = x * period, py = y * period, pz = z * period;
-            const ix = Math.floor(px), iy = Math.floor(py), iz = Math.floor(pz);
-            let best = 9;
-            for (let dz = -1; dz <= 1; dz++) for (let dy = -1; dy <= 1; dy++) for (let dx = -1; dx <= 1; dx++) {
-                const cx = ix + dx, cy = iy + dy, cz = iz + dz;
-                const w = (v: number) => ((v % period) + period) % period;
-                const o = (w(cz) * period * period + w(cy) * period + w(cx)) * 3;
-                const d = Math.hypot(cx + pts[o] - px, cy + pts[o + 1] - py, cz + pts[o + 2] - pz);
-                if (d < best) best = d;
-            }
-            return 1 - Math.min(1, best);
-        };
-    };
-    const grads = Array.from({ length: 4 * 4 * 4 }, () => {
-        const a = rand() * Math.PI * 2, z = rand() * 2 - 1, r = Math.sqrt(1 - z * z);
-        return [r * Math.cos(a), r * Math.sin(a), z];
-    });
-    const perlin = (x: number, y: number, z: number) => {
-        const p = 4;
-        const px = x * p, py = y * p, pz = z * p;
-        const ix = Math.floor(px), iy = Math.floor(py), iz = Math.floor(pz);
-        const fx = px - ix, fy = py - iy, fz = pz - iz;
-        const fade = (t: number) => t * t * t * (t * (t * 6 - 15) + 10);
-        let sum = 0;
-        for (let k = 0; k < 8; k++) {
-            const dx = k & 1, dy = (k >> 1) & 1, dz = (k >> 2) & 1;
-            const g = grads[(((iz + dz) % p) * p + ((iy + dy) % p)) * p + ((ix + dx) % p)];
-            const v = g[0] * (fx - dx) + g[1] * (fy - dy) + g[2] * (fz - dz);
-            sum += v * (dx ? fade(fx) : 1 - fade(fx)) * (dy ? fade(fy) : 1 - fade(fy)) * (dz ? fade(fz) : 1 - fade(fz));
-        }
-        return sum * 0.5 + 0.5;
-    };
-    const w4 = worley(4), w8 = worley(8), w16 = worley(16), w32 = worley(32);
-    const vol = new Uint8Array(SIZE * SIZE * SIZE * 2);
-    for (let z = 0; z < SIZE; z++) for (let y = 0; y < SIZE; y++) for (let x = 0; x < SIZE; x++) {
-        const u = (x + 0.5) / SIZE, v = (y + 0.5) / SIZE, w = (z + 0.5) / SIZE;
-        const cells = w4(u, v, w) * 0.625 + w8(u, v, w) * 0.25 + w16(u, v, w) * 0.125;
-        // Perlin carved by Worley lands mostly low (median about 0.22): stretched to fill 0..1.
-        const base = Math.min(1, Math.max(0, ((perlin(u, v, w) - (1 - cells)) / Math.max(1e-3, cells) * 0.5 + cells * 0.5) / 0.52));
-        const erosion = w8(u, v, w) * 0.625 + w16(u, v, w) * 0.25 + w32(u, v, w) * 0.125;
-        const o = ((z * SIZE + y) * SIZE + x) * 2;
-        vol[o] = Math.round(base * 255);
-        vol[o + 1] = Math.round(erosion * 255);
-    }
-    const W = ATLAS_W, H = CELL * 4;
-    const out = new Uint8Array(W * H * 4);
-    for (let s = 0; s < SIZE; s++) {
-        const ox = (s % 8) * CELL, oy = Math.floor(s / 8) * CELL;
-        for (let j = 0; j < CELL; j++) for (let i = 0; i < CELL; i++) {
-            const x = (i - 1 + SIZE) % SIZE, y = (j - 1 + SIZE) % SIZE;
-            const src = ((s * SIZE + y) * SIZE + x) * 2;
-            const dst = ((oy + j) * W + ox + i) * 4;
-            out[dst] = vol[src];
-            out[dst + 1] = vol[src + 1];
-            out[dst + 3] = 255;
-        }
-    }
-    return out;
-}
-
-function mulberry(seed: number): () => number {
-    let a = seed >>> 0;
-    return () => {
-        a = (a + 0x6d2b79f5) >>> 0;
-        let t = a;
-        t = Math.imul(t ^ (t >>> 15), t | 1);
-        t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-    };
 }

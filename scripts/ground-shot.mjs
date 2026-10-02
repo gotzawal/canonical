@@ -27,7 +27,7 @@ page.on('console', (m) => {
 });
 page.on('pageerror', (e) => logs.push(`[pageerror] ${e.message}`));
 await page.addInitScript(() => {
-    const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', editMode: true };
+    const pinned = { v: 2, backgroundCompression: false, compressImports: false, viewportFps: 30, viewportQuality: 'high', adaptiveResolution: false, editMode: true };
     localStorage.setItem('canonical-editor/prefs', JSON.stringify(pinned));
 });
 await page.goto('http://localhost:8101/');
@@ -99,6 +99,14 @@ const shot = async (name, c) => {
 process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await shot('shore', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
 await shot('close', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
+// The same with the layers block compressed on the GPU (Terrain.compress).
+console.log('bc', await page.evaluate((id) => {
+    const ed = window.__editor;
+    ed.store.commit('Compress', (d) => { d.nodes.find((n) => n.id === id).terrain.compress = true; });
+    return ed.runtime.engine.context3D.device.features.has('texture-compression-bc');
+}, ids.terrain));
+await shot('close-bc', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
+await page.evaluate((id) => window.__editor.store.commit('Uncompress', (d) => { d.nodes.find((n) => n.id === id).terrain.compress = false; }), ids.terrain);
 await shot('beach', { target: [62, 0.3, 14], yaw: 100, pitch: 55, distance: 10, fov: 60 });
 await shot('rain', { target: [55, 0.5, 0], yaw: 90, pitch: 32, distance: 16, fov: 60 });
 await shot('wide', { target: [0, 0, 0], yaw: 135, pitch: 10, distance: 170, fov: 60 });

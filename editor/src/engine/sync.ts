@@ -1268,6 +1268,7 @@ export class SceneSync extends Emitter<SyncEvents> {
         const state = t;
         state.view.setShadows(doc.castShadow);
         state.view.material.setLook(doc.blending, doc.variation, QUALITY[this.runtime.qualityLevel].terrainFar);
+        state.view.material.setCompressed(doc.compress);
         state.wet = '';
         const built = JSON.stringify([doc.heightmap, doc.size, doc.height, doc.detail]);
         if (built !== state.built) {
