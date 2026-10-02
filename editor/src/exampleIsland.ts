@@ -11,8 +11,21 @@ import { Scatter, ScatterSource } from './core/model';
 import { defaults } from './core/schema';
 import { defaultDesign } from './core/design';
 import { BUILTIN_CATALOG, loadCatalog, type LibraryItem } from './core/library';
-import type { ScatterDoc, TerrainLayerDoc } from './core/types';
-import type { Editor } from './editor';
+import type { Store } from './core/store';
+import type { CameraState, SceneDoc, ScatterDoc, TerrainLayerDoc, Vec3 } from './core/types';
+import type { NewTerrain } from './design/terrainEdit';
+
+/** The editor commands the example is built with. */
+export interface IslandEditor {
+    readonly store: Store;
+    loadDoc(doc: SceneDoc, camera?: CameraState): void;
+    createTerrain(o: NewTerrain & { at?: Vec3; name?: string }): Promise<string>;
+    createWater(): string;
+    createGrass(): string;
+    createScatter(scatter: ScatterDoc, opts?: { name?: string; at?: Vec3 }): string;
+    addLibraryMaterial(item: LibraryItem, slot?: string): Promise<unknown>;
+    addFromLibrary(item: LibraryItem, opts: { place: boolean }): Promise<{ asset: { id: string } }>;
+}
 
 /** Library items it uses: the ground's materials and the models standing on it. */
 const ITEMS = {
@@ -24,7 +37,7 @@ const ITEMS = {
     fern: 'polyhaven/fern-02',
 };
 
-export async function buildIsland(editor: Editor): Promise<void> {
+export async function buildIsland(editor: IslandEditor): Promise<void> {
     const doc = emptyScene();
     doc.name = 'Island';
     doc.design = defaultDesign();
