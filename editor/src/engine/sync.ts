@@ -136,6 +136,8 @@ interface TerrainState {
     version: number;
     /** The water and rain that last made it wet (see updateWetness). */
     wet: string;
+    /** The height of water over it (grass grows above it), or null. */
+    water?: number | null;
     /** Its paint as last loaded (scatters that follow a layer read it), or null. */
     paintData: { width: number; height: number; data: Uint8Array } | null;
 }
@@ -376,6 +378,7 @@ export class SceneSync extends Emitter<SyncEvents> {
                 }
             }
             const wet = { water: water === null ? null : Math.round(water * 1000) / 1000, shore: doc.wetShore, rain, puddles: doc.puddles };
+            t.water = wet.water;
             const key = JSON.stringify(wet);
             if (key === t.wet) continue;
             t.wet = key;
@@ -1225,12 +1228,15 @@ export class SceneSync extends Emitter<SyncEvents> {
                 doc.size, doc.count, doc.ground, doc.heights, doc.widths, doc.sizes, doc.shapes, doc.shapeSpread, doc.curvature, doc.patchSize, doc.height, Array.from(m, (v) => +v.toFixed(4)),
                 ground?.map((r) => [r.geometry?.instanceID, Array.from(r.object3D.transform.worldMatrix.rawData, (v) => +v.toFixed(4))]),
                 lands.map((l) => [l.id, l.version]),
+                // Where it grows follows the layers, what stands on them and the water.
+                lands.length ? this.groundKey : null,
             ]);
             if (key === entry.grassPlaced) continue;
             entry.grassPlaced = key;
             const frame = fieldFrame(m);
             const grid = ground?.length ? new GroundGrid(ground, fieldArea(frame, doc.size)) : null;
-            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface)) : doc.ground ? new LayeredGround(null, []) : null;
+            const states = [...this.terrainStates].filter((t) => lands.some((l) => l.id === t.view.id));
+            const surface = grid || lands.length ? new LayeredGround(grid, lands.map((l) => l.surface), undefined, this.grassGrowth(states)) : doc.ground ? new LayeredGround(null, []) : null;
             entry.grass!.place(doc, frame, surface, hashString(entry.id));
         }
     }
@@ -1641,7 +1647,7 @@ export class SceneSync extends Emitter<SyncEvents> {
     private updateGround(eye: number[]) {
         const tier = QUALITY[this.runtime.qualityLevel];
         const terrains = [...this.terrainStates].filter((t) => this.entries.get(t.view.id)?.visible);
-        const key = [this.scatterVersion, ...terrains.map((t) => `${t.view.id}:${t.version}:${t.view.material.meansVersion}:${this.store.node(t.view.id)?.terrain?.layers.map((l) => l.debris)}`)].join('|');
+        const key = [this.scatterVersion, ...terrains.map((t) => `${t.view.id}:${t.version}:${t.view.material.meansVersion}:${t.water}:${this.store.node(t.view.id)?.terrain?.layers.map((l) => [l.debris, l.grass])}`)].join('|');
         if (key !== this.groundKey) {
             this.groundKey = key;
             const contacts = this.scatterContacts();
@@ -1653,6 +1659,17 @@ export class SceneSync extends Emitter<SyncEvents> {
             }
             this.clutter ??= new GroundClutter(this.runtime.scene, this.runtime.engine.context3D);
             this.clutter.setGround(this.clutterGround(terrains), terrains[0]?.view.material.means ?? []);
+            // Grass grows where the ground suits it now, its roots in the ground's colors.
+            this.placeGrass();
+            for (const entry of this.entries.values()) {
+                if (!entry.grass) continue;
+                const frame = fieldFrame(entry.obj.transform.worldMatrix.rawData);
+                const doc = this.store.node(entry.id)?.grass;
+                const pts: [number, number][] = [];
+                if (doc) for (let i = 0; i < 16; i++) pts.push([frame.origin[0] + (((i % 4) + 0.5) / 4 - 0.5) * doc.size[0], frame.origin[2] + ((Math.floor(i / 4) + 0.5) / 4 - 0.5) * doc.size[1]]);
+                const c = this.groundColor(terrains, pts);
+                if (c) entry.grass.setGroundColor(c);
+            }
         }
         this.clutter?.update(eye, tier.clutterDistance * tier.lodDistance);
         for (const entry of this.entries.values()) {
@@ -1717,30 +1734,70 @@ export class SceneSync extends Emitter<SyncEvents> {
         };
     }
 
+    /** The mean color (linear rgb) of the terrains' ground at these points, as their layers show there; null off them or before their colors are read. */
+    private groundColor(terrains: TerrainState[], points: [number, number][]): number[] | null {
+        const sum = [0, 0, 0];
+        let n = 0;
+        for (const [x, z] of points) {
+            const t = terrains.find((t) => covers(t.view.surface, x, z));
+            const w = t && t.view.material.means.length ? this.layersOn(t, x, z) : null;
+            if (!t || !w) continue;
+            w.forEach((v, i) => {
+                const m = t.view.material.means[i];
+                if (m) for (let c = 0; c < 3; c++) sum[c] += m[c] * v;
+            });
+            n++;
+        }
+        return n ? sum.map((v) => v / n) : null;
+    }
+
+    /** How much each layer of a terrain shows at (x, z) on its ground, or null without its document. */
+    private layersOn(t: TerrainState, x: number, z: number): number[] | null {
+        const doc = this.store.node(t.view.id)?.terrain;
+        if (!doc) return null;
+        const slope = (Math.acos(Math.min(1, groundNormal(t.view.surface, x, z)[1])) * 180) / Math.PI;
+        return layerWeights(doc.layers, groundHeight(t.view.surface, x, z), slope, t.paintData ? paintAt(t.view.surface.frame, t.paintData, x, z) : null);
+    }
+
+    /**
+     * How well grass grows at (x, z) on these terrains: as their layers let
+     * it (TerrainLayer.grass), not under what stands there (the contact
+     * map), not under water and thinning just above it; 1 off them.
+     */
+    private grassGrowth(lands: TerrainState[]): ((x: number, z: number) => number) | undefined {
+        if (!lands.length) return undefined;
+        return (x, z) => {
+            const t = lands.find((t) => covers(t.view.surface, x, z));
+            if (!t) return 1;
+            const doc = this.store.node(t.view.id)?.terrain;
+            const w = this.layersOn(t, x, z);
+            let g = 0;
+            w?.forEach((v, i) => (g += v * (doc?.layers[i]?.grass ?? 1)));
+            const c = this.contactMaps.get(t);
+            if (c) {
+                const f = t.view.frame;
+                const i = Math.floor(((x - f.x + f.sizeX / 2) / f.sizeX) * c.width), j = Math.floor(((z - f.z + f.sizeZ / 2) / f.sizeZ) * c.height);
+                if (i >= 0 && j >= 0 && i < c.width && j < c.height) g *= 1 - c.data[(j * c.width + i) * 4] / 255;
+            }
+            if (t.water !== null && t.water !== undefined) {
+                const y = groundHeight(t.view.surface, x, z);
+                g *= Math.min(1, Math.max(0, (y - t.water - 0.05) / 0.5));
+            }
+            return g;
+        };
+    }
+
     /** A scatter's soil (the terrain's colors under its copies), moss and variation. */
     private applyRockGround(st: ScatterState, doc: ScatterDoc, terrains: TerrainState[]) {
         const place = this.shaders.terrainPlace;
         const key = JSON.stringify([doc.soil, doc.moss, doc.mossColor, doc.vary, st.placements.length, this.groundKey, place.frame.x, place.frame.z, place.frame.w, place.level.x, place.level.y, place.level.z]);
         if (key === st.groundKey) return;
         st.groundKey = key;
-        // The soil: the terrains' mean colors where the copies stand (a few of them), as the layers show there.
-        const soil = [0, 0, 0];
-        let n = 0;
+        // The soil: the terrains' mean colors where the copies stand (a few of them).
         const step = Math.max(1, Math.floor(st.placements.length / 24));
-        for (let k = 0; k < st.placements.length; k += step) {
-            const [x, , z] = st.placements[k].position;
-            const t = terrains.find((t) => covers(t.view.surface, x, z));
-            const doc = t && this.store.node(t.view.id)?.terrain;
-            if (!t || !doc || !t.view.material.means.length) continue;
-            const slope = (Math.acos(Math.min(1, groundNormal(t.view.surface, x, z)[1])) * 180) / Math.PI;
-            const w = layerWeights(doc.layers, groundHeight(t.view.surface, x, z), slope, t.paintData ? paintAt(t.view.surface.frame, t.paintData, x, z) : null);
-            w.forEach((v, i) => {
-                const m = t.view.material.means[i];
-                if (m) for (let c = 0; c < 3; c++) soil[c] += m[c] * v;
-            });
-            n++;
-        }
-        const color = n ? soil.map((v) => (v / n) * 0.85) : linearOf('#6a5c4c');
+        const soil = this.groundColor(terrains, st.placements.filter((_, k) => k % step === 0).map((p) => [p.position[0], p.position[2]]));
+        const n = soil ? 1 : 0;
+        const color = soil ? soil.map((v) => v * 0.85) : linearOf('#6a5c4c');
         st.view.ground.set({
             frame: [place.frame.x, place.frame.y, place.frame.z, place.frame.w],
             level: [place.level.x, place.level.y, place.level.z, doc.vary],

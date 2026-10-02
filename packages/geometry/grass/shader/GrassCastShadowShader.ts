@@ -30,6 +30,12 @@ export let GrassCastShadowShader = /* wgsl */`
         shadowEyeY: f32,
         shadowEyeZ: f32,
         shadowDistance: f32,
+        // The ground's color (linear) the roots fade into, how much, and how dry patches are.
+        groundR: f32,
+        groundG: f32,
+        groundB: f32,
+        rootBlend: f32,
+        dryness: f32,
     };
       
     @group(2) @binding(0)

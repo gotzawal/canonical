@@ -54,6 +54,11 @@ export class GrassMaterial extends Material {
         colorPass.setUniformFloat("shadowEyeY", 0);
         colorPass.setUniformFloat("shadowEyeZ", 0);
         colorPass.setUniformFloat("shadowDistance", 0);
+        colorPass.setUniformFloat("groundR", 0);
+        colorPass.setUniformFloat("groundG", 0);
+        colorPass.setUniformFloat("groundB", 0);
+        colorPass.setUniformFloat("rootBlend", 0);
+        colorPass.setUniformFloat("dryness", 0);
 
         shadowPass.setUniformColor("baseColor", new Color(0.0, 1.0, 0.0, 1.0));
         shadowPass.setUniformColor("grassBottomColor", new Color(39 / 255, 87 / 255, 36 / 255));
@@ -74,6 +79,11 @@ export class GrassMaterial extends Material {
         shadowPass.setUniformFloat("shadowEyeY", 0);
         shadowPass.setUniformFloat("shadowEyeZ", 0);
         shadowPass.setUniformFloat("shadowDistance", 0);
+        shadowPass.setUniformFloat("groundR", 0);
+        shadowPass.setUniformFloat("groundG", 0);
+        shadowPass.setUniformFloat("groundB", 0);
+        shadowPass.setUniformFloat("rootBlend", 0);
+        shadowPass.setUniformFloat("dryness", 0);
 
         colorPass.doubleSide = true;
         shadowPass.doubleSide = true;
@@ -205,6 +215,15 @@ export class GrassMaterial extends Material {
      * Blades past `distance` meters from the viewer at `eye` thin out of the
      * shadows (from half of it); 0 keeps every blade's shadow.
      */
+    /** The ground's color (linear rgb) the roots fade into and how much (0 to 1), and how dry patches of the field are (0 to 1). */
+    public setGround(color: ArrayLike<number>, rootBlend: number, dryness: number) {
+        this.shader.setUniformFloat("groundR", color[0]);
+        this.shader.setUniformFloat("groundG", color[1]);
+        this.shader.setUniformFloat("groundB", color[2]);
+        this.shader.setUniformFloat("rootBlend", rootBlend);
+        this.shader.setUniformFloat("dryness", dryness);
+    }
+
     public setShadowView(eye: ArrayLike<number>, distance: number) {
         this.shader.setUniformFloat("shadowEyeX", eye[0]);
         this.shader.setUniformFloat("shadowEyeY", eye[1]);

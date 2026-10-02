@@ -365,6 +365,8 @@ export const Grass = z.object({
     curvature: range([0, 0.5], 0, 1, { precision: 2, step: 0.05, description: 'How much blades bend at rest, [least, most] (leaves bend more, needles less).' }),
     patchSize: num(4, 0.5, 200, { title: 'Patch Size', step: 0.5, description: 'Meters across a patch, for sizes or shapes spread in patches.' }),
     bottomColor: color('#28461c', { title: 'Root Color' }),
+    rootBlend: unit(0.5, { title: 'Into Ground', description: 'How much the blades\' roots take the color of the terrain they grow from, so the field grows out of it.' }),
+    dryness: unit(0.3, { description: 'Drier, yellower patches over the field; 0 evenly green.' }),
     topColor: color('#7cab45', { title: 'Tip Color' }),
     wind: num(0.6, 0, 3, { step: 0.01, slider: true, description: 'How far gusts bend the blades.' }),
     windSpeed: num(3, 0, 30, { step: 0.1, description: 'How fast gusts sweep over the field, m/s.' }),
@@ -426,6 +428,7 @@ export const TerrainLayer = z.object({
     heightBlend: num(1, 0, 100, { step: 0.1, description: 'Meters over which the layer fades in at its height limits.' }),
     slopeBlend: num(5, 0, 45, { step: 0.5, description: 'Degrees over which the layer fades in at its slope limits.' }),
     onlyPainted: bool(false, { title: 'Only Where Painted', description: 'Shows only where it is painted (paths, fields), not by its rules.' }),
+    grass: unit(1, { title: 'Grass Grows', description: 'How well Grass fields grow on this layer: 1 fully, 0 not at all (sand, rock); in between they thin out and grow shorter.' }),
     debris: unit(0, { title: 'Loose Stones', description: 'Small stones lying on this layer near the camera, in its colors (0 none, 1 about three a square meter). Not on the low graphics tier.' }),
 });
 export type TerrainLayerDoc = z.output<typeof TerrainLayer>;

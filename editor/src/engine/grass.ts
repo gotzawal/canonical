@@ -52,6 +52,8 @@ export class GrassField {
     private distance = 0;
     private lodScale = 1;
     private castShadow = true;
+    /** The ground's color the roots fade into (linear rgb), and how much and how dry (Grass.rootBlend, Grass.dryness). */
+    private ground = { color: [0.1, 0.08, 0.05], rootBlend: 0, dryness: 0 };
     /** Where the shadows were last fitted to the viewer. */
     private shadowEye = [Infinity, 0, 0];
     /** The shapes the blades were last given (to reshape only when they change). */
@@ -102,6 +104,20 @@ export class GrassField {
         this.distance = doc.distance;
         this.castShadow = doc.castShadow;
         this.shadowEye[0] = Infinity;
+        this.ground.rootBlend = doc.rootBlend;
+        this.ground.dryness = doc.dryness;
+        this.writeGround();
+    }
+
+    /** The color of the ground under the field (linear rgb). */
+    setGroundColor(color: ArrayLike<number>) {
+        this.ground.color = Array.from(color);
+        this.writeGround();
+    }
+
+    private writeGround() {
+        const g = this.ground;
+        for (const { renderer } of this.chunks) renderer.grassMaterial.setGround(g.color, g.rootBlend, g.dryness);
     }
 
     /** Whether its textures are set yet. */
@@ -138,6 +154,8 @@ export class GrassField {
         // Sizes and shapes draw from their own stream: a field without them keeps its blades.
         const more = mulberry32(seed ^ 0x5bd1e995);
         const noiseSeed = seed ^ 0x2f6b;
+        // Where the ground suits grass less, blades are left out and the rest are shorter: their own stream too.
+        const keep = mulberry32(seed ^ 0x68e31da4);
         const pos = new Vector3(), rot = new Vector3(), scale = new Vector3();
         const [w, d] = doc.size;
         const cw = w / this.side, cd = d / this.side;
@@ -161,13 +179,14 @@ export class GrassField {
                 const wide = lerp(doc.widths, sizeAt(doc.sizes, doc.sizes === 'patches' ? rh : rw, [extra[1], extra[0]], patch));
                 own.push(shapeAt(doc.shapes, doc.shapeSpread, rs, patchNoise(x, z, doc.patchSize, noiseSeed ^ 0x77)));
                 const y = ground ? ground.height(x, z) : o[1] + ax[1] * u + az[1] * v;
-                if (y === null) {
+                const grow = ground?.grow ? ground.grow(x, z) : 1;
+                if (y === null || keep() >= grow) {
                     // No ground here: a blade of no size draws nothing.
                     scale.set(0, 0, 0);
                 } else {
                     pos.set(x, y, z);
                     rot.set(0, yaw, 0);
-                    scale.set(wide, tall, wide);
+                    scale.set(wide, tall * (0.55 + 0.45 * Math.min(1, grow)), wide);
                     node.localPosition = pos;
                     node.localRotation = rot;
                     const top = y + doc.height * tall * 1.1;
@@ -295,6 +314,8 @@ export function fieldArea(frame: FieldFrame, size: [number, number]): { minX: nu
 /** What things stand on: the height of the ground at (x, z), or null where there is none or it is too steep. */
 export interface Ground {
     height(x: number, z: number): number | null;
+    /** How well grass grows at (x, z), 0 to 1 (1 without saying). */
+    grow?(x: number, z: number): number;
 }
 
 /** The ground at a point, however steep: its height and normal (unit, up). */
@@ -309,7 +330,7 @@ export interface GroundPoint {
  * detail their chunks draw.
  */
 export class LayeredGround implements Ground {
-    constructor(private meshes: GroundGrid | null, private lands: TerrainSurface[], private maxSlope = MAX_SLOPE) {}
+    constructor(private meshes: GroundGrid | null, private lands: TerrainSurface[], private maxSlope = MAX_SLOPE, readonly grow?: (x: number, z: number) => number) {}
 
     height(x: number, z: number): number | null {
         let best: number | null = this.meshes?.height(x, z) ?? null;

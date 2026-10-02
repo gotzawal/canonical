@@ -1000,7 +1000,7 @@ export class InspectorPanel {
             ...this.componentRows('grass', ['height', 'width', 'heights', 'widths', 'sizes']),
             h('div', { class: 'muted small pad', text: 'Shapes, by their shares:' }),
             ...this.fieldRows(inner(Grass.shape.shapes) as z.ZodObject, (n: NodeDoc) => n.grass?.shapes, ['blade', 'leaf', 'needle']),
-            ...this.componentRows('grass', ['shapeSpread', 'curvature', 'patchSize', 'bottomColor', 'topColor', 'wind', 'windSpeed', 'windDirection']),
+            ...this.componentRows('grass', ['shapeSpread', 'curvature', 'patchSize', 'bottomColor', 'topColor', 'rootBlend', 'dryness', 'wind', 'windSpeed', 'windDirection']),
             row('Texture', blade.el, 'Blade texture: alpha below 0.3 is cut out'),
             row('Gust Map', gusts.el, 'Red and green make the gusts, a pixel per meter'),
             ...this.componentRows('grass', ['distance', 'castShadow']),
@@ -1156,7 +1156,7 @@ export class InspectorPanel {
                 out.push(...this.fieldRows(TerrainLayer, get as Getter, ['tile', 'color', 'roughness']));
             }
             if (i > 0) out.push(...this.fieldRows(TerrainLayer, get as Getter, ['height', 'slope', 'heightBlend', 'slopeBlend', 'onlyPainted']));
-            out.push(...this.fieldRows(TerrainLayer, get as Getter, ['debris']));
+            out.push(...this.fieldRows(TerrainLayer, get as Getter, ['grass', 'debris']));
         });
         if (t.layers.length < 4) {
             out.push(h('div', { class: 'design-actions' }, button('Add Layer', () => this.hooks<null>('Add Layer', (n) => !!n.terrain && n.terrain.layers.length < 4, (n) => {

@@ -37,6 +37,12 @@ export let GrassShader = /* wgsl */`
         shadowEyeY: f32,
         shadowEyeZ: f32,
         shadowDistance: f32,
+        // The ground's color (linear) the roots fade into, how much, and how dry patches are.
+        groundR: f32,
+        groundG: f32,
+        groundB: f32,
+        rootBlend: f32,
+        dryness: f32,
     };
       
     @group(2) @binding(0)
@@ -146,6 +152,17 @@ export let GrassShader = /* wgsl */`
         return lightBuffer[0];
     }
 
+    fn grassHash(p: vec2<f32>) -> f32 {
+        return fract(sin(dot(p, vec2<f32>(127.1, 311.7))) * 43758.5453);
+    }
+
+    fn grassNoise(p: vec2<f32>) -> f32 {
+        let i = floor(p);
+        let f = p - i;
+        let u = f * f * (3.0 - 2.0 * f);
+        return mix(mix(grassHash(i), grassHash(i + vec2<f32>(1.0, 0.0)), u.x), mix(grassHash(i + vec2<f32>(0.0, 1.0)), grassHash(i + vec2<f32>(1.0, 1.0)), u.x), u.y);
+    }
+
     fn frag(){
 
         var normal = ORI_VertexVarying.vWorldNormal ;
@@ -173,7 +190,14 @@ export let GrassShader = /* wgsl */`
 
         // Root to tip, darker near the ground where the blades shade each other.
         let tip = 1.0 - uv.y ;
-        let albedo = color.rgb * mix(materialUniform.grassBottomColor.rgb, materialUniform.grassTopColor.rgb, tip) ;
+        var albedo = color.rgb * mix(materialUniform.grassBottomColor.rgb, materialUniform.grassTopColor.rgb, tip) ;
+        // Drier, yellower patches over the field.
+        let at = ORI_VertexVarying.vWorldPos.xz ;
+        let patchy = grassNoise(at * 0.07) * 0.65 + grassNoise(at * 0.23 + vec2<f32>(7.1, 3.3)) * 0.35 ;
+        albedo = mix(albedo, albedo * vec3<f32>(1.35, 1.1, 0.45), smoothstep(0.45, 0.8, patchy) * materialUniform.dryness) ;
+        // Roots fading into the ground they grow from.
+        let root = (1.0 - smoothstep(0.0, 0.35, tip)) * materialUniform.rootBlend ;
+        albedo = mix(albedo, vec3<f32>(materialUniform.groundR, materialUniform.groundG, materialUniform.groundB), root * 0.8) ;
         let occlusion = mix(0.5, 1.0, tip) ;
 
         // Thin blades: light wraps around them, and shines through them seen against the sun.

@@ -51,8 +51,8 @@ const ids = await page.evaluate(async () => {
     ed.store.commit('Slots', (d) => {
         for (const [name, id] of Object.entries(slots)) d.design.materials.push({ id, name, description: '', swatch: null, color: '#ffffff', roughness: 0.9, metallic: 0, tile: 2 });
         const t = d.nodes.find((n) => n.id === terrain).terrain;
-        const layer = (slot, height, slope, heightBlend = 1, slopeBlend = 6, debris = 0) => ({ slot, albedo: null, normal: null, arm: null, heightMap: null, tile: 2, color: '#ffffff', roughness: 1, height, slope, heightBlend, slopeBlend, onlyPainted: false, debris });
-        t.layers = [layer(slots.dirt, [-1e4, 1e4], [0, 90], 1, 6, 0.15), layer(slots.sand, [-1e4, 1.4], [0, 25], 0.8), layer(slots.stones, [1, 1e4], [10, 34], 1, 6, 0.6), layer(slots.rock, [-1e4, 1e4], [34, 90])];
+        const layer = (slot, height, slope, heightBlend = 1, slopeBlend = 6, debris = 0, grass = 1) => ({ slot, albedo: null, normal: null, arm: null, heightMap: null, tile: 2, color: '#ffffff', roughness: 1, height, slope, heightBlend, slopeBlend, onlyPainted: false, debris, grass });
+        t.layers = [layer(slots.dirt, [-1e4, 1e4], [0, 90], 1, 6, 0.15), layer(slots.sand, [-1e4, 1.4], [0, 25], 0.8, 6, 0, 0.05), layer(slots.stones, [1, 1e4], [10, 34], 1, 6, 0.6, 0.5), layer(slots.rock, [-1e4, 1e4], [34, 90], 1, 6, 0, 0)];
     });
     await ed.addLibraryMaterial(item('polyhaven/brown-mud-leaves-01'), slots.dirt);
     await ed.addLibraryMaterial(item('polyhaven/sandstone-cracks'), slots.sand);
@@ -78,8 +78,15 @@ const ids = await page.evaluate(async () => {
         r.position = [55, 6, 0];
         r.rain.size = [24, 12, 24];
     });
+    // Grass over the shore and the slope above it: it grows as the layers, rocks and water let it.
+    const grass = ed.createGrass();
+    ed.store.commit('Grass on the island', (d) => {
+        const g = d.nodes.find((n) => n.id === grass);
+        g.position = [30, 0, 14];
+        g.grass = { ...g.grass, count: 30000, size: [20, 20], ground: terrain, heights: [0.6, 1.5], sizes: 'patches', distance: 80 };
+    });
     ed.store.select([]);
-    return { terrain, water, scatter, rain };
+    return { terrain, water, scatter, rain, grass };
 });
 console.log('created', JSON.stringify(ids));
 
@@ -100,6 +107,14 @@ process.on('exit', () => console.log('LOGS\n' + logs.join('\n')));
 await shot('shore', { target: [58, 1, 18], yaw: 100, pitch: 14, distance: 22, fov: 60 });
 await shot('close', { target: [50, 2, -20], yaw: 80, pitch: 28, distance: 9, fov: 60 });
 // Up close: rock bases in the soil, loose stones, the ground's relief.
+console.log('blades', await page.evaluate((id) => {
+    const g = window.__editor.sync.entries.get(id).grass;
+    let on = 0, all = 0;
+    for (const r of g.renderers) for (const n of r.nodes) { all++; if (n.localScale.y > 0) on++; }
+    return `${on}/${all}`;
+}, ids.grass));
+await shot('grass', { target: [30, 6, 14], yaw: 95, pitch: 22, distance: 18, fov: 60 });
+await shot('grass-close', { target: [30, 6, 14], yaw: 120, pitch: 14, distance: 7, fov: 60 });
 await shot('detail', { target: [50, 2, -20], yaw: 260, pitch: 50, distance: 2.5, fov: 60 });
 console.log('stone cells', await page.evaluate(() => [...(window.__editor.sync.clutter?.cells.values() ?? [])].filter(Boolean).length));
 // The same with the layers block compressed on the GPU (Terrain.compress).
