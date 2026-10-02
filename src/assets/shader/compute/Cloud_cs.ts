@@ -33,7 +33,7 @@ const CLOUD_COMMON = /* wgsl */ `
         env: vec4<f32>,
         // size (1 as usual), softness (0 crisp .. 1 soft), pattern offset x, z (m)
         look: vec4<f32>,
-        // wind direction x, z (unit), unused
+        // wind direction x, z (unit), how far tops lean (0..1), clumping (0 scattered puffs .. 1 big masses)
         lean: vec4<f32>,
     };
 
@@ -52,11 +52,19 @@ const CLOUD_COMMON = /* wgsl */ `
     }
 
     // How strongly clouds gather at xz (0 clear sky .. 1 the heart of a cloud), drifting with the wind.
+    // Flat sheets (stratus, cirrus) are drawn out along the wind into streaks.
+    fn streak(xz: vec2<f32>) -> vec2<f32> {
+        let d = cloud.lean.xy;
+        let k = 1.0 + 3.0 * smoothstep(0.35, 0.0, cloud.shape.x);
+        return xz + d * dot(xz, d) * (1.0 / k - 1.0);
+    }
+
     fn weather(xz: vec2<f32>) -> f32 {
         let c = cloud.layer.z;
         if (c <= 0.001) { return 0.0; }
-        let scale = 12000.0 * cloud.look.x;
-        let w = (xz + cloud.wind.xy + cloud.look.zw) / scale;
+        // Clumping: many small cells (scattered puffs) to few large ones (big masses).
+        let scale = 12000.0 * cloud.look.x * mix(0.3, 1.5, cloud.lean.w);
+        let w = streak(xz + cloud.wind.xy + cloud.look.zw) / scale;
         // Slowly changing over time as well as drifting.
         let t = cloud.shape.w * cloud.shape.z / scale * 0.25;
         let n = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(w.x, w.y, t), 0.0).b;
@@ -79,14 +87,15 @@ const CLOUD_COMMON = /* wgsl */ `
         let h = (alt - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
         if (h <= 0.0 || h >= 1.0) { return 0.0; }
         // Tops lean ahead with the wind (it blows harder higher up).
-        let q = p.xz - cloud.lean.xy * h * h * (cloud.layer.y - cloud.layer.x) * 0.5;
+        let q = p.xz - cloud.lean.xy * cloud.lean.z * h * h * (cloud.layer.y - cloud.layer.x) * 0.5;
         let w = weather(q);
         if (w <= 0.0) { return 0.0; }
         let g = profile(h, w);
         if (g <= 0.0) { return 0.0; }
         let size = 3200.0 * cloud.look.x;
         let rise = cloud.shape.w * cloud.shape.z;
-        let s = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(q.x + cloud.wind.x, alt + rise, q.y + cloud.wind.y) / size, 0.0);
+        let sq = streak(q + cloud.wind.xy);
+        let s = textureSampleLevel(shapeTex, shapeTexSampler, vec3<f32>(sq.x, alt + rise, sq.y) / size, 0.0);
         // Shape: Perlin-Worley lumps rounded off by the Worley billows.
         var base = remap(s.r, (1.0 - s.g) * 0.55 - 0.1, 1.0);
         // A full sky closes up: its holes fill as coverage nears 1.
@@ -95,7 +104,8 @@ const CLOUD_COMMON = /* wgsl */ `
         // The weather decides how much of the shape stays: all at a cloud's heart, its peaks at its edges.
         var d = remap(base * g, 1.0 - w, 1.0);
         if (detail && d > 0.0) {
-            let e = textureSampleLevel(detailTex, detailTexSampler, vec3<f32>(q.x + cloud.wind.x * 1.4, alt + rise * 1.5, q.y + cloud.wind.y * 1.4) / (size * 0.2), 0.0).a;
+            let eq = streak(q + cloud.wind.xy * 1.4);
+            let e = textureSampleLevel(detailTex, detailTexSampler, vec3<f32>(eq.x, alt + rise * 1.5, eq.y) / (size * 0.2), 0.0).a;
             // Wisps at the base, billows (the noise turned inside out) toward the top.
             let worn = mix(e, 1.0 - e, clamp(h * 4.0, 0.0, 1.0));
             d = remap(d, worn * cloud.shape.y * 0.45, 1.0);
@@ -221,7 +231,9 @@ const CLOUD_MARCH = /* wgsl */ `
                 let h = (altitude(p) - cloud.layer.x) / max(cloud.layer.y - cloud.layer.x, 1.0);
                 // Light from all around: the sky's, half of its color taken out (clouds are grey, not blue).
                 let sky = mix(skyLow * 0.5, skyTop, h) * 0.9;
-                let ambient = mix(vec3<f32>(dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722))), sky, 0.5);
+                // With the sun low its light reaches under the clouds too, warmest at their bases.
+                let glow = sunColor * 0.12 * smoothstep(0.35, 0.02, l.y) * step(0.0, l.y) * mix(1.0, 0.4, h);
+                let ambient = mix(vec3<f32>(dot(sky, vec3<f32>(0.2126, 0.7152, 0.0722))), sky, 0.5) + glow;
                 let stepT = exp(-d * sigma * dt);
                 light += trans * (sunPart + ambient) * (1.0 - stepT);
                 depthSum += t * trans * (1.0 - stepT);

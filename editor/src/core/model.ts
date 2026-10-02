@@ -675,6 +675,7 @@ export const Environment = z.object({
         density: num(1, 0.1, 4, { step: 0.05, slider: true, description: 'How thick and dark they are.' }),
         detail: unit(0.6, { description: 'How much their edges are worn: wisps at their bases, billows on their tops.' }),
         size: num(1, 0.3, 4, { step: 0.05, slider: true, description: 'How big each cloud is: 1 heaps a kilometer or two across, less for small puffs, more for big masses.' }),
+        clumping: unit(0.6, { description: '0 many small puffs scattered over the sky to 1 clouds gathered in a few big masses.' }),
         softness: unit(0.3, { description: '0 crisp clouds with sharp edges to 1 soft, hazy ones.' }),
         seed: num(0, 0, 9999, { step: 1, precision: 0, title: 'Pattern', description: 'Another number gives another arrangement of the clouds.' }),
         bottom: num(1500, 100, 10000, { step: 50, precision: 0, title: 'Base', description: 'Altitude of their base, meters.' }),

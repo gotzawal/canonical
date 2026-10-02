@@ -491,7 +491,7 @@ export class Runtime {
         if (clouds) {
             const a = (cl.windDirection * Math.PI) / 180;
             Object.assign(clouds, {
-                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, softness: cl.softness, seed: cl.seed,
+                coverage: cl.coverage, type: cl.type, density: cl.density, detail: cl.detail, size: cl.size, clumping: cl.clumping, softness: cl.softness, seed: cl.seed,
                 bottom: cl.bottom, top: cl.bottom + cl.thickness,
                 windX: Math.cos(a) * cl.wind, windZ: Math.sin(a) * cl.wind, evolve: cl.evolve,
                 haze: Math.max(0, env.atmosphere.haze), shadows: cl.shadows, steps: tier.cloudSteps, reflectionEvery: tier.cloudReflectionEvery,

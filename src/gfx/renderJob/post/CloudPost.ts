@@ -52,6 +52,8 @@ export class CloudPost extends PostBase {
     public softness = 0.3;
     /** Picks another pattern of clouds (any number). */
     public seed = 0;
+    /** 0 scattered small puffs to 1 clouds gathered in big masses. */
+    public clumping = 0.6;
     /** Wind over the layer, m/s along x and z, and how fast shapes change, m/s. */
     public windX = 6;
     public windZ = 3;
@@ -188,9 +190,9 @@ export class CloudPost extends PostBase {
         // The pattern moves to another place of the noise for another seed.
         const seed = Math.floor(this.seed) || 0;
         const wind = Math.hypot(this.windX, this.windZ);
-        const lean = Math.min(1, wind / 15) / Math.max(wind, 1e-6);
+        const toward = 1 / Math.max(wind, 1e-6);
         s.setFloat32Array('look', new Float32Array([Math.max(0.2, this.size), Math.min(1, Math.max(0, this.softness)), (seed * 7919) % 100003 * 37, (seed * 104729) % 100019 * 41]));
-        s.setFloat32Array('lean', new Float32Array([this.windX * lean, this.windZ * lean, 0, 0]));
+        s.setFloat32Array('lean', new Float32Array([this.windX * toward, this.windZ * toward, Math.min(1, wind / 15), Math.min(1, Math.max(0, this.clumping))]));
         s.apply();
     }
 
@@ -208,7 +210,7 @@ export class CloudPost extends PostBase {
         const moved = Math.hypot(m[12] - last[12], m[13] - last[13], m[14] - last[14]);
         const turned = m[8] * last[8] + m[9] * last[9] + m[10] * last[10];
         const sun = this._sunDir(view);
-        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.haze].join();
+        const look = [sun.map((v) => Math.round(v * 30)).join(), this.bottom, this.top, this.coverage, this.density, this.type, this.detail, this.size, this.softness, this.seed, this.clumping, this.haze].join();
         if (moved > 200 || turned < 0.95 || look !== this._lastLook) this._frame = 0;
         this._lastLook = look;
         last.set(m);
