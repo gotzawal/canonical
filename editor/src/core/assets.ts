@@ -155,12 +155,14 @@ export async function getAssetUrl(meta: AssetMeta): Promise<string | null> {
     return url;
 }
 
-export async function deleteAssets(keep: Set<string>): Promise<number> {
+/** Drops the stored files not in `keep` (or what it gives right before each: files added meanwhile stay). */
+export async function deleteAssets(keep: Set<string> | (() => Set<string>)): Promise<number> {
+    const kept = typeof keep === 'function' ? keep : () => keep;
     let removed = 0;
     try {
         const keys = (await tx('assets', 'readonly', (s) => s.getAllKeys())) as string[];
         for (const key of keys) {
-            if (!keep.has(key)) {
+            if (!kept().has(key)) {
                 await tx('assets', 'readwrite', (s) => s.delete(key));
                 memory.delete(key);
                 removed++;

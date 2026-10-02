@@ -212,8 +212,10 @@ export async function deleteDerivedOf(assets: string[]): Promise<void> {
 }
 
 /** Drops copies of assets not in `keep`, and those of other encoders. Resolves with how many went. */
-export async function gcDerived(keep: Set<string>): Promise<number> {
-    const stale = (await all()).filter((r) => !keep.has(r.asset) || r.encoder !== ENCODER_VERSION).map((r) => r.key);
+export async function gcDerived(keep: Set<string> | (() => Set<string>)): Promise<number> {
+    const records = await all();
+    const kept = typeof keep === 'function' ? keep() : keep;
+    const stale = records.filter((r) => !kept.has(r.asset) || r.encoder !== ENCODER_VERSION).map((r) => r.key);
     await remove(stale);
     return stale.length;
 }

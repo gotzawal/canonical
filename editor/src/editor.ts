@@ -1717,7 +1717,7 @@ export class Editor extends Emitter<EditorEvents> {
         this.compiler.setTrusted(false);
         this.store.load({ ...doc, assets: keptAssets(doc) }, camera);
         this.compiler.setTrusted(trusted || !this.store.doc.scripts.length);
-        collectGarbage(this.store.doc);
+        collectGarbage(() => this.store.doc);
     }
 
     async saveSceneFile() {

@@ -18,6 +18,8 @@ import type { NewTerrain } from './design/terrainEdit';
 /** The editor commands the example is built with. */
 export interface IslandEditor {
     readonly store: Store;
+    /** The graphics tier of this device: phones (low) get a lighter island. */
+    readonly runtime: { readonly deviceQuality: 'low' | 'medium' | 'high' };
     loadDoc(doc: SceneDoc, camera?: CameraState): void;
     createTerrain(o: NewTerrain & { at?: Vec3; name?: string }): Promise<string>;
     createWater(): string;
@@ -47,7 +49,9 @@ export async function buildIsland(editor: IslandEditor): Promise<void> {
     doc.environment.clouds = { ...doc.environment.clouds, variety: 0.6, shadows: 0.5 };
     editor.loadDoc(doc, { target: [0, 10, 0], yaw: 210, pitch: 16, distance: 70, fov: 60 });
 
-    const terrain = await editor.createTerrain({ shape: 'island', size: [200, 200], height: 26, resolution: 513, waterLevel: 0, seed: 7, erosion: 0.5, at: [0, 0, 0], name: 'Island' });
+    // Phones and weak GPUs: a coarser map and fewer blades (the memory a mobile browser allows is small).
+    const light = editor.runtime.deviceQuality === 'low';
+    const terrain = await editor.createTerrain({ shape: 'island', size: [200, 200], height: 26, resolution: light ? 257 : 513, waterLevel: 0, seed: 7, erosion: 0.5, at: [0, 0, 0], name: 'Island' });
     const slots = { soil: 'm_soil', sand: 'm_sand', gravel: 'm_gravel', rock: 'm_rock' };
     editor.store.commit('Island ground', (d) => {
         for (const [name, id] of Object.entries(slots)) d.design.materials.push({ id, name, description: '', swatch: null, color: '#ffffff', roughness: 0.9, metallic: 0, tile: 2 });
@@ -73,7 +77,7 @@ export async function buildIsland(editor: IslandEditor): Promise<void> {
         const g = d.nodes.find((n) => n.id === grass)!;
         g.name = 'Meadow';
         g.position = [0, 0, 0];
-        g.grass = { ...g.grass!, ground: terrain, size: [90, 90], count: 240000, heights: [0.5, 1.2], width: 0.12, sizes: 'patches', gaps: 0.15, distance: 50 };
+        g.grass = { ...g.grass!, ground: terrain, size: [90, 90], count: light ? 70000 : 240000, heights: [0.5, 1.2], width: 0.12, sizes: 'patches', gaps: 0.15, distance: light ? 30 : 50 };
     });
 
     // The Library's files: without them (offline) the island keeps plain colors and no models.
