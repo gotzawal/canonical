@@ -74,7 +74,7 @@ const TRIES = 12;
  * scatters without the newer rules keep their copies.
  */
 export function placeScatter(doc: ScatterDoc, frame: ScatterFrame, ground: GroundQuery | null, avoid: readonly AvoidBox[], salt = 0, extras: PlaceExtras = {}): Placement[] {
-    const weights = doc.sources.map((s) => (s.model && s.weight > 0 ? s.weight : 0));
+    const weights = doc.sources.map((s) => ((s.model || s.tree) && s.weight > 0 ? s.weight : 0));
     const total = weights.reduce((a, b) => a + b, 0);
     if (!(total > 0) || doc.count <= 0) return [];
     const random = seededRandom(Math.imul(doc.seed + 1, 2654435761) ^ salt);

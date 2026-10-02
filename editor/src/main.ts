@@ -674,7 +674,7 @@ function aiContext(editor: Editor, dock: Dock): string {
     const store = editor.store;
     const lines: string[] = [];
     const sel = store.selection.map((id) => store.node(id)).filter(Boolean).slice(0, 12);
-    lines.push(sel.length ? `Selected: ${sel.map((n) => `${n!.name} (id ${n!.id}, ${n!.player ? 'player' : n!.character ? 'character' : nodeIcon(n!)})`).join(', ')}` : 'Selected: nothing');
+    lines.push(sel.length ? `Selected: ${sel.map((n) => `${n!.name} (id ${n!.id}, ${n!.player ? 'player' : n!.character ? 'character' : n!.tree ? 'tree' : nodeIcon(n!)})`).join(', ')}` : 'Selected: nothing');
     const doc = dock.activeDoc();
     if (doc) lines.push(`Open in the code editor: ${doc.name} (${doc.kind} id ${doc.id})`);
     const f = editor.focusedPart;

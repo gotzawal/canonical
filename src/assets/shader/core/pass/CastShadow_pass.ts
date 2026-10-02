@@ -145,11 +145,21 @@ fn main(vertex:VertexAttributes) -> VertexOutput {
 export let shadowCastMap_frag: string = /*wgsl*/ `
     #include "GlobalUniform"
 
+    // Declared with or without USE_ALPHACUT: a pass whose vertex stage binds
+    // group 2 (instanced draws, skinning, morph targets) needs a group 1.
+    @group(1) @binding(0)
+    var baseMapSampler: sampler;
+    @group(1) @binding(1)
+    var baseMap: texture_2d<f32>;
+
     #if USE_ALPHACUT
-      @group(1) @binding(0)
-      var baseMapSampler: sampler;
-      @group(1) @binding(1)
-      var baseMap: texture_2d<f32>;
+      // The color pass's cutoff (PassGenerate copies it; a material's
+      // setUniformFloat reaches every pass).
+      struct ShadowMaterialUniform {
+        alphaCutoff: f32,
+      };
+      @group(2) @binding(0)
+      var<uniform> materialUniform: ShadowMaterialUniform;
     #endif
 
     // Point and spot shadows are depth only (PointShadowPass draws the
@@ -168,7 +178,7 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
       #if USE_ALPHACUT
         // Cut-out texels cast nothing (written, they would be at the light).
         let Albedo = textureSample(baseMap,baseMapSampler,fragUV);
-        if(Albedo.w <= 0.5){
+        if(Albedo.w <= materialUniform.alphaCutoff){
           discard;
         }
       #endif
@@ -181,11 +191,19 @@ export let shadowCastMap_frag: string = /*wgsl*/ `
  * @internal
  */
 export let directionShadowCastMap_frag: string = /*wgsl*/ `
+    // Declared with or without USE_ALPHACUT: a pass whose vertex stage binds
+    // group 2 (instanced draws, skinning, morph targets) needs a group 1.
+    @group(1) @binding(0)
+    var baseMapSampler: sampler;
+    @group(1) @binding(1)
+    var baseMap: texture_2d<f32>;
+
     #if USE_ALPHACUT
-      @group(1) @binding(0)
-      var baseMapSampler: sampler;
-      @group(1) @binding(1)
-      var baseMap: texture_2d<f32>;
+      struct ShadowMaterialUniform {
+        alphaCutoff: f32,
+      };
+      @group(2) @binding(0)
+      var<uniform> materialUniform: ShadowMaterialUniform;
     #endif
 
     // Directional shadow is a DEPTH-ONLY pass: ShadowMapPassRenderer builds
@@ -196,7 +214,14 @@ export let directionShadowCastMap_frag: string = /*wgsl*/ `
     // Even an "unused" extra input like @location(1) would create a binding
     // that Dawn's D3D12 backend can silently drop rasterized fragments for,
     // which is the symptom we saw (Mac works, Windows no shadows).
+    // Discarding needs no output: a cut-out texel (leaves on a card) casts
+    // nothing, as the color pass shows nothing there.
     @fragment
     fn main(@location(auto) fragUV: vec2<f32>) {
+      #if USE_ALPHACUT
+        if (textureSample(baseMap, baseMapSampler, fragUV).a <= materialUniform.alphaCutoff) {
+          discard;
+        }
+      #endif
     }
 `

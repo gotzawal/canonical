@@ -142,8 +142,8 @@ export function scanLevel(editor: Editor, skip: Set<string>): LevelScan {
     const objects: LevelObject[] = [];
     for (const n of store.doc.nodes) {
         if (skip.has(n.id) || !sync.entries.get(n.id)?.visible) continue;
-        // A scatter's area is no object: its solid copies are in the rays.
-        if (n.scatter && !n.mesh && !n.model) continue;
+        // A scatter's area is no object, nor a tree's crown: their solid trunks and copies are in the rays.
+        if ((n.scatter || n.tree) && !n.mesh && !n.model) continue;
         const box = picker.bounds(n.id, false);
         if (box) objects.push({ id: n.id, name: n.name, box, mesh: !!(n.mesh || n.model) });
     }

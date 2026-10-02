@@ -3,8 +3,9 @@ import { PARTICLE_PRESETS, particleCount, presetParticles } from '../core/partic
 import { defaultCharacter, defaultPlayer } from '../core/character';
 import {
     Animation, ANIMATION_MODES, AudioSource, Body, Camera, Character, Grass, Instancing, Light, LightShadow, Material, Mirror, Particles, Player, Rain, Scatter, ScatterSource, Terrain,
-    TerrainLayer,
+    TerrainLayer, Tree,
 } from '../core/model';
+import { SPECIES_HEIGHT, SPECIES_NAME, TREE_SPECIES, type TreeSpecies } from '../core/trees';
 import { defaults, inner } from '../core/schema';
 import type { Editor } from '../editor';
 import type { ChangeHint } from '../core/store';
@@ -13,11 +14,11 @@ import type { BrushTool } from '../design/terrainEdit';
 import type { Heightmap } from '../core/heightmap';
 import { onChanges } from './batch';
 import { formatBytes } from '../core/assets';
-import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial } from '../core/defaults';
+import { defaultCameraDoc, defaultGeometry, defaultLight, defaultMaterial, defaultTree } from '../core/defaults';
 import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../core/templates';
 import type {
-    AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScriptRef,
-    SlotShading, TextureRole, Vec3,
+    AlphaMode, AssetMeta, GeometryType, LightType, MaterialDoc, MaterialOverride, MaterialType, NodeDoc, ParamValue, PartOverride, ScatterSourceDoc, ScriptRef,
+    SlotShading, TextureRole, TreeDoc, Vec3,
 } from '../core/types';
 import { MATERIAL_PRESETS } from '../core/materialPresets';
 import { MAP_ROLES } from '../core/refs';
@@ -101,6 +102,7 @@ const COMPONENTS = {
     rain: [Rain, (n: NodeDoc) => n.rain],
     terrain: [Terrain, (n: NodeDoc) => n.terrain],
     scatter: [Scatter, (n: NodeDoc) => n.scatter],
+    tree: [Tree, (n: NodeDoc) => n.tree],
     audio: [AudioSource, (n: NodeDoc) => n.audio],
     // Made on the first edit: every model with clips shows the section.
     animation: [Animation, (n: NodeDoc) => n.animation, 'animation'],
@@ -121,6 +123,36 @@ const BRUSH_TOOLS: { value: BrushTool; label: string; hint: string }[] = [
 
 /** Meters with one decimal. */
 const meters = (v: number) => String(Math.round(v * 10) / 10);
+
+/** A scatter source's choice that grows a tree of a species (after it): the others are model asset ids. */
+const TREE_CHOICE = 'tree:';
+
+/** The fields of a scatter's tree source shown (the scatter's own cast shadows and solids hold for it). */
+const SCATTER_TREE_ROWS = ['seed', 'height', 'width', 'trunk', 'branches', 'leaves', 'leafSize', 'gnarl', 'autumn', 'leafTint', 'barkTint', 'translucency', 'vary', 'wind'] as const;
+
+/** What a scatter source places, as its choice: a model asset id, a tree of a species, or '' for nothing. */
+const sourceChoice = (src: ScatterSourceDoc): string => (src.tree ? TREE_CHOICE + src.tree.species : src.model ?? '');
+
+/**
+ * Makes a scatter source place what was chosen: a model, a tree of a
+ * species (one already a tree keeps how it grows) or nothing. The first
+ * tree of a scatter spaces its copies apart and makes its trunk solid, as
+ * trees need room and stop characters.
+ */
+function chooseSource(n: NodeDoc, src: ScatterSourceDoc, choice: string) {
+    if (!choice.startsWith(TREE_CHOICE)) {
+        src.model = choice || null;
+        delete src.tree;
+        return;
+    }
+    const species = choice.slice(TREE_CHOICE.length) as TreeSpecies;
+    if (!src.tree) {
+        if (n.scatter && !n.scatter.sources.some((x) => x.tree) && n.scatter.spacing < 3) n.scatter.spacing = 4;
+        if (src.solid === 'none') src.solid = 'trunk';
+    }
+    src.tree = src.tree ? { ...src.tree, species } : (defaultTree(species) satisfies TreeDoc);
+    src.model = null;
+}
 
 /** The lowest and highest sample of each heightmap shown (a sculpt stroke makes a new map). */
 const extremes = new WeakMap<Heightmap, [number, number]>();
@@ -224,7 +256,9 @@ export class InspectorPanel {
             n.rain ? 'rain:' + this.store.doc.nodes.length : '-',
             // A layer shows its own maps or follows a slot, from the slots listed.
             n.terrain ? 'terrain:' + n.terrain.layers.map((l) => l.slot ?? '-').join(',') + ':' + this.store.doc.design.materials.map((m) => m.id + m.name).join(',') : '-',
-            n.scatter ? 'scatter:' + n.scatter.sources.length + ':' + n.scatter.avoid.join(',') + ':' + this.store.doc.nodes.length : '-',
+            // A source shows a model's rows or a tree's.
+            n.scatter ? 'scatter:' + n.scatter.sources.map((x) => (x.tree ? 't' : 'm')).join('') + ':' + n.scatter.avoid.join(',') + ':' + this.store.doc.nodes.length : '-',
+            n.tree ? 'tree' : '-',
             n.prefab ? this.prefabKey(n.prefab) : '-',
             n.model ? n.model.asset + ':' + (this.editor.sync.modelState(n.id)?.status ?? '') + ':' + (info ? info.parts.length : 0) : '-',
             n.model ? JSON.stringify(Object.keys(n.model.materials ?? {})) + JSON.stringify(Object.keys(n.model.parts ?? {})) : '',
@@ -341,6 +375,7 @@ export class InspectorPanel {
         if (node.rain) this.body.append(this.rainSection());
         if (node.terrain) this.body.append(this.terrainSection());
         if (node.scatter) this.body.append(this.scatterSection());
+        if (node.tree) this.body.append(this.treeSection());
         if (node.instancing) this.body.append(this.instancingSection());
         if (node.audio) this.body.append(this.audioSection());
         if (node.model) this.body.append(...this.modelSections(node));
@@ -1182,7 +1217,7 @@ export class InspectorPanel {
             if (!cur) return;
             const copies = this.editor.sync.scatterPlacements(self).length;
             const solids = this.editor.sync.scatterSolids().find((x) => x.id === self)?.solids.length ?? 0;
-            placed.textContent = !cur.sources.some((x) => x.model) ? 'Add a model to place' : `${copies} of ${cur.count}${solids ? `, ${solids} solid` : ''}`;
+            placed.textContent = !cur.sources.some((x) => x.model || x.tree) ? 'Add a model or a tree to place' : `${copies} of ${cur.count}${solids ? `, ${solids} solid` : ''}`;
         };
         showPlaced();
         this.watch(showPlaced);
@@ -1191,20 +1226,34 @@ export class InspectorPanel {
         s.sources.forEach((src, i) => {
             const get = (n: NodeDoc) => n.scatter?.sources[i];
             const hasSource: Filter = (n) => !!get(n);
-            const model = new SelectField<string>([{ value: '', label: 'None' }, ...models.map((a) => ({ value: a.id, label: a.name }))], src.model ?? '', (v) =>
-                this.hooks<string | null>('Scatter Model', hasSource, (n, x) => (get(n)!.model = x)).commit!(v || null));
+            const model = new SelectField<string>([
+                { value: '', label: 'None' },
+                ...TREE_SPECIES.map((sp) => ({ value: TREE_CHOICE + sp, label: `${SPECIES_NAME[sp]} (tree)` })),
+                ...models.map((a) => ({ value: a.id, label: a.name })),
+            ], sourceChoice(src), (v) => this.hooks<string>('Scatter Model', hasSource, (n, x) => chooseSource(n, get(n)!, x)).commit!(v));
             this.watch(() => {
                 const cur = get(this.node);
-                if (cur) model.set(cur.model ?? '');
+                if (cur) model.set(sourceChoice(cur));
             });
-            const drop = iconButton('trash', 'Remove this model', () => this.hooks<null>('Remove Scatter Model', hasSource, (n) => void n.scatter!.sources.splice(i, 1)).commit!(null));
-            sources.push(row(`Model ${i + 1}`, h('div', { class: 'inline grow' }, model.el, drop), 'A model to place: a tree, rock or bush (a set of pieces side by side gives each copy one piece)'));
+            const drop = iconButton('trash', 'Remove this source', () => this.hooks<null>('Remove Scatter Model', hasSource, (n) => void n.scatter!.sources.splice(i, 1)).commit!(null));
+            sources.push(src.tree
+                ? row(`Tree ${i + 1}`, h('div', { class: 'inline grow' }, model.el, drop), 'A tree grown from rules: each copy is one of a few variants of it, as tall as its height times its scale')
+                : row(`Model ${i + 1}`, h('div', { class: 'inline grow' }, model.el, drop), 'A model to place: a tree, rock or bush (a set of pieces side by side gives each copy one piece), or a tree grown from rules'));
             sources.push(...this.fieldRows(ScatterSource, get as Getter, ['weight', 'scale', 'solid']));
+            if (src.tree) sources.push(...this.fieldRows(Tree, (n) => get(n)?.tree, SCATTER_TREE_ROWS));
         });
         if (s.sources.length < 8) {
-            sources.push(h('div', { class: 'design-actions' }, button('Add Model', () => this.hooks<null>('Add Scatter Model', (n) => !!n.scatter && n.scatter.sources.length < 8, (n) => {
+            const add = button('Add Model', () => this.hooks<null>('Add Scatter Model', (n) => !!n.scatter && n.scatter.sources.length < 8, (n) => {
                 n.scatter!.sources.push({ ...defaults(ScatterSource), model: models.find((a) => !n.scatter!.sources.some((x) => x.model === a.id))?.id ?? models[0]?.id ?? null });
-            }).commit!(null), 'small', 'plus')));
+            }).commit!(null), 'small', 'plus');
+            const tree = button('Add Tree', () => this.hooks<null>('Add Scatter Tree', (n) => !!n.scatter && n.scatter.sources.length < 8, (n) => {
+                const src = { ...defaults(ScatterSource) };
+                n.scatter!.sources.push(src);
+                // The species no source grows yet.
+                chooseSource(n, src, TREE_CHOICE + (TREE_SPECIES.find((sp) => !n.scatter!.sources.some((x) => x.tree?.species === sp)) ?? 'oak'));
+            }).commit!(null), 'small', 'plant');
+            tree.title = 'A tree grown from rules: oak, birch or spruce';
+            sources.push(h('div', { class: 'design-actions' }, add, tree));
         }
         // What copies stand on, and what they keep clear of: objects with a mesh, a model, a terrain or children.
         const solid = doc.nodes.filter((n) => (n.id !== self || n.terrain) && !n.prefabChild && (n.mesh || n.model || n.terrain || this.store.children(n.id).length));
@@ -1222,7 +1271,9 @@ export class InspectorPanel {
                 on: { click: () => this.hooks<null>('Scatter Avoid', has, (n) => (n.scatter!.avoid = n.scatter!.avoid.filter((x) => x !== aid))).commit!(null) },
             }));
         }
-        const addAvoid = new SelectField<string>([{ value: '', label: 'Keep clear of...' }, ...solid.filter((n) => n.id !== self && !n.terrain && !s.avoid.includes(n.id)).map((n) => ({ value: n.id, label: n.name }))], '', (v) => {
+        // What they can keep clear of: those objects, and trees.
+        const avoidable = doc.nodes.filter((n) => n.id !== self && !n.terrain && !n.prefabChild && !s.avoid.includes(n.id) && (n.mesh || n.model || n.tree || this.store.children(n.id).length));
+        const addAvoid = new SelectField<string>([{ value: '', label: 'Keep clear of...' }, ...avoidable.map((n) => ({ value: n.id, label: n.name }))], '', (v) => {
             if (v) this.hooks<string>('Scatter Avoid', has, (n, x) => void (n.scatter!.avoid.includes(x) || n.scatter!.avoid.push(x))).commit!(v);
         });
         const reseed = button('Reseed', () => this.hooks<number>('Reseed Scatter', has, (n, x) => (n.scatter!.seed = x)).commit!(Math.floor(Math.random() * 999999)), 'small', 'refresh');
@@ -1230,10 +1281,10 @@ export class InspectorPanel {
         const bake = button('Make Objects', () => {
             if (!this.editor.bakeScatter(self)) toast('The scatter has no copies yet (or its models are still loading).', 'info');
         }, 'small', 'layers');
-        bake.title = 'Turn the copies into objects of their own under an instanced group, to edit one by one (the scatter goes)';
+        bake.title = 'Turn the copies into objects of their own under an instanced group, to edit one by one (the scatter goes). Trees become tree objects, each drawn on its own: keep forests as scatters';
         const remove = iconButton('trash', 'Remove scatter', () => this.hooks<null>('Remove Scatter', has, (n) => delete n.scatter).commit!(null));
         return section('scatter', 'Scatter', 'scatter', [
-            h('div', { class: 'muted small pad', text: 'Copies of models spread over the area around the object by rules, drawn instanced by parts of the area. Only the rules are saved: the copies are placed again from them whenever they, the ground or what to avoid change.' }),
+            h('div', { class: 'muted small pad', text: 'Copies of models or trees spread over the area around the object by rules, drawn instanced by parts of the area. Only the rules are saved: the copies are placed again from them whenever they, the ground or what to avoid change.' }),
             row('Placed', placed, 'Copies placed of those asked, and how many stop characters in Play'),
             ...sources,
             ...this.componentRows('scatter', ['size', 'count', 'spacing', 'seed']),
@@ -1242,6 +1293,31 @@ export class InspectorPanel {
             row('Avoid', h('div', {}, avoided, addAvoid.el), 'Objects whose ground area stays clear: buildings, paths, the play area'),
             ...this.componentRows('scatter', ['margin', 'align', 'tilt', 'sink', 'bury', 'soil', 'moss', 'mossColor', 'vary', 'sway', 'distance', 'castShadow']),
             h('div', { class: 'design-actions' }, reseed, bake),
+        ], [remove]);
+    }
+
+    private treeSection(): HTMLElement {
+        const has: Filter = (n) => !!n.tree;
+        const id = this.node.id;
+        const drawn = h('div', { class: 'readonly' });
+        const showDrawn = () => {
+            const tris = this.editor.sync.treeView(id)?.levelTriangles();
+            const k = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : String(n));
+            drawn.textContent = tris ? tris.map(k).join(' · ') : this.node.visible ? 'Growing...' : 'Hidden';
+        };
+        showDrawn();
+        this.watch(showDrawn);
+        const reseed = button('Reseed', () => this.hooks<number>('Reseed Tree', has, (n, x) => (n.tree!.seed = x)).commit!(Math.floor(Math.random() * 999999)), 'small', 'refresh');
+        reseed.title = 'Grow another tree of the species';
+        const forest = button('Make Forest', () => this.editor.forestFrom(id), 'small', 'scatter');
+        forest.title = 'A scatter of trees like this one around it (this tree stays)';
+        const remove = iconButton('trash', 'Remove tree', () => this.hooks<null>('Remove Tree', has, (n) => delete n.tree).commit!(null));
+        return section('tree', 'Tree', 'plant', [
+            h('div', { class: 'muted small pad', text: 'A tree grown from rules: trunk, branches and leaves from the species and the seed, in three levels of detail that take over with distance. The wind of the weather sways it. Scale it with the object\'s scale; for a forest, use a scatter of trees.' }),
+            row('Triangles', drawn, 'Triangles of each level of detail: near, midway and far'),
+            ...this.componentRows('tree', ['species', 'seed', 'height', 'width', 'trunk', 'branches', 'leaves', 'leafSize', 'gnarl']),
+            ...this.componentRows('tree', ['autumn', 'leafTint', 'barkTint', 'translucency', 'wind', 'castShadow', 'solid']),
+            h('div', { class: 'design-actions' }, reseed, forest),
         ], [remove]);
     }
 
@@ -1923,6 +1999,17 @@ export class InspectorPanel {
                     }
                     n.scatter = scatter;
                 }).commit!(null),
+            });
+        }
+        if (!node.tree && !node.mesh && !node.model && !node.light && !node.camera && !node.terrain && !node.scatter) {
+            items.push({
+                label: 'Tree',
+                icon: 'plant',
+                submenu: TREE_SPECIES.map((sp) => ({
+                    label: SPECIES_NAME[sp],
+                    icon: 'plant',
+                    action: () => this.hooks<null>('Add Tree', (n) => !n.tree && !n.mesh && !n.model, (n) => (n.tree = defaultTree(sp))).commit!(null),
+                })),
             });
         }
         if (!node.audio && !node.light && !node.camera) {

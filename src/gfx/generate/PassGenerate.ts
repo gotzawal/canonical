@@ -88,8 +88,8 @@ export class PassGenerate {
                 // shadowPass.doubleSide = colorPass.doubleSide;
                 shadowPass.cullMode = colorPass.cullMode;
                 shadowPass.setTexture(`baseMap`, colorPass.getTexture(`baseMap`));
-                shadowPass.setUniform(`alphaCutoff`, colorPass.getUniform(`alphaCutoff`));
-                // shadowPass.setDefine("USE_ALPHACUT", colorPass.shaderState.alphaCutoff < 1.0);
+                if (colorPass.uniforms[`alphaCutoff`]) shadowPass.setUniform(`alphaCutoff`, colorPass.getUniform(`alphaCutoff`));
+                shadowPass.setDefine(`USE_ALPHACUT`, CastShadowMaterialPass.cutsAlpha(colorPass));
                 // Shadow is a depth-only pass; tangents only feed fragment-side
                 // normal mapping, so it never needs TANGENT. Set false
                 // explicitly (rather than mirroring the color pass) so preDefine
@@ -125,8 +125,8 @@ export class PassGenerate {
             if (!castPointShadowPassList || castPointShadowPassList.length < (i + 1)) {
                 let castPointShadowPass = new CastPointShadowMaterialPass();
                 castPointShadowPass.setTexture(`baseMap`, colorPass.getTexture(`baseMap`));
-                castPointShadowPass.setUniform(`alphaCutoff`, colorPass.getUniform(`alphaCutoff`));
-                castPointShadowPass.setDefine("USE_ALPHACUT", 1);
+                if (colorPass.uniforms[`alphaCutoff`]) castPointShadowPass.setUniform(`alphaCutoff`, colorPass.getUniform(`alphaCutoff`));
+                castPointShadowPass.setDefine(`USE_ALPHACUT`, CastShadowMaterialPass.cutsAlpha(colorPass));
                 // castPointShadowPass.doubleSide = false ;
                 for (let j = 0; j < 1; j++) {
                     // Depth-only pass — never needs TANGENT (see createShadowPass).

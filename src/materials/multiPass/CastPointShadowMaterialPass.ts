@@ -27,6 +27,8 @@ export class CastPointShadowMaterialPass extends RenderShaderPass {
         this.shaderState.depthBiasSlopeScale = 0.5;
         this.shaderState.depthBiasClamp = 0;
 
-        this.setDefine(`USE_ALPHACUT`, true);
+        // As the directional cast: cut-outs only where the color pass cuts.
+        this.setDefine(`USE_ALPHACUT`, false);
+        this.setUniformFloat(`alphaCutoff`, 0.5);
     }
 }

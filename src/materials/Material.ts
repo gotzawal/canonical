@@ -9,6 +9,7 @@ import { Vector2 } from "../math/Vector2";
 import { Vector3 } from "../math/Vector3";
 import { Vector4 } from "../math/Vector4";
 import { BlendMode } from "./BlendMode";
+import { CastShadowMaterialPass } from "./multiPass/CastShadowMaterialPass";
 import { UUID } from "../util/Global";
 import { Reference } from "../util/Reference";
 
@@ -451,6 +452,18 @@ export class Material {
     /** Upload pending uniform changes to the GPU. */
     public applyUniform() {
         this._shader.applyUniform();
+    }
+
+    /**
+     * Shadow passes cut out what the color pass cuts out (see
+     * CastShadowMaterialPass.cutsAlpha). Alpha mode setters call this after
+     * changing the color pass, so shadow passes made before follow it.
+     */
+    protected _syncShadowAlphaCut() {
+        const cut = CastShadowMaterialPass.cutsAlpha(this.shader.getSubShaders(PassType.COLOR)[0]);
+        for (const type of [PassType.SHADOW, PassType.POINT_SHADOW]) {
+            for (const pass of this.shader.getSubShaders(type)) pass.setDefine(`USE_ALPHACUT`, cut);
+        }
     }
 
     /**
