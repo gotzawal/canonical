@@ -9,8 +9,8 @@
 // The root sits at the scene's root and the copies are placed in world space.
 
 import {
-    BoundingBox, InstanceDrawComponent, Material, MeshRenderer, Object3D, Quaternion, RenderNode, SkinnedMeshRenderer, SkinnedMeshRenderer2, Vector3,
-    VertexAttributeName, type Context3D, type GeometryBase, type Texture,
+    BoundingBox, InstanceDrawComponent, Material, MeshRenderer, Object3D, Quaternion, Reference, RenderNode, SkinnedMeshRenderer, SkinnedMeshRenderer2,
+    Vector3, VertexAttributeName, type Context3D, type GeometryBase, type Texture,
 } from '@orillusion/core';
 import { compose, decompose, invert, mul, rayBox, type Mat4, type Ray } from '../core/math';
 import type { Placement } from '../core/scatter';
@@ -45,6 +45,10 @@ export interface ScatterPiece {
  * A source model taken apart for its copies. A model that is a set of
  * pieces side by side (rocks, grass clumps) gives each piece standing at
  * its own origin, and each copy shows one; any other model is one piece.
+ * It holds the shapes of its parts while it is kept: the copies' renderers
+ * come and go (placed anew, or all at once when Play stops), and the last
+ * renderer of a shape to go destroys it, as the simpler levels of its parts
+ * are held by nothing else.
  */
 export class ScatterModel {
     readonly pieces: ScatterPiece[] = [];
@@ -52,6 +56,8 @@ export class ScatterModel {
     readonly paths: Map<RenderNode, string>;
     /** The model's root matrix, which copies leave out and a model object keeps. */
     readonly root: Mat4;
+    /** The shapes it holds. */
+    private shapes = new Set<GeometryBase>();
 
     constructor(prefab: Object3D) {
         this.paths = partPaths(prefab);
@@ -68,6 +74,13 @@ export class ScatterModel {
             const whole = pieceOf(prefab, toModel);
             if (whole.parts.length) this.pieces.push(whole);
         }
+        for (const piece of this.pieces) for (const part of piece.parts) this.hold(part.geometry);
+    }
+
+    private hold(g: GeometryBase) {
+        if (this.shapes.has(g)) return;
+        this.shapes.add(g);
+        Reference.getInstance().attached(g, this);
     }
 
     /** The piece a copy shows, by its variant (0 to 1). */
@@ -82,8 +95,21 @@ export class ScatterModel {
      */
     async addLods(): Promise<void> {
         for (const piece of this.pieces) {
-            for (const part of piece.parts) part.geometry = await geometryWithLods(part.geometry);
+            for (const part of piece.parts) {
+                part.geometry = await geometryWithLods(part.geometry);
+                this.hold(part.geometry);
+            }
         }
+    }
+
+    /** Lets go of its shapes (it is no longer kept); `dispose` frees those nothing else holds. */
+    dispose(dispose: (res: { destroy(force?: boolean): void }) => void) {
+        const refs = Reference.getInstance();
+        for (const g of this.shapes) {
+            refs.detached(g, this);
+            if (!refs.hasReference(g)) dispose(g);
+        }
+        this.shapes.clear();
     }
 }
 
@@ -273,10 +299,21 @@ export class ScatterView {
         this.setVisible(this.visible);
     }
 
+    /** A cell of copies, or none at all: what failed half way leaves nothing in the scene to draw. */
     private makeCell(group: Placement[], models: readonly (ScatterModel | null)[], castShadow: boolean): Cell {
         const obj = new Object3D();
         obj.name = 'Scatter cell';
         this.root.addChild(obj);
+        try {
+            return this.fillCell(obj, group, models, castShadow);
+        } catch (e) {
+            obj.removeFromParent();
+            obj.destroy();
+            throw e;
+        }
+    }
+
+    private fillCell(obj: Object3D, group: Placement[], models: readonly (ScatterModel | null)[], castShadow: boolean): Cell {
         // The instancer compiles the materials it draws for itself: each cell draws copies of its own.
         const copies = new Map<Material, Material>();
         const materialOf = (m: Material) => {

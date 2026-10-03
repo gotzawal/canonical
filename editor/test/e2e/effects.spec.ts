@@ -3,8 +3,10 @@
 // shadows of a lamp next to the sun's. SwiftShader compiles each effect's
 // shaders the first time it draws, so they are turned on together and
 // checked in one go, with the graphics quality tiers that drop some; and
-// likewise the reflections, cascaded shadows, grass and instancing.
-import { expect, test } from '@playwright/test';
+// likewise the reflections, cascaded shadows, grass and instancing; the
+// volumetric clouds in a mirror; rain through Play and Stop; and shadow maps
+// kept while nothing moves.
+import { expect, test, type Page } from '@playwright/test';
 import { playFrames, sharedEditor } from './editor';
 import { measure } from './measure';
 import { chain, setEnv } from './scenery';
@@ -155,6 +157,64 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
     }));
     await measure(page, 3);
     expect(await seen()).toMatchObject({ instancing: null, cube: { shown: true, alone: true } });
+});
+
+/** The mean color (linear) of the rows from `top` to `bottom` (shares of its height) of what a mirror captured. */
+function captured(page: Page, id: string, top: number, bottom: number): Promise<number[]> {
+    return page.evaluate(async ([id, top, bottom]) => {
+        const ed = window.__editor;
+        const tex = ed.sync.entries.get(id)!.mirror!.captureComponent!.getCaptureTexture()!.getGPUTexture();
+        const device = ed.runtime.engine.context3D.device;
+        const y = Math.floor(tex.height * top);
+        const rows = Math.max(1, Math.floor(tex.height * bottom) - y);
+        // Texels of four half floats, rows padded to 256 bytes.
+        const bytesPerRow = Math.ceil((tex.width * 8) / 256) * 256;
+        const buffer = device.createBuffer({ size: bytesPerRow * rows, usage: GPUBufferUsage.COPY_DST | GPUBufferUsage.MAP_READ });
+        const encoder = device.createCommandEncoder();
+        encoder.copyTextureToBuffer({ texture: tex, origin: { x: 0, y } }, { buffer, bytesPerRow }, { width: tex.width, height: rows });
+        device.queue.submit([encoder.finish()]);
+        await buffer.mapAsync(GPUMapMode.READ);
+        const half = new Uint16Array(buffer.getMappedRange());
+        const float = (h: number) => {
+            const e = (h >> 10) & 31, m = h & 1023, sign = h & 0x8000 ? -1 : 1;
+            return e === 0 ? sign * m * 2 ** -24 : sign * (1 + m / 1024) * 2 ** (e - 15);
+        };
+        const sum = [0, 0, 0];
+        for (let r = 0; r < rows; r++) {
+            for (let x = 0; x < tex.width; x++) {
+                for (let k = 0; k < 3; k++) sum[k] += float(half[(r * bytesPerRow) / 2 + x * 4 + k]);
+            }
+        }
+        buffer.unmap();
+        buffer.destroy();
+        return sum.map((v) => v / (rows * tex.width));
+    }, [id, top, bottom] as const);
+}
+
+test('a mirror reflects the volumetric clouds with the sky', async () => {
+    test.setTimeout(300_000);
+    const page = editor.page();
+    // The ground a mirror with nothing over it, seen from above at a slant: it reflects only the sky.
+    const ground = await page.evaluate(() => {
+        const ed = window.__editor;
+        ed.store.commit('Mirror', (d) => {
+            d.nodes = d.nodes.filter((n) => n.name === 'Sun' || n.name === 'Ground');
+            d.nodes.find((n) => n.name === 'Ground')!.mirror = { resolution: 0.5 };
+        });
+        ed.store.setCamera({ target: [0, 0, 0], yaw: 0, pitch: 35, distance: 6, fov: 60 });
+        return ed.store.doc.nodes.find((n) => n.name === 'Ground')!.id;
+    });
+    await measure(page, 3);
+    // Where the ground is in the view, its reflection: a blue sky.
+    const blue = (c: number[]) => c[2] / Math.max(c[0], 1e-4);
+    const clear = await captured(page, ground, 0.6, 0.95);
+    expect(blue(clear)).toBeGreaterThan(1.5);
+
+    // An overcast sky: the mirror's sky turns from blue to the clouds' grey, as the sky over it (once their
+    // shapes are made and the reflection cube has them on every face).
+    await setEnv(page, { clouds: { enable: true, coverage: 0.95 } });
+    await measure(page, 3);
+    await expect.poll(async () => blue(await captured(page, ground, 0.6, 0.95)), { timeout: 120_000 }).toBeLessThan(blue(clear) * 0.7);
 });
 
 test('plays a scene with rain and stops it, the rain back as it was', async () => {
