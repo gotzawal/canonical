@@ -89,21 +89,32 @@ function withLods(g: GeometryBase, simplifier: Simplifier): GeometryBase {
     return out;
 }
 
+/** Shapes with their simpler levels by the shape they are made from: promised (made or being made), and made. */
 const made = new WeakMap<GeometryBase, Promise<GeometryBase>>();
+const done = new WeakMap<GeometryBase, GeometryBase>();
 
-/** The shape with its simpler levels (made once per shape; the shape itself where they cannot be made). */
+/**
+ * The shape with its simpler levels (made once per shape; the shape itself
+ * where they cannot be made). What draws it holds it, and the last renderer
+ * to go destroys it (an object deleted, the scene built again when Play
+ * stops): it is then made again.
+ */
 export function geometryWithLods(g: GeometryBase): Promise<GeometryBase> {
     if (OWN.has(g)) return Promise.resolve(g);
     let p = made.get(g);
-    if (!p) {
+    const last = done.get(g);
+    if (!p || (last && last !== g && !last.subGeometries)) {
         p = loadSimplifier().then((simplifier) => {
-            if (!simplifier) return g;
-            try {
-                return withLods(g, simplifier);
-            } catch (e) {
-                console.warn('[editor] a shape could not be simplified', e);
-                return g;
+            let out = g;
+            if (simplifier) {
+                try {
+                    out = withLods(g, simplifier);
+                } catch (e) {
+                    console.warn('[editor] a shape could not be simplified', e);
+                }
             }
+            done.set(g, out);
+            return out;
         });
         made.set(g, p);
     }
