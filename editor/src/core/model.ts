@@ -269,6 +269,7 @@ export const Character = z
         radius: num(0.35, 0.05, 10, { description: 'Of the body (m).' }),
         eyeHeight: num(1.65, 0.05, 20, { description: 'Eyes above the feet: the first person camera height (m).' }),
         stepHeight: num(0.3, 0, 10, { description: 'Highest step it climbs without jumping (m).' }),
+        maxSlope: num(40, 0, 89, { title: 'Max Slope', step: 1, description: 'Steepest ground it walks up, in degrees: steeper slopes stop it like a wall (it can still go down them).' }),
         collide: bool(true, { title: 'Collisions', description: 'Walls and other characters stop it and it stands on floors; off, it moves freely at its height.' }),
     })
     .overwrite((c) => {

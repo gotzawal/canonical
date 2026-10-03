@@ -959,7 +959,7 @@ export class InspectorPanel {
         const specs = this.store.doc.design.specs;
         const fromBrief = button('Body from the Brief', () => this.hooks<null>('Character Size from the Brief', has, (n) => {
             const d = defaultCharacter(specs);
-            Object.assign(n.character!, { height: d.height, radius: d.radius, eyeHeight: d.eyeHeight, stepHeight: d.stepHeight });
+            Object.assign(n.character!, { height: d.height, radius: d.radius, eyeHeight: d.eyeHeight, stepHeight: d.stepHeight, maxSlope: d.maxSlope });
         }).commit!(null), 'small', 'walk');
         const remove = iconButton('trash', 'Remove character', () => this.hooks<null>('Remove Character', has, (n) => {
             delete n.character;
@@ -967,8 +967,8 @@ export class InspectorPanel {
         }).commit!(null));
         return section('character', 'Character', 'walk', [
             h('div', { class: 'muted small pad', text: 'A body that walks the level in Play. The player controls it with a Player Controller; for an NPC, a behavior tree walks it with Move To, or a script with this.character.' }),
-            ...this.componentRows('character', ['speed', 'runSpeed', 'jump', 'gravity', 'height', 'radius', 'eyeHeight', 'stepHeight', 'collide']),
-            row('', fromBrief, `Height ${specs.playerHeight} m, radius ${specs.playerRadius} m, eyes at ${specs.eyeHeight} m, steps up to ${specs.stepHeight} m`),
+            ...this.componentRows('character', ['speed', 'runSpeed', 'jump', 'gravity', 'height', 'radius', 'eyeHeight', 'stepHeight', 'maxSlope', 'collide']),
+            row('', fromBrief, `Height ${specs.playerHeight} m, radius ${specs.playerRadius} m, eyes at ${specs.eyeHeight} m, steps up to ${specs.stepHeight} m, slopes up to ${specs.maxSlope}°`),
         ], [remove]);
     }
 

@@ -16,7 +16,7 @@ import type { CharacterDoc, Vec3 } from '../core/types';
 import type { Picker } from '../engine/picking';
 import type { SceneSync } from '../engine/sync';
 import { LevelRays } from '../engine/levelRays';
-import { CharacterMotor, type CastFn } from './motor';
+import { CharacterMotor, type CastFn, type OpenGround } from './motor';
 
 /** How fast the body turns toward where it goes, per second. */
 const TURN_RATE = 12;
@@ -91,13 +91,13 @@ export class Character extends Emitter<CharacterEvents> {
     /** Plans walks to targets around walls (the level's navigation mesh, once Play has one); null walks straight. */
     planner: Planner | null = null;
 
-    /** `bottom`: the lowest point of the object's meshes (null without meshes: its origin is the feet). */
-    constructor(readonly obj: Object3D, readonly doc: CharacterDoc, cast: CastFn, bottom: number | null) {
+    /** `bottom`: the lowest point of the object's meshes (null without meshes: its origin is the feet). `open`: the terrains it walks over. */
+    constructor(readonly obj: Object3D, readonly doc: CharacterDoc, cast: CastFn, bottom: number | null, open?: OpenGround) {
         super();
         const m = obj.transform.worldMatrix.rawData;
         this.offset = bottom === null ? 0 : Math.max(0, m[13] - bottom);
         this.facing = yawOf(m);
-        this.motor = new CharacterMotor(cast, doc, [m[12], m[13] - this.offset, m[14]]);
+        this.motor = new CharacterMotor(cast, doc, [m[12], m[13] - this.offset, m[14]], open);
         // Standing where it was placed: onto the ground under it.
         const feet = this.motor.feet;
         const ground = doc.collide ? this.motor.groundAt([feet[0], feet[1] + doc.stepHeight + 0.3, feet[2]], doc.stepHeight + 1.3) : null;
@@ -328,8 +328,12 @@ export class Characters {
     readonly rays: LevelRays;
     /** Nodes of the characters (and under them): the level leaves them out, their bodies stand in. */
     private own = new Set<string>();
+    /** The terrains of the level, open ground (gathered again every frame). */
+    private terrains = new Set<string>();
+    private readonly land = (id: string | undefined) => !!id && this.terrains.has(id);
 
-    constructor(picker: Picker, sync: SceneSync, store: Store) {
+    constructor(picker: Picker, private sync: SceneSync, store: Store) {
+        this.terrains = new Set(sync.terrains().map((t) => t.id));
         // Triggers (physics bodies that only detect) do not stop anyone.
         const trigger = (id: string) => {
             for (let n = store.node(id); n; n = n.parent ? store.node(n.parent) : undefined) if (n.body) return n.body.sensor;
@@ -356,10 +360,11 @@ export class Characters {
     /** The character of an object; `nodes`: its node and the nodes under it. */
     add(obj: Object3D, doc: CharacterDoc, nodes: string[], bottom: number | null): Character {
         this.exclude(nodes);
-        const cast: CastFn = (o, d, max) => {
-            const hit = this.rays.cast(o, d, max);
+        // Rays against the level (or what stands on its open ground) and the other characters' bodies.
+        const rays = (ignore?: (id: string) => boolean): CastFn => (o, d, max) => {
+            const hit = this.rays.cast(o, d, max, ignore);
             if (hit && !d[1]) c.bumped.add(hit.id);
-            let best: { distance: number; point: Vec3 } | null = hit;
+            let best: ReturnType<CastFn> = hit;
             for (const other of this.list) {
                 if (other.obj === obj) continue;
                 // A ray of this length cannot reach a body whose axis is farther away than that (plus its radius).
@@ -372,7 +377,7 @@ export class Characters {
             }
             return best;
         };
-        const c = new Character(obj, doc, cast, bottom);
+        const c = new Character(obj, doc, rays(), bottom, { has: this.land, cast: rays(this.land) });
         this.list.push(c);
         return c;
     }
@@ -397,6 +402,7 @@ export class Characters {
 
     update(dt: number) {
         this.rays.flush();
+        this.terrains = new Set(this.sync.terrains().map((t) => t.id));
         for (const c of this.list) c.update(dt);
     }
 

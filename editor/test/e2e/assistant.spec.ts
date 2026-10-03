@@ -1,7 +1,8 @@
 // The assistant in the simple view (the scene and the chat), with OpenRouter
-// scripted: a project starts from one request, the tools change the scene,
-// the settings limit them, the user stops a request, approves a stage from
-// the chat, and sees what the work cost, with images at the quality chosen.
+// scripted: a project starts from one request, the tools change the scene
+// and walk its route, the settings limit them, the user stops a request,
+// approves a stage from the chat, and sees what the work cost, with images
+// at the quality chosen.
 
 import { expect, test, type Route } from '@playwright/test';
 import { scriptedAssistant, sharedEditor, toolResults, USAGE, type ScriptedCall } from './editor';
@@ -170,6 +171,41 @@ test('grows a tree and a forest of trees with its tools, and bakes the forest in
     expect(birches.length).toBe(placed.sources[0].copies);
     for (const b of birches) expect([7, 7926, 15845, 23764]).toContain(b.seed);
     expect(copies.filter((c) => c.species === 'oak').every((c) => c.height === 12 && !c.solid)).toBe(true);
+});
+
+test('walks the route with the player\'s body around a wall and checks a sight line, ticking the Level checklist', async () => {
+    const page = editor.page();
+    await page.evaluate(() => {
+        window.__editor.store.commit('Route', (d) => {
+            d.design.play.route = [
+                { id: 'r_gate', name: 'Gate', position: [-5, 0, 5] },
+                { id: 'r_yard', name: 'Yard', position: [5, 0, -5] },
+            ];
+            d.design.play.sightlines = [{ id: 's_yard', from: 'Gate', to: 'Yard' }];
+        }, { design: true });
+    });
+    // A wall across the straight way from the gate to the yard: the walk goes around its end.
+    const results: any[] = await ask([
+        [{ name: 'create_objects', args: { objects: [{ type: 'box', name: 'Wall', position: [0, 1.5, 1], size: [12, 3, 0.3] }] } }],
+        [{ name: 'place_player', args: { at: 'Gate' } }],
+        [{ name: 'walk_route', args: {} }],
+        // Screenshots are off: the sight line is still checked, from the plan's own ends.
+        [{ name: 'check_sightline', args: { sightline: 's_yard' } }],
+    ]);
+    expect(results.filter((r) => r?.error)).toEqual([]);
+    const walk = results[2];
+    expect(walk.legs.map((l: any) => [l.to, l.reached])).toEqual([['Gate', true], ['Yard', true]]);
+    // Around the wall, not through it: longer than the straight way.
+    expect(walk.legs[1].walked_m).toBeGreaterThan(Math.hypot(10, 10) + 1);
+    expect(results[3]).toMatchObject({ clear: false, blocked_by: ['Wall'] });
+    const state = await page.evaluate(() => {
+        const ed = window.__editor;
+        const items = ed.pipeline.progress('level').items;
+        const item = (id: string) => items.find((i) => i.id === id)!;
+        return { visited: ed.store.doc.design.play.route.map((r) => !!r.visited), route: item('level.route').done, sightlines: item('level.sightlines').detail, walk: ed.pipeline.walk!.trace.length };
+    });
+    expect(state).toMatchObject({ visited: [true, true], route: true, sightlines: '0 of 1 clear' });
+    expect(state.walk).toBeGreaterThan(10);
 });
 
 test('offers only the tools the AI settings allow and refuses the others', async () => {

@@ -53,6 +53,9 @@ export async function openLevelCheck(editor: Editor) {
     const img = h('img', { class: 'level-map', attrs: { src: result.map, alt: 'Plan view of the level check' } });
     img.addEventListener('click', () => lightbox(result.map, 'Level check'));
     const stats = r.stats;
+    // Where the body it walked with is set: the player's Character, else the brief's specs.
+    const player = editor.store.doc.nodes.some((n) => n.player && n.character);
+    const walker = `Walked with ${player ? 'the player\'s body (its Character in the inspector)' : 'the brief\'s body (Design tab, Specs)'}: steps up to ${r.body.stepHeight} m, slopes up to ${r.body.maxSlope}°.`;
     const body = h(
         'div',
         { class: 'level-check' },
@@ -61,7 +64,7 @@ export async function openLevelCheck(editor: Editor) {
         h('ul', { class: 'level-findings' }, lines.slice(0, 40).map((l) => h('li', { text: l }))),
         h('div', {
             class: 'muted small',
-            text: `Walkable ${stats.walkable} m²${stats.reachable !== null ? `, reached ${stats.reachable} m²` : ''}, roofed ${stats.indoor} m²${stats.ceiling !== null ? `, ceilings about ${stats.ceiling} m high` : ''}; built ${stats.footprint[0]} x ${stats.footprint[1]} m. Grid ${r.region.step} m.`,
+            text: `Walkable ${stats.walkable} m²${stats.reachable !== null ? `, reached ${stats.reachable} m²` : ''}, roofed ${stats.indoor} m²${stats.ceiling !== null ? `, ceilings about ${stats.ceiling} m high` : ''}; built ${stats.footprint[0]} x ${stats.footprint[1]} m. Grid ${r.region.step} m. ${walker}`,
         }),
     );
     const m = modal('Level check', body, { cls: 'level-check-dialog' });

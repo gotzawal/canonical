@@ -223,17 +223,26 @@ export const greyboxTools = tools({
     },
     check_sightline: {
         groups: ['capture'],
-        needs: 'screenshots',
-        description: 'Check whether a landmark is visible from a point at eye height: rays from the eye to the landmark tell whether and by what it is blocked. With sightline (an id from the plan) the result is recorded. Returns a picture of the view.',
+        description: 'Check whether a landmark is visible from a point at eye height: rays from the eye to the landmark tell whether and by what it is blocked. With sightline (an id from the plan) the result is recorded on the Level checklist, and from and to default to the sight line\'s own (a route point, area or object name). With screenshots, a picture of the view comes with it.',
         params: {
             from: place,
             to: place,
             sightline: { type: 'string', description: 'Sight line id of the plan to record the result in.' },
         },
-        required: ['from', 'to'],
         async run({ env, args, ed, store, doc }) {
-            const from = resolvePlace(env, args.from, 'from');
-            const to = resolvePlace(env, args.to, 'to');
+            const line = typeof args.sightline === 'string' ? doc().design.play.sightlines.find((s) => s.id === args.sightline) : undefined;
+            if (typeof args.sightline === 'string' && !line) throw new ToolError(`No sight line "${args.sightline}" in the plan.`);
+            const end = (v: unknown, own: string | undefined, what: 'from' | 'to') => {
+                if (v !== undefined) return resolvePlace(env, v, what);
+                if (own === undefined) throw new ToolError(`Give ${what}, or the id of a sight line of the plan (sightline).`);
+                try {
+                    return resolvePlace(env, own, what);
+                } catch {
+                    throw new ToolError(`The sight line's ${what} "${own}" is no route point, area or object: give ${what} as [x, y, z] or a name.`);
+                }
+            };
+            const from = end(args.from, line?.from, 'from');
+            const to = end(args.to, line?.to, 'to');
             const eye = eyeAt(env, from.point);
             ed.picker.update();
             // Sample the landmark: its center and the middle of its top.
@@ -253,15 +262,13 @@ export const greyboxTools = tools({
                 else blockers.add(store.node(hit.id)?.name ?? hit.id);
             }
             const clear = visible > 0;
-            if (typeof args.sightline === 'string') {
-                const id = args.sightline;
-                if (!doc().design.play.sightlines.some((s) => s.id === id)) throw new ToolError(`No sight line "${id}" in the plan.`);
+            if (line) {
                 store.commit('AI: Sight Line', (d) => {
-                    const sl = d.design.play.sightlines.find((s) => s.id === id);
+                    const sl = d.design.play.sightlines.find((s) => s.id === line.id);
                     if (sl) sl.ok = clear;
                 }, { design: true });
             }
-            const image = await capture(env, lookCamera(eye, to.point, 60), 16 / 9).catch(() => undefined);
+            const image = env.screenshots() ? await capture(env, lookCamera(eye, to.point, 60), 16 / 9).catch(() => undefined) : undefined;
             return {
                 data: { clear, samples_visible: `${visible}/${samples.length}`, ...(blockers.size ? { blocked_by: [...blockers] } : {}), eye: rv(eye), distance: r3(len(sub(to.point, eye))) },
                 image,
@@ -313,7 +320,7 @@ export const greyboxTools = tools({
 });
 
 /** Orbit camera state for a camera at `pos` looking at `at`. */
-function lookCamera(pos: Vec3, at: Vec3, fov: number): CameraState {
+export function lookCamera(pos: Vec3, at: Vec3, fov: number): CameraState {
     const back = sub(pos, at);
     const distance = Math.max(0.05, len(back));
     const d = normalize(back);
@@ -362,7 +369,7 @@ function eyeAt(env: ToolEnv, p: Vec3): Vec3 {
     return [p[0], ground + ed.store.doc.design.specs.eyeHeight, p[2]];
 }
 
-async function capture(env: ToolEnv, camera: CameraState, aspect: number): Promise<string> {
+export async function capture(env: ToolEnv, camera: CameraState, aspect: number): Promise<string> {
     const blob = await env.editor.pipeline.captureCamera(camera, aspect, env.imageSize());
     return blobToDataUrl(blob);
 }

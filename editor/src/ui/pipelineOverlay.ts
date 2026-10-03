@@ -4,11 +4,14 @@ import type { Vec3 } from '../core/types';
 const AREA = 'rgba(120, 180, 255, 0.75)';
 const ROUTE = 'rgba(255, 200, 90, 0.95)';
 const DONE = 'rgba(90, 210, 140, 0.95)';
+const WALK = 'rgba(110, 220, 255, 0.9)';
+const STOP = 'rgba(255, 84, 104, 0.95)';
 
 /**
  * Viewport drawing for the plan: the areas' rough bounds on the ground with
- * their names, and the route points in order (green once reached with the
- * walk camera). Shown with the helpers, while the plan has them.
+ * their names, the route points in order (green once reached on foot), and
+ * the way the assistant last walked it with where it got stuck. Shown with
+ * the helpers, while the plan has them.
  */
 export function pipelineOverlay(editor: Editor): (ctx: CanvasRenderingContext2D) => void {
     return (ctx) => {
@@ -43,6 +46,39 @@ export function pipelineOverlay(editor: Editor): (ctx: CanvasRenderingContext2D)
                 ctx.fillStyle = AREA;
                 ctx.fillText(a.name, label.x - ctx.measureText(a.name).width / 2, label.y);
             }
+        }
+        // The assistant's walk (walk_route): its feet a little over the ground, and a cross where it stopped short.
+        const walk = editor.pipeline.walk;
+        if (walk) {
+            ctx.save();
+            ctx.strokeStyle = WALK;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            let open = false;
+            for (const p of walk.trace) {
+                const q = picker.project([p[0], p[1] + 0.1, p[2]]);
+                if (!q.visible) {
+                    open = false;
+                    continue;
+                }
+                if (open) ctx.lineTo(q.x, q.y);
+                else ctx.moveTo(q.x, q.y);
+                open = true;
+            }
+            ctx.stroke();
+            ctx.strokeStyle = STOP;
+            ctx.lineWidth = 3;
+            for (const p of walk.stops) {
+                const q = picker.project([p[0], p[1] + 0.1, p[2]]);
+                if (!q.visible) continue;
+                ctx.beginPath();
+                ctx.moveTo(q.x - 7, q.y - 7);
+                ctx.lineTo(q.x + 7, q.y + 7);
+                ctx.moveTo(q.x + 7, q.y - 7);
+                ctx.lineTo(q.x - 7, q.y + 7);
+                ctx.stroke();
+            }
+            ctx.restore();
         }
         const route = d.play.route.filter((r) => r.position);
         let prev: { x: number; y: number } | null = null;

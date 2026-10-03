@@ -1,7 +1,8 @@
 // Checks a greybox level the way the player will meet it: are its
 // buildings closed (no seams between walls, floors and ceilings, no gaps in
 // walls, roofs or floors), can the player walk the route at its size (doors
-// wide and high enough, steps low enough), does anything float, and where
+// wide and high enough, steps low enough, slopes no steeper than its max
+// slope), does anything float, and where
 // do large empty spaces make it less compact? The level is sampled on a
 // grid of columns with ray casts; the findings come with a plan view.
 
@@ -11,12 +12,14 @@ import type { AreaDoc, Vec3 } from '../core/types';
 import type { Editor } from '../editor';
 import { LevelRays } from '../engine/levelRays';
 import type { Box } from '../engine/picking';
-import { CharacterMotor } from '../play/motor';
+import { CharacterMotor, climbRate, STEEP_RUN } from '../play/motor';
 
 export interface CheckBody {
     height: number;
     radius: number;
     stepHeight: number;
+    /** Steepest ground it walks up, degrees. */
+    maxSlope?: number;
 }
 
 /** A shown object of the level: its world box, and whether it is a mesh (or a model). */
@@ -74,6 +77,8 @@ export interface LevelReport {
     sealed: { at: Vec3; area: number }[];
     /** Large empty spaces: places 3.5 m (indoors) or 8 m (outdoors) from everything, `size` with the room around them, `clearance` the most. */
     empty: { at: Vec3; size: [number, number]; clearance: number; indoor: boolean }[];
+    /** The body it walked with: its size, the highest step and the steepest slope it climbs. */
+    body: { height: number; radius: number; stepHeight: number; maxSlope: number };
     stats: {
         walkable: number;
         reachable: number | null;
@@ -99,6 +104,8 @@ const EMPTY_INDOOR = 3.5;
 const EMPTY_OUTDOOR = 8;
 /** A check of one building or area grows up to this far (m) to take in the player standing outside it. */
 const REACH_GROW = 15;
+/** A drop the player walks off (m); down a slope, more. */
+const DROP = 1.2;
 
 /** A place to stand: a surface in a column of the grid, with the room above it. */
 export interface Cell {
@@ -119,6 +126,8 @@ export interface Cell {
     clear: number;
     /** It stands on a terrain. */
     land?: boolean;
+    /** The normal of its surface, when known. */
+    normal?: Vec3;
 }
 
 /** The grid of the check and what it found, for the plan view (drawMap). */
@@ -164,6 +173,278 @@ export function builtBounds(objects: LevelObject[], limit = 200): Box | null {
 const pause = () => new Promise<void>((r) => setTimeout(r, 0));
 const round = (v: number, k = 100) => Math.round(v * k) / k;
 const r2 = (p: Vec3): Vec3 => [round(p[0]), round(p[1]), round(p[2])];
+/** The hit has a face normal (rays against an object's box only have none). */
+const known = (hit: RayHit) => !!(hit.normal[0] || hit.normal[1] || hit.normal[2]);
+const sloped = (n: Vec3 | undefined) => !!n && n[1] < 0.9998;
+
+/**
+ * The grid of a level check over a region: every surface to stand on, column
+ * by column from the top down with the room above it, and the moves the
+ * body makes between neighbors: up a step or a slope it climbs, down a drop
+ * or a slope, nothing in the way (the tests it moves by, play/motor.ts).
+ */
+export class LevelGrid {
+    readonly cells: Cell[];
+    /** Highest rise and lowest drop between neighbors (a step, or a slope over a cell). */
+    private readonly rise: number;
+    private readonly drop: number;
+    private readonly climb: number;
+    private readonly rate: number;
+    private readonly motor: CharacterMotor;
+    /** Moves tested, by the cells' indices. */
+    private readonly moves = new Map<number, boolean>();
+    /** The place each cell leads to in each of the four directions, by its index and the direction. */
+    private readonly leads = new Map<number, Cell | null>();
+    private readonly index = new Map<Cell, number>();
+
+    private constructor(private level: LevelScan, body: CheckBody, readonly box: Box, readonly step: number, readonly nx: number, readonly nz: number, readonly columns: Cell[][]) {
+        this.cells = columns.flat();
+        this.cells.forEach((c, i) => this.index.set(c, i));
+        this.climb = body.stepHeight + 0.05;
+        this.rate = climbRate(body);
+        this.rise = Math.max(this.climb, step * this.rate + 0.05);
+        this.drop = Math.max(DROP, step * this.rate + 0.05);
+        // Over open ground the slope is judged from the ground's samples: only what stands on it stops the body.
+        const lands = level.lands;
+        this.motor = new CharacterMotor((o, d, m) => level.cast(o, d, m), body, [0, 0, 0], lands && { has: (id) => !!id && lands.has(id), cast: (o, d, m) => level.cast(o, d, m, (id) => lands.has(id)) });
+    }
+
+    /**
+     * Scans the region, `step` meters a cell (coarser when the region is
+     * large). It casts many rays and yields to the page now and then.
+     */
+    static async scan(level: LevelScan, region: Box, step: number, body: CheckBody): Promise<LevelGrid> {
+        const box: Box = { min: [...region.min] as Vec3, max: [...region.max] as Vec3 };
+        for (const o of level.objects) {
+            const b = o.box;
+            if (b.max[0] < box.min[0] || b.min[0] > box.max[0] || b.max[2] < box.min[2] || b.min[2] > box.max[2]) continue;
+            box.max[1] = Math.max(box.max[1], b.max[1]);
+        }
+        step = Math.max(0.25, step);
+        const span = [box.max[0] - box.min[0], box.max[2] - box.min[2]];
+        while ((span[0] / step) * (span[1] / step) > 16000) step *= 1.25;
+        step = round(step, 1000);
+        const nx = Math.max(1, Math.ceil(span[0] / step));
+        const nz = Math.max(1, Math.ceil(span[1] / step));
+        const top = box.max[1] + 1;
+        const bottom = box.min[1] - 2;
+        const columns: Cell[][] = new Array(nx * nz);
+        // From the top down; a face seen from behind means the ray is inside a solid (a floor running under a wall): no place to stand there.
+        for (let iz = 0; iz < nz; iz++) {
+            for (let ix = 0; ix < nx; ix++) {
+                const x = box.min[0] + (ix + 0.5) * step;
+                const z = box.min[2] + (iz + 0.5) * step;
+                const list: Cell[] = [];
+                let from = top;
+                for (let k = 0; k < 10 && from > bottom; k++) {
+                    const hit = level.cast([x, from, z], DOWN, from - bottom);
+                    if (!hit) break;
+                    const y = hit.point[1];
+                    from = y - 0.02;
+                    // The top of something, seen from above; else the ray is inside a solid or on a wall.
+                    if (known(hit) && hit.normal[1] < 0.3) continue;
+                    const up = level.cast([x, y + 0.02, z], UP, ROOF);
+                    // Overhead, the underside of something; its top seen from below means inside a solid.
+                    if (up && known(up) && up.normal[1] > -0.3) continue;
+                    const head = up ? up.distance + 0.02 : Infinity;
+                    if (head >= 0.5) list.push({ ix, iz, x, z, y, head, walk: head >= body.height, reached: false, indoor: false, clear: Infinity, land: !!level.lands?.has(hit.id), normal: known(hit) ? hit.normal : undefined });
+                }
+                columns[iz * nx + ix] = list;
+            }
+            if (iz % 20 === 19) await pause();
+        }
+        return new LevelGrid(level, body, box, step, nx, nz, columns);
+    }
+
+    at(ix: number, iz: number): Cell[] | null {
+        return ix < 0 || iz < 0 || ix >= this.nx || iz >= this.nz ? null : this.columns[iz * this.nx + ix];
+    }
+
+    /** The place in a column nearest to height `y`, within `tol`. */
+    cellAt(ix: number, iz: number, y: number, tol: number): Cell | null {
+        let best: Cell | null = null;
+        for (const c of this.at(ix, iz) ?? []) if (Math.abs(c.y - y) <= tol && (!best || Math.abs(c.y - y) < Math.abs(best.y - y))) best = c;
+        return best;
+    }
+
+    /** Where feet at `p` stand: the highest place to stand in its column at most a little above them. */
+    standing(p: Vec3): Cell | null {
+        const ix = Math.floor((p[0] - this.box.min[0]) / this.step);
+        const iz = Math.floor((p[2] - this.box.min[2]) / this.step);
+        return (this.at(ix, iz) ?? []).filter((c) => c.walk && c.y <= p[1] + 0.6).sort((a, b) => b.y - a.y)[0] ?? null;
+    }
+
+    /** Places in the neighbor column (dx, dz) within a rise and a drop of `c`, the nearest in height first. */
+    candidates(c: Cell, dx: number, dz: number): Cell[] {
+        return (this.at(c.ix + dx, c.iz + dz) ?? []).filter((o) => o.walk && o.y - c.y <= this.rise && c.y - o.y <= this.drop).sort((a, b) => Math.abs(a.y - c.y) - Math.abs(b.y - c.y));
+    }
+
+    /** The place in the neighbor column (dx, dz) the body walks to from `c` (one of the four directions), or null. */
+    next(c: Cell, dx: number, dz: number): Cell | null {
+        const key = this.index.get(c)! * 4 + (dx ? (dx > 0 ? 0 : 1) : dz > 0 ? 2 : 3);
+        let o = this.leads.get(key);
+        if (o === undefined) {
+            o = this.candidates(c, dx, dz).find((x) => this.passes(c, x, dx, dz)) ?? null;
+            this.leads.set(key, o);
+        }
+        return o;
+    }
+
+    /** The body walks from `c` to `n`, a place in the neighbor column (dx, dz). */
+    passes(c: Cell, n: Cell, dx: number, dz: number): boolean {
+        const key = this.index.get(c)! * this.cells.length + this.index.get(n)!;
+        let ok = this.moves.get(key);
+        if (ok === undefined) {
+            ok = this.ground(c, n, dx, dz) && this.free(c, n, dx, dz);
+            this.moves.set(key, ok);
+        }
+        return ok;
+    }
+
+    /**
+     * The ground from one cell to the next, sampled every half of STEEP_RUN
+     * or so: no rise higher than a step between samples, and over every
+     * STEEP_RUN no more than the body climbs, a step or its max slope (the
+     * runs the body looks along as it walks, play/motor.ts).
+     */
+    private ground(c: Cell, n: Cell, dx: number, dz: number): boolean {
+        const { climb, step, level } = this;
+        if (n.y - c.y <= climb && !sloped(c.normal) && !sloped(n.normal)) return true;
+        const parts = Math.max(2, Math.ceil(step / (STEEP_RUN / 2)));
+        const seg = step / parts;
+        const ys = [c.y];
+        for (let i = 1; i <= parts; i++) {
+            let y = n.y;
+            if (i < parts) {
+                // From over the highest the ground can be here, down to the lowest.
+                const last = ys[i - 1];
+                const top = Math.max(last, n.y) + climb + 0.05;
+                const hit = level.cast([c.x + dx * seg * i, top, c.z + dz * seg * i], DOWN, top - Math.min(last, n.y) + this.drop);
+                // Nothing to stand on, or the ray started inside something.
+                if (!hit || (known(hit) && hit.normal[1] < 0.3)) return false;
+                y = hit.point[1];
+            }
+            if (y - ys[i - 1] > climb) return false;
+            ys.push(y);
+        }
+        // Over every run of STEEP_RUN (between the samples, along the ground's line), no more than the body climbs.
+        const run = Math.min(STEEP_RUN, step);
+        const most = Math.max(climb, run * this.rate);
+        const at = (t: number) => {
+            const k = Math.min(parts - 1, Math.floor(t / seg));
+            return ys[k] + (ys[k + 1] - ys[k]) * (t / seg - k);
+        };
+        for (let i = 0; i < parts; i++) {
+            const t = Math.min(i * seg, step - run);
+            if (at(t + run) - at(t) > most) return false;
+        }
+        return true;
+    }
+
+    /** Nothing stops the body on the way: up a slope the rays rise with it; over open ground they meet only what stands on it. */
+    private free(c: Cell, n: Cell, dx: number, dz: number): boolean {
+        const { step, motor } = this;
+        const land = !!(c.land && n.land);
+        const lean = land || sloped(c.normal) || sloped(n.normal) ? Math.max(0, n.y - c.y) / step : 0;
+        for (const side of [0, 0.2, -0.2]) {
+            // Somewhere across the width of the cell is enough.
+            motor.feet = [c.x + dz * side * step, c.y, c.z + dx * side * step];
+            if (!motor.blocked([dx * step, 0, dz * step], lean, land)) return true;
+        }
+        return false;
+    }
+
+    /**
+     * The way the body walks from `from` to `to`'s column or to within
+     * `near` meters (across) of it, along the grid's rows and columns: the
+     * feet at the middle of each cell on the way, from the one it starts in
+     * (each move between them is one the grid judged, so the body walks
+     * them one by one); null when the grid has no way there. The fewest
+     * turns among the shortest ways (A*).
+     */
+    async path(from: Vec3, to: Vec3, near: number): Promise<Vec3[] | null> {
+        const start = this.standing(from);
+        if (!start) return null;
+        const tix = Math.floor((to[0] - this.box.min[0]) / this.step);
+        const tiz = Math.floor((to[2] - this.box.min[2]) / this.step);
+        const goal = (c: Cell) => (c.ix === tix && c.iz === tiz) || Math.hypot(c.x - to[0], c.z - to[2]) <= near;
+        const h = (c: Cell) => Math.max(0, Math.abs(c.x - to[0]) + Math.abs(c.z - to[2]) - near * Math.SQRT2);
+        const cost = new Map<Cell, number>([[start, 0]]);
+        const back = new Map<Cell, Cell>();
+        const heading = new Map<Cell, number>();
+        const open = new Heap<Cell>();
+        open.push(start, h(start));
+        const done = new Set<Cell>();
+        let end: Cell | null = null;
+        let n = 0;
+        while (open.size) {
+            const c = open.pop()!;
+            if (done.has(c)) continue;
+            done.add(c);
+            if (goal(c)) {
+                end = c;
+                break;
+            }
+            DIRS4.forEach(([dx, dz], dir) => {
+                const o = this.next(c, dx, dz);
+                if (!o || done.has(o)) return;
+                // A turn costs a little: straight runs rather than staircases.
+                const turn = heading.has(c) && heading.get(c) !== dir ? this.step * 0.01 : 0;
+                const g = cost.get(c)! + this.step + turn;
+                if (g >= (cost.get(o) ?? Infinity)) return;
+                cost.set(o, g);
+                back.set(o, c);
+                heading.set(o, dir);
+                open.push(o, g + h(o));
+            });
+            if (++n % 400 === 0) await pause();
+        }
+        if (!end) return null;
+        const way: Vec3[] = [];
+        for (let c: Cell | undefined = end; c; c = back.get(c)) way.unshift([c.x, c.y, c.z]);
+        return way;
+    }
+}
+
+/** A binary heap of items by priority, lowest first. */
+class Heap<T> {
+    private items: { v: T; p: number }[] = [];
+
+    get size(): number {
+        return this.items.length;
+    }
+
+    push(v: T, p: number) {
+        const a = this.items;
+        a.push({ v, p });
+        for (let i = a.length - 1; i > 0; ) {
+            const up = (i - 1) >> 1;
+            if (a[up].p <= a[i].p) break;
+            [a[up], a[i]] = [a[i], a[up]];
+            i = up;
+        }
+    }
+
+    pop(): T | undefined {
+        const a = this.items;
+        if (!a.length) return undefined;
+        const top = a[0].v;
+        const last = a.pop()!;
+        if (a.length) {
+            a[0] = last;
+            for (let i = 0; ; ) {
+                const l = 2 * i + 1, r = l + 1;
+                let m = i;
+                if (l < a.length && a[l].p < a[m].p) m = l;
+                if (r < a.length && a[r].p < a[m].p) m = r;
+                if (m === i) break;
+                [a[m], a[i]] = [a[i], a[m]];
+                i = m;
+            }
+        }
+        return top;
+    }
+}
 
 /**
  * Runs the check. It casts many rays (a second or two for a large level)
@@ -175,69 +456,12 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
     const rays = level;
     const objects = level.objects;
 
-    // The region and its grid: coarser when the level is large.
-    const box: Box = { min: [...opts.box.min] as Vec3, max: [...opts.box.max] as Vec3 };
-    for (const o of objects) {
-        const b = o.box;
-        if (b.max[0] < box.min[0] || b.min[0] > box.max[0] || b.max[2] < box.min[2] || b.min[2] > box.max[2]) continue;
-        box.max[1] = Math.max(box.max[1], b.max[1]);
-    }
-    let step = Math.max(0.25, opts.step);
-    const span = [box.max[0] - box.min[0], box.max[2] - box.min[2]];
-    while ((span[0] / step) * (span[1] / step) > 16000) step *= 1.25;
-    step = round(step, 1000);
-    const nx = Math.max(1, Math.ceil(span[0] / step));
-    const nz = Math.max(1, Math.ceil(span[1] / step));
-    const top = box.max[1] + 1;
-    const bottom = box.min[1] - 2;
-    const columns: Cell[][] = new Array(nx * nz);
-    const at = (ix: number, iz: number): Cell[] | null => (ix < 0 || iz < 0 || ix >= nx || iz >= nz ? null : columns[iz * nx + ix]);
-    const cellAt = (ix: number, iz: number, y: number, tol: number): Cell | null => {
-        let best: Cell | null = null;
-        for (const c of at(ix, iz) ?? []) if (Math.abs(c.y - y) <= tol && (!best || Math.abs(c.y - y) < Math.abs(best.y - y))) best = c;
-        return best;
-    };
+    // 1. The grid: every surface to stand on, column by column.
+    const grid = await LevelGrid.scan(level, opts.box, opts.step, body);
+    const { box, step, nx, nz, columns, cells } = grid;
+    const at = (ix: number, iz: number) => grid.at(ix, iz);
+    const cellAt = (ix: number, iz: number, y: number, tol: number) => grid.cellAt(ix, iz, y, tol);
 
-    // 1. Columns: every surface to stand on, from the top down, with the room
-    //    above it. A face seen from behind means the ray is inside a solid (a
-    //    floor running under a wall): no place to stand there.
-    const known = (hit: RayHit) => !!(hit.normal[0] || hit.normal[1] || hit.normal[2]);
-    for (let iz = 0; iz < nz; iz++) {
-        for (let ix = 0; ix < nx; ix++) {
-            const x = box.min[0] + (ix + 0.5) * step;
-            const z = box.min[2] + (iz + 0.5) * step;
-            const list: Cell[] = [];
-            let from = top;
-            for (let k = 0; k < 10 && from > bottom; k++) {
-                const hit = rays.cast([x, from, z], DOWN, from - bottom);
-                if (!hit) break;
-                const y = hit.point[1];
-                from = y - 0.02;
-                // The top of something, seen from above; else the ray is inside a solid or on a wall.
-                if (known(hit) && hit.normal[1] < 0.3) continue;
-                const up = rays.cast([x, y + 0.02, z], UP, ROOF);
-                // Overhead, the underside of something; its top seen from below means inside a solid.
-                if (up && known(up) && up.normal[1] > -0.3) continue;
-                const head = up ? up.distance + 0.02 : Infinity;
-                if (head >= 0.5) list.push({ ix, iz, x, z, y, head, walk: head >= body.height, reached: false, indoor: false, clear: Infinity, land: !!level.lands?.has(hit.id) });
-            }
-            columns[iz * nx + ix] = list;
-        }
-        if (iz % 20 === 19) await pause();
-    }
-    const cells = columns.flat();
-
-    // 2. Walking: from the start, to the next column where the step up is
-    //    small enough and the body passes (the same test the player moves by).
-    const motor = new CharacterMotor((o, d, m) => rays.cast(o, d, m), body, [0, 0, 0]);
-    const passes = (c: Cell, dx: number, dz: number): boolean => {
-        for (const side of [0, 0.2, -0.2]) {
-            // Somewhere across the width of the cell is enough.
-            motor.feet = [c.x + dz * side * step, c.y, c.z + dx * side * step];
-            if (!motor.blocked([dx * step, 0, dz * step])) return true;
-        }
-        return false;
-    };
     // Nothing within the body's radius, above the step height.
     const fits = (c: Cell): boolean => {
         if (c.fits === undefined) {
@@ -249,21 +473,19 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
     let reachable: number | null = null;
     let startLost = false;
     const unreachable: LevelReport['unreachable'] = [];
+    // 2. Walking: from the start, to every place the body gets to from a
+    //    neighbor (up a step or a slope it climbs, down a drop or a slope,
+    //    nothing in the way: LevelGrid.passes).
     if (opts.start) {
-        const s = opts.start;
-        const six = Math.floor((s[0] - box.min[0]) / step);
-        const siz = Math.floor((s[2] - box.min[2]) / step);
-        const first = (at(six, siz) ?? []).filter((c) => c.walk && c.y <= s[1] + 0.6).sort((a, b) => b.y - a.y)[0];
+        const first = grid.standing(opts.start);
         if (first) {
             first.reached = true;
             const queue = [first];
             for (let n = 0; n < queue.length; n++) {
                 const c = queue[n];
                 for (const [dx, dz] of DIRS4) {
-                    const next = (at(c.ix + dx, c.iz + dz) ?? [])
-                        .filter((o) => o.walk && !o.reached && o.y - c.y <= body.stepHeight + 0.05 && c.y - o.y <= 1.2)
-                        .sort((a, b) => Math.abs(a.y - c.y) - Math.abs(b.y - c.y))[0];
-                    if (!next || !passes(c, dx, dz)) continue;
+                    const next = grid.candidates(c, dx, dz).filter((o) => !o.reached)[0];
+                    if (!next || !grid.passes(c, next, dx, dz)) continue;
                     next.reached = true;
                     queue.push(next);
                 }
@@ -496,6 +718,7 @@ export async function checkLevel(level: LevelScan, opts: LevelCheckOptions): Pro
         unreachable,
         sealed: sealed.slice(0, 20),
         empty: empty.slice(0, 10),
+        body: { height: body.height, radius: body.radius, stepHeight: body.stepHeight, maxSlope: Math.round((Math.atan(climbRate(body)) * 180) / Math.PI) },
         stats: {
             walkable: area(cells.filter((c) => c.walk)),
             reachable: reachable === null ? null : area(cells.filter((c) => c.reached)),
@@ -759,7 +982,9 @@ export async function runLevelCheck(editor: Editor, scope: { area?: AreaDoc | nu
     // Characters are not the level: they move in Play.
     const skip = new Set(doc.nodes.filter((n) => n.character).flatMap((n) => [n.id, ...store.descendants(n.id).map((c) => c.id)]));
     const c = playerNode?.character;
-    const body: CheckBody = c ? { height: c.height, radius: c.radius, stepHeight: c.stepHeight } : { height: d.specs.playerHeight, radius: d.specs.playerRadius, stepHeight: d.specs.stepHeight };
+    const body: CheckBody = c
+        ? { height: c.height, radius: c.radius, stepHeight: c.stepHeight, maxSlope: c.maxSlope }
+        : { height: d.specs.playerHeight, radius: d.specs.playerRadius, stepHeight: d.specs.stepHeight, maxSlope: d.specs.maxSlope };
     let start: Vec3 | null = null;
     const pb = playerNode ? picker.bounds(playerNode.id) : null;
     if (pb) start = [(pb.min[0] + pb.max[0]) / 2, pb.min[1], (pb.min[2] + pb.max[2]) / 2];

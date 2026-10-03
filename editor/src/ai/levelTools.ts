@@ -4,14 +4,15 @@
 
 import { makeMeshNode, makeNode } from '../core/defaults';
 import { invert, mat4, transformPoint } from '../core/math';
-import { defaultPlayer, makeCharacterNode } from '../core/character';
+import { defaultCharacter, defaultPlayer, makeCharacterNode } from '../core/character';
 import { Character, Player } from '../core/model';
 import { patch, toolFields } from '../core/schema';
 import type { NodeDoc, Vec3 } from '../core/types';
-import { runLevelCheck, summarize } from '../design/levelCheck';
+import { builtBounds, LevelGrid, runLevelCheck, scanLevel, summarize } from '../design/levelCheck';
 import { assignSlot, upsertSlot } from '../design/materialSlots';
 import { planBuilding, SIDES, snapRooms, type OpeningSpec, type RoomSpec, type Side } from '../design/rooms';
-import { resolvePlace } from './greyboxTools';
+import { ROUTE_REACH, walkRoute, type WalkPoint } from '../design/walkRoute';
+import { capture, lookCamera, resolvePlace } from './greyboxTools';
 import { node, num, optStr, r3, rv, str, ToolError, tools, type Json, type ToolEnv } from './toolUtil';
 
 const xz = { type: 'array', items: { type: 'number' }, minItems: 2, maxItems: 2 };
@@ -148,7 +149,7 @@ export const levelTools = tools({
     },
     check_level: {
         groups: ['read'],
-        description: 'Check the level the way the player will meet it, with the player\'s body: seams between walls, floors and ceilings, gaps in walls, holes in roofs and floors, floating objects, route points out of reach (doors too narrow or low, steps too high, walls in the way), roofed rooms nobody can get into, and large empty spaces (compactness). Returns the findings with positions and a plan view image. A check of the whole level ticks the Level checklist item when it passes. Run it after building and fix what it finds; passages (doors) and windows it lists are fine.',
+        description: 'Check the level the way the player will meet it, with the player\'s body: seams between walls, floors and ceilings, gaps in walls, holes in roofs and floors, floating objects, route points out of reach (doors too narrow or low, steps too high, slopes steeper than the body\'s max slope, walls in the way), roofed rooms nobody can get into, and large empty spaces (compactness). Returns the findings with positions and a plan view image. A check of the whole level ticks the Level checklist item when it passes. Run it after building and fix what it finds; passages (doors) and windows it lists are fine.',
         params: {
             area: { type: 'string', description: 'Check only this area of the plan (id or name; its bounds).' },
             object: { type: 'string', description: 'Check only this object and what is under it (a building).' },
@@ -174,7 +175,7 @@ export const levelTools = tools({
             if (r.seams.length) fixes.push('Seams: move or resize the pieces so they touch or overlap a little (walls of build_rooms always meet).');
             if (r.openings.some((o) => o.kind.startsWith('gap'))) fixes.push('Gaps: a wall does not reach the floor or the ceiling there, or a piece is missing.');
             if (r.roofHoles.length || r.floorHoles.length) fixes.push('Holes: close them with a slab, unless the plan wants them (a courtyard, a stairwell).');
-            if (r.unreachable.length || r.sealed.length) fixes.push('Out of reach: add or widen a door (at least the body width plus a margin, as high as the door height), lower a step, or add stairs or a ramp.');
+            if (r.unreachable.length || r.sealed.length) fixes.push(`Out of reach: add or widen a door (at least the body width plus a margin, as high as the door height), lower a step, or add stairs or a ramp; on a terrain, sculpt a path no steeper than ${r.body.maxSlope}° (the body's max slope) or smooth the slope.`);
             if (r.floating.length) fixes.push('Floating: rest it on what is below (or delete it).');
             if (r.empty.length) fixes.push('Empty spaces: make the rooms smaller or fill them as the plan says, so the space stays compact.');
             return {
@@ -187,6 +188,109 @@ export const levelTools = tools({
                 },
                 image: env.screenshots() ? result.map : undefined,
                 summary: summarize(r),
+            };
+        },
+    },
+    walk_route: {
+        groups: ['read'],
+        description: 'Walk the route as the player would (the walk camera\'s keys are the user\'s): the player\'s body (its size, the steps and the slopes it climbs, the motor of Play and the walk camera) walks from the player (or the first route point) to each route point in turn, along the way check_level finds for it (around walls, up slopes it climbs), and every route point it passes counts as walked at eye height on the Level checklist. Returns each leg: reached, or where it got stuck and why (blocked by an object, ground too steep for the body\'s max slope, a fall, no way there); the view draws the way it went. With screenshots it attaches the eye-height view where it got stuck. Scripts do not run (a door a script opens stays shut): walk those in Play. Fix what stops it (check_level shows the level\'s problems) and walk again.',
+        params: {
+            points: { type: 'array', items: { type: 'string' }, description: 'Route point ids or names to walk to, in this order (default: every route point with a position, in the route\'s order).' },
+            from: { ...place, description: 'Where to start (default: the player, else the first route point): [x, y, z], or the name / id of a route point, area or object.' },
+            run: { type: 'boolean', description: 'Run instead of walking (default false).' },
+            views: { type: 'string', enum: ['none', 'stuck', 'all'], description: 'Eye-height views to attach with screenshots: where it got stuck (default), at every point it reached too, or none.' },
+        },
+        async run({ env, args, ed, store }) {
+            if (ed.player.state !== 'stopped') throw new ToolError('Stop Play first: the walk goes through the level as it is built.');
+            if (ed.isolated) throw new ToolError('A prefab is being edited on its own: finish that first (Apply or Discard).');
+            ed.picker.update();
+            const doc = store.doc;
+            const route = doc.design.play.route.filter((r) => r.position).map((r): WalkPoint => ({ id: r.id, name: r.name, point: [...r.position!] as Vec3 }));
+            if (!route.length) throw new ToolError('The route has no points with a position: add them to the plan (update_design play.route) first.');
+            const find = (ref: unknown) => {
+                const want = String(ref ?? '').toLowerCase();
+                const p = route.find((r) => r.id === ref) ?? route.find((r) => r.name.toLowerCase() === want);
+                if (!p) throw new ToolError(`No route point "${ref}" with a position. Route points: ${route.map((r) => `${r.name} (${r.id})`).join(', ')}.`);
+                return p;
+            };
+            const targets = Array.isArray(args.points) && args.points.length ? args.points.map(find) : route;
+            // The player's body, else the brief's (as the walk camera has it).
+            const playerNode = doc.nodes.find((n) => n.player && n.character && ed.sync.entries.get(n.id)?.visible);
+            const c = playerNode?.character ?? defaultCharacter(doc.design.specs);
+            const body = { height: c.height, radius: c.radius, stepHeight: c.stepHeight, maxSlope: c.maxSlope, gravity: c.gravity, speed: Math.max(0.5, args.run === true ? c.runSpeed : c.speed) };
+            // Characters are not the level: they move in Play.
+            const skip = new Set(doc.nodes.filter((n) => n.character).flatMap((n) => [n.id, ...store.descendants(n.id).map((d) => d.id)]));
+            let start: Vec3 | null = null;
+            if (args.from !== undefined && args.from !== null) start = resolvePlace(env, args.from, 'from').point;
+            else if (playerNode) {
+                const b = ed.picker.bounds(playerNode.id);
+                if (b) start = [(b.min[0] + b.max[0]) / 2, b.min[1], (b.min[2] + b.max[2]) / 2];
+            }
+            start ??= [...route[0].point] as Vec3;
+            const level = scanLevel(ed, skip);
+            // The way: over the level check's grid of what is built, the start and the route, with room around them.
+            const region = builtBounds(level.objects) ?? { min: [...start] as Vec3, max: [...start] as Vec3 };
+            for (const p of [start, ...route.map((r) => r.point)]) {
+                for (let k = 0; k < 3; k++) {
+                    region.min[k] = Math.min(region.min[k], p[k] - 3);
+                    region.max[k] = Math.max(region.max[k], p[k] + 3);
+                }
+            }
+            const grid = await LevelGrid.scan(level, region, 0.5, body);
+            const lands = level.lands ?? new Set<string>();
+            const result = await walkRoute(level.cast, body, start, targets, {
+                plan: (a, b) => grid.path(a, b, ROUTE_REACH * 0.8),
+                route,
+                open: { has: (id) => !!id && lands.has(id), cast: (o, d, m) => level.cast(o, d, m, (id) => lands.has(id)) },
+                pause: () => new Promise<void>((r) => setTimeout(r, 0)),
+            });
+            const fresh = result.passed.filter((id) => !doc.design.play.route.find((r) => r.id === id)?.visited);
+            if (fresh.length) {
+                store.commit('AI: Route Walked', (d) => {
+                    for (const p of d.design.play.route) if (fresh.includes(p.id)) p.visited = true;
+                }, { design: true });
+            }
+            ed.pipeline.walk = { trace: result.trace, stops: result.stops };
+            const name = (id: string) => store.node(id)?.name ?? id;
+            const legs = result.legs.map((l) => ({
+                to: l.to,
+                reached: l.reached,
+                walked_m: l.walked,
+                seconds: l.seconds,
+                way: l.planned ? 'found' : 'none found, so straight at it',
+                ...(l.stuck ? { stuck_at: rv(l.stuck.at), why: l.stuck.why, ...(l.stuck.by ? { blocked_by: name(l.stuck.by) } : {}), meters_left: l.stuck.left } : {}),
+            }));
+            // Eye-height views where it got stuck (and at the points it reached), looking where it was going.
+            const images: string[] = [];
+            const views = args.views === 'none' || args.views === 'all' ? args.views : 'stuck';
+            if (env.screenshots() && views !== 'none') {
+                const eye = (p: Vec3): Vec3 => [p[0], p[1] + c.eyeHeight, p[2]];
+                const shots: { at: Vec3; toward: Vec3 }[] = [];
+                result.legs.forEach((l, i) => {
+                    const goal = targets[i].point;
+                    if (l.stuck) shots.push({ at: l.stuck.at, toward: goal });
+                    else if (views === 'all') shots.push({ at: goal, toward: targets[i + 1]?.point ?? goal });
+                });
+                for (const s of shots.slice(0, 4)) {
+                    const from = eye(s.at);
+                    const toward: Vec3 = Math.hypot(s.toward[0] - from[0], s.toward[2] - from[2]) > 0.5 ? [s.toward[0], from[1], s.toward[2]] : [from[0], from[1], from[2] + 1];
+                    const image = await capture(env, lookCamera(from, toward, 60), 16 / 9).catch(() => null);
+                    if (image) images.push(image);
+                }
+            }
+            const reached = result.legs.filter((l) => l.reached).length;
+            const visited = store.doc.design.play.route.filter((r) => r.visited).length;
+            return {
+                data: {
+                    body: { height: body.height, radius: body.radius, step_height: body.stepHeight, max_slope: body.maxSlope, speed: body.speed },
+                    from: rv(start),
+                    legs,
+                    passed: result.passed.map((id) => route.find((r) => r.id === id)!.name),
+                    checklist: `${visited} of ${store.doc.design.play.route.length} route points walked`,
+                    ...(images.length ? { images: 'Eye-height views where it got stuck (or at the points it reached) are attached in the next message, in the order of the legs.' } : {}),
+                },
+                images,
+                summary: `${reached} of ${targets.length} reached`,
             };
         },
     },
