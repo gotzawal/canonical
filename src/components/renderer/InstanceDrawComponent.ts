@@ -225,7 +225,9 @@ export class InstanceDrawComponent extends RenderNode {
                 return;
 
             let geometry = renderNode.geometry;
-            let subGeometries = geometry.subGeometries;
+            let subGeometries = geometry?.subGeometries;
+            // A destroyed geometry has no sub-meshes left to draw.
+            if (!subGeometries) return;
             const offset = this._keyOffsetGroup.get(k);
             // Iterate by max(materials, subGeometries) to mirror the base
             // renderPass2 — single-material meshes with multiple subGeometries
@@ -247,7 +249,8 @@ export class InstanceDrawComponent extends RenderNode {
                         continue;
                     gpu.bindPipeline(encoder, renderShader);
                     const subGeometry = i >= subGeometries.length ? subGeometries[0] : subGeometries[i];
-                    let lodInfo = subGeometry.lodLevels[renderNode.lodLevel];
+                    // A level the shape does not have (it could not be simplified) draws its own triangles.
+                    let lodInfo = subGeometry.lodLevels[renderNode.lodLevel] ?? subGeometry.lodLevels[0];
                     // @builtin(instance_index) runs from firstInstance, the
                     // group's offset into instanceDrawID.matrixIDs.
                     gpu.drawIndexed(encoder, lodInfo.indexCount, v.length, lodInfo.indexStart, 0, offset);
@@ -274,7 +277,8 @@ export class InstanceDrawComponent extends RenderNode {
      */
     public renderItem(view: View3D, passType: PassType, renderNode: RenderNode, renderContext: RenderContext, count: number = 1, offset: number = 0) {
         const gpu = view.engine3D.context3D.gpuContext;
-        const subGeometries = renderNode.geometry.subGeometries;
+        const subGeometries = renderNode.geometry?.subGeometries;
+        if (!subGeometries) return;
         const nCount = Math.max(renderNode.materials.length, subGeometries.length);
 
         for (let i = 0; i < nCount; i++) {
@@ -302,7 +306,7 @@ export class InstanceDrawComponent extends RenderNode {
                 gpu.bindPipeline(renderContext.encoder, renderShader);
 
                 const subGeometry = i >= subGeometries.length ? subGeometries[0] : subGeometries[i];
-                let lodInfo = subGeometry.lodLevels[renderNode.lodLevel];
+                let lodInfo = subGeometry.lodLevels[renderNode.lodLevel] ?? subGeometry.lodLevels[0];
                 gpu.drawIndexed(renderContext.encoder, lodInfo.indexCount, count, lodInfo.indexStart, 0, offset);
             }
         }
