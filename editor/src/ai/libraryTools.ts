@@ -59,9 +59,9 @@ export const libraryTools = tools({
     search_library: {
         groups: ['objects', 'materials', 'audio', 'environment'],
         description:
-            'Search the asset Library: open-source (CC0) files that can be copied into the project. Models: realistic scanned props, furniture, rocks and plants, and low-poly packs (buildings, roads, trees, vehicles, characters with animation clips). Materials: realistic scanned surfaces (brick, plaster, wood, concrete, ground, rock) with color, normal and ARM maps and their real tile size, for material slots. Skies (kind hdri): HDRI photos of real skies that light the scene. Also sounds (footsteps, pickups) and images. Words match names, tags and pack names. Model sizes are as authored (many low-poly packs are 1 unit per tile: scale them to the design specs). A contact sheet of the results with a picture is attached, numbered like the list. Check here before building a prop from primitives or generating a swatch.',
+            'Search the asset Library: open-source (CC0) files that can be copied into the project. Models: realistic scanned props, furniture, rocks and plants. Materials: realistic scanned surfaces (brick, plaster, wood, concrete, ground, rock) with color, normal and ARM maps and their real tile size, for material slots. Skies (kind hdri): HDRI photos of real skies that light the scene. Catalogs the user added may also hold sounds and images. Words match names, tags and pack names. Model sizes are as authored (real-world meters for the scans): scale them to the design specs if needed. A contact sheet of the results with a picture is attached, numbered like the list. Check here before building a prop from primitives or generating a swatch.',
         params: {
-            query: { type: 'string', description: 'Words, e.g. "building", "road corner", "tree", "coin", "jump".' },
+            query: { type: 'string', description: 'Words, e.g. "rock", "fern", "chair", "brick wall", "sunset sky".' },
             kind: { type: 'string', enum: KINDS },
             limit: { type: 'integer', minimum: 1, maximum: 24 },
         },
@@ -97,7 +97,7 @@ export const libraryTools = tools({
         description:
             'Copy a Library item into the project. A model is placed too (at position, else where new objects go) and the new object id is returned: scale it with update_object (sizes are as authored). A material becomes a swatch and, given a slot, goes on that material slot like use_swatch (its maps, real tile size, textures sized for the surface and compressed). A sky (hdri) becomes the sky, lighting the scene; sky false only adds the file. A sound or image becomes an asset for Audio components, scripts or materials. An item the project has already is not downloaded again.',
         params: {
-            item: { type: 'string', description: 'Item id from search_library, e.g. "kenney-city/building-small-a".' },
+            item: { type: 'string', description: 'Item id from search_library, e.g. "polyhaven/rock-moss-set-01".' },
             position: { type: 'array', items: { type: 'number' }, minItems: 3, maxItems: 3 },
             name: { type: 'string', description: 'Name of the placed object.' },
             place: { type: 'boolean', description: 'false adds a model\'s file without placing it.' },

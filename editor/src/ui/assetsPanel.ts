@@ -39,7 +39,7 @@ export class AssetsPanel {
                     const r = (e.currentTarget as HTMLElement).getBoundingClientRect();
                     showMenu(createAssetMenu(editor), r.left, r.bottom + 4);
                 }),
-                iconButton('library', 'Library: models, sounds and images to use', () => openLibraryDialog(editor)),
+                iconButton('library', 'Library: models, materials and skies to use', () => openLibraryDialog(editor)),
                 iconButton('upload', 'Import models, images or sounds', async () => {
                     const files = await pickFiles('.glb,.gltf,image/*,audio/*,.ogg,.opus,.m4a,.flac', true);
                     if (files.length) await editor.importFiles(files);

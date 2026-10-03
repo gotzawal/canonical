@@ -54,7 +54,7 @@ class LibraryDialog {
     private adding = new Set<string>();
 
     constructor(private editor: Editor, private opts: { kind?: LibraryKind | null; query?: string }) {
-        this.search = h('input', { class: 'text lib-search', attrs: { type: 'search', placeholder: 'Search names and tags (building, road, coin, jump)...', spellcheck: 'false' } });
+        this.search = h('input', { class: 'text lib-search', attrs: { type: 'search', placeholder: 'Search names and tags (rock, chair, brick, sky)...', spellcheck: 'false' } });
         this.search.value = opts.query ?? '';
         this.search.addEventListener('keydown', (e) => e.stopPropagation());
         this.search.addEventListener('input', () => {

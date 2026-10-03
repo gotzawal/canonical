@@ -6,7 +6,7 @@
 // the mirror cannot.
 //
 //   node scripts/mirror-library.mjs              every source, at its pinned ref
-//   node scripts/mirror-library.mjs kenney-city  only that source
+//   node scripts/mirror-library.mjs polyhaven    only that source
 //   node scripts/mirror-library.mjs --latest     move every source to its newest commit
 //
 // Models are packed into self-contained GLBs (their external textures and
