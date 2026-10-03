@@ -5,7 +5,7 @@
 // checked in one go, with the graphics quality tiers that drop some; and
 // likewise the reflections, cascaded shadows, grass and instancing.
 import { expect, test } from '@playwright/test';
-import { sharedEditor } from './editor';
+import { playFrames, sharedEditor } from './editor';
 import { measure } from './measure';
 import { chain, setEnv } from './scenery';
 
@@ -148,4 +148,21 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
     }));
     await measure(page, 3);
     expect(await seen()).toMatchObject({ instancing: null, cube: { shown: true, alone: true } });
+});
+
+test('plays a scene with rain and stops it, the rain back as it was', async () => {
+    test.setTimeout(240_000);
+    const page = editor.page();
+    await page.evaluate(() => window.__editor.store.commit('Rain', (d) => {
+        d.nodes.push({
+            id: 'rain', name: 'Rain', parent: null, visible: true, position: [0, 3, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+            rain: { size: [12, 6, 12], amount: 1, spacing: 1, dropWidth: 0.01, streak: 1, speed: 5, wind: 0, density: 8, brightness: 1, color: '#e8f0f8', nearFade: 3, shelter: null, light: null, lightGain: 0.45 },
+        });
+    }));
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
+    await playFrames(page, 3);
+    // Stop rebuilds the scene: the rain's volume goes with the rest and comes back.
+    await page.evaluate(() => window.__editor.stopPlay());
+    expect(await page.evaluate(() => window.__editor.player.state)).toBe('stopped');
+    expect(await page.evaluate(() => !!window.__editor.sync.entries.get('rain')?.rain)).toBe(true);
 });

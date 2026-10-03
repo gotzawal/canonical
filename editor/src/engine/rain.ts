@@ -351,8 +351,9 @@ export class RainVolume {
 
     remove() {
         this.root.removeFromParent();
+        // The renderer releases the material it draws with as it goes: destroying
+        // it again threw, so stopping Play in a scene with rain left it half rebuilt.
         this.root.destroy();
-        this.material?.destroy?.(true);
         this.material = null;
     }
 }
