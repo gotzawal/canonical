@@ -87,11 +87,12 @@ test('draws the physical sky, fog, light effects and shadows together, and the l
 test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and instanced copies together', async () => {
     test.setTimeout(300_000);
     const page = editor.page();
-    // A mirror, grass on the ground, and copies of the cube drawn instanced
-    // with it; the cube and the sphere are moved under other objects, which
-    // must not hide them.
+    // A mirror with a tree by it, grass on the ground, and copies of the
+    // cube drawn instanced with it; the cube and the sphere are moved under
+    // other objects, which must not hide them.
     await page.evaluate(() => {
         const ed = window.__editor;
+        ed.createTree('birch', [2.5, 0, 5.5]);
         ed.store.commit('Features', (d) => {
             const cube = d.nodes.find((n) => n.name === 'Cube')!;
             const ground = d.nodes.find((n) => n.name === 'Ground')!;
@@ -131,6 +132,15 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
     // One draw for the seven cubes, every blade on the ground.
     expect(await seen()).toEqual({ instancing: { meshes: 7, draws: 1 }, cube: { shown: true, alone: false }, sphere: true, standing: 2000, mirror: true, cascades: true });
     expect(Object.fromEntries(await chain(page))).toMatchObject({ SSRPost: true });
+
+    // The mirror draws the tree's copies by their runs: a tree's level of
+    // detail only counts its changes (for the shadow maps), and after a few
+    // it is past the levels its shape has.
+    await page.evaluate(() => {
+        const { sync, store } = window.__editor;
+        sync.treeView(store.doc.nodes.find((n) => n.tree)!.id)!.renderer!.lodLevel = 9;
+    });
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 
     // Without instancing they draw on their own again.
     await page.evaluate(() => window.__editor.store.commit('Off', (d) => {
