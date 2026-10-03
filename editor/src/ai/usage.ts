@@ -3,8 +3,10 @@
 // and the language model calls of scripts in Play. The assistant's requests
 // are also split by what each model call worked on (the tools it called).
 // Input tokens are split into text and images (estimated from the images'
-// sizes, see openrouter/imageTokens.ts). The log is kept per project in this
-// browser (IndexedDB), and the chat's token count opens it
+// sizes, see openrouter/imageTokens.ts). Each piece of work also keeps how
+// long it took, and a request how much of that went to waiting for the
+// model and to running tools. The log is kept per project in this browser
+// (IndexedDB), and the chat's token count and work time open it
 // (ui/usageDialog.ts).
 
 import { kvGet, kvSet } from '../core/db';
@@ -63,6 +65,9 @@ export interface WorkPart {
     /** Credits of its model calls and of the images its tools made. */
     cost: number;
     made: number;
+    /** Time (ms) waiting for its model calls, and running the tools they called (missing in older entries). */
+    modelMs?: number;
+    toolMs?: number;
 }
 
 export interface UsageEntry {
@@ -99,6 +104,9 @@ export interface UsageEntry {
     tools: number;
     /** An assistant request's usage by what its model calls worked on (missing in older entries). */
     work?: Partial<Record<WorkKind, WorkPart>>;
+    /** Of its time (ms), waiting for the language models and running tools (missing in older entries). */
+    modelMs?: number;
+    toolMs?: number;
     /** Still going on. */
     running?: boolean;
 }
@@ -116,10 +124,14 @@ export interface UsageTotals {
     cost: number;
     sent: number;
     made: number;
+    /** How long the work took (ms), and of the work timed in parts (`splitMs`) the time waiting for models and running tools. */
     ms: number;
+    modelMs: number;
+    toolMs: number;
+    splitMs: number;
 }
 
-export const emptyTotals = (): UsageTotals => ({ count: 0, calls: 0, prompt: 0, cached: 0, completion: 0, imageTokens: 0, cost: 0, sent: 0, made: 0, ms: 0 });
+export const emptyTotals = (): UsageTotals => ({ count: 0, calls: 0, prompt: 0, cached: 0, completion: 0, imageTokens: 0, cost: 0, sent: 0, made: 0, ms: 0, modelMs: 0, toolMs: 0, splitMs: 0 });
 
 export function addTotals(t: UsageTotals, e: UsageEntry | UsageTotals): UsageTotals {
     const one = 'kind' in e;
@@ -133,6 +145,9 @@ export function addTotals(t: UsageTotals, e: UsageEntry | UsageTotals): UsageTot
     t.sent += e.sent;
     t.made += e.made;
     t.ms += e.ms;
+    t.modelMs += e.modelMs ?? 0;
+    t.toolMs += e.toolMs ?? 0;
+    t.splitMs += one ? (e.modelMs !== undefined || e.toolMs !== undefined ? e.ms : 0) : e.splitMs ?? 0;
     return t;
 }
 
@@ -176,6 +191,11 @@ export function workTotals(entries: readonly UsageEntry[]): [WorkKind | null, Us
             t.imageTokens += p.imageTokens;
             t.cost += p.cost;
             t.made += p.made;
+            const ms = (p.modelMs ?? 0) + (p.toolMs ?? 0);
+            t.ms += ms;
+            t.modelMs += p.modelMs ?? 0;
+            t.toolMs += p.toolMs ?? 0;
+            t.splitMs += ms;
         }
     }
     return [...groups].sort((a, b) => tokensOf(b[1]) - tokensOf(a[1]) || b[1].cost - a[1].cost);
@@ -213,10 +233,13 @@ export function modelTotals(entries: readonly UsageEntry[]): [string, UsageTotal
 
 export const tokensOf = (t: { prompt: number; completion: number }) => t.prompt + t.completion;
 
+/** Work whose time counts as work: not the model calls of scripts in Play, whose time is a game being played. */
+export const timed = (e: UsageEntry) => e.kind !== 'script';
+
 const CSV_HEAD = [
     'started', 'kind', 'work', 'stage', 'model', 'calls', 'prompt_tokens', 'cached_tokens', 'cache_write_tokens', 'completion_tokens', 'cost_usd',
     'images_sent', 'image_quality_sent', 'image_model', 'images_made', 'image_cost_usd', 'image_quality_made', 'tool_calls', 'seconds',
-    'image_tokens', 'work_tokens',
+    'image_tokens', 'work_tokens', 'model_seconds', 'tool_seconds',
 ];
 
 /** The entries as CSV, one row each, oldest first. */
@@ -229,6 +252,7 @@ export function usageCsv(entries: readonly UsageEntry[]): string {
         new Date(e.at).toISOString(), e.kind, e.label, e.stage ?? '', e.model, e.calls, e.prompt, e.cached, e.written, e.completion, round(e.cost),
         e.sent, e.seeQuality ?? '', e.imageModel, e.made, round(e.imageCost), e.drawQuality ?? '', e.tools, (e.ms / 1000).toFixed(1),
         e.imageTokens ?? '', Object.entries(e.work ?? {}).map(([k, p]) => `${k} ${tokensOf(p!)}`).join('; '),
+        e.modelMs === undefined ? '' : (e.modelMs / 1000).toFixed(1), e.toolMs === undefined ? '' : (e.toolMs / 1000).toFixed(1),
     ].map(cell).join(','));
     return [CSV_HEAD.join(','), ...rows].join('\n') + '\n';
 }
@@ -255,17 +279,19 @@ const SCRIPT_MERGE_MS = 10 * 60_000;
 export class UsageTask {
     private start = performance.now();
     private ended = false;
-    /** What the tool running now works on: images it makes count there. */
+    /** What the tool running now works on: images it makes and its time count there. */
     private current: WorkKind | null = null;
+    /** When the tool running now began (performance.now()), until it is done. */
+    private toolStart: number | null = null;
 
     constructor(private log: UsageLog, readonly entry: UsageEntry, readonly key: string) {}
 
     /**
      * A language model call's usage report, with the prompt tokens of the
-     * images it was sent (an estimate, where the report has none) and, for
-     * an assistant request, what the call worked on.
+     * images it was sent (an estimate, where the report has none), how long
+     * it took (ms) and, for an assistant request, what the call worked on.
      */
-    chat(model: string, u: Usage | null | undefined, opts: { imageTokens?: number; work?: WorkKind } = {}) {
+    chat(model: string, u: Usage | null | undefined, opts: { imageTokens?: number; work?: WorkKind; ms?: number } = {}) {
         const e = this.entry;
         const cache = cacheTokens(u);
         const prompt = u?.prompt_tokens ?? 0;
@@ -281,6 +307,7 @@ export class UsageTask {
         e.cached += cache.read;
         e.written += cache.written;
         e.cost += cost;
+        if (opts.ms !== undefined) e.modelMs = (e.modelMs ?? 0) + opts.ms;
         if (opts.work) {
             const p = this.part(opts.work);
             p.calls++;
@@ -289,6 +316,7 @@ export class UsageTask {
             p.completion += completion;
             p.imageTokens += imageTokens;
             p.cost += cost;
+            if (opts.ms !== undefined) p.modelMs = (p.modelMs ?? 0) + opts.ms;
         }
         this.log.touched(this);
     }
@@ -321,14 +349,31 @@ export class UsageTask {
         this.log.touched(this);
     }
 
-    /** A tool call of a request, and what it works on. */
+    /** A tool call of a request, and what it works on; it runs until the next one, toolDone() or end(). */
     tool(work?: WorkKind) {
+        this.toolDone();
         this.entry.tools++;
         this.current = work ?? null;
+        this.toolStart = performance.now();
+    }
+
+    /** The tool running now is done: its time counts for the request and what it worked on. */
+    toolDone() {
+        if (this.toolStart === null) return;
+        const ms = performance.now() - this.toolStart;
+        this.toolStart = null;
+        const e = this.entry;
+        e.toolMs = (e.toolMs ?? 0) + ms;
+        if (this.current) {
+            const p = this.part(this.current);
+            p.toolMs = (p.toolMs ?? 0) + ms;
+        }
+        this.log.touched(this);
     }
 
     end() {
         if (this.ended) return;
+        this.toolDone();
         this.ended = true;
         this.entry.ms += performance.now() - this.start;
         delete this.entry.running;
@@ -428,6 +473,13 @@ export class UsageLog extends Emitter<{ change: void }> {
         if (this.older) addTotals(t, this.older);
         for (const e of this.entries) addTotals(t, e);
         return t;
+    }
+
+    /** How long the listed work of the project took (ms), scripts in Play left out. */
+    workTime(): number {
+        let ms = 0;
+        for (const e of this.entries) if (timed(e)) ms += e.ms;
+        return ms;
     }
 
     /** Forgets the project's log. */

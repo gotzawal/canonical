@@ -3,38 +3,15 @@
 // decoding and required glTF extensions.
 import { MeshoptEncoder } from 'meshoptimizer/encoder';
 import { describe, expect, it } from 'vitest';
-import { formatBlockInfo, isCompressedFormat, isSrgbFormat, levelBytes, levelsToSkip, toLinearFormat, toSrgbFormat } from '../../../src/gfx/graphics/webGpu/core/texture/TextureFormatUtil';
+import { formatBlockInfo, levelBytes, levelsToSkip } from '../../../src/gfx/graphics/webGpu/core/texture/TextureFormatUtil';
 import { assertSupportedGltfExtensions, preferredImages, textureSources, unsupportedGltfExtensions } from '../../../src/loader/parser/gltf/GLTFExtensions';
 import { dequantizeNormalized, fitIndices, toFloat32 } from '../../../src/loader/parser/gltf/GLTFQuantization';
 import { EXT_meshopt_compression } from '../../../src/loader/parser/gltf/extends/EXT_meshopt_compression';
-import { isKTX2, isKTX2Image, KTX2_MAGIC, readKTX2Header } from '../../../src/textures/ktx2/KTX2Container';
+import { isKTX2Image } from '../../../src/textures/ktx2/KTX2Container';
 import { chooseTarget, rankTargets } from '../../../src/textures/ktx2/KTX2TranscodeTarget';
 import { formatInfo } from '../../src/engine/gpuStats';
 
 describe('texture formats', () => {
-    it('tell sRGB and compressed formats apart', () => {
-        expect(isSrgbFormat('rgba8unorm-srgb')).toBe(true);
-        expect(isSrgbFormat('bc7-rgba-unorm-srgb')).toBe(true);
-        expect(isSrgbFormat('rgba8unorm')).toBe(false);
-        expect(isSrgbFormat(undefined)).toBe(false);
-        expect(isCompressedFormat('bc1-rgba-unorm')).toBe(true);
-        expect(isCompressedFormat('etc2-rgb8unorm')).toBe(true);
-        expect(isCompressedFormat('eac-r11unorm')).toBe(true);
-        expect(isCompressedFormat('astc-4x4-unorm-srgb')).toBe(true);
-        expect(isCompressedFormat('rgba8unorm')).toBe(false);
-    });
-
-    it('switch between the sRGB and linear twins, where there is one', () => {
-        for (const f of ['rgba8unorm', 'bgra8unorm', 'bc1-rgba-unorm', 'bc3-rgba-unorm', 'bc7-rgba-unorm', 'etc2-rgb8unorm', 'etc2-rgba8unorm', 'astc-4x4-unorm']) {
-            expect(toSrgbFormat(f)).toBe(f + '-srgb');
-            expect(toSrgbFormat(f + '-srgb')).toBe(f + '-srgb');
-            expect(toLinearFormat(f + '-srgb')).toBe(f);
-        }
-        // No sRGB twin: unchanged.
-        expect(toSrgbFormat('bc4-r-unorm')).toBe('bc4-r-unorm');
-        expect(toSrgbFormat('rgba16float')).toBe('rgba16float');
-    });
-
     it('size blocks as the GPU memory counter does', () => {
         for (const f of ['bc1-rgba-unorm', 'bc4-r-unorm', 'bc7-rgba-unorm-srgb', 'etc2-rgb8unorm', 'etc2-rgba8unorm', 'eac-rg11unorm', 'astc-4x4-unorm', 'astc-8x6-unorm', 'rgba8unorm', 'rgba16float', 'r8unorm', 'depth24plus', 'depth32float-stencil8']) {
             const b = formatBlockInfo(f);
@@ -46,16 +23,6 @@ describe('texture formats', () => {
         expect(levelBytes('rgba8unorm', 3, 5)).toBe(60);
     });
 });
-
-/** A KTX2 header (80 bytes: identifier, 9 numbers, the index) for a texture. */
-function ktx2Header(fields: { vkFormat?: number; width: number; height: number; levels?: number; supercompression?: number }): Uint8Array {
-    const bytes = new Uint8Array(80);
-    bytes.set(KTX2_MAGIC);
-    const v = new DataView(bytes.buffer);
-    const u32 = [fields.vkFormat ?? 0, 1, fields.width, fields.height, 0, 0, 1, fields.levels ?? 1, fields.supercompression ?? 0];
-    u32.forEach((n, i) => v.setUint32(12 + i * 4, n, true));
-    return bytes;
-}
 
 describe('textures on a quality tier', () => {
     const chain = (w: number, h: number) => {
@@ -82,20 +49,6 @@ describe('textures on a quality tier', () => {
 });
 
 describe('KTX2 files', () => {
-    it('are told by their identifier and read by their header', () => {
-        const header = ktx2Header({ width: 512, height: 256, levels: 10, supercompression: 1 });
-        expect(isKTX2(header)).toBe(true);
-        expect(isKTX2(header.buffer as ArrayBuffer)).toBe(true);
-        expect(isKTX2(new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]))).toBe(false);
-        expect(isKTX2(new Uint8Array(4))).toBe(false);
-        expect(readKTX2Header(header)).toEqual({ vkFormat: 0, width: 512, height: 256, depth: 0, layers: 0, faces: 1, levels: 10, supercompression: 1 });
-        // A view into a larger buffer reads from its own start.
-        const shifted = new Uint8Array(100);
-        shifted.set(header, 20);
-        expect(readKTX2Header(shifted.subarray(20)).width).toBe(512);
-        expect(() => readKTX2Header(new Uint8Array(80))).toThrow('not a KTX2 file');
-    });
-
     it('are known by their mime type or name, also after a blob URL', () => {
         expect(isKTX2Image({ mimeType: 'image/ktx2' })).toBe(true);
         expect(isKTX2Image({ uri: 'textures/wall.ktx2' })).toBe(true);

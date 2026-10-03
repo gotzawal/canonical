@@ -45,7 +45,6 @@ import { isHdr, measureScene } from './engine/measure';
 import { instanceRootOf, makeInstance, prefabFrom, regenerate, templateFromInstance } from './design/prefabs';
 import type { Viewport } from './viewport/viewport';
 import type { DerivedAssets } from './derive/derivedAssets';
-import { exampleGuard, exampleShowcase } from './examples';
 import { buildIsland } from './exampleIsland';
 import { UsageLog } from './ai/usage';
 
@@ -1765,7 +1764,7 @@ export class Editor extends Emitter<EditorEvents> {
         return empty || confirmDialog(title, `${what} It is only kept in this browser unless you saved a file.`, ok, true);
     }
 
-    async newScene(kind: 'empty' | 'showcase' | 'guard' | 'laundromat' | 'island' = 'empty') {
+    async newScene(kind: 'empty' | 'laundromat' | 'island' = 'empty') {
         if (!(await this.confirmReplace('New scene', 'Discard'))) return;
         if (kind === 'island') {
             // Built with the editor's commands: its heightmap is made and the Library's files fetched.
@@ -1788,10 +1787,7 @@ export class Editor extends Emitter<EditorEvents> {
             }
             return;
         }
-        const doc = kind === 'showcase' ? exampleShowcase() : kind === 'guard' ? exampleGuard() : emptyScene();
-        const camera = kind === 'showcase' ? { ...defaultCamera(), distance: 16, pitch: 22, target: [0, 1, 0] as Vec3 } : kind === 'guard' ? { ...defaultCamera(), distance: 18, pitch: 38, target: [0, 0.5, 0] as Vec3 } : defaultCamera();
-        this.loadDoc(doc, camera);
-        if (kind === 'guard') this.showBehavior({ tree: doc.behaviors[0]?.id });
+        this.loadDoc(emptyScene(), defaultCamera());
     }
 
     /**

@@ -42,13 +42,13 @@ import { icon, nodeIcon } from './ui/icons';
 import { InspectorPanel } from './ui/inspector';
 import { logo, wordmark } from './ui/logo';
 import { mascotPose } from './ui/mascot';
-import { dialog, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
+import { dialog, foldMenubar, menubar, showMenu, toast, type MenuItem } from './ui/overlays';
 import { ScenePanel } from './ui/scenePanel';
 import { NOTICE_KINDS, notices } from './ui/notify';
 import { statusbar } from './ui/statusbar';
 import { applyTheme } from './ui/theme';
 import { toolbar } from './ui/toolbar';
-import { button } from './ui/widgets';
+import { button, iconButton } from './ui/widgets';
 import { CameraController } from './viewport/cameraController';
 import { TerrainBrush } from './viewport/terrainBrush';
 import { WalkController } from './viewport/walk';
@@ -115,16 +115,18 @@ async function main() {
     const leftToggle = h('button', { class: 'icon-btn panel-toggle left-toggle', title: 'Hierarchy', attrs: { type: 'button', 'aria-label': 'Toggle hierarchy' } }, icon('layers', 16));
     const rightToggle = h('button', { class: 'icon-btn panel-toggle', title: 'Inspector', attrs: { type: 'button', 'aria-label': 'Toggle inspector' } }, icon('sliders', 16));
 
+    // The free space of the top bar: the menus fold into one button when there is none left for them.
+    const topSpacers = [h('div', { class: 'spacer' }), h('div', { class: 'spacer' })];
     app.append(
         h(
             'header',
             { class: 'topbar' },
             h('div', { class: 'brand' }, logo(22, 'brand-mark'), wordmark(24, 'brand-name')),
             menuSlot,
-            h('div', { class: 'spacer' }),
+            topSpacers[0],
             sceneName.el,
             stepsSlot,
-            h('div', { class: 'spacer' }),
+            topSpacers[1],
             modeToggle,
             bell,
             leftToggle,
@@ -319,6 +321,7 @@ async function main() {
     const hierarchy = new HierarchyPanel(editor, commands, () => createMenu(editor));
     const assets = new AssetsPanel(editor);
     left.append(hierarchy.el, h('div', { class: 'splitter horizontal', dataset: { side: 'assets' } }), assets.el);
+    hierarchy.el.querySelector('.panel-header')?.append(iconButton('close', 'Close the panel', () => setPanel('left', false), 'drawer-close'));
     installSplitters(app);
 
     const dock = new Dock(editor, app);
@@ -359,12 +362,14 @@ async function main() {
     const sceneTab = h('button', { class: 'tab', text: 'Scene', attrs: { type: 'button', role: 'tab' } });
     const designTab = h('button', { class: 'tab', attrs: { type: 'button', role: 'tab' } }, icon('flag', 13), h('span', { text: 'Design' }));
     const aiTab = h('button', { class: 'tab', attrs: { type: 'button', role: 'tab' } }, icon('sparkle', 13), h('span', { text: 'AI' }));
-    tabs.append(inspectorTab, sceneTab, designTab, aiTab);
+    // On narrow windows the panel is a drawer over the view: it closes from here too, not only from the top bar.
+    tabs.append(inspectorTab, sceneTab, designTab, aiTab, h('div', { class: 'spacer' }), iconButton('close', 'Close the panel', () => setPanel('right', false), 'drawer-close'));
     const scenePanel = new ScenePanel(editor);
     const inspector = new InspectorPanel(editor, () => showTab('scene'));
     const aiPanel = new AIPanel(editor, () => aiContext(editor, dock), {
         showDetails: () => showTab('design', true),
         build: () => commands.get('file.build').run(),
+        close: () => setPanel('right', false),
     });
     const start = new StartScreen(editor, {
         start: (request, images, fresh) => {
@@ -529,23 +534,23 @@ async function main() {
     });
     right.append(tabs, inspector.el, scenePanel.el, designPanel.el, aiPanel.el);
 
-    menuSlot.append(
-        menubar(
-            menuDefinitions(editor, commands, {
-                toggleLeft: () => {
-                    setEditMode(true);
-                    setPanel('left');
-                },
-                toggleRight: () => setPanel('right'),
-                showGraph: () => {
-                    setEditMode(true);
-                    dock.show('graph');
-                },
-                showAI: () => showTab('ai'),
-                versions: () => openVersionHistory(editor),
-            }),
-        ),
+    const bar = menubar(
+        menuDefinitions(editor, commands, {
+            toggleLeft: () => {
+                setEditMode(true);
+                setPanel('left');
+            },
+            toggleRight: () => setPanel('right'),
+            showGraph: () => {
+                setEditMode(true);
+                dock.show('graph');
+            },
+            showAI: () => showTab('ai'),
+            versions: () => openVersionHistory(editor),
+        }),
     );
+    menuSlot.append(bar);
+    foldMenubar(bar, menuSlot, topSpacers);
     toolbarSlot.append(toolbar(editor, commands, () => createMenu(editor), () => showTab('ai')));
     // "[Name.js:12]" in the console opens the file at the line.
     statusSlot.append(

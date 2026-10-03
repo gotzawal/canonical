@@ -26,7 +26,7 @@
 </p>
 
 <p align="center">
-  <img src=".github/assets/hero.png" alt="Morglay: the scene and a chat with the assistant, which has just added a campfire to the scene" width="100%">
+  <img src=".github/assets/hero.webp" alt="Morglay: the Island example in the editor, with the assistant's chat beside it" width="100%">
 </p>
 
 ## What is Morglay?
@@ -72,10 +72,10 @@ The pieces that make this possible are already in the editor:
 - **It always plays.** A model only ever fills in values the tree reads. Without a model, or before it has downloaded, the world plays with the defaults you set.
 - **You can see every decision.** A decision log shows what each character saw, what it was asked, how sure it was and what it did.
 
-Open **File > Open Example: Guard** in the editor to try it: walk up to the guard, talk to it with keys 1 to 3, and watch its judgment change.
+To see one, open **File > Open Example: Night Laundromat** and press **Play**. Its cat runs on a behavior tree: it naps by the heater, watches the washers turn, comes over to rub against a visitor it trusts and dashes under the bench when someone runs past. Buy a can from the vending machine and give it to the cat, and it does the OIIA spin. On the **Island**, a shiba follows you around, runs off to explore and keeps popping up behind you. Ask the assistant for characters of your own, or give one a tree yourself in the **Behavior** tab of edit mode; **Help > Behavior Tree Reference** lists every node.
 
 <p align="center">
-  <img src=".github/assets/behavior.png" alt="The guard's behavior tree in the editor, with its Ask node that questions the model" width="100%">
+  <img src=".github/assets/behavior.webp" alt="The laundromat cat's behavior tree in edit mode: the OIIA spin when given a can, hide when someone runs close by, come over to a visitor it trusts, watch one who stands still, otherwise nap, watch the washers or look out at the rain. Its Ask service asks the model whether the cat trusts the visitor." width="100%">
 </p>
 
 The goal is a new kind of game: worlds whose people notice you, remember you and respond to you, built by one person with an AI assistant, and still directed by that person's hand.
@@ -91,16 +91,18 @@ We keep it apart from the core on purpose. A free-writing model is hard to direc
 <table>
   <tr>
     <td width="50%" valign="top">
-      <img src=".github/assets/start.png" alt="The start screen: What shall we make?"><br>
-      <strong>Start from one sentence.</strong> Describe a place, add a planning document or reference images if you have them, and the assistant takes it from there.
+      <img src=".github/assets/island.webp" alt="Play on the Island example: the player at the water's edge, the wooded island behind"><br>
+      <strong>Walk an island.</strong> Terrain, woods, grass, sea and sky, built with the editor's own tools. Press <strong>Play</strong> and explore it, with a dog at your heels.
     </td>
     <td width="50%" valign="top">
-      <img src=".github/assets/editor.png" alt="The full editor with hierarchy, inspector and a shader open in the code dock"><br>
-      <strong>Everything stays editable.</strong> Edit mode opens a complete editor: hierarchy, inspector, scripts, shaders, render graph and the pipeline.
+      <img src=".github/assets/laundromat.webp" alt="The Night Laundromat example from the rainy street: neon, wet pavement and the lit shop"><br>
+      <strong>Or a rainy street at night.</strong> Neon, reflections on the wet pavement and a lit laundromat with a cat inside, all in the browser.
     </td>
   </tr>
 </table>
 
+- **Start from one sentence.** Describe a place, add a planning document or reference images if you have them, and the assistant takes it from there.
+- **Everything stays editable.** Edit mode opens a complete editor: hierarchy, inspector, scripts, shaders, behavior trees, render graph and the pipeline.
 - **An assistant that works like a developer.** It builds levels, writes JavaScript and WGSL shaders, plays the scene to test them, reads the errors and fixes them. One request is one undo step, and **Stop** ends it at once.
 - **An art pipeline, run for you.** Layout, then look, then finish: greybox, lighting, materials and effects, compared against reference images at every step, with a saved version after each change.
 - **A real game underneath.** A playable character with keyboard, mouse and touch controls, NPCs, physics, animation, particles, physically based materials and global illumination, on the WebGPU engine [Orillusion](https://www.orillusion.com/).
@@ -114,7 +116,7 @@ The [user guide](editor/README.md) explains every part in detail.
 2. Connect the assistant with your [OpenRouter](https://openrouter.ai/) account (**Connect with OpenRouter** in the chat), and choose any model that supports tool calls. Your key stays in your browser.
 3. Answer **What shall we make?**
 
-No account yet? Open **File > Open Example: Showcase** or **File > Open Example: Guard** and press **Play**.
+No account yet? Open **File > Open Example: Night Laundromat** or **File > Open Example: Island** and press **Play**.
 
 Continue with the **[user guide](editor/README.md)**: the assistant, the pipeline, scripting, behavior trees and AI agents, materials, Build & Deploy and all the shortcuts.
 
@@ -145,6 +147,11 @@ The editor is published to GitHub Pages every time `main` is updated. The [user 
 ## Contributing
 
 Issues and pull requests are welcome. Commit messages follow the [commit convention](.github/commit-convention.md), for example `feat(editor): ...`. For the engine's internals, see the [Orillusion contributing guide](.github/contributing.md).
+
+## Credits
+
+- The Night Laundromat's cat is ["Oiiaioooooiai Cat"](https://sketchfab.com/3d-models/oiiaioooooiai-cat-30d27bf7fb224849b76e208a6eccdb36) by [Zhuier](https://sketchfab.com/Zhuier), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the example has it with a smaller texture. Its song and the can's clunk are synthesized for the example.
+- The Island's dog is ["Shiba"](https://sketchfab.com/3d-models/shiba-faef9fe5ace445e7b2989d1c1ece361c) by [zixisun02](https://sketchfab.com/zixisun51), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the example has it lit and with a smaller texture.
 
 ## License
 

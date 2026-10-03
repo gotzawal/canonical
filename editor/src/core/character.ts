@@ -7,11 +7,11 @@ import { Character, Player } from './model';
 import { defaults } from './schema';
 import type { CharacterDoc, NodeDoc, PlayerDoc, SpecsDoc } from './types';
 
-type Body = Pick<SpecsDoc, 'playerHeight' | 'playerRadius' | 'eyeHeight' | 'stepHeight'>;
+type Body = Pick<SpecsDoc, 'playerHeight' | 'playerRadius' | 'eyeHeight' | 'stepHeight'> & Partial<Pick<SpecsDoc, 'maxSlope'>>;
 
 /** A character sized like the brief's specs (the editor's defaults without one). */
 export const defaultCharacter = (specs?: Body): CharacterDoc =>
-    Character.parse({ height: specs?.playerHeight, radius: specs?.playerRadius, eyeHeight: specs?.eyeHeight, stepHeight: specs?.stepHeight });
+    Character.parse({ height: specs?.playerHeight, radius: specs?.playerRadius, eyeHeight: specs?.eyeHeight, stepHeight: specs?.stepHeight, maxSlope: specs?.maxSlope });
 
 export const defaultPlayer = (): PlayerDoc => defaults(Player);
 

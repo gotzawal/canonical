@@ -1,5 +1,6 @@
 import { add, DEG, normalize, scale } from '../core/math';
 import type { Vec3 } from '../core/types';
+import { ROUTE_REACH } from '../design/walkRoute';
 import type { Editor } from '../editor';
 import { LevelRays } from '../engine/levelRays';
 import { keyNames } from '../play/input';
@@ -11,8 +12,6 @@ const WALK_SPEED = 1.5;
 const RUN_SPEED = 4.5;
 const GRAVITY = 9.8;
 const LOOK = 0.12;
-/** A route point counts as reached within this distance (xz, meters). */
-const REACH = 1.5;
 
 const KEYS = new Set(['w', 'a', 's', 'd', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright', 'shift', ' ', 'q', 'e']);
 
@@ -36,9 +35,13 @@ export class WalkController {
     private start: Vec3 = [0, 0, 0];
     /** The level while walking: only what moves is boxed again, not every object for every ray. */
     private rays: LevelRays | null = null;
+    /** The terrains: open ground, which only stops the body where too steep (as in Play). */
+    private terrains = new Set<string>();
 
     constructor(private editor: Editor, private overlay: HTMLCanvasElement, viewportEl: HTMLElement) {
-        this.motor = new CharacterMotor((origin, dir, maxDist) => (this.rays ? this.rays.cast(origin, dir, maxDist) : editor.picker.raycast(origin, dir, maxDist)), this.body(), [0, 0, 0]);
+        const land = (id: string | undefined) => !!id && this.terrains.has(id);
+        const cast = (ignore?: (id: string) => boolean) => (origin: Vec3, dir: Vec3, maxDist: number) => (this.rays ? this.rays.cast(origin, dir, maxDist, ignore) : editor.picker.raycast(origin, dir, maxDist, ignore));
+        this.motor = new CharacterMotor(cast(), this.body(), [0, 0, 0], { has: land, cast: cast(land) });
         this.hudText = h('span');
         this.hud = h('div', { class: 'walk-hud', attrs: { hidden: true } }, this.hudText);
         viewportEl.appendChild(this.hud);
@@ -52,7 +55,7 @@ export class WalkController {
     /** The body of the brief's player. */
     private body() {
         const s = this.specs;
-        return { height: s.playerHeight, radius: s.playerRadius, stepHeight: s.stepHeight };
+        return { height: s.playerHeight, radius: s.playerRadius, stepHeight: s.stepHeight, maxSlope: s.maxSlope };
     }
 
     private get feet(): Vec3 {
@@ -70,6 +73,7 @@ export class WalkController {
         // starts on the one above it.
         const target = cam.target;
         this.rays = new LevelRays(ed.picker, ed.sync, ed.store, undefined, { track: true });
+        this.terrains = new Set(ed.sync.terrains().map((t) => t.id));
         this.motor.body = this.body();
         const ground = this.motor.groundAt([target[0], target[1] + this.specs.stepHeight, target[2]], 200) ?? this.motor.groundAt([target[0], target[1] + 50, target[2]], 200);
         this.motor.feet = [target[0], ground ?? 0, target[2]];
@@ -185,7 +189,7 @@ export class WalkController {
 
     private checkRoute() {
         const route = this.editor.store.doc.design.play.route;
-        const reached = route.filter((p) => !p.visited && p.position && Math.hypot(p.position[0] - this.feet[0], p.position[2] - this.feet[2]) < REACH);
+        const reached = route.filter((p) => !p.visited && p.position && Math.hypot(p.position[0] - this.feet[0], p.position[2] - this.feet[2]) < ROUTE_REACH);
         if (!reached.length) return;
         const ids = reached.map((p) => p.id);
         this.editor.store.commit('Route Point Reached', (d) => {

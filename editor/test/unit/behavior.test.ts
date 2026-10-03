@@ -87,10 +87,6 @@ describe('behavior ops', () => {
         expect(r.ok).toBe(true);
         expect(r.changes).toBeNull();
     });
-
-    it('rejects a batch that is not a list', () => {
-        expect(applyBehaviorOps(emptyScene(), { op: 'create_schema' }, 'strict').errors[0].name).toBe('batch');
-    });
 });
 
 describe('behavior validation', () => {

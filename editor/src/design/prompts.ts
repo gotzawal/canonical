@@ -21,11 +21,15 @@ export function startPrompt(request: string, images: number, fresh: boolean): st
     ].filter(Boolean).join(' ');
 }
 
-/** "Keep going": the next part of the current stage, after the user liked the result so far. */
-export function continuePrompt(stage: StageId, approved: boolean): string {
+/**
+ * "Keep going": the next part of the current stage, after the user liked the
+ * result so far. `auto`: nobody answered for a while (AI settings,
+ * Auto-approve), which counts as approved.
+ */
+export function continuePrompt(stage: StageId, approved: boolean, auto = false): string {
     const step = stepOf(stage);
     return [
-        approved ? 'I like how it looks so far.' : 'Keep going where you stopped.',
+        approved ? (auto ? 'I did not answer for a while, so it counts as approved.' : 'I like how it looks so far.') : 'Keep going where you stopped.',
         STAGE_PROMPTS[stage],
         `Keep going through the ${step.title} step (now ${stageDef(stage).title}) and end your turn when it is done, or when you need me to look at something.`,
     ].join(' ');
@@ -59,7 +63,7 @@ export const STAGE_PROMPTS: Record<StageId, string> = {
         'Build the layout in the gray greybox material only (no colors or textures, material slots are fine), under one group per area named after the area: the ground, every building and interior with build_rooms (closed and compact, doors on the route), ramps and stairs, and every object the areas list. Reuse repeated objects as prefabs, and put many copies of one thing (trees, rocks, fence posts) under one group object with instancing: {} so they draw together.',
         'An outdoor level larger than a courtyard stands on a terrain (create_terrain: an island for an island, else hills, mountains or plains, sized to the layout): sculpt flat sites for the buildings and level paths along the route (sculpt_terrain flatten and path), and spread the trees and large rocks over it with scatter (solid trunk or box, heights above the shore, avoiding the buildings, the paths and the play area) rather than placing them one by one.',
         'Place the player where the route starts (place_player). Run check_level and fix what it finds (seams, gaps, holes, floating objects, route points out of reach, rooms without a way in, large empty spaces) until it passes.',
-        'Frame a shot for every concept image (create_shot), check the landmark sight lines from the player\'s eye height (check_sightline), play-test (run_play_test) and tick what is done with update_checklist.',
+        'Walk the route with the player\'s body (walk_route) and fix what stops it, check every landmark sight line from the player\'s eye height (check_sightline with its id), frame a shot for every concept image (create_shot), play-test where scripts matter (run_play_test) and tick what is done with update_checklist (level.play once the walk reaches every point).',
         'Then paint a reference image over every shot (generate_paintover): when the detail level is quick choose the targets yourself (choose_paintover), otherwise ask me to choose. Tell me what is left. Answer in the language of the brief.',
     ].join(' '),
     light: [

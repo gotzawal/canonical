@@ -13,7 +13,7 @@ import type { SceneSync } from '../engine/sync';
 import type { NavQuery } from './ai/agents';
 import { ownIndices } from '../engine/lod';
 
-/** The body the navigation mesh is made for: the widest and tallest walking character, the lowest step, the specs' slope. */
+/** The body the navigation mesh is made for: the widest and tallest walking character, the lowest step, the gentlest max slope. */
 export interface NavAgent {
     radius: number;
     height: number;
@@ -40,15 +40,15 @@ export function usesNavigation(doc: SceneDoc): boolean {
     return doc.scripts.some((s) => /\bthis\.nav\b/.test(s.code));
 }
 
-/** The navigation body for these characters and the design specs. */
-export function navAgent(doc: SceneDoc, characters: readonly { radius: number; height: number; stepHeight: number }[]): NavAgent {
+/** The navigation body for these characters, or the design specs' without any. */
+export function navAgent(doc: SceneDoc, characters: readonly { radius: number; height: number; stepHeight: number; maxSlope?: number }[]): NavAgent {
     const specs = doc.design.specs;
-    const list = characters.length ? characters : [{ radius: specs.playerRadius, height: specs.playerHeight, stepHeight: specs.stepHeight }];
+    const list = characters.length ? characters : [{ radius: specs.playerRadius, height: specs.playerHeight, stepHeight: specs.stepHeight, maxSlope: specs.maxSlope }];
     return {
         radius: Math.max(...list.map((c) => c.radius)),
         height: Math.max(...list.map((c) => c.height)),
         climb: Math.min(...list.map((c) => c.stepHeight)),
-        slope: Math.min(89, Math.max(1, specs.maxSlope)),
+        slope: Math.min(89, Math.max(1, Math.min(...list.map((c) => c.maxSlope ?? specs.maxSlope)))),
     };
 }
 

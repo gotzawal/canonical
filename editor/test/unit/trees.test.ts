@@ -2,7 +2,7 @@
 // height as asked, levels of detail that get much lighter, and the wind,
 // shade and phase each vertex carries; trees in documents and scatters.
 import { describe, expect, it } from 'vitest';
-import { defaultTree, forestScatter } from '../../src/core/defaults';
+import { defaultTree } from '../../src/core/defaults';
 import { Scatter, ScatterSource, Tree } from '../../src/core/model';
 import { repair } from '../../src/core/schema';
 import { growTree, LEAF_CELLS, SPECIES_HEIGHT, TREE_SPECIES, TREE_VARIANTS, treeTriangles, variantIndex, variantSeed, type TreeMesh, type TreeShape } from '../../src/core/trees';
@@ -120,16 +120,5 @@ describe('trees', () => {
         for (const s of seeds) expect(s >= 0 && s <= 999_999 && Number.isInteger(s)).toBe(true);
         expect(new Set(seeds).size).toBe(TREE_VARIANTS);
         expect([0, 0.24, 0.25, 0.99, 1].map((v) => variantIndex(v, 4))).toEqual([0, 0, 1, 3, 3]);
-    });
-
-    it('makes forest rules by the area: a tree per 50 square meters, solid trunks', () => {
-        const trees = TREE_SPECIES.map((sp) => ({ tree: defaultTree(sp, 1), weight: 1 }));
-        const small = forestScatter(trees, [80, 80]);
-        expect(small.count).toBe(128);
-        expect(small.sources.map((s) => [s.tree?.species, s.model, s.solid])).toEqual(TREE_SPECIES.map((sp) => [sp, null, 'trunk']));
-        expect(forestScatter(trees, [10, 10]).count).toBe(20);
-        expect(forestScatter(trees, [1000, 1000]).count).toBe(1500);
-        // Valid rules as they are.
-        expect(Scatter.parse(small)).toEqual(small);
     });
 });

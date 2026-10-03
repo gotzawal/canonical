@@ -2,12 +2,13 @@ import type { Editor } from '../editor';
 import { Agent, type AgentDone, type AgentTurn, type Attachment, type SendOptions } from '../ai/agent';
 import { getAssetUrl, putDesignImage } from '../core/assets';
 import { planStarted, STAGE_IDS } from '../core/design';
+import type { StageId } from '../core/types';
 import { pickFiles } from '../core/persistence';
 import {
     finishOAuth, listModels, pickDefaultModel, startOAuth, supportsImages, supportsTools, type OpenRouterModel,
 } from '../openrouter/client';
 import { DRAW_HINTS, IMAGE_QUALITIES, QUALITY_NAMES, SEE_HINTS, type ImageQuality } from '../openrouter/imageQuality';
-import { aiSettings } from '../openrouter/settings';
+import { aiSettings, AUTO_APPROVE_CHOICES } from '../openrouter/settings';
 import { continuePrompt, startPrompt } from '../design/prompts';
 import { nextStage, stageDef, stepOf } from '../design/stages';
 import { activityLabel } from './activity';
@@ -19,8 +20,8 @@ import { clear, h } from './dom';
 import { icon } from './icons';
 import { mascotAvatar, mascotPose, setMascotMood, type MascotMood, type MascotPose } from './mascot';
 import { dialog, popover, toast } from './overlays';
-import { openUsageDialog, tokens } from './usageDialog';
-import { CheckboxField, NumberField, SliderField, button, iconButton, row, suggestions } from './widgets';
+import { credits, duration, openUsageDialog, shortDuration, tokens } from './usageDialog';
+import { CheckboxField, NumberField, SelectField, SliderField, button, iconButton, row, suggestions } from './widgets';
 
 const SUGGESTIONS = [
     'Build a small park: grass ground, a few trees, benches and a warm sunset.',
@@ -36,11 +37,15 @@ export interface AIPanelHooks {
     showDetails(): void;
     /** File > Build & Deploy. */
     build(): void;
+    /** Closes the chat where it is a drawer over the view (narrow windows). */
+    close(): void;
 }
 
 const PLACEHOLDER = 'Ask for a change, a script, a shader... (Enter to send, Shift+Enter for a new line)';
 /** How long the heron looks pleased after a request. */
 const DONE_MOOD_MS = 6000;
+/** Times the chat goes on by itself in one stage before it waits for the user (a stage the assistant never finishes). */
+const MAX_AUTO_RUNS = 8;
 
 /** Chat with an OpenRouter model that edits the project through tools. */
 export class AIPanel {
@@ -50,7 +55,7 @@ export class AIPanel {
     private input: HTMLTextAreaElement;
     private sendBtn: HTMLButtonElement;
     private modelLabel: HTMLElement;
-    /** The project's tokens and credits; opens their statistics. */
+    /** The project's tokens, credits and work time; opens their statistics. */
     private usageLabel: HTMLButtonElement;
     /** How sharp the images are that go to the models and come from them. */
     private qualityBtn: HTMLButtonElement;
@@ -69,6 +74,16 @@ export class AIPanel {
     private lastEnd: 'answer' | 'limited' | 'stopped' | 'error' | null = null;
     private lastEndAt = 0;
     private moodTimer = 0;
+    /** The countdown of going on by itself while nobody answers (AI settings, Auto-approve): on what, in which stage, until when. */
+    private auto: { kind: 'stage' | 'next'; stage: StageId; at: number; timer: number } | null = null;
+    /** The user held the countdown (Wait, or an answer begun): none until the next request. */
+    private autoHeld = false;
+    /** A request of this page ended and none runs: what it ended in waits for the user. */
+    private ended = false;
+    /** Times it went on by itself in a stage since the user last asked for something. */
+    private autoRuns: { stage: StageId | null; count: number } = { stage: null, count: 0 };
+    /** What going on is under the last answer, when its card offers it. */
+    private goOn: ((auto: boolean) => void) | null = null;
 
     constructor(private editor: Editor, context: () => string, private hooks: AIPanelHooks) {
         this.agent = new Agent(editor, context);
@@ -109,6 +124,7 @@ export class AIPanel {
                     this.render();
                 }),
                 iconButton('gear', 'AI settings', () => void this.openSettings()),
+                iconButton('close', 'Close the chat', () => this.hooks.close(), 'drawer-close'),
             ),
             this.list,
             h(
@@ -152,9 +168,15 @@ export class AIPanel {
             }
         });
         this.input.addEventListener('blur', () => (this.input.placeholder = PLACEHOLDER));
+        // An answer begun holds the countdown of going on by itself; anything else done in the editor starts it over.
+        this.input.addEventListener('focus', () => this.holdAuto());
+        this.input.addEventListener('input', () => this.holdAuto());
+        for (const type of ['pointerdown', 'keydown', 'wheel']) document.addEventListener(type, () => this.restartAuto(), { capture: true, passive: true });
         this.sendBtn.addEventListener('click', () => (this.agent.running ? this.agent.stop() : this.submit()));
         this.agent.on('update', (turn) => this.update(turn));
         this.agent.on('busy', () => {
+            // A new request: the wait it ends in may go on by itself again.
+            if (this.agent.running) this.autoHeld = this.ended = false;
             this.renderControls();
             this.renderNext();
         });
@@ -205,6 +227,7 @@ export class AIPanel {
         const attachments = this.attachments;
         this.attachments = [];
         this.renderAttachments();
+        this.autoRuns.count = 0;
         void this.agent.send(text, attachments).then((started) => {
             // Nothing was sent (no model picked yet): the text comes back to be sent again.
             if (started || this.input.value) return;
@@ -224,6 +247,8 @@ export class AIPanel {
             void this.openSettings();
             return;
         }
+        // The user asked for something: it may go on by itself again.
+        this.autoRuns.count = 0;
         void this.agent.send(text, attachments, opts);
     }
 
@@ -243,12 +268,12 @@ export class AIPanel {
     /**
      * Asks the assistant to go on: with the current stage once the pipeline
      * runs (`liked`: the user likes the result so far), else with what it
-     * was asked before it stopped.
+     * was asked before it stopped. `auto`: nobody answered (Auto-approve).
      */
-    private keepGoing(liked: boolean) {
+    private keepGoing(liked: boolean, auto = false) {
         const design = this.editor.store.doc.design;
-        const show = liked ? 'Looks good, keep going.' : 'Keep going.';
-        if (planStarted(design)) this.send(continuePrompt(design.stage, liked), [], { show });
+        const show = auto ? `No answer for ${waitText(aiSettings.value.autoApprove)}: keep going.` : liked ? 'Looks good, keep going.' : 'Keep going.';
+        if (planStarted(design)) this.send(continuePrompt(design.stage, liked, auto), [], { show });
         else this.send('Keep going where you stopped and finish what I asked.', [], { show });
     }
 
@@ -344,11 +369,13 @@ export class AIPanel {
         const t = this.editor.usage.totals();
         const all = t.prompt + t.completion;
         const hit = t.prompt ? Math.round((t.cached / t.prompt) * 100) : 0;
-        const parts = [all ? `${tokens(all)} tok` : '', t.cached ? `${hit}% cached` : '', t.cost ? `$${t.cost.toFixed(4)}` : ''].filter(Boolean);
+        const ms = this.editor.usage.workTime();
+        // A narrow header cuts the end off: the cache's share goes first.
+        const parts = [all ? `${tokens(all)} tok` : '', t.cost ? credits(t.cost) : '', ms ? shortDuration(ms) : '', t.cached ? `${hit}% cached` : ''].filter(Boolean);
         this.usageLabel.textContent = parts.join(' · ') || 'Usage';
         this.usageLabel.title = t.count
-            ? `This project: ${t.calls} model calls, ${(t.prompt - t.imageTokens).toLocaleString()} text + about ${t.imageTokens.toLocaleString()} image input tokens, ${t.completion.toLocaleString()} output tokens${t.cached ? `, ${t.cached.toLocaleString()} input tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}. Click for the statistics per piece of work.`
-            : 'Token usage of this project, per piece of work';
+            ? `This project: ${t.calls} model calls, ${(t.prompt - t.imageTokens).toLocaleString()} text + about ${t.imageTokens.toLocaleString()} image input tokens, ${t.completion.toLocaleString()} output tokens${t.cached ? `, ${t.cached.toLocaleString()} input tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}, ${duration(ms)} of work. Click for the statistics per piece of work: tokens and credits, and work time.`
+            : 'Token usage and work time of this project, per piece of work';
     }
 
     /** Picks how sharp the images are that the assistant sees and has drawn, for the next ones. */
@@ -405,6 +432,7 @@ export class AIPanel {
     private finished(d: AgentDone) {
         this.lastEnd = d.error ? 'error' : d.stopped ? 'stopped' : d.limited ? 'limited' : 'answer';
         this.lastEndAt = Date.now();
+        this.ended = true;
         clearTimeout(this.moodTimer);
         this.moodTimer = window.setTimeout(() => this.renderMood(), DONE_MOOD_MS + 50);
         this.renderControls();
@@ -414,6 +442,7 @@ export class AIPanel {
     // ------------------------------------------------------------ messages
 
     private render() {
+        this.stopAuto();
         clear(this.list);
         this.views.clear();
         if (!aiSettings.apiKey) {
@@ -585,7 +614,8 @@ export class AIPanel {
                 el.appendChild(h('div', { class: 'ai-approval-state ok' }, icon('check', 13), h('span', { text: `${def.title} is complete.${next ? ` Next: ${stageDef(next).long}.` : ''}` })));
             } else if (st.proposal && design.stage === a.stage) {
                 el.appendChild(h('div', { class: 'ai-approval-text', text: st.proposal.summary }));
-                const complete = button(pipeline.busy ? 'Saving the shots...' : 'Looks good', () => void pipeline.complete(), 'small primary', 'check');
+                // Completed, it goes on as it would by itself; a dialog the user cancels holds it.
+                const complete = button(pipeline.busy ? 'Saving the shots...' : 'Looks good', () => void pipeline.complete().then((ok) => ok || this.holdAuto()), 'small primary', 'check');
                 complete.disabled = pipeline.busy;
                 el.appendChild(
                     h(
@@ -596,9 +626,16 @@ export class AIPanel {
                             pipeline.dismissProposal();
                             this.askForChange();
                         }, 'small subtle'),
-                        button('Details', () => this.hooks.showDetails(), 'small subtle', 'sliders'),
+                        button('Details', () => {
+                            this.holdAuto();
+                            this.hooks.showDetails();
+                        }, 'small subtle', 'sliders'),
                     ),
                 );
+                if (t === this.openStageApproval()) {
+                    const line = this.autoLine('stage');
+                    if (line) el.appendChild(line);
+                }
             } else {
                 el.appendChild(h('div', { class: 'ai-approval-state', text: 'Not yet: the assistant keeps working on it.' }));
             }
@@ -634,6 +671,7 @@ export class AIPanel {
 
     /** Puts the cursor in the chat, asking what should change. */
     private askForChange() {
+        this.holdAuto();
         this.input.placeholder = 'What should change? (Enter to send)';
         this.input.focus();
     }
@@ -656,10 +694,15 @@ export class AIPanel {
         // A request that did not finish can go on in any project; whether the user likes it is asked once the pipeline runs.
         const show = !!aiSettings.apiKey && !this.agent.running && !!lastTurn && lastTurn.role !== 'user' && !pending && (started || unfinished);
         el.hidden = !show;
+        // What going on is under the answer, which goes on by itself when nobody answers: not after a stop or an error, nor at the end.
+        this.goOn = !show || (allDone && !unfinished) || this.lastEnd === 'stopped' || this.lastEnd === 'error'
+            ? null
+            : this.lastEnd === 'limited' ? (auto) => this.keepGoing(false, auto) : (auto) => this.keepGoing(true, auto);
+        this.syncAuto();
         if (!show) return;
         // The heron stands at the card's side, in the pose of how things are.
         const card = (pose: MascotPose, text: string, ...options: HTMLElement[]) =>
-            el.append(mascotPose(pose, 96, 'ai-next-heron'), h('div', { class: 'ai-next-body' }, h('div', { class: 'ai-next-head', text }), h('div', { class: 'ai-choice-options' }, ...options)));
+            el.append(mascotPose(pose, 96, 'ai-next-heron'), h('div', { class: 'ai-next-body' }, h('div', { class: 'ai-next-head', text }), h('div', { class: 'ai-choice-options' }, ...options), this.autoLine('next')));
         if (allDone && !unfinished) {
             card(
                 'celebrate',
@@ -686,6 +729,120 @@ export class AIPanel {
             button('Looks good, keep going', () => this.keepGoing(true), 'small primary', 'check'),
             button('Change something', () => this.askForChange(), 'small subtle'),
         );
+    }
+
+    // ------------------------------------------------------------ auto-approve
+
+    /** The latest card of a stage to approve that still waits for the user. */
+    private openStageApproval(): AgentTurn | undefined {
+        return [...this.agent.turns].reverse().find((t) => t.approval?.kind === 'stage' && this.approvalOpen(t));
+    }
+
+    /**
+     * What the chat waits on that goes on by itself when nobody answers (AI
+     * settings, Auto-approve): a stage to approve, which it completes, or
+     * the card under the last answer, which goes on. Only where a request of
+     * this page ended, by answering or at its step limit: not after a stop
+     * or an error, nor in a conversation a reload shows.
+     */
+    private autoFor(): 'stage' | 'next' | null {
+        if (!aiSettings.value.autoApprove || !aiSettings.apiKey || this.agent.running || this.editor.pipeline.busy) return null;
+        if (!this.ended || (this.lastEnd !== 'answer' && this.lastEnd !== 'limited')) return null;
+        return this.openStageApproval() ? 'stage' : this.goOn ? 'next' : null;
+    }
+
+    /** It went on by itself as often as it may in this stage (a stage the assistant never finishes): it waits for the user. */
+    private autoCapped(): boolean {
+        return this.autoRuns.stage === this.editor.store.doc.design.stage && this.autoRuns.count >= MAX_AUTO_RUNS;
+    }
+
+    /** Starts the countdown when the chat comes to wait on something, and ends it when that is gone. */
+    private syncAuto() {
+        const was = this.auto;
+        const design = this.editor.store.doc.design;
+        // "Not yet" in the Design tab: the user answered.
+        if (was?.kind === 'stage' && !this.openStageApproval() && design.stages[was.stage].status !== 'done') this.autoHeld = true;
+        const kind = this.autoHeld || this.autoCapped() ? null : this.autoFor();
+        if (kind === (was?.kind ?? null) && (!was || was.stage === design.stage)) return;
+        this.stopAuto();
+        if (!kind) return;
+        this.auto = { kind, stage: design.stage, at: Date.now() + aiSettings.value.autoApprove * 1000, timer: window.setInterval(() => this.tickAuto(), 1000) };
+        // The card under the answer draws its countdown (renderNext); the stage's card gets it here.
+        const t = kind === 'stage' ? this.openStageApproval() : undefined;
+        const line = t && this.autoLine('stage');
+        if (t && line) this.views.get(t.id)?.appendChild(line);
+    }
+
+    private stopAuto() {
+        if (!this.auto) return;
+        clearInterval(this.auto.timer);
+        this.auto = null;
+        for (const el of this.el.querySelectorAll('.ai-auto')) el.remove();
+    }
+
+    /** The user answers, or asked it to wait: it does not go on by itself until the next request. */
+    private holdAuto() {
+        this.autoHeld = true;
+        this.stopAuto();
+    }
+
+    /** Someone is at the editor: the countdown starts over. */
+    private restartAuto() {
+        if (!this.auto) return;
+        this.auto.at = Date.now() + aiSettings.value.autoApprove * 1000;
+        this.tickAuto();
+    }
+
+    private tickAuto() {
+        const a = this.auto;
+        if (!a) return;
+        // Playing the scene is being there.
+        if (this.editor.player.state !== 'stopped') a.at = Date.now() + aiSettings.value.autoApprove * 1000;
+        const left = Math.ceil((a.at - Date.now()) / 1000);
+        if (left > 0) {
+            for (const el of this.el.querySelectorAll('.ai-auto-time')) el.textContent = `${left} s`;
+            return;
+        }
+        // A dialog open: the user is deciding something there.
+        if (document.querySelector('.dialog-backdrop')) this.holdAuto();
+        else void this.fireAuto(a.kind);
+    }
+
+    /** Nobody answered: completes the stage and goes on, or goes on. */
+    private async fireAuto(kind: 'stage' | 'next') {
+        this.stopAuto();
+        if (this.agent.running || this.editor.pipeline.busy) return;
+        const stage = this.editor.store.doc.design.stage;
+        const runs = this.autoRuns.stage === stage ? this.autoRuns.count : 0;
+        if (kind === 'stage') {
+            // Nobody looks at what is still open: completed as Complete Anyway would.
+            if (!(await this.editor.pipeline.complete(true))) {
+                this.holdAuto();
+                return;
+            }
+            this.keepGoing(true, true);
+        } else if (this.goOn) this.goOn(true);
+        else return;
+        this.autoRuns = { stage, count: runs + 1 };
+    }
+
+    /** The countdown on a card, with the button that holds it; or why it waits for the user instead. */
+    private autoLine(kind: 'stage' | 'next'): HTMLElement | null {
+        const a = this.auto;
+        if (a?.kind === kind) {
+            const left = Math.max(1, Math.ceil((a.at - Date.now()) / 1000));
+            return h(
+                'div',
+                { class: 'ai-auto', title: 'Auto-approve (AI settings): with no answer it goes on by itself. Anything you do in the editor starts the countdown over.' },
+                icon('clock', 13),
+                h('span', null, kind === 'stage' ? 'Approves and goes on in ' : 'Goes on in ', h('span', { class: 'ai-auto-time', text: `${left} s` })),
+                button('Wait', () => this.holdAuto(), 'small subtle'),
+            );
+        }
+        if (!this.autoHeld && this.autoCapped() && this.autoFor() === kind) {
+            return h('div', { class: 'ai-auto' }, icon('clock', 13), h('span', { text: `It went on by itself ${MAX_AUTO_RUNS} times in this stage, so it waits for you now.` }));
+        }
+        return null;
     }
 
     private welcome(): HTMLElement {
@@ -785,6 +942,9 @@ export class AIPanel {
             describeModel();
         });
         const temperature = new SliderField({ value: s.temperature, min: 0, max: 1.5, step: 0.05, precision: 2 });
+        const waits = AUTO_APPROVE_CHOICES.includes(s.autoApprove) ? AUTO_APPROVE_CHOICES : [...AUTO_APPROVE_CHOICES, s.autoApprove];
+        const autoApprove = new SelectField(waits.map((n) => ({ value: String(n), label: n ? `After ${waitText(n)}` : 'Off' })), String(s.autoApprove), () => {});
+        autoApprove.el.setAttribute('aria-label', 'Auto-approve');
         const steps = new NumberField({ value: s.maxSteps, min: 1, max: 60, step: 0.25, precision: 0 });
         const allowPlay = new CheckboxField(s.allowPlay, () => {}, 'Let the assistant run Play tests');
         const shots = new CheckboxField(s.screenshots, () => {}, 'Send viewport screenshots to vision models');
@@ -825,6 +985,7 @@ export class AIPanel {
             row('', cacheLong.el, 'Claude keeps cached prompts for five minutes; an hour keeps the conversation cached while you look at the result between requests. Writing the cache costs 2x the input price instead of 1.25x, reading it 0.1x either way.'),
             row('Temperature', temperature.el),
             row('Max steps', steps.el, 'Model calls per request'),
+            row('Auto-approve', autoApprove.el, 'When the assistant stops for you (a finished stage to approve, whether to go on) and nobody answers, it approves and goes on by itself after this long. The card counts down; Wait holds it, and anything you do in the editor starts it over.'),
             row('', allowPlay.el),
             row('', shots.el),
             row('', images.el),
@@ -849,6 +1010,7 @@ export class AIPanel {
             model: modelInput.value.trim(),
             temperature: temperature.get(),
             maxSteps: Math.round(steps.get()),
+            autoApprove: Number(autoApprove.el.value),
             remember: box(remember),
             allowPlay: box(allowPlay),
             screenshots: box(shots),
@@ -860,6 +1022,11 @@ export class AIPanel {
         });
         aiSettings.setKey(key.value);
     }
+}
+
+/** A wait of Auto-approve in words: "20 s", "1 min". */
+function waitText(seconds: number): string {
+    return seconds % 60 ? `${seconds} s` : `${seconds / 60} min`;
 }
 
 /** A group of the assistant's steps (tool calls in a row): one line with the latest, open for all. */

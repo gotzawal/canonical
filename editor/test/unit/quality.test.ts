@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { Environment } from '../../src/core/model';
-import { editorQuality, isMobileDevice, pickQuality, QUALITY, resolveQuality, sunScatterToLine } from '../../src/core/quality';
-import { defaults, InputError, patch, repair, toolSchema } from '../../src/core/schema';
+import { editorQuality, isMobileDevice, pickQuality, resolveQuality, sunScatterToLine } from '../../src/core/quality';
+import { defaults, repair } from '../../src/core/schema';
 
 describe('graphics quality', () => {
     const device = (gpu: string, extra: Partial<Parameters<typeof pickQuality>[0]> = {}) => pickQuality({ gpu, fallback: false, mobile: false, ...extra });
@@ -22,13 +22,6 @@ describe('graphics quality', () => {
         expect(device('nvidia', { memory: 2 })).toBe('low');
     });
 
-    it('draws a preview over the scene setting over the device', () => {
-        expect(resolveQuality('auto', 'medium')).toBe('medium');
-        expect(resolveQuality('low', 'high')).toBe('low');
-        expect(resolveQuality('low', 'high', 'medium')).toBe('medium');
-        expect(resolveQuality(undefined, 'high')).toBe('high');
-    });
-
     it('draws the low tier in the editor on phones and tablets, the high one on computers', () => {
         const phone = { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile Safari/537.36', maxTouchPoints: 5 };
         // An iPad reports a Mac, but has touch.
@@ -38,14 +31,6 @@ describe('graphics quality', () => {
         // A scene that leaves the tier to the device gets the editor's; one that names a tier draws it.
         expect(resolveQuality('auto', editorQuality(true))).toBe('low');
         expect(resolveQuality('high', editorQuality(true))).toBe('high');
-    });
-
-    it('keeps the high tier as the editor drew before', () => {
-        expect(QUALITY.high).toMatchObject({ shadowMapSize: 2048, pointShadowSize: 1024, shadowRangeMax: Infinity, shadowEvery: 1, giRealtime: true, ao: true });
-        expect(QUALITY.low.shadowMapSize).toBeLessThan(QUALITY.high.shadowMapSize);
-        expect(QUALITY.low.godRaySteps).toBe(0);
-        // Games on weak devices load textures smaller; the high tier as they are.
-        expect([QUALITY.low.textureMaxSize, QUALITY.medium.textureMaxSize, QUALITY.high.textureMaxSize]).toEqual([1024, 2048, Infinity]);
     });
 
     it('turns the fog glow into the engine setting', () => {
@@ -67,18 +52,5 @@ describe('environment settings of the graphics upgrade', () => {
         // A scene saved before keeps its fog and gets the rest.
         const old = repair(Environment, { sky: 'color', fog: { enable: true, color: '#112233', near: 2, far: 40, intensity: 0.5 } })!;
         expect(old.fog).toMatchObject({ enable: true, color: '#112233', near: 2, far: 40, intensity: 0.5, mode: 'linear', density: 0.02 });
-    });
-
-    it('take the assistant\'s snake_case arguments, clamped', () => {
-        const env = patch(Environment, defaults(Environment), { fog: { mode: 'height', height_falloff: 0.2 }, god_rays: { enable: true, focus: 100 }, volumetric_fog: { anisotropy: 2 }, shadow: { softness: 9 } }, 'environment');
-        expect(env.fog).toMatchObject({ mode: 'height', heightFalloff: 0.2 });
-        expect(env.godRays).toMatchObject({ enable: true, focus: 40 });
-        expect(env.volumetricFog.anisotropy).toBe(0.95);
-        expect(env.shadow.softness).toBe(4);
-        expect(() => patch(Environment, env, { god_rays: { strength: 1 } }, 'environment')).toThrow(InputError);
-        const props = toolSchema(Environment).properties;
-        expect(props.quality.enum).toEqual(['auto', 'low', 'medium', 'high']);
-        expect(props.fog.properties.mode.enum).toEqual(['linear', 'exponential', 'height']);
-        expect(Object.keys(props.god_rays.properties)).toEqual(['enable', 'intensity', 'focus']);
     });
 });

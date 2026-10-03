@@ -70,6 +70,8 @@ export class Pipeline extends Emitter<PipelineEvents> {
     private progressCache: { version: number; stage: StageId; fps: string; result: ReturnType<typeof stageProgress> } | null = null;
     /** Whether the layout changed after the Level stage, for the document version it was worked out for. */
     private layoutCache: { version: number; changed: boolean } | null = null;
+    /** The way the assistant last walked the route (walk_route) and where it got stuck, drawn over the view. */
+    walk: { trace: Vec3[]; stops: Vec3[] } | null = null;
 
     constructor(private host: PipelineHost) {
         super();
@@ -77,6 +79,7 @@ export class Pipeline extends Emitter<PipelineEvents> {
             // The loaded scene comes with its own camera.
             this.viewFov = null;
             this.showShot(null);
+            this.walk = null;
         });
         host.store.on('change', (hint) => {
             // Shots are in the design section.

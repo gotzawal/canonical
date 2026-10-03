@@ -229,6 +229,13 @@ export function menubar(menus: { label: string; items: () => MenuItem[] }[]): HT
         openMenu = { el, close };
         if (keyboard) el.querySelector<HTMLElement>('button:not([disabled])')?.focus();
     };
+    // Where the bar has no room for its menus (foldMenubar), one button holds them all.
+    const all = h('button', { class: 'menubar-item menubar-all', title: 'Menu', attrs: { type: 'button', 'aria-haspopup': 'menu', 'aria-label': 'Menu' } }, icon('menu', 16));
+    all.addEventListener('click', (e) => {
+        if (active === all) closeMenus();
+        else open(all, menus.map((m) => ({ label: m.label, submenu: m.items() })), e.detail === 0);
+    });
+    bar.appendChild(all);
     for (const m of menus) {
         const btn = h('button', { class: 'menubar-item', text: m.label, attrs: { type: 'button', 'aria-haspopup': 'menu' } });
         btn.addEventListener('click', (e) => {
@@ -242,6 +249,42 @@ export function menubar(menus: { label: string; items: () => MenuItem[] }[]): HT
         bar.appendChild(btn);
     }
     return bar;
+}
+
+/**
+ * Folds a menubar into its one Menu button while the bar it is in has no
+ * room for every menu (a phone, the steps beside the scene's name, a large
+ * font), and unfolds it once the free space (`spacers`) holds them again.
+ * The bar is measured, so whatever crowds it folds it: the menus never run
+ * under the buttons beside them.
+ */
+export function foldMenubar(bar: HTMLElement, slot: HTMLElement, spacers: HTMLElement[]) {
+    /** The bar's width with every menu, from when it last showed them. */
+    let full = 0;
+    const fit = () => {
+        if (!bar.classList.contains('folded')) {
+            full = bar.offsetWidth;
+            if (full > slot.clientWidth + 1) {
+                // A menu open from the bar loses the button it hangs from.
+                if (bar.querySelector('.open')) closeMenus();
+                bar.classList.add('folded');
+            }
+        } else if (full && spacers.reduce((sum, el) => sum + el.offsetWidth, 0) >= full - bar.offsetWidth + 8) {
+            if (bar.querySelector('.open')) closeMenus();
+            bar.classList.remove('folded');
+            // Measured again: still too wide folds it back before it is drawn.
+            fit();
+        }
+    };
+    fit();
+    // Folding resizes what is watched: it happens in the next frame, not in the
+    // observer's callback (where it would be a loop the browser reports).
+    let frame = 0;
+    const observer = new ResizeObserver(() => {
+        cancelAnimationFrame(frame);
+        frame = requestAnimationFrame(fit);
+    });
+    for (const el of [slot, ...spacers]) observer.observe(el);
 }
 
 // ----------------------------------------------------------------- toasts

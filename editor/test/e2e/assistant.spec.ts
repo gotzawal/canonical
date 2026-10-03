@@ -1,7 +1,8 @@
 // The assistant in the simple view (the scene and the chat), with OpenRouter
-// scripted: a project starts from one request, the tools change the scene,
-// the settings limit them, the user stops a request, approves a stage from
-// the chat, and sees what the work cost, with images at the quality chosen.
+// scripted: a project starts from one request, the tools change the scene
+// and walk its route, the settings limit them, the user stops a request,
+// approves a stage from the chat (or lets it approve itself), and sees what
+// the work cost, with images at the quality chosen.
 
 import { expect, test, type Route } from '@playwright/test';
 import { scriptedAssistant, sharedEditor, toolResults, USAGE, type ScriptedCall } from './editor';
@@ -172,6 +173,41 @@ test('grows a tree and a forest of trees with its tools, and bakes the forest in
     expect(copies.filter((c) => c.species === 'oak').every((c) => c.height === 12 && !c.solid)).toBe(true);
 });
 
+test('walks the route with the player\'s body around a wall and checks a sight line, ticking the Level checklist', async () => {
+    const page = editor.page();
+    await page.evaluate(() => {
+        window.__editor.store.commit('Route', (d) => {
+            d.design.play.route = [
+                { id: 'r_gate', name: 'Gate', position: [-5, 0, 5] },
+                { id: 'r_yard', name: 'Yard', position: [5, 0, -5] },
+            ];
+            d.design.play.sightlines = [{ id: 's_yard', from: 'Gate', to: 'Yard' }];
+        }, { design: true });
+    });
+    // A wall across the straight way from the gate to the yard: the walk goes around its end.
+    const results: any[] = await ask([
+        [{ name: 'create_objects', args: { objects: [{ type: 'box', name: 'Wall', position: [0, 1.5, 1], size: [12, 3, 0.3] }] } }],
+        [{ name: 'place_player', args: { at: 'Gate' } }],
+        [{ name: 'walk_route', args: {} }],
+        // Screenshots are off: the sight line is still checked, from the plan's own ends.
+        [{ name: 'check_sightline', args: { sightline: 's_yard' } }],
+    ]);
+    expect(results.filter((r) => r?.error)).toEqual([]);
+    const walk = results[2];
+    expect(walk.legs.map((l: any) => [l.to, l.reached])).toEqual([['Gate', true], ['Yard', true]]);
+    // Around the wall, not through it: longer than the straight way.
+    expect(walk.legs[1].walked_m).toBeGreaterThan(Math.hypot(10, 10) + 1);
+    expect(results[3]).toMatchObject({ clear: false, blocked_by: ['Wall'] });
+    const state = await page.evaluate(() => {
+        const ed = window.__editor;
+        const items = ed.pipeline.progress('level').items;
+        const item = (id: string) => items.find((i) => i.id === id)!;
+        return { visited: ed.store.doc.design.play.route.map((r) => !!r.visited), route: item('level.route').done, sightlines: item('level.sightlines').detail, walk: ed.pipeline.walk!.trace.length };
+    });
+    expect(state).toMatchObject({ visited: [true, true], route: true, sightlines: '0 of 1 clear' });
+    expect(state.walk).toBeGreaterThan(10);
+});
+
 test('offers only the tools the AI settings allow and refuses the others', async () => {
     const [result] = await ask([[{ name: 'play', args: {} }]]);
     expect((result as { error: string }).error).toBe('Play is turned off in the AI settings.');
@@ -223,6 +259,49 @@ test('completes the stage the assistant proposes from the chat', async () => {
     await expect(page.locator('.ai-panel .ai-next')).toContainText('Like how it looks?');
 });
 
+/** Auto-approve after `seconds` (0: off) in the AI settings; a test waits less than the 20 s and 1 min they offer. */
+async function autoApprove(seconds: number) {
+    const page = editor.page();
+    await click('.ai-panel .ai-header .icon-btn[aria-label="AI settings"]');
+    await page.waitForSelector('.dialog select[aria-label="Auto-approve"]');
+    await page.evaluate((s) => {
+        const select = document.querySelector<HTMLSelectElement>('.dialog select[aria-label="Auto-approve"]')!;
+        if (![...select.options].some((o) => o.value === String(s))) select.append(new Option(`After ${s} s`, String(s)));
+        select.value = String(s);
+    }, seconds);
+    await click('.dialog button', 'Save');
+}
+
+test('shows the approval under the last answer, and approves and goes on by itself when nobody answers', async () => {
+    const page = editor.page();
+    await autoApprove(5);
+    try {
+        const before = assistant.sent.length;
+        assistant.turns = [[{ name: 'propose_stage_complete', args: { summary: 'The plan is ready.' } }], 'The areas are planned: have a look.'];
+        await page.evaluate(() => window.__editor.askAI('Go on.', true));
+        // The card comes after the assistant's last words, counting down.
+        const card = page.locator('.ai-panel .ai-msg.approval').last();
+        await expect(card.locator('.ai-auto')).toContainText('Approves and goes on in');
+        const order = await page.evaluate(() => [...document.querySelectorAll('.ai-panel .ai-list > .ai-msg')].slice(-2).map((m) => (m.classList.contains('approval') ? 'approval' : m.querySelector('.ai-bubble')?.textContent?.trim())));
+        expect(order).toEqual(['The areas are planned: have a look.', 'approval']);
+        // Nobody answers: the stage is completed and the assistant goes on.
+        await expect.poll(() => page.evaluate(() => window.__editor.store.doc.design.stage), { timeout: 30_000 }).toBe('level');
+        await expect.poll(() => assistant.sent.length, { timeout: 30_000 }).toBe(before + 3);
+        await expect(page.locator('.ai-panel .ai-msg.user').last()).toHaveText('No answer for 5 s: keep going.');
+        expect(JSON.stringify(assistant.sent[before + 2].messages.at(-1))).toContain('it counts as approved');
+        // Its answer waits again, counting down, until the user holds it.
+        const next = page.locator('.ai-panel .ai-next');
+        await expect(next.locator('.ai-auto')).toContainText('Goes on in');
+        await click('.ai-panel .ai-next .ai-auto button', 'Wait');
+        await expect(next.locator('.ai-auto')).toHaveCount(0);
+        await expect(next).toContainText('Like how it looks?');
+        await page.waitForTimeout(6000);
+        expect(assistant.sent.length).toBe(before + 3);
+    } finally {
+        await autoApprove(0);
+    }
+});
+
 test('sends attached images at the quality chosen, and counts what each request spent', async () => {
     const page = editor.page();
     await page.evaluate(async () => {
@@ -266,10 +345,17 @@ test('sends attached images at the quality chosen, and counts what each request 
     await expect.poll(() => page.evaluate(() => window.__editor.usage.entries.filter((e) => !e.running).length)).toBe(1);
     const entry = await page.evaluate(() => window.__editor.usage.entries[0]);
     expect(entry).toMatchObject({ kind: 'request', label: 'What is on it?', model: 'test/model', calls: 1, prompt: USAGE.prompt_tokens, cached: 1000, completion: USAGE.completion_tokens, sent: 1, seeQuality: 'low' });
-    await expect(page.locator('.ai-usage')).toHaveText('1.5k tok · 67% cached · $0.0020');
+    expect(entry.ms).toBeGreaterThan(0);
+    expect(entry.modelMs).toBeGreaterThan(0);
+    await expect(page.locator('.ai-usage')).toHaveText(/^1\.5k tok · \$0\.0020 · \d+ s · 67% cached$/);
     await click('.ai-usage');
     await expect(page.locator('.usage-modal .usage-table').first()).toContainText('Assistant requests');
     await expect(page.locator('.usage-modal')).toContainText('1 sent (low)');
+    // Beside the tokens and credits, how long the work took.
+    await click('.usage-modal .usage-views .seg-btn', 'Work time');
+    await expect(page.locator('.usage-modal .usage-stats')).toContainText('waiting for models');
+    await expect(page.locator('.usage-modal .usage-table').first()).toContainText('Outside the pipeline');
+    await click('.usage-modal .usage-views .seg-btn', 'Tokens and credits');
     await click('.usage-modal .dialog-footer button', 'Close');
 
     // Back to the default for the tests after this one.

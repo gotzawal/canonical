@@ -559,10 +559,17 @@ export class GLTFSubParserConverter {
             acc.normalize = false;
         }
 
+        // Morph targets go by the names the file gives them (the mesh's extras.targetNames, which
+        // glTF leaves optional), or else by their index.
+        let targetNames: string[] = primitive.targetNames;
+        if (primitive.morphTargetsRelative && !targetNames?.length) {
+            targetNames = [];
+            while (attribArrays[GLTFType.MORPH_POSITION_PREFIX + targetNames.length]) targetNames.push(String(targetNames.length));
+        }
+
         // BlendShapeData
         if (primitive.morphTargetsRelative) {
             let blendShapeData = new BlendShapeData();
-            let targetNames = primitive.targetNames;
             if (targetNames && targetNames.length > 0) {
                 blendShapeData.shapeNames = [];
                 blendShapeData.shapeIndexs = [];
@@ -593,7 +600,6 @@ export class GLTFSubParserConverter {
         // geometry.geometrySource = new SerializeGeometrySource().setGLTFGeometry(this.initUrl, name);
         //morphTarget
         geometry.morphTargetsRelative = primitive.morphTargetsRelative;
-        let targetNames = primitive.targetNames;
         if (targetNames && targetNames.length > 0) {
             let morphTargetDictionary = geometry.morphTargetDictionary = {} as any;
             for (let i = 0; i < targetNames.length; i++) {

@@ -545,7 +545,7 @@ function nodeSummary(doc: SceneDoc, n: NodeDoc): Json {
     if (n.camera) out.camera = { ...n.camera };
     if (n.character) {
         const c = n.character;
-        out.character = { speed: c.speed, run_speed: c.runSpeed, jump: c.jump, height: c.height, radius: c.radius, eye_height: c.eyeHeight, step_height: c.stepHeight, ...(c.collide ? {} : { collide: false }) };
+        out.character = { speed: c.speed, run_speed: c.runSpeed, jump: c.jump, height: c.height, radius: c.radius, eye_height: c.eyeHeight, step_height: c.stepHeight, max_slope: c.maxSlope, ...(c.collide ? {} : { collide: false }) };
     }
     if (n.player) {
         const p = n.player;

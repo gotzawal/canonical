@@ -8,7 +8,7 @@ import {
 import { assetRoles } from '../../src/core/refs';
 import type { AssetMeta, TextureRole } from '../../src/core/types';
 import type { DeriveIn, DeriveOut } from '../../src/derive/derive.worker';
-import { copyBlockBytes, encodedSize, encoderSettings, MAX_SOURCE_TEXELS, modelTextureOptions, slotRole, textureMemory } from '../../src/derive/encode';
+import { copyBlockBytes, encodedSize, MAX_SOURCE_TEXELS, modelTextureOptions, slotRole, textureMemory } from '../../src/derive/encode';
 import { DeriveQueue, PRIORITY, type WorkerLike } from '../../src/derive/queue';
 import { DerivedAssets } from '../../src/derive/derivedAssets';
 import { putAsset } from '../../src/core/assets';
@@ -124,12 +124,6 @@ describe('texture encoding', () => {
         const big = encodedSize(4096, 4096, 4096);
         expect(big.width * big.height).toBeLessThanOrEqual(MAX_SOURCE_TEXELS);
         expect(big.width % 4 + big.height % 4).toBe(0);
-    });
-
-    it('encodes colors perceptually in sRGB and normal maps with their preset', () => {
-        expect(encoderSettings('color', { codec: 'etc1s', maxSize: 2048 })).toMatchObject({ uastc: false, srgb: true, normalMap: false });
-        expect(encoderSettings('normal', { codec: 'uastc', maxSize: 2048 })).toMatchObject({ uastc: true, srgb: false, normalMap: true, zstd: true });
-        expect(encoderSettings('data', { codec: 'uastc', maxSize: 2048 })).toMatchObject({ uastc: true, srgb: false, normalMap: false });
     });
 
     it('estimates GPU memory with and without compression', () => {

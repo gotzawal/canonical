@@ -273,7 +273,7 @@ export const STAGES: StageDef[] = [
                     const ok = r.filter((p) => p.visited).length;
                     return { done: ok === r.length, detail: r.length ? count(ok, r.length, 'points') : 'no route' };
                 },
-                hint: 'Use the walk camera: points are ticked when you pass them.',
+                hint: 'Walk it with the walk camera (points are ticked as you pass them), or let the assistant walk it with the player\'s body (walk_route).',
             },
             {
                 id: 'level.sightlines',
@@ -283,6 +283,7 @@ export const STAGES: StageDef[] = [
                     const ok = v.filter((s) => s.ok === true).length;
                     return { done: ok === v.length, detail: v.length ? count(ok, v.length, 'clear') : 'none listed' };
                 },
+                hint: 'Mark them in the Design tab, or let the assistant check them from eye height (check_sightline).',
             },
             {
                 id: 'level.closed',
@@ -295,7 +296,7 @@ export const STAGES: StageDef[] = [
                 },
                 hint: 'Check the level in the Design tab, or let the assistant run check_level.',
             },
-            { id: 'level.play', text: 'Play check passed (scale, paths, heights)' },
+            { id: 'level.play', text: 'Play check passed (scale, paths, heights)', hint: 'Walk it in Play, or let the assistant walk the route with the player\'s body (walk_route) and tick it.' },
             {
                 id: 'level.paintovers',
                 text: 'Every shot has a chosen reference image, painted over the greybox',

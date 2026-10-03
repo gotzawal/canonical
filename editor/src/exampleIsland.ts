@@ -3,12 +3,13 @@
 // (soil, beach sand, gravel, cliff rock), the sea around it, woods of oaks
 // and birches on its lower slopes and spruces higher up, mossy rocks on
 // the gravel, ferns and a meadow of grass swaying in one wind, loose
-// stones, and fair-weather clouds on a late afternoon; and the player (a
+// stones, and fair-weather clouds on a late afternoon; the player (a
 // capsule) on its gentle south-west shore, to walk it in Play (keys, or
-// the joystick on a touch screen). It is built with the editor's own
-// commands (the heightmap is made, the Library's files are fetched), so it
-// opens like a scene the user made. Phones and weak GPUs (the low tier)
-// get a lighter island.
+// the joystick on a touch screen), and a shiba that trots after the player
+// and keeps coming up from behind (examplePets.ts). It is built with the
+// editor's own commands (the heightmap is made, the Library's files are
+// fetched), so it opens like a scene the user made. Phones and weak GPUs
+// (the low tier) get a lighter island.
 
 import { defaultPlayer, makeCharacterNode } from './core/character';
 import { defaultTree, emptyScene, forestScatter } from './core/defaults';
@@ -17,8 +18,9 @@ import { Scatter, ScatterSource } from './core/model';
 import { defaults } from './core/schema';
 import { defaultDesign } from './core/design';
 import { BUILTIN_CATALOG, loadCatalog, type LibraryItem } from './core/library';
+import { addDog, DOG_MODEL } from './examplePets';
 import type { Store } from './core/store';
-import type { CameraState, SceneDoc, ScatterDoc, TerrainLayerDoc, Vec3 } from './core/types';
+import type { AssetSource, CameraState, SceneDoc, ScatterDoc, TerrainLayerDoc, Vec3 } from './core/types';
 import type { NewTerrain } from './design/terrainEdit';
 
 /** The editor commands the example is built with. */
@@ -35,6 +37,8 @@ export interface IslandEditor {
     createScatter(scatter: ScatterDoc, opts?: { name?: string; at?: Vec3 }): string;
     addLibraryMaterial(item: LibraryItem, slot?: string): Promise<unknown>;
     addFromLibrary(item: LibraryItem, opts: { place: boolean }): Promise<{ asset: { id: string } }>;
+    /** Copies a model from a link into the project (the dog, served with the examples). */
+    importUrl(url: string, opts: { place: boolean; name: string; kind: 'model'; source: AssetSource }): Promise<{ asset: { id: string } }>;
 }
 
 /** Library items it uses: the ground's materials and the models standing on it. */
@@ -160,6 +164,20 @@ export async function buildIsland(editor: IslandEditor): Promise<void> {
     editor.store.commit('Player', (d) => {
         d.nodes.push(player);
     });
+    // The dog stands beside the player on dry ground, looking the same way.
+    const facing = player.rotation[1];
+    const dog = [90, -90, 180, 135, -135]
+        .map((turn): Vec3 => {
+            const a = ((facing + turn) * Math.PI) / 180;
+            const x = feet[0] + Math.sin(a) * 2;
+            const z = feet[2] + Math.cos(a) * 2;
+            return [tidy(x, 3), tidy(ground(x, z) ?? -1, 3), tidy(z, 3)];
+        })
+        .find((p) => p[1] > 0.3);
+    if (dog) {
+        const model = await editor.importUrl(DOG_MODEL.url, { place: false, name: DOG_MODEL.name, kind: 'model', source: DOG_MODEL.source });
+        editor.store.commit('Dog', (d) => addDog(d, dog, facing, model.asset.id));
+    }
 
     // The meadow lies around the player's first steps, more of it ahead toward the hills; grass thins out on sand and rock by itself.
     const grass = editor.createGrass();

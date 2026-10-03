@@ -96,10 +96,8 @@ export function menuDefinitions(
             label: 'File',
             items: (): MenuItem[] => [
                 { label: 'New Empty Scene', icon: 'plus', action: () => void editor.newScene('empty') },
-                { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
-                { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
-                { label: 'Open Example: Night Laundromat (Full Project)', action: () => void editor.newScene('laundromat') },
-                { label: 'Open Example: Island (Terrain, Trees, Weather, Player)', action: () => void editor.newScene('island') },
+                { label: 'Open Example: Night Laundromat', action: () => void editor.newScene('laundromat') },
+                { label: 'Open Example: Island', action: () => void editor.newScene('island') },
                 { separator: true },
                 cmd('file.open'),
                 { label: 'Open Link...', icon: 'link', action: () => void openFromLink(editor) },

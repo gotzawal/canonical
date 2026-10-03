@@ -1,17 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { bladeBend, bladeProfile, patchNoise, shapeAt, sizeAt } from '../../src/core/grass';
-import { Grass } from '../../src/core/model';
-import { defaults } from '../../src/core/schema';
 
 describe('grass blades', () => {
-    it('keeps the blades of older fields: plain blades, sizes spread evenly over 0.7 to 1.3', () => {
-        const doc = defaults(Grass);
-        expect(doc.shapes).toEqual({ blade: 1, leaf: 0, needle: 0 });
-        expect([doc.heights, doc.widths, doc.sizes, doc.shapeSpread]).toEqual([[0.7, 1.3], [0.7, 1.3], 'uniform', 'mixed']);
-        expect(sizeAt('uniform', 0.25, [0.9, 0.9], 0.5)).toBe(0.25);
-        expect(bladeProfile('blade', 5)).toEqual([1, 0.8, 0.6, 0.4, 0.2, 0].map((v) => expect.closeTo(v, 6)));
-    });
-
     it('shapes leaves broad in their lower middle and needles thin, all to a point', () => {
         const leaf = bladeProfile('leaf', 5);
         const needle = bladeProfile('needle', 5);

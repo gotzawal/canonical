@@ -31,6 +31,7 @@ const ACTIVITY: Record<string, string> = {
     // level
     build_rooms: 'Building rooms',
     check_level: 'Checking the level',
+    walk_route: 'Walking the route',
     place_player: 'Placing the player',
     create_prefab: 'Making a reusable piece',
     place_prefab: 'Placing pieces',
