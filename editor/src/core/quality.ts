@@ -2,9 +2,10 @@
 // the editor always did; lower tiers use smaller shadow maps, cover less
 // shadow range, drop the costly effects and render fewer pixels. Built
 // games pick a tier for the device they run on (Environment.quality
-// 'auto'); the editor draws the high tier unless View > Graphics Quality
-// previews another. No engine imports: the player decides before the
-// engine starts, and the unit tests run it in Node.
+// 'auto'); the editor draws the high tier on computers and the low one on
+// phones and tablets, unless View > Graphics Quality previews another. No
+// engine imports: the player decides before the engine starts, and the
+// unit tests run it in Node.
 
 export const QUALITY_LEVELS = ['low', 'medium', 'high'] as const;
 export type QualityLevel = (typeof QUALITY_LEVELS)[number];
@@ -90,6 +91,16 @@ export const isQualityLevel = (v: unknown): v is QualityLevel => QUALITY_LEVELS.
 export function resolveQuality(setting: QualitySetting | undefined, device: QualityLevel, override?: QualityLevel | null): QualityLevel {
     if (override) return override;
     return setting && setting !== 'auto' ? setting : device;
+}
+
+/**
+ * The device's tier in the editor: high on computers, to show a scene at
+ * its best, and low on phones and tablets, as games there pick (their
+ * memory and fill rate are small). Scenes that name a tier draw it; View >
+ * Graphics Quality previews another.
+ */
+export function editorQuality(mobile = isMobileDevice()): QualityLevel {
+    return mobile ? 'low' : 'high';
 }
 
 /** Whether the browser runs on a phone or tablet, from its user agent (iPads report a Mac one, but have touch). */

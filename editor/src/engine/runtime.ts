@@ -61,9 +61,9 @@ export class Runtime {
     /** Draw calls and GPU memory, counted at the WebGPU API (null when not asked for). */
     readonly stats: GpuStats | null;
     /**
-     * The quality tier of this device (the editor: high). Its shadow map
-     * sizes were fixed when the engine started; the rest of a tier is
-     * applied with the environment.
+     * The quality tier of this device (the editor: high, low on phones and
+     * tablets; see editorQuality). Its shadow map sizes were fixed when the
+     * engine started; the rest of a tier is applied with the environment.
      */
     readonly deviceQuality: QualityLevel;
     /** A tier previewed instead of the document's (View > Graphics Quality, ?quality=). */
@@ -152,8 +152,8 @@ export class Runtime {
 
     /**
      * `stats` counts draw calls and GPU memory (the editor's status bar); it
-     * has to start before the engine. `quality` is the device's tier (the
-     * editor: high): its shadow map sizes are fixed from here on.
+     * has to start before the engine. `quality` is the device's tier (high
+     * by default): its shadow map sizes are fixed from here on.
      */
     static async create(canvas: HTMLCanvasElement, opts: { stats?: boolean; quality?: QualityLevel } = {}): Promise<Runtime> {
         let runtime: Runtime | null = null;
