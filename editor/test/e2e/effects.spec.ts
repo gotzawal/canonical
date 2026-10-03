@@ -142,6 +142,13 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
     });
     expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 
+    // A group none of whose copies casts a shadow is no shadow caster.
+    await page.evaluate(() => window.__editor.store.commit('No shadows', (d) => {
+        for (const n of d.nodes) if (n.parent === 'copies' && n.mesh) n.mesh.castShadow = false;
+    }));
+    await measure(page, 3);
+    expect(await page.evaluate(() => window.__editor.sync.entries.get('copies')!.instancer!.castShadow)).toBe(false);
+
     // Without instancing they draw on their own again.
     await page.evaluate(() => window.__editor.store.commit('Off', (d) => {
         delete d.nodes.find((n) => n.id === 'copies')!.instancing;
@@ -165,4 +172,41 @@ test('plays a scene with rain and stops it, the rain back as it was', async () =
     await page.evaluate(() => window.__editor.stopPlay());
     expect(await page.evaluate(() => window.__editor.player.state)).toBe('stopped');
     expect(await page.evaluate(() => !!window.__editor.sync.entries.get('rain')?.rain)).toBe(true);
+});
+
+test('keeps the sun\'s shadow map while nothing moves, with particles and copies a script may move in it', async () => {
+    test.setTimeout(240_000);
+    const page = editor.page();
+    // Smoke, and instanced copies of the cube that cast no shadow, one with a script.
+    await page.evaluate(() => {
+        const ed = window.__editor;
+        ed.createParticles('smoke');
+        ed.store.commit('Copies', (d) => {
+            const cube = d.nodes.find((n) => n.name === 'Cube')!;
+            const copy = (id: string, patch: object) => ({ ...JSON.parse(JSON.stringify(cube)), id, name: id, ...patch });
+            const group = copy('copies', { instancing: {} });
+            delete group.mesh;
+            d.nodes.push(group);
+            for (let i = 0; i < 3; i++) d.nodes.push(copy(`copy${i}`, { parent: 'copies', position: [i * 1.5 - 2, 0.5, -3], mesh: { ...cube.mesh!, castShadow: false } }));
+        });
+        ed.createScript({ name: 'Turn', code: 'export default class Turn extends Script {\n    update(dt) { this.object3D.rotationY += 90 * dt; }\n}\n', attachTo: ['copy0'], open: false });
+    });
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
+    // Neither is a caster that changes every frame: the map drawn once is kept.
+    const drawn = await page.evaluate(async () => {
+        const rt = window.__editor.runtime;
+        const pass = rt.view.renderGraph!.getPass('ShadowPass') as any;
+        const out: number[] = [];
+        for (let i = 0; i < 6; i++) {
+            await new Promise<void>((resolve) => {
+                const off = rt.onFrame(() => {
+                    off();
+                    resolve();
+                });
+            });
+            out.push(pass.drawnMaps);
+        }
+        return out;
+    });
+    expect(drawn).toEqual([0, 0, 0, 0, 0, 0]);
 });
