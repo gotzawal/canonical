@@ -3127,9 +3127,13 @@ kbd {
     min-width: 0;
 }
 
-/* Token usage of a project (ui/usageDialog.ts). */
+/* Token usage and work time of a project (ui/usageDialog.ts). */
 .dialog.usage-modal {
     width: min(920px, 100%);
+}
+
+.usage-views {
+    align-self: flex-start;
 }
 
 .usage {

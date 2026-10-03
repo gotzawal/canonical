@@ -354,6 +354,7 @@ export class Agent extends Emitter<AgentEvents> {
                 last = turn;
                 this.setActivity('');
                 const imagesIn = imageTokensOf(this.history, model);
+                const asked = performance.now();
                 const res = await chat(
                     key,
                     {
@@ -371,7 +372,7 @@ export class Agent extends Emitter<AgentEvents> {
                         },
                     },
                 );
-                task.chat(model, res.usage, { imageTokens: imagesIn, work: workOf(res.message.tool_calls ?? []) });
+                task.chat(model, res.usage, { imageTokens: imagesIn, work: workOf(res.message.tool_calls ?? []), ms: performance.now() - asked });
                 cut();
                 this.history.push(res.message);
                 // Images are sent once; later requests only mention them. With a
@@ -434,6 +435,7 @@ export class Agent extends Emitter<AgentEvents> {
                     toolTurn.tool!.result = content;
                     this.history.push({ role: 'tool', tool_call_id: call.id, content });
                     this.emit('update', toolTurn);
+                    task.toolDone();
                 }
                 if (images.length) {
                     if (vision) {
@@ -578,6 +580,7 @@ export class Agent extends Emitter<AgentEvents> {
         this.working = true;
         this.emit('busy', this.busy);
         const task = this.editor.usage.begin('summary', auto ? 'Summary of a long conversation' : 'Summary of the conversation');
+        const asked = performance.now();
         try {
             const res = await chat(
                 cred.key,
@@ -594,7 +597,7 @@ export class Agent extends Emitter<AgentEvents> {
                 },
                 { signal },
             );
-            task.chat(cred.model, res.usage);
+            task.chat(cred.model, res.usage, { ms: performance.now() - asked });
             if (this.generation !== gen) return false;
             const summary = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!summary) throw new Error('The model returned an empty summary.');
@@ -683,6 +686,7 @@ export class Agent extends Emitter<AgentEvents> {
             ...pipelineSummary(doc),
             ...designSummary(doc),
         ].join('\n');
+        const asked = performance.now();
         try {
             const res = await chat(cred.key, {
                 model: cred.model,
@@ -695,7 +699,7 @@ export class Agent extends Emitter<AgentEvents> {
                 ...this.cacheRequest,
                 cacheable: false,
             }, { signal: job.abort.signal });
-            task.chat(cred.model, res.usage);
+            task.chat(cred.model, res.usage, { ms: performance.now() - asked });
             if (this.sessionKey !== session) return false;
             const text = typeof res.message.content === 'string' ? res.message.content.trim() : '';
             if (!text) return false;

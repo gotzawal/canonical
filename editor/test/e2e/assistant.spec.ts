@@ -345,10 +345,17 @@ test('sends attached images at the quality chosen, and counts what each request 
     await expect.poll(() => page.evaluate(() => window.__editor.usage.entries.filter((e) => !e.running).length)).toBe(1);
     const entry = await page.evaluate(() => window.__editor.usage.entries[0]);
     expect(entry).toMatchObject({ kind: 'request', label: 'What is on it?', model: 'test/model', calls: 1, prompt: USAGE.prompt_tokens, cached: 1000, completion: USAGE.completion_tokens, sent: 1, seeQuality: 'low' });
-    await expect(page.locator('.ai-usage')).toHaveText('1.5k tok · 67% cached · $0.0020');
+    expect(entry.ms).toBeGreaterThan(0);
+    expect(entry.modelMs).toBeGreaterThan(0);
+    await expect(page.locator('.ai-usage')).toHaveText(/^1\.5k tok · \$0\.0020 · \d+ s · 67% cached$/);
     await click('.ai-usage');
     await expect(page.locator('.usage-modal .usage-table').first()).toContainText('Assistant requests');
     await expect(page.locator('.usage-modal')).toContainText('1 sent (low)');
+    // Beside the tokens and credits, how long the work took.
+    await click('.usage-modal .usage-views .seg-btn', 'Work time');
+    await expect(page.locator('.usage-modal .usage-stats')).toContainText('waiting for models');
+    await expect(page.locator('.usage-modal .usage-table').first()).toContainText('Outside the pipeline');
+    await click('.usage-modal .usage-views .seg-btn', 'Tokens and credits');
     await click('.usage-modal .dialog-footer button', 'Close');
 
     // Back to the default for the tests after this one.

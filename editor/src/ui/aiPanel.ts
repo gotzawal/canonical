@@ -20,7 +20,7 @@ import { clear, h } from './dom';
 import { icon } from './icons';
 import { mascotAvatar, mascotPose, setMascotMood, type MascotMood, type MascotPose } from './mascot';
 import { dialog, popover, toast } from './overlays';
-import { openUsageDialog, tokens } from './usageDialog';
+import { credits, duration, openUsageDialog, shortDuration, tokens } from './usageDialog';
 import { CheckboxField, NumberField, SelectField, SliderField, button, iconButton, row, suggestions } from './widgets';
 
 const SUGGESTIONS = [
@@ -55,7 +55,7 @@ export class AIPanel {
     private input: HTMLTextAreaElement;
     private sendBtn: HTMLButtonElement;
     private modelLabel: HTMLElement;
-    /** The project's tokens and credits; opens their statistics. */
+    /** The project's tokens, credits and work time; opens their statistics. */
     private usageLabel: HTMLButtonElement;
     /** How sharp the images are that go to the models and come from them. */
     private qualityBtn: HTMLButtonElement;
@@ -369,11 +369,13 @@ export class AIPanel {
         const t = this.editor.usage.totals();
         const all = t.prompt + t.completion;
         const hit = t.prompt ? Math.round((t.cached / t.prompt) * 100) : 0;
-        const parts = [all ? `${tokens(all)} tok` : '', t.cached ? `${hit}% cached` : '', t.cost ? `$${t.cost.toFixed(4)}` : ''].filter(Boolean);
+        const ms = this.editor.usage.workTime();
+        // A narrow header cuts the end off: the cache's share goes first.
+        const parts = [all ? `${tokens(all)} tok` : '', t.cost ? credits(t.cost) : '', ms ? shortDuration(ms) : '', t.cached ? `${hit}% cached` : ''].filter(Boolean);
         this.usageLabel.textContent = parts.join(' · ') || 'Usage';
         this.usageLabel.title = t.count
-            ? `This project: ${t.calls} model calls, ${(t.prompt - t.imageTokens).toLocaleString()} text + about ${t.imageTokens.toLocaleString()} image input tokens, ${t.completion.toLocaleString()} output tokens${t.cached ? `, ${t.cached.toLocaleString()} input tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}. Click for the statistics per piece of work.`
-            : 'Token usage of this project, per piece of work';
+            ? `This project: ${t.calls} model calls, ${(t.prompt - t.imageTokens).toLocaleString()} text + about ${t.imageTokens.toLocaleString()} image input tokens, ${t.completion.toLocaleString()} output tokens${t.cached ? `, ${t.cached.toLocaleString()} input tokens read from the cache (${hit}%)` : ''}${t.made ? `, ${t.made} images made` : ''}, ${duration(ms)} of work. Click for the statistics per piece of work: tokens and credits, and work time.`
+            : 'Token usage and work time of this project, per piece of work';
     }
 
     /** Picks how sharp the images are that the assistant sees and has drawn, for the next ones. */

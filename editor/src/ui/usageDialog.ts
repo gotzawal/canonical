@@ -1,13 +1,16 @@
-// The project's token usage, per piece of work (ai/usage.ts): totals, what
-// kind of work (the assistant's requests split by what their model calls
-// worked on) and which stage spent it, per model, the costliest pieces and
-// the latest ones, with a CSV download. Input tokens are shown as text and
-// images, apart from the output. The chat's token count opens it.
+// The project's usage, per piece of work (ai/usage.ts), in two views side by
+// side. Tokens and credits: totals, what kind of work (the assistant's
+// requests split by what their model calls worked on) and which stage spent
+// it, per model, the costliest pieces and the latest ones; input tokens are
+// shown as text and images, apart from the output. Work time: how long the
+// work took, waiting for the models and running tools, by stage, kind of
+// work and day, and the longest pieces. A CSV download has both. The chat's
+// token count and its work time open it.
 
 import { download } from '../core/persistence';
 import type { Editor } from '../editor';
 import {
-    groupTotals, modelTotals, tokensOf, usageCsv, USAGE_KINDS, WORK_KINDS, workTotals, type UsageEntry, type UsageKind, type UsageTotals, type WorkKind,
+    addTotals, emptyTotals, groupTotals, modelTotals, timed, tokensOf, usageCsv, USAGE_KINDS, WORK_KINDS, workTotals, type UsageEntry, type UsageKind, type UsageTotals, type WorkKind,
 } from '../ai/usage';
 import type { StageId } from '../core/types';
 import { stageDef } from '../design/stages';
@@ -19,22 +22,37 @@ import { button } from './widgets';
 /** Rows the list of recent work shows. */
 const RECENT = 60;
 
-let open: Modal | null = null;
+export type UsageView = 'tokens' | 'time';
 
-export function openUsageDialog(editor: Editor) {
-    if (open && !open.closed) return;
+let open: { modal: Modal; show: (view: UsageView) => void } | null = null;
+/** The view shown last: the dialog opens on it again. */
+let lastView: UsageView = 'tokens';
+
+export function openUsageDialog(editor: Editor, view: UsageView = lastView) {
+    if (open && !open.modal.closed) return open.show(view);
     const log = editor.usage;
     const body = h('div', { class: 'usage' });
     let frame = 0;
+    const views: [UsageView, string][] = [['tokens', 'Tokens and credits'], ['time', 'Work time']];
     const render = () => {
         frame = 0;
         clear(body);
-        body.append(...content(log.entries, log.totals()));
+        const tabs = h('div', { class: 'seg usage-views', attrs: { role: 'tablist' } });
+        for (const [v, label] of views) {
+            const b = h('button', { class: 'seg-btn' + (v === view ? ' on' : ''), text: label, attrs: { type: 'button', role: 'tab', 'aria-selected': String(v === view) } });
+            b.addEventListener('click', () => show(v));
+            tabs.appendChild(b);
+        }
+        body.append(tabs, ...(view === 'tokens' ? content(log.entries, log.totals()) : timeContent(log.entries, !!log.older?.count)));
+    };
+    const show = (v: UsageView) => {
+        view = lastView = v;
+        render();
     };
     const off = log.on('change', () => {
         frame ||= requestAnimationFrame(render);
     });
-    const m = modal(`Token Usage: ${editor.store.doc.name}`, body, {
+    const m = modal(`Usage: ${editor.store.doc.name}`, body, {
         cls: 'usage-modal',
         onClose: () => {
             off();
@@ -42,7 +60,7 @@ export function openUsageDialog(editor: Editor) {
             open = null;
         },
     });
-    open = m;
+    open = { modal: m, show };
     const csv = button('Download CSV', () => {
         const stem = editor.store.doc.name.normalize('NFKD').replace(/[^\w-]+/g, '-').replace(/^-|-$/g, '').slice(0, 40) || 'scene';
         download(new Blob([usageCsv(log.entries)], { type: 'text/csv' }), `${stem}-token-usage.csv`);
@@ -78,8 +96,9 @@ function content(entries: readonly UsageEntry[], all: UsageTotals): Node[] {
     ].filter((n): n is HTMLElement => !!n);
 }
 
+const stat = (label: string, value: string, title = '') => h('div', { class: 'usage-stat', title }, h('div', { class: 'usage-stat-value', text: value }), h('div', { class: 'usage-stat-label', text: label }));
+
 function summary(t: UsageTotals): HTMLElement {
-    const stat = (label: string, value: string, title = '') => h('div', { class: 'usage-stat', title }, h('div', { class: 'usage-stat-value', text: value }), h('div', { class: 'usage-stat-label', text: label }));
     return h(
         'div',
         { class: 'usage-stats' },
@@ -148,7 +167,7 @@ function entryTable(entries: UsageEntry[]): HTMLElement {
         ['When', 'Work', 'Stage', 'Calls', 'Text in', 'Image in', 'Cached', 'Output', 'Images', 'Credits', 'Time'],
         entries.map((e) => [
             when(e.at),
-            h('span', { class: 'usage-work', text: e.label, title: `${USAGE_KINDS[e.kind]}: ${e.label}${e.model ? `\n${e.model}` : ''}${e.imageModel ? `\n${e.imageModel}` : ''}${e.tools ? `\n${e.tools} tool calls` : ''}${workLines(e)}` }),
+            workCell(e),
             e.stage ? stageDef(e.stage).title : '-',
             e.calls ? e.calls.toLocaleString() : '-',
             tokens(e.prompt - (e.imageTokens ?? 0)),
@@ -157,9 +176,147 @@ function entryTable(entries: UsageEntry[]): HTMLElement {
             tokens(e.completion),
             images(e),
             credits(e.cost + e.imageCost),
-            e.running ? 'running' : `${Math.max(0.1, e.ms / 1000).toFixed(1)} s`,
+            e.running ? 'running' : duration(e.ms),
         ]),
     );
+}
+
+/** What a piece of work was, with its models, tool calls and parts in the tooltip. */
+function workCell(e: UsageEntry): HTMLElement {
+    return h('span', { class: 'usage-work', text: e.label, title: `${USAGE_KINDS[e.kind]}: ${e.label}${e.model ? `\n${e.model}` : ''}${e.imageModel ? `\n${e.imageModel}` : ''}${e.tools ? `\n${e.tools} tool calls` : ''}${workLines(e)}` });
+}
+
+// ---------------------------------------------------------------- work time
+
+/**
+ * How long the work of the project took: the summary, by stage, by kind of
+ * work (the assistant's requests by what they worked on), by day, and the
+ * longest pieces. Scripts calling a model in Play are left out: their time
+ * is a game being played. `older`: some work is only in the token totals.
+ */
+function timeContent(entries: readonly UsageEntry[], older: boolean): Node[] {
+    const work = entries.filter((e) => timed(e) && !e.running);
+    const t = work.reduce(addTotals, emptyTotals());
+    if (!t.count) {
+        return [h('p', { class: 'muted', text: 'No work timed on this project yet. Each request of the assistant, conversation summary, memo and image made by hand shows up here with how long it took.' })];
+    }
+    const longest = [...work].sort((a, b) => b.ms - a.ms).slice(0, 5);
+    const days = groupTotals(work, (e) => dayKey(e.at)).sort((a, b) => b[0].localeCompare(a[0]));
+    return [
+        timeSummary(t, work),
+        h('p', {
+            class: 'muted small',
+            text: 'Each request counts from the message to the end of its answer: waiting for the model (writing its answer and tool calls) and running the editor\'s tools '
+                + '(building, checking, capturing, drawing images), with the editor\'s own steps between them. Requests from before this was measured have no parts. '
+                + `Scripts calling a model in Play are left out.${older ? ' So is the oldest work, which only the token totals keep.' : ''}`,
+        }),
+        section('By stage', timeTable('Stage', byTime(groupTotals(work, (e) => e.stage ?? '-')), t.ms, (k) => (k === '-' ? 'Outside the pipeline' : stageDef(k as StageId).title))),
+        section('By kind of work', timeKindTable(work, t.ms)),
+        section('By day', timeTable('Day', days, t.ms, dayName)),
+        section('Longest work', longestTable(longest)),
+    ];
+}
+
+function timeSummary(t: UsageTotals, work: readonly UsageEntry[]): HTMLElement {
+    const requests = work.filter((e) => e.kind === 'request');
+    const today = new Date().toDateString();
+    const share = (ms: number) => (t.splitMs ? ` (${Math.round((ms / t.splitMs) * 100)}%)` : '');
+    return h(
+        'div',
+        { class: 'usage-stats' },
+        stat('work time', duration(t.ms), `${t.count.toLocaleString()} pieces of work`),
+        stat(`waiting for models${share(t.modelMs)}`, t.splitMs ? duration(t.modelMs) : '-', 'The language models writing their answers and tool calls (of the work timed in parts)'),
+        stat(`running tools${share(t.toolMs)}`, t.splitMs ? duration(t.toolMs) : '-', 'The editor running the tools the assistant called (of the work timed in parts)'),
+        stat('per request', requests.length ? duration(requests.reduce((n, e) => n + e.ms, 0) / requests.length) : '-', `${requests.length.toLocaleString()} requests`),
+        stat('longest request', requests.length ? duration(Math.max(...requests.map((e) => e.ms))) : '-'),
+        stat('today', duration(work.filter((e) => new Date(e.at).toDateString() === today).reduce((n, e) => n + e.ms, 0))),
+    );
+}
+
+const TIME_HEAD = ['Count', 'Time', 'Share', 'Models', 'Tools', 'Average'];
+
+/** A group's time, its share of `all`, its parts where measured, and the average piece. */
+function timeCells(t: UsageTotals, all: number): string[] {
+    return [
+        t.count.toLocaleString(),
+        duration(t.ms),
+        all ? `${Math.round((t.ms / all) * 100)}%` : '-',
+        t.modelMs ? duration(t.modelMs) : '-',
+        t.toolMs ? duration(t.toolMs) : '-',
+        t.count ? duration(t.ms / t.count) : '-',
+    ];
+}
+
+const byTime = <K>(rows: [K, UsageTotals][]) => [...rows].sort((a, b) => b[1].ms - a[1].ms);
+
+function timeTable(what: string, rows: [string, UsageTotals][], all: number, name: (key: string) => string): HTMLElement {
+    return table(1, [what, ...TIME_HEAD], rows.map(([k, t]) => [name(k), ...timeCells(t, all)]));
+}
+
+/** The kinds of work by time, the assistant's requests with a row for each thing their model calls and tools worked on. */
+function timeKindTable(work: readonly UsageEntry[], all: number): HTMLElement {
+    const rows: (string | HTMLElement)[][] = [];
+    const sub: number[] = [];
+    for (const [k, t] of byTime(groupTotals(work, (e) => e.kind))) {
+        rows.push([USAGE_KINDS[k as UsageKind] ?? k, ...timeCells(t, all)]);
+        if (k !== 'request') continue;
+        for (const [w, wt] of byTime(workTotals(work))) {
+            if (!wt.ms) continue;
+            sub.push(rows.length);
+            rows.push([h('span', { class: 'usage-sub-name', text: w ? WORK_KINDS[w] ?? w : 'Not split (earlier requests)' }), ...timeCells(wt, all)]);
+        }
+    }
+    const el = table(1, ['Work', ...TIME_HEAD], rows);
+    const trs = el.querySelectorAll('tbody tr');
+    for (const i of sub) trs[i]?.classList.add('usage-sub');
+    return el;
+}
+
+function longestTable(entries: UsageEntry[]): HTMLElement {
+    return table(
+        3,
+        ['When', 'Work', 'Stage', 'Time', 'Models', 'Tools', 'Tool calls'],
+        entries.map((e) => [
+            when(e.at),
+            workCell(e),
+            e.stage ? stageDef(e.stage).title : '-',
+            duration(e.ms),
+            e.modelMs ? duration(e.modelMs) : '-',
+            e.toolMs ? duration(e.toolMs) : '-',
+            e.tools ? e.tools.toLocaleString() : '-',
+        ]),
+    );
+}
+
+/** A time span: "0.4 s", "42 s", "4 min 05 s", "1 h 12 min". */
+export function duration(ms: number): string {
+    const s = Math.max(0, ms) / 1000;
+    if (s < 10) return `${s.toFixed(1)} s`;
+    if (s < 60) return `${Math.floor(s)} s`;
+    const m = Math.floor(s / 60);
+    if (m < 60) return `${m} min ${String(Math.floor(s % 60)).padStart(2, '0')} s`;
+    return `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+
+/** A time span in short, for the chat's header: "42 s", "25 min", "1 h 12 min". */
+export function shortDuration(ms: number): string {
+    const s = Math.max(0, ms) / 1000;
+    if (s < 60) return `${Math.max(1, Math.round(s))} s`;
+    const m = Math.floor(s / 60);
+    return m < 60 ? `${m} min` : `${Math.floor(m / 60)} h ${String(m % 60).padStart(2, '0')} min`;
+}
+
+/** The local day of a time, as it sorts: "2026-10-03". */
+function dayKey(at: number): string {
+    const d = new Date(at);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+function dayName(key: string): string {
+    const [y, m, d] = key.split('-').map(Number);
+    const day = new Date(y, m - 1, d);
+    if (day.toDateString() === new Date().toDateString()) return 'Today';
+    return day.toLocaleDateString(undefined, { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
 /** A table whose first `words` columns are text, the rest numbers. */
@@ -192,7 +349,7 @@ export function tokens(n: number): string {
     return n < 1000 ? String(n) : n < 1_000_000 ? `${(n / 1000).toFixed(1)}k` : `${(n / 1_000_000).toFixed(2)}M`;
 }
 
-function credits(v: number): string {
+export function credits(v: number): string {
     return v > 0 ? `$${v.toFixed(v < 0.1 ? 4 : 2)}` : '-';
 }
 
