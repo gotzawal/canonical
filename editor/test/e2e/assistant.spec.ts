@@ -122,7 +122,8 @@ test('grows a tree and a forest of trees with its tools, and bakes the forest in
         [{ name: 'create_objects', args: { objects: [{ type: 'tree', position: [6, 0, 2], tree: { species: 'spruce', autumn: 0.5, leaf_tint: '#ddeecc' } }] } }],
         [{
             name: 'scatter',
-            args: { name: 'Wood', position: [0, 0, -20], size: [30, 30], count: 10, spacing: 5, sources: [{ tree: { species: 'birch', seed: 7 } }, { tree: { species: 'oak', height: 12 }, weight: 2, solid: 'none' }] },
+            // Mostly birches: which source each copy takes follows the scatter's id, new every run.
+            args: { name: 'Wood', position: [0, 0, -20], size: [30, 30], count: 10, spacing: 5, sources: [{ tree: { species: 'birch', seed: 7 }, weight: 3 }, { tree: { species: 'oak', height: 12 }, solid: 'none' }] },
         }],
         // Another species keeps the rest of the tree.
         [{ name: 'update_objects', args: { updates: [{ id: 'Spruce', tree: { species: 'oak', height: 9 } }] } }],
@@ -139,6 +140,8 @@ test('grows a tree and a forest of trees with its tools, and bakes the forest in
     const placed = results[1] as { copies: number; sources: { tree: string; copies: number }[]; solid_copies: number };
     expect(placed.copies).toBeGreaterThan(3);
     expect(placed.sources.map((s) => s.tree)).toEqual(['birch', 'oak']);
+    // Birches three times as often: none of ten would be one run in a million.
+    expect(placed.sources[0].copies).toBeGreaterThan(0);
     expect(placed.solid_copies).toBe(placed.sources[0].copies);
     const listed = (results[3] as { objects: { name: string; type: string; tree?: unknown; scatter?: { sources: unknown[] } }[] }).objects;
     expect(listed.find((o) => o.name === 'Spruce')).toMatchObject({ type: 'tree', tree: { species: 'oak', height: 9, autumn: 0.5 } });
