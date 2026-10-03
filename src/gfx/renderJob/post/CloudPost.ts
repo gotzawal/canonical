@@ -28,8 +28,9 @@ import { PostBase } from './PostBase';
  * different pixel of each block every frame) and gathered over frames at half resolution,
  * then put over the scene with their shadow on the ground. With
  * `reflections` the scene's environment cube becomes the sky with the
- * clouds in it (a face refreshed each frame), so reflections and the light
- * from the sky have them too; the sky drawn behind the scene stays clear.
+ * clouds in it (a face refreshed each frame), so reflections (mirrors too:
+ * the sky renderer's `reflectedMap`) and the light from the sky have them
+ * too; the sky drawn behind the scene stays clear.
  * See Cloud_cs. The settings are the public fields; the editor sets them.
  *
  * @group Post Effects
@@ -314,17 +315,19 @@ export class CloudPost extends PostBase {
         this._env ??= new Reflection(this._boundCtx!, scene, REFLECTION_SIZE, this._settings, (c) => this._bindNoise(c), GlobalBindGroup.getLightEntries(scene).storageGPUBuffer);
         const env = this._env;
         env.setSky(sky);
+        const dome = EntityCollect.instance.getSky(scene);
         if (scene.envMap !== env.cube) {
             // A new sky (or the first): it stays on the sky renderer, everything else gets the cube.
             const clear = scene.envMap;
             if (!env.clear) env.fresh = true;
             env.cube.isHDRTexture = clear?.isHDRTexture;
             scene.envMap = env.cube;
-            const dome = EntityCollect.instance.getSky(scene);
             if (dome instanceof SkyRenderer) dome.map = clear;
             rebind(scene, [clear, env.clear].filter((t): t is Texture => !!t && t !== env.cube), env.cube);
             env.clear = clear;
         }
+        // Mirrors draw the cube for their sky, as reflections see it (a new sky renderer gets it too).
+        if (dome instanceof SkyRenderer) dome.reflectedMap = env.cube;
     }
 
     /** Gives the scene its clear sky back (the cube stays). */
@@ -334,6 +337,8 @@ export class CloudPost extends PostBase {
         const scene = env.scene;
         if (scene.envMap === env.cube) scene.envMap = env.clear;
         rebind(scene, [env.cube], scene.envMap);
+        const dome = EntityCollect.instance.getSky(scene);
+        if (dome instanceof SkyRenderer && dome.reflectedMap === env.cube) dome.reflectedMap = null;
         env.clear = null;
     }
 
