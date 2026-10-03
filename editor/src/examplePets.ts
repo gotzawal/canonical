@@ -309,7 +309,7 @@ const DOG_TREE = [
                     note: 'From behind the player it runs up past them and greets them.',
                     decorators: [{ type: 'condition', key: 'coming', op: 'eq', value: true }],
                     children: [
-                        { id: 'dash_back', type: 'move_to', target: 'come_spot', radius: 0.6, run: true },
+                        { id: 'dash_back', type: 'move_to', target: 'come_spot', radius: 0.6, run: true, note: 'Where it cannot get there (a cliff), it greets them from where it is.', decorators: [{ type: 'force', result: 'success' }] },
                         { id: 'hello', type: 'script', method: 'greet' },
                     ],
                 },
