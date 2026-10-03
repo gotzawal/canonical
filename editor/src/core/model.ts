@@ -327,7 +327,8 @@ export type AnimationDoc = z.output<typeof Animation>;
  * mesh is a mirror tinted by the material's color; a material shader
  * reads the reflection with mirrorColor(offset) to make water (waves that
  * move it, a fresnel term that blends it). The scene is drawn a second
- * time for it, every frame the camera is in front of it.
+ * time for it (what the reflection can see), every frame the camera is in
+ * front of it.
  */
 export const Mirror = z.object({
     resolution: num(0.5, 0.1, 1, { step: 0.05, slider: true, description: 'Size of the reflection image as a share of the screen\'s: lower is cheaper and softer.' }),

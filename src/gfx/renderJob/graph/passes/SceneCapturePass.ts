@@ -60,6 +60,8 @@ import { dependOnIfRegistered, preInitPassPipelines } from './_helpers';
  * (allowlist) and {@link SceneCaptureCameraComponent.excludeMask}
  * (denylist) are tested against each renderer's `rendererMask`
  * before drawing. The default masks include every renderer.
+ * Renderers that take part in culling ({@link RenderNode.frustumCulled})
+ * are drawn only when the capture camera's frustum holds their bounds.
  *
  * @group Graph
  */
@@ -133,8 +135,12 @@ export class SceneCapturePass extends RenderGraphPass {
         // Scene-capture passes render through the capture component's
         // own camera; thread its cullingMask through so per-capture
         // layer restrictions (e.g. a minimap RT that drops Overlay)
-        // take effect.
-        const layered = this.collectLayered(view, camera);
+        // take effect. Renderers outside that camera's frustum are left
+        // out, as the color pass leaves out what the main camera cannot
+        // see: a mirror's camera (water) sees only what is in front of
+        // its plane, and its planes come from the projection it draws
+        // with, near plane on the mirror and all.
+        const layered = this.collectLayered(view, camera, 'frustum');
 
         const gpu = view.engine3D.context3D.gpuContext;
         renderContext.gpu = gpu;
