@@ -3,47 +3,6 @@
  "name": "Morglay library",
  "sources": [
   {
-   "id": "kenney-city",
-   "name": "Starter Kit City Builder",
-   "author": "Kenney",
-   "license": "CC0-1.0",
-   "licenseNote": "Its README marks the sprites and 3D models CC0 (the project code is MIT); its sounds are left out.",
-   "url": "https://github.com/KenneyNL/Starter-Kit-City-Builder",
-   "commit": "4535092b740b378b700efd9df9e27a631815b84a"
-  },
-  {
-   "id": "kenney-arena",
-   "name": "Mini Arena",
-   "author": "Kenney",
-   "license": "CC0-1.0",
-   "url": "https://github.com/KenneyNL/Starter-Kit-Basic-Scene",
-   "commit": "a6927e66ff8dd8e173660ce4825abe773c65f683"
-  },
-  {
-   "id": "kenney-platformer",
-   "name": "Starter Kit 3D Platformer",
-   "author": "Kenney",
-   "license": "CC0-1.0",
-   "url": "https://github.com/KenneyNL/Starter-Kit-3D-Platformer",
-   "commit": "3fa8a04b1c01ab23db43123d4ce814a34c3fc7f0"
-  },
-  {
-   "id": "kenney-fps",
-   "name": "Starter Kit FPS",
-   "author": "Kenney",
-   "license": "CC0-1.0",
-   "url": "https://github.com/KenneyNL/Starter-Kit-FPS",
-   "commit": "185fd2326d74a5cf858cffc616f87cf9696f9cc0"
-  },
-  {
-   "id": "kenney-racing",
-   "name": "Starter Kit Racing",
-   "author": "Kenney",
-   "license": "CC0-1.0",
-   "url": "https://github.com/KenneyNL/Starter-Kit-Racing",
-   "commit": "2f2e5f2646dda89cb21d4e8539bab60c6e955dc8"
-  },
-  {
    "id": "polyhaven",
    "name": "Poly Haven",
    "author": "Poly Haven and its artists",
@@ -115,6 +74,36 @@
      "id": "polyhaven/snow-01",
      "author": "Rob Tuytel",
      "origin": "https://polyhaven.com/a/snow_01"
+    },
+    {
+     "id": "polyhaven/rocky-trail-02",
+     "author": "Amal Kumar",
+     "origin": "https://polyhaven.com/a/rocky_trail_02"
+    },
+    {
+     "id": "polyhaven/sand-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/sand_01"
+    },
+    {
+     "id": "polyhaven/rocks-ground-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/rocks_ground_02"
+    },
+    {
+     "id": "polyhaven/ganges-river-pebbles",
+     "author": "Amal Kumar",
+     "origin": "https://polyhaven.com/a/ganges_river_pebbles"
+    },
+    {
+     "id": "polyhaven/wood-planks-dirt",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/wood_planks_dirt"
+    },
+    {
+     "id": "polyhaven/brown-mud-dry",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/brown_mud_dry"
     },
     {
      "id": "polyhaven/red-brick",
@@ -346,1769 +335,6 @@
  ],
  "items": [
   {
-   "id": "kenney-city/building-garage",
-   "name": "Building Garage",
-   "kind": "model",
-   "file": "kenney-city/building-garage.glb",
-   "bytes": 29064,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "building"
-   ],
-   "tris": 196,
-   "extent": [
-    1,
-    0.55,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/building-garage.png"
-  },
-  {
-   "id": "kenney-city/building-small-a",
-   "name": "Building Small A",
-   "kind": "model",
-   "file": "kenney-city/building-small-a.glb",
-   "bytes": 49516,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "building"
-   ],
-   "tris": 452,
-   "extent": [
-    1,
-    0.95,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/building-small-a.png"
-  },
-  {
-   "id": "kenney-city/building-small-b",
-   "name": "Building Small B",
-   "kind": "model",
-   "file": "kenney-city/building-small-b.glb",
-   "bytes": 59620,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "building"
-   ],
-   "tris": 600,
-   "extent": [
-    1,
-    1.626,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/building-small-b.png"
-  },
-  {
-   "id": "kenney-city/building-small-c",
-   "name": "Building Small C",
-   "kind": "model",
-   "file": "kenney-city/building-small-c.glb",
-   "bytes": 79936,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "building"
-   ],
-   "tris": 834,
-   "extent": [
-    1,
-    1.75,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/building-small-c.png"
-  },
-  {
-   "id": "kenney-city/building-small-d",
-   "name": "Building Small D",
-   "kind": "model",
-   "file": "kenney-city/building-small-d.glb",
-   "bytes": 49204,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "building"
-   ],
-   "tris": 448,
-   "extent": [
-    1,
-    1,
-    1.05
-   ],
-   "thumb": "kenney-city/thumbs/building-small-d.png"
-  },
-  {
-   "id": "kenney-city/grass",
-   "name": "Grass",
-   "kind": "model",
-   "file": "kenney-city/grass.glb",
-   "bytes": 14500,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "nature",
-    "ground"
-   ],
-   "tris": 30,
-   "extent": [
-    1,
-    0.06,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/grass.png"
-  },
-  {
-   "id": "kenney-city/grass-trees",
-   "name": "Grass Trees",
-   "kind": "model",
-   "file": "kenney-city/grass-trees.glb",
-   "bytes": 48016,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "nature",
-    "ground"
-   ],
-   "tris": 380,
-   "extent": [
-    1,
-    0.636,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/grass-trees.png"
-  },
-  {
-   "id": "kenney-city/grass-trees-tall",
-   "name": "Grass Trees Tall",
-   "kind": "model",
-   "file": "kenney-city/grass-trees-tall.glb",
-   "bytes": 56868,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "nature",
-    "ground"
-   ],
-   "tris": 472,
-   "extent": [
-    1.072,
-    0.76,
-    1.006
-   ],
-   "thumb": "kenney-city/thumbs/grass-trees-tall.png"
-  },
-  {
-   "id": "kenney-city/pavement",
-   "name": "Pavement",
-   "kind": "model",
-   "file": "kenney-city/pavement.glb",
-   "bytes": 13516,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "ground"
-   ],
-   "tris": 20,
-   "extent": [
-    1,
-    0.06,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/pavement.png"
-  },
-  {
-   "id": "kenney-city/pavement-fountain",
-   "name": "Pavement Fountain",
-   "kind": "model",
-   "file": "kenney-city/pavement-fountain.glb",
-   "bytes": 23936,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "ground"
-   ],
-   "tris": 152,
-   "extent": [
-    1,
-    0.536,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/pavement-fountain.png"
-  },
-  {
-   "id": "kenney-city/road-corner",
-   "name": "Road Corner",
-   "kind": "model",
-   "file": "kenney-city/road-corner.glb",
-   "bytes": 20956,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "road"
-   ],
-   "tris": 126,
-   "extent": [
-    1,
-    0.06,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/road-corner.png"
-  },
-  {
-   "id": "kenney-city/road-intersection",
-   "name": "Road Intersection",
-   "kind": "model",
-   "file": "kenney-city/road-intersection.glb",
-   "bytes": 23004,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "road"
-   ],
-   "tris": 154,
-   "extent": [
-    1,
-    0.05,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/road-intersection.png"
-  },
-  {
-   "id": "kenney-city/road-split",
-   "name": "Road Split",
-   "kind": "model",
-   "file": "kenney-city/road-split.glb",
-   "bytes": 19260,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "road"
-   ],
-   "tris": 100,
-   "extent": [
-    1,
-    0.05,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/road-split.png"
-  },
-  {
-   "id": "kenney-city/road-straight",
-   "name": "Road Straight",
-   "kind": "model",
-   "file": "kenney-city/road-straight.glb",
-   "bytes": 15992,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "road"
-   ],
-   "tris": 54,
-   "extent": [
-    1,
-    0.05,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/road-straight.png"
-  },
-  {
-   "id": "kenney-city/road-straight-lightposts",
-   "name": "Road Straight Lightposts",
-   "kind": "model",
-   "file": "kenney-city/road-straight-lightposts.glb",
-   "bytes": 27952,
-   "source": "kenney-city",
-   "tags": [
-    "city",
-    "road"
-   ],
-   "tris": 190,
-   "extent": [
-    1,
-    0.55,
-    1
-   ],
-   "thumb": "kenney-city/thumbs/road-straight-lightposts.png"
-  },
-  {
-   "id": "kenney-arena/banner",
-   "name": "Banner",
-   "kind": "model",
-   "file": "kenney-arena/banner.glb",
-   "bytes": 32168,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 228,
-   "extent": [
-    0.6,
-    1.025,
-    0.225
-   ],
-   "thumb": "kenney-arena/thumbs/banner.png"
-  },
-  {
-   "id": "kenney-arena/block",
-   "name": "Block",
-   "kind": "model",
-   "file": "kenney-arena/block.glb",
-   "bytes": 12900,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 12,
-   "extent": [
-    1,
-    0.5,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/block.png"
-  },
-  {
-   "id": "kenney-arena/border-corner",
-   "name": "Border Corner",
-   "kind": "model",
-   "file": "kenney-arena/border-corner.glb",
-   "bytes": 21184,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 122,
-   "extent": [
-    0.8,
-    0.4,
-    0.8
-   ],
-   "thumb": "kenney-arena/thumbs/border-corner.png"
-  },
-  {
-   "id": "kenney-arena/border-straight",
-   "name": "Border Straight",
-   "kind": "model",
-   "file": "kenney-arena/border-straight.glb",
-   "bytes": 16576,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 60,
-   "extent": [
-    1,
-    0.4,
-    0.6
-   ],
-   "thumb": "kenney-arena/thumbs/border-straight.png"
-  },
-  {
-   "id": "kenney-arena/bricks",
-   "name": "Bricks",
-   "kind": "model",
-   "file": "kenney-arena/bricks.glb",
-   "bytes": 23108,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 120,
-   "extent": [
-    0.772,
-    0.412,
-    0.847
-   ],
-   "thumb": "kenney-arena/thumbs/bricks.png"
-  },
-  {
-   "id": "kenney-arena/character-soldier",
-   "name": "Character Soldier",
-   "kind": "model",
-   "file": "kenney-arena/character-soldier.glb",
-   "bytes": 187896,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 513,
-   "extent": [
-    0.781,
-    0.836,
-    0.52
-   ],
-   "thumb": "kenney-arena/thumbs/character-soldier.png",
-   "animations": [
-    "static",
-    "idle",
-    "walk",
-    "sprint",
-    "jump",
-    "fall",
-    "crouch",
-    "sit",
-    "drive",
-    "die",
-    "pick-up",
-    "emote-yes",
-    "emote-no",
-    "holding-right",
-    "holding-left",
-    "holding-both",
-    "holding-right-shoot",
-    "holding-left-shoot",
-    "holding-both-shoot",
-    "attack-melee-right",
-    "attack-melee-left",
-    "attack-kick-right",
-    "attack-kick-left",
-    "interact-right",
-    "interact-left",
-    "wheelchair-sit",
-    "wheelchair-look-left",
-    "wheelchair-look-right",
-    "wheelchair-move-forward",
-    "wheelchair-move-back",
-    "wheelchair-move-left",
-    "wheelchair-move-right"
-   ]
-  },
-  {
-   "id": "kenney-arena/column",
-   "name": "Column",
-   "kind": "model",
-   "file": "kenney-arena/column.glb",
-   "bytes": 27196,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 168,
-   "extent": [
-    0.603,
-    1,
-    0.6
-   ],
-   "thumb": "kenney-arena/thumbs/column.png"
-  },
-  {
-   "id": "kenney-arena/column-damaged",
-   "name": "Column Damaged",
-   "kind": "model",
-   "file": "kenney-arena/column-damaged.glb",
-   "bytes": 24364,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 148,
-   "extent": [
-    0.6,
-    0.716,
-    0.6
-   ],
-   "thumb": "kenney-arena/thumbs/column-damaged.png"
-  },
-  {
-   "id": "kenney-arena/floor",
-   "name": "Floor",
-   "kind": "model",
-   "file": "kenney-arena/floor.glb",
-   "bytes": 11904,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 2,
-   "extent": [
-    1,
-    0,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/floor.png"
-  },
-  {
-   "id": "kenney-arena/floor-detail",
-   "name": "Floor Detail",
-   "kind": "model",
-   "file": "kenney-arena/floor-detail.glb",
-   "bytes": 16416,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 50,
-   "extent": [
-    1,
-    0.07,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/floor-detail.png"
-  },
-  {
-   "id": "kenney-arena/stairs",
-   "name": "Stairs",
-   "kind": "model",
-   "file": "kenney-arena/stairs.glb",
-   "bytes": 15304,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 44,
-   "extent": [
-    1,
-    0.5,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/stairs.png"
-  },
-  {
-   "id": "kenney-arena/stairs-corner",
-   "name": "Stairs Corner",
-   "kind": "model",
-   "file": "kenney-arena/stairs-corner.glb",
-   "bytes": 18808,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 84,
-   "extent": [
-    1,
-    0.5,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/stairs-corner.png"
-  },
-  {
-   "id": "kenney-arena/stairs-corner-inner",
-   "name": "Stairs Corner Inner",
-   "kind": "model",
-   "file": "kenney-arena/stairs-corner-inner.glb",
-   "bytes": 17644,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 72,
-   "extent": [
-    1,
-    0.5,
-    1
-   ],
-   "thumb": "kenney-arena/thumbs/stairs-corner-inner.png"
-  },
-  {
-   "id": "kenney-arena/statue",
-   "name": "Statue",
-   "kind": "model",
-   "file": "kenney-arena/statue.glb",
-   "bytes": 61032,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 549,
-   "extent": [
-    0.7,
-    1.336,
-    0.7
-   ],
-   "thumb": "kenney-arena/thumbs/statue.png"
-  },
-  {
-   "id": "kenney-arena/tree",
-   "name": "Tree",
-   "kind": "model",
-   "file": "kenney-arena/tree.glb",
-   "bytes": 44108,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 330,
-   "extent": [
-    0.65,
-    1.917,
-    0.651
-   ],
-   "thumb": "kenney-arena/thumbs/tree.png"
-  },
-  {
-   "id": "kenney-arena/trophy",
-   "name": "Trophy",
-   "kind": "model",
-   "file": "kenney-arena/trophy.glb",
-   "bytes": 33812,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 244,
-   "extent": [
-    0.569,
-    0.477,
-    0.452
-   ],
-   "thumb": "kenney-arena/thumbs/trophy.png"
-  },
-  {
-   "id": "kenney-arena/wall",
-   "name": "Wall",
-   "kind": "model",
-   "file": "kenney-arena/wall.glb",
-   "bytes": 26060,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 174,
-   "extent": [
-    1,
-    1,
-    0.6
-   ],
-   "thumb": "kenney-arena/thumbs/wall.png"
-  },
-  {
-   "id": "kenney-arena/wall-corner",
-   "name": "Wall Corner",
-   "kind": "model",
-   "file": "kenney-arena/wall-corner.glb",
-   "bytes": 32440,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 226,
-   "extent": [
-    0.8,
-    1,
-    0.8
-   ],
-   "thumb": "kenney-arena/thumbs/wall-corner.png"
-  },
-  {
-   "id": "kenney-arena/wall-gate",
-   "name": "Wall Gate",
-   "kind": "model",
-   "file": "kenney-arena/wall-gate.glb",
-   "bytes": 40624,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 322,
-   "extent": [
-    1,
-    1,
-    0.6
-   ],
-   "thumb": "kenney-arena/thumbs/wall-gate.png"
-  },
-  {
-   "id": "kenney-arena/weapon-rack",
-   "name": "Weapon Rack",
-   "kind": "model",
-   "file": "kenney-arena/weapon-rack.glb",
-   "bytes": 29764,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 212,
-   "extent": [
-    0.72,
-    0.467,
-    0.3
-   ],
-   "thumb": "kenney-arena/thumbs/weapon-rack.png"
-  },
-  {
-   "id": "kenney-arena/weapon-spear",
-   "name": "Weapon Spear",
-   "kind": "model",
-   "file": "kenney-arena/weapon-spear.glb",
-   "bytes": 17180,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 58,
-   "extent": [
-    0.146,
-    0.7,
-    0.119
-   ],
-   "thumb": "kenney-arena/thumbs/weapon-spear.png"
-  },
-  {
-   "id": "kenney-arena/weapon-sword",
-   "name": "Weapon Sword",
-   "kind": "model",
-   "file": "kenney-arena/weapon-sword.glb",
-   "bytes": 19280,
-   "source": "kenney-arena",
-   "tags": [
-    "arena",
-    "medieval"
-   ],
-   "tris": 80,
-   "extent": [
-    0.208,
-    0.501,
-    0.06
-   ],
-   "thumb": "kenney-arena/thumbs/weapon-sword.png"
-  },
-  {
-   "id": "kenney-platformer/block-coin",
-   "name": "Block Coin",
-   "kind": "model",
-   "file": "kenney-platformer/block-coin.glb",
-   "bytes": 75852,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 788,
-   "extent": [
-    1.083,
-    1,
-    1.083
-   ],
-   "thumb": "kenney-platformer/thumbs/block-coin.png"
-  },
-  {
-   "id": "kenney-platformer/break",
-   "name": "Break",
-   "kind": "audio",
-   "file": "kenney-platformer/break.ogg",
-   "bytes": 10784,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.42
-  },
-  {
-   "id": "kenney-platformer/brick",
-   "name": "Brick",
-   "kind": "model",
-   "file": "kenney-platformer/brick.glb",
-   "bytes": 32264,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 188,
-   "extent": [
-    1,
-    1,
-    1
-   ],
-   "thumb": "kenney-platformer/thumbs/brick.png"
-  },
-  {
-   "id": "kenney-platformer/brick-particle",
-   "name": "Brick Particle",
-   "kind": "model",
-   "file": "kenney-platformer/brick-particle.glb",
-   "bytes": 16344,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 44,
-   "extent": [
-    0.5,
-    0.583,
-    0.583
-   ],
-   "thumb": "kenney-platformer/thumbs/brick-particle.png"
-  },
-  {
-   "id": "kenney-platformer/character",
-   "name": "Character",
-   "kind": "model",
-   "file": "kenney-platformer/character.glb",
-   "bytes": 88068,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 550,
-   "extent": [
-    1.2,
-    1.1,
-    0.635
-   ],
-   "thumb": "kenney-platformer/thumbs/character.png",
-   "animations": [
-    "static",
-    "idle",
-    "walk",
-    "jump"
-   ]
-  },
-  {
-   "id": "kenney-platformer/cloud",
-   "name": "Cloud",
-   "kind": "model",
-   "file": "kenney-platformer/cloud.glb",
-   "bytes": 33484,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 204,
-   "extent": [
-    1,
-    1,
-    1
-   ],
-   "thumb": "kenney-platformer/thumbs/cloud.png"
-  },
-  {
-   "id": "kenney-platformer/coin",
-   "name": "Coin",
-   "kind": "model",
-   "file": "kenney-platformer/coin.glb",
-   "bytes": 31948,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 252,
-   "extent": [
-    0.415,
-    0.417,
-    0.167
-   ],
-   "thumb": "kenney-platformer/thumbs/coin.png"
-  },
-  {
-   "id": "kenney-platformer/coin-sound",
-   "name": "Coin",
-   "kind": "audio",
-   "file": "kenney-platformer/coin-sound.ogg",
-   "bytes": 6620,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.29
-  },
-  {
-   "id": "kenney-platformer/dust",
-   "name": "Dust",
-   "kind": "model",
-   "file": "kenney-platformer/dust.glb",
-   "bytes": 44164,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 336,
-   "extent": [
-    0.363,
-    0.33,
-    0.363
-   ],
-   "thumb": "kenney-platformer/thumbs/dust.png"
-  },
-  {
-   "id": "kenney-platformer/fall",
-   "name": "Fall",
-   "kind": "audio",
-   "file": "kenney-platformer/fall.ogg",
-   "bytes": 11313,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.14
-  },
-  {
-   "id": "kenney-platformer/flag",
-   "name": "Flag",
-   "kind": "model",
-   "file": "kenney-platformer/flag.glb",
-   "bytes": 23128,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 132,
-   "extent": [
-    0.2,
-    1.235,
-    0.685
-   ],
-   "thumb": "kenney-platformer/thumbs/flag.png"
-  },
-  {
-   "id": "kenney-platformer/grass",
-   "name": "Grass",
-   "kind": "model",
-   "file": "kenney-platformer/grass.glb",
-   "bytes": 18724,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 72,
-   "extent": [
-    0.511,
-    0.309,
-    0.536
-   ],
-   "thumb": "kenney-platformer/thumbs/grass.png"
-  },
-  {
-   "id": "kenney-platformer/grass-small",
-   "name": "Grass Small",
-   "kind": "model",
-   "file": "kenney-platformer/grass-small.glb",
-   "bytes": 18744,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 72,
-   "extent": [
-    0.248,
-    0.258,
-    0.313
-   ],
-   "thumb": "kenney-platformer/thumbs/grass-small.png"
-  },
-  {
-   "id": "kenney-platformer/jump",
-   "name": "Jump",
-   "kind": "audio",
-   "file": "kenney-platformer/jump.ogg",
-   "bytes": 5805,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.17
-  },
-  {
-   "id": "kenney-platformer/land",
-   "name": "Land",
-   "kind": "audio",
-   "file": "kenney-platformer/land.ogg",
-   "bytes": 5885,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.06
-  },
-  {
-   "id": "kenney-platformer/particle",
-   "name": "Particle",
-   "kind": "texture",
-   "file": "kenney-platformer/particle.png",
-   "bytes": 1750,
-   "source": "kenney-platformer",
-   "tags": [
-    "particle"
-   ],
-   "pixels": [
-    128,
-    128
-   ]
-  },
-  {
-   "id": "kenney-platformer/platform",
-   "name": "Platform",
-   "kind": "model",
-   "file": "kenney-platformer/platform.glb",
-   "bytes": 23108,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 144,
-   "extent": [
-    2,
-    0.55,
-    2
-   ],
-   "thumb": "kenney-platformer/thumbs/platform.png"
-  },
-  {
-   "id": "kenney-platformer/platform-falling",
-   "name": "Platform Falling",
-   "kind": "model",
-   "file": "kenney-platformer/platform-falling.glb",
-   "bytes": 26900,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 180,
-   "extent": [
-    2.2,
-    0.5,
-    2.2
-   ],
-   "thumb": "kenney-platformer/thumbs/platform-falling.png"
-  },
-  {
-   "id": "kenney-platformer/platform-grass-large-round",
-   "name": "Platform Grass Large Round",
-   "kind": "model",
-   "file": "kenney-platformer/platform-grass-large-round.glb",
-   "bytes": 21168,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 124,
-   "extent": [
-    5,
-    0.5,
-    5
-   ],
-   "thumb": "kenney-platformer/thumbs/platform-grass-large-round.png"
-  },
-  {
-   "id": "kenney-platformer/platform-large",
-   "name": "Platform Large",
-   "kind": "model",
-   "file": "kenney-platformer/platform-large.glb",
-   "bytes": 33820,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 254,
-   "extent": [
-    5,
-    0.55,
-    5
-   ],
-   "thumb": "kenney-platformer/thumbs/platform-large.png"
-  },
-  {
-   "id": "kenney-platformer/platform-medium",
-   "name": "Platform Medium",
-   "kind": "model",
-   "file": "kenney-platformer/platform-medium.glb",
-   "bytes": 27672,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer"
-   ],
-   "tris": 188,
-   "extent": [
-    3,
-    0.55,
-    3
-   ],
-   "thumb": "kenney-platformer/thumbs/platform-medium.png"
-  },
-  {
-   "id": "kenney-platformer/walking",
-   "name": "Walking",
-   "kind": "audio",
-   "file": "kenney-platformer/walking.ogg",
-   "bytes": 10929,
-   "source": "kenney-platformer",
-   "tags": [
-    "platformer",
-    "effect"
-   ],
-   "seconds": 0.9
-  },
-  {
-   "id": "kenney-fps/blaster",
-   "name": "Blaster",
-   "kind": "model",
-   "file": "kenney-fps/blaster.glb",
-   "bytes": 68504,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 624,
-   "extent": [
-    0.88,
-    0.9,
-    1.6
-   ],
-   "thumb": "kenney-fps/thumbs/blaster.png"
-  },
-  {
-   "id": "kenney-fps/blaster-repeater",
-   "name": "Blaster Repeater",
-   "kind": "model",
-   "file": "kenney-fps/blaster-repeater.glb",
-   "bytes": 74772,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 700,
-   "extent": [
-    0.788,
-    0.85,
-    1.88
-   ],
-   "thumb": "kenney-fps/thumbs/blaster-repeater.png"
-  },
-  {
-   "id": "kenney-fps/blaster-repeater-sound",
-   "name": "Blaster Repeater",
-   "kind": "audio",
-   "file": "kenney-fps/blaster-repeater-sound.ogg",
-   "bytes": 13024,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.44
-  },
-  {
-   "id": "kenney-fps/blaster-sound",
-   "name": "Blaster",
-   "kind": "audio",
-   "file": "kenney-fps/blaster-sound.ogg",
-   "bytes": 14032,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 1.34
-  },
-  {
-   "id": "kenney-fps/blob-shadow",
-   "name": "Blob Shadow",
-   "kind": "texture",
-   "file": "kenney-fps/blob-shadow.png",
-   "bytes": 15168,
-   "source": "kenney-fps",
-   "tags": [
-    "decal"
-   ],
-   "pixels": [
-    256,
-    256
-   ]
-  },
-  {
-   "id": "kenney-fps/burst",
-   "name": "Burst",
-   "kind": "texture",
-   "file": "kenney-fps/burst.png",
-   "bytes": 6292,
-   "source": "kenney-fps",
-   "tags": [
-    "particle"
-   ],
-   "pixels": [
-    512,
-    256
-   ]
-  },
-  {
-   "id": "kenney-fps/cloud",
-   "name": "Cloud",
-   "kind": "model",
-   "file": "kenney-fps/cloud.glb",
-   "bytes": 32640,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 204,
-   "extent": [
-    1,
-    1,
-    1
-   ],
-   "thumb": "kenney-fps/thumbs/cloud.png"
-  },
-  {
-   "id": "kenney-fps/enemy-attack",
-   "name": "Enemy Attack",
-   "kind": "audio",
-   "file": "kenney-fps/enemy-attack.ogg",
-   "bytes": 8989,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.52
-  },
-  {
-   "id": "kenney-fps/enemy-destroy",
-   "name": "Enemy Destroy",
-   "kind": "audio",
-   "file": "kenney-fps/enemy-destroy.ogg",
-   "bytes": 17737,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 1
-  },
-  {
-   "id": "kenney-fps/enemy-flying",
-   "name": "Enemy Flying",
-   "kind": "model",
-   "file": "kenney-fps/enemy-flying.glb",
-   "bytes": 65424,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 544,
-   "extent": [
-    1.2,
-    0.875,
-    0.759
-   ],
-   "thumb": "kenney-fps/thumbs/enemy-flying.png"
-  },
-  {
-   "id": "kenney-fps/enemy-hurt",
-   "name": "Enemy Hurt",
-   "kind": "audio",
-   "file": "kenney-fps/enemy-hurt.ogg",
-   "bytes": 6135,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.15
-  },
-  {
-   "id": "kenney-fps/grass",
-   "name": "Grass",
-   "kind": "model",
-   "file": "kenney-fps/grass.glb",
-   "bytes": 17900,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 72,
-   "extent": [
-    0.511,
-    0.309,
-    0.536
-   ],
-   "thumb": "kenney-fps/thumbs/grass.png"
-  },
-  {
-   "id": "kenney-fps/grass-small",
-   "name": "Grass Small",
-   "kind": "model",
-   "file": "kenney-fps/grass-small.glb",
-   "bytes": 17920,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 72,
-   "extent": [
-    0.248,
-    0.258,
-    0.313
-   ],
-   "thumb": "kenney-fps/thumbs/grass-small.png"
-  },
-  {
-   "id": "kenney-fps/jump-a",
-   "name": "Jump A",
-   "kind": "audio",
-   "file": "kenney-fps/jump-a.ogg",
-   "bytes": 8611,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.43
-  },
-  {
-   "id": "kenney-fps/jump-b",
-   "name": "Jump B",
-   "kind": "audio",
-   "file": "kenney-fps/jump-b.ogg",
-   "bytes": 9119,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.4
-  },
-  {
-   "id": "kenney-fps/jump-c",
-   "name": "Jump C",
-   "kind": "audio",
-   "file": "kenney-fps/jump-c.ogg",
-   "bytes": 8270,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.3
-  },
-  {
-   "id": "kenney-fps/land",
-   "name": "Land",
-   "kind": "audio",
-   "file": "kenney-fps/land.ogg",
-   "bytes": 5885,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.06
-  },
-  {
-   "id": "kenney-fps/platform",
-   "name": "Platform",
-   "kind": "model",
-   "file": "kenney-fps/platform.glb",
-   "bytes": 26076,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 180,
-   "extent": [
-    2.2,
-    0.5,
-    2.2
-   ],
-   "thumb": "kenney-fps/thumbs/platform.png"
-  },
-  {
-   "id": "kenney-fps/platform-large-grass",
-   "name": "Platform Large Grass",
-   "kind": "model",
-   "file": "kenney-fps/platform-large-grass.glb",
-   "bytes": 26092,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 180,
-   "extent": [
-    5.2,
-    0.5,
-    5.2
-   ],
-   "thumb": "kenney-fps/thumbs/platform-large-grass.png"
-  },
-  {
-   "id": "kenney-fps/walking",
-   "name": "Walking",
-   "kind": "audio",
-   "file": "kenney-fps/walking.ogg",
-   "bytes": 53585,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 4.9
-  },
-  {
-   "id": "kenney-fps/wall-high",
-   "name": "Wall High",
-   "kind": "model",
-   "file": "kenney-fps/wall-high.glb",
-   "bytes": 29480,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 208,
-   "extent": [
-    1.5,
-    1.7,
-    0.7
-   ],
-   "thumb": "kenney-fps/thumbs/wall-high.png"
-  },
-  {
-   "id": "kenney-fps/wall-low",
-   "name": "Wall Low",
-   "kind": "model",
-   "file": "kenney-fps/wall-low.glb",
-   "bytes": 26440,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter"
-   ],
-   "tris": 178,
-   "extent": [
-    2.2,
-    0.8,
-    0.7
-   ],
-   "thumb": "kenney-fps/thumbs/wall-low.png"
-  },
-  {
-   "id": "kenney-fps/weapon-change",
-   "name": "Weapon Change",
-   "kind": "audio",
-   "file": "kenney-fps/weapon-change.ogg",
-   "bytes": 11694,
-   "source": "kenney-fps",
-   "tags": [
-    "shooter",
-    "effect"
-   ],
-   "seconds": 0.41
-  },
-  {
-   "id": "kenney-racing/decoration-empty",
-   "name": "Decoration Empty",
-   "kind": "model",
-   "file": "kenney-racing/decoration-empty.glb",
-   "bytes": 65592,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 596,
-   "extent": [
-    10.164,
-    4.938,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/decoration-empty.png"
-  },
-  {
-   "id": "kenney-racing/decoration-forest",
-   "name": "Decoration Forest",
-   "kind": "model",
-   "file": "kenney-racing/decoration-forest.glb",
-   "bytes": 199628,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 2006,
-   "extent": [
-    10,
-    5.329,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/decoration-forest.png"
-  },
-  {
-   "id": "kenney-racing/decoration-tents",
-   "name": "Decoration Tents",
-   "kind": "model",
-   "file": "kenney-racing/decoration-tents.glb",
-   "bytes": 177904,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 1900,
-   "extent": [
-    10,
-    4.2,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/decoration-tents.png"
-  },
-  {
-   "id": "kenney-racing/engine",
-   "name": "Engine",
-   "kind": "audio",
-   "file": "kenney-racing/engine.ogg",
-   "bytes": 111411,
-   "source": "kenney-racing",
-   "tags": [
-    "racing",
-    "effect"
-   ],
-   "seconds": 8
-  },
-  {
-   "id": "kenney-racing/engine-motorcycle",
-   "name": "Engine Motorcycle",
-   "kind": "audio",
-   "file": "kenney-racing/engine-motorcycle.ogg",
-   "bytes": 104279,
-   "source": "kenney-racing",
-   "tags": [
-    "racing",
-    "effect"
-   ],
-   "seconds": 8.01
-  },
-  {
-   "id": "kenney-racing/impact",
-   "name": "Impact",
-   "kind": "audio",
-   "file": "kenney-racing/impact.ogg",
-   "bytes": 11616,
-   "source": "kenney-racing",
-   "tags": [
-    "racing",
-    "effect"
-   ],
-   "seconds": 0.65
-  },
-  {
-   "id": "kenney-racing/skid",
-   "name": "Skid",
-   "kind": "audio",
-   "file": "kenney-racing/skid.ogg",
-   "bytes": 42919,
-   "source": "kenney-racing",
-   "tags": [
-    "racing",
-    "effect"
-   ],
-   "seconds": 3.51
-  },
-  {
-   "id": "kenney-racing/smoke",
-   "name": "Smoke",
-   "kind": "texture",
-   "file": "kenney-racing/smoke.png",
-   "bytes": 3655,
-   "source": "kenney-racing",
-   "tags": [
-    "particle"
-   ],
-   "pixels": [
-    256,
-    256
-   ]
-  },
-  {
-   "id": "kenney-racing/track-bump",
-   "name": "Track Bump",
-   "kind": "model",
-   "file": "kenney-racing/track-bump.glb",
-   "bytes": 27716,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 166,
-   "extent": [
-    3.38,
-    0.587,
-    3.38
-   ],
-   "thumb": "kenney-racing/thumbs/track-bump.png"
-  },
-  {
-   "id": "kenney-racing/track-corner",
-   "name": "Track Corner",
-   "kind": "model",
-   "file": "kenney-racing/track-corner.glb",
-   "bytes": 113388,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 1136,
-   "extent": [
-    10.056,
-    4.938,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/track-corner.png"
-  },
-  {
-   "id": "kenney-racing/track-finish",
-   "name": "Track Finish",
-   "kind": "model",
-   "file": "kenney-racing/track-finish.glb",
-   "bytes": 34476,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 274,
-   "extent": [
-    14.035,
-    7.017,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/track-finish.png"
-  },
-  {
-   "id": "kenney-racing/track-straight",
-   "name": "Track Straight",
-   "kind": "model",
-   "file": "kenney-racing/track-straight.glb",
-   "bytes": 21012,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 106,
-   "extent": [
-    10,
-    0.75,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/track-straight.png"
-  },
-  {
-   "id": "kenney-racing/track-tents",
-   "name": "Track Tents",
-   "kind": "model",
-   "file": "kenney-racing/track-tents.glb",
-   "bytes": 177888,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 1900,
-   "extent": [
-    10,
-    4.2,
-    10
-   ],
-   "thumb": "kenney-racing/thumbs/track-tents.png"
-  },
-  {
-   "id": "kenney-racing/vehicle-motorcycle",
-   "name": "Vehicle Motorcycle",
-   "kind": "model",
-   "file": "kenney-racing/vehicle-motorcycle.glb",
-   "bytes": 105816,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 960,
-   "extent": [
-    1.09,
-    1.266,
-    2.435
-   ],
-   "thumb": "kenney-racing/thumbs/vehicle-motorcycle.png"
-  },
-  {
-   "id": "kenney-racing/vehicle-truck-green",
-   "name": "Vehicle Truck Green",
-   "kind": "model",
-   "file": "kenney-racing/vehicle-truck-green.glb",
-   "bytes": 112104,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 1104,
-   "extent": [
-    1.5,
-    1.4,
-    2.903
-   ],
-   "thumb": "kenney-racing/thumbs/vehicle-truck-green.png"
-  },
-  {
-   "id": "kenney-racing/vehicle-truck-purple",
-   "name": "Vehicle Truck Purple",
-   "kind": "model",
-   "file": "kenney-racing/vehicle-truck-purple.glb",
-   "bytes": 86488,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 814,
-   "extent": [
-    1.5,
-    1.3,
-    2.8
-   ],
-   "thumb": "kenney-racing/thumbs/vehicle-truck-purple.png"
-  },
-  {
-   "id": "kenney-racing/vehicle-truck-red",
-   "name": "Vehicle Truck Red",
-   "kind": "model",
-   "file": "kenney-racing/vehicle-truck-red.glb",
-   "bytes": 100372,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 946,
-   "extent": [
-    1.5,
-    1.3,
-    2.8
-   ],
-   "thumb": "kenney-racing/thumbs/vehicle-truck-red.png"
-  },
-  {
-   "id": "kenney-racing/vehicle-truck-yellow",
-   "name": "Vehicle Truck Yellow",
-   "kind": "model",
-   "file": "kenney-racing/vehicle-truck-yellow.glb",
-   "bytes": 101412,
-   "source": "kenney-racing",
-   "tags": [
-    "racing"
-   ],
-   "tris": 989,
-   "extent": [
-    1.5,
-    1.55,
-    2.8
-   ],
-   "thumb": "kenney-racing/thumbs/vehicle-truck-yellow.png"
-  },
-  {
    "id": "polyhaven/alarm-clock-01",
    "name": "Alarm Clock 01",
    "kind": "model",
@@ -2141,7 +367,7 @@
    "name": "Asphalt 02",
    "kind": "material",
    "file": "polyhaven/asphalt-02/color.jpg",
-   "bytes": 924894,
+   "bytes": 1120875,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -2160,7 +386,8 @@
    "origin": "https://polyhaven.com/a/asphalt_02",
    "maps": {
     "normal": "polyhaven/asphalt-02/normal.jpg",
-    "arm": "polyhaven/asphalt-02/arm.jpg"
+    "arm": "polyhaven/asphalt-02/arm.jpg",
+    "height": "polyhaven/asphalt-02/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -2174,7 +401,7 @@
    "name": "Beige Wall 001",
    "kind": "material",
    "file": "polyhaven/beige-wall-001/color.jpg",
-   "bytes": 207631,
+   "bytes": 345247,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -2190,7 +417,8 @@
    "origin": "https://polyhaven.com/a/beige_wall_001",
    "maps": {
     "normal": "polyhaven/beige-wall-001/normal.jpg",
-    "arm": "polyhaven/beige-wall-001/arm.jpg"
+    "arm": "polyhaven/beige-wall-001/arm.jpg",
+    "height": "polyhaven/beige-wall-001/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -2228,11 +456,42 @@
    "thumb": "polyhaven/thumbs/boulder-01.png"
   },
   {
+   "id": "polyhaven/brown-mud-dry",
+   "name": "Brown Mud Dry",
+   "kind": "material",
+   "file": "polyhaven/brown-mud-dry/color.jpg",
+   "bytes": 1205021,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "dirt",
+    "soil",
+    "mud",
+    "stones",
+    "dry"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/brown_mud_dry",
+   "maps": {
+    "normal": "polyhaven/brown-mud-dry/normal.jpg",
+    "arm": "polyhaven/brown-mud-dry/arm.jpg",
+    "height": "polyhaven/brown-mud-dry/height.jpg"
+   },
+   "tile": 1.3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/brown-mud-dry.png"
+  },
+  {
    "id": "polyhaven/brown-mud-leaves-01",
    "name": "Brown Mud Leaves 01",
    "kind": "material",
    "file": "polyhaven/brown-mud-leaves-01/color.jpg",
-   "bytes": 1019147,
+   "bytes": 1204671,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -2249,7 +508,8 @@
    "origin": "https://polyhaven.com/a/brown_mud_leaves_01",
    "maps": {
     "normal": "polyhaven/brown-mud-leaves-01/normal.jpg",
-    "arm": "polyhaven/brown-mud-leaves-01/arm.jpg"
+    "arm": "polyhaven/brown-mud-leaves-01/arm.jpg",
+    "height": "polyhaven/brown-mud-leaves-01/height.jpg"
    },
    "tile": 1.3,
    "pixels": [
@@ -2372,7 +632,7 @@
    "name": "Concrete Floor 02",
    "kind": "material",
    "file": "polyhaven/concrete-floor-02/color.jpg",
-   "bytes": 589226,
+   "bytes": 709657,
    "source": "polyhaven",
    "tags": [
     "concrete",
@@ -2386,7 +646,8 @@
    "origin": "https://polyhaven.com/a/concrete_floor_02",
    "maps": {
     "normal": "polyhaven/concrete-floor-02/normal.jpg",
-    "arm": "polyhaven/concrete-floor-02/arm.jpg"
+    "arm": "polyhaven/concrete-floor-02/arm.jpg",
+    "height": "polyhaven/concrete-floor-02/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -2400,7 +661,7 @@
    "name": "Concrete Floor Worn 001",
    "kind": "material",
    "file": "polyhaven/concrete-floor-worn-001/color.jpg",
-   "bytes": 285901,
+   "bytes": 425292,
    "source": "polyhaven",
    "tags": [
     "concrete",
@@ -2418,7 +679,8 @@
    "origin": "https://polyhaven.com/a/concrete_floor_worn_001",
    "maps": {
     "normal": "polyhaven/concrete-floor-worn-001/normal.jpg",
-    "arm": "polyhaven/concrete-floor-worn-001/arm.jpg"
+    "arm": "polyhaven/concrete-floor-worn-001/arm.jpg",
+    "height": "polyhaven/concrete-floor-worn-001/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -2545,7 +807,7 @@
    "name": "Factory Wall",
    "kind": "material",
    "file": "polyhaven/factory-wall/color.jpg",
-   "bytes": 301758,
+   "bytes": 357934,
    "source": "polyhaven",
    "tags": [
     "roof",
@@ -2558,7 +820,8 @@
    "origin": "https://polyhaven.com/a/factory_wall",
    "maps": {
     "normal": "polyhaven/factory-wall/normal.jpg",
-    "arm": "polyhaven/factory-wall/arm.jpg"
+    "arm": "polyhaven/factory-wall/arm.jpg",
+    "height": "polyhaven/factory-wall/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -2600,7 +863,7 @@
    "name": "Forest Ground 04",
    "kind": "material",
    "file": "polyhaven/forest-ground-04/color.jpg",
-   "bytes": 876823,
+   "bytes": 921598,
    "source": "polyhaven",
    "tags": [
     "rock",
@@ -2618,7 +881,8 @@
    "origin": "https://polyhaven.com/a/forest_ground_04",
    "maps": {
     "normal": "polyhaven/forest-ground-04/normal.jpg",
-    "arm": "polyhaven/forest-ground-04/arm.jpg"
+    "arm": "polyhaven/forest-ground-04/arm.jpg",
+    "height": "polyhaven/forest-ground-04/height.jpg"
    },
    "tile": 3.15,
    "pixels": [
@@ -2632,7 +896,7 @@
    "name": "Forest Ground 01",
    "kind": "material",
    "file": "polyhaven/forrest-ground-01/color.jpg",
-   "bytes": 1010232,
+   "bytes": 1185481,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -2651,7 +915,8 @@
    "origin": "https://polyhaven.com/a/forrest_ground_01",
    "maps": {
     "normal": "polyhaven/forrest-ground-01/normal.jpg",
-    "arm": "polyhaven/forrest-ground-01/arm.jpg"
+    "arm": "polyhaven/forrest-ground-01/arm.jpg",
+    "height": "polyhaven/forrest-ground-01/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -2659,6 +924,42 @@
     1024
    ],
    "thumb": "polyhaven/thumbs/forrest-ground-01.png"
+  },
+  {
+   "id": "polyhaven/ganges-river-pebbles",
+   "name": "Ganges River Pebbles",
+   "kind": "material",
+   "file": "polyhaven/ganges-river-pebbles/color.jpg",
+   "bytes": 891341,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "gravel",
+    "stones",
+    "rough",
+    "uneven",
+    "rock",
+    "pebbles",
+    "pebble",
+    "scattered pebbles",
+    "scattered",
+    "river"
+   ],
+   "author": "Amal Kumar",
+   "origin": "https://polyhaven.com/a/ganges_river_pebbles",
+   "maps": {
+    "normal": "polyhaven/ganges-river-pebbles/normal.jpg",
+    "arm": "polyhaven/ganges-river-pebbles/arm.jpg",
+    "height": "polyhaven/ganges-river-pebbles/height.jpg"
+   },
+   "tile": 2.16,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/ganges-river-pebbles.png"
   },
   {
    "id": "polyhaven/grass-bermuda-01",
@@ -2768,7 +1069,7 @@
    "name": "Laminate Floor 02",
    "kind": "material",
    "file": "polyhaven/laminate-floor-02/color.jpg",
-   "bytes": 268902,
+   "bytes": 416666,
    "source": "polyhaven",
    "tags": [
     "wood",
@@ -2785,7 +1086,8 @@
    "origin": "https://polyhaven.com/a/laminate_floor_02",
    "maps": {
     "normal": "polyhaven/laminate-floor-02/normal.jpg",
-    "arm": "polyhaven/laminate-floor-02/arm.jpg"
+    "arm": "polyhaven/laminate-floor-02/arm.jpg",
+    "height": "polyhaven/laminate-floor-02/height.jpg"
    },
    "tile": 1.7,
    "pixels": [
@@ -2851,7 +1153,7 @@
    "name": "Metal Plate",
    "kind": "material",
    "file": "polyhaven/metal-plate/color.jpg",
-   "bytes": 537629,
+   "bytes": 643151,
    "source": "polyhaven",
    "tags": [
     "metal",
@@ -2868,7 +1170,8 @@
    "origin": "https://polyhaven.com/a/metal_plate",
    "maps": {
     "normal": "polyhaven/metal-plate/normal.jpg",
-    "arm": "polyhaven/metal-plate/arm.jpg"
+    "arm": "polyhaven/metal-plate/arm.jpg",
+    "height": "polyhaven/metal-plate/height.jpg"
    },
    "tile": 0.5,
    "pixels": [
@@ -3048,7 +1351,7 @@
    "name": "Plywood",
    "kind": "material",
    "file": "polyhaven/plywood/color.jpg",
-   "bytes": 477063,
+   "bytes": 674486,
    "source": "polyhaven",
    "tags": [
     "wood",
@@ -3063,7 +1366,8 @@
    "origin": "https://polyhaven.com/a/plywood",
    "maps": {
     "normal": "polyhaven/plywood/normal.jpg",
-    "arm": "polyhaven/plywood/arm.jpg"
+    "arm": "polyhaven/plywood/arm.jpg",
+    "height": "polyhaven/plywood/height.jpg"
    },
    "tile": 0.5,
    "pixels": [
@@ -3187,7 +1491,7 @@
    "name": "Red Brick",
    "kind": "material",
    "file": "polyhaven/red-brick/color.jpg",
-   "bytes": 556339,
+   "bytes": 639833,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -3202,7 +1506,8 @@
    "origin": "https://polyhaven.com/a/red_brick",
    "maps": {
     "normal": "polyhaven/red-brick/normal.jpg",
-    "arm": "polyhaven/red-brick/arm.jpg"
+    "arm": "polyhaven/red-brick/arm.jpg",
+    "height": "polyhaven/red-brick/height.jpg"
    },
    "tile": 1.4,
    "pixels": [
@@ -3216,7 +1521,7 @@
    "name": "Red Brick 03",
    "kind": "material",
    "file": "polyhaven/red-brick-03/color.jpg",
-   "bytes": 656689,
+   "bytes": 756230,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -3230,7 +1535,8 @@
    "origin": "https://polyhaven.com/a/red_brick_03",
    "maps": {
     "normal": "polyhaven/red-brick-03/normal.jpg",
-    "arm": "polyhaven/red-brick-03/arm.jpg"
+    "arm": "polyhaven/red-brick-03/arm.jpg",
+    "height": "polyhaven/red-brick-03/height.jpg"
    },
    "tile": 1,
    "pixels": [
@@ -3244,7 +1550,7 @@
    "name": "Rock Face 03",
    "kind": "material",
    "file": "polyhaven/rock-face-03/color.jpg",
-   "bytes": 670525,
+   "bytes": 738681,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -3263,7 +1569,8 @@
    "origin": "https://polyhaven.com/a/rock_face_03",
    "maps": {
     "normal": "polyhaven/rock-face-03/normal.jpg",
-    "arm": "polyhaven/rock-face-03/arm.jpg"
+    "arm": "polyhaven/rock-face-03/arm.jpg",
+    "height": "polyhaven/rock-face-03/height.jpg"
    },
    "tile": 2.7,
    "pixels": [
@@ -3325,6 +1632,75 @@
    "thumb": "polyhaven/thumbs/rock-moss-set-02.png"
   },
   {
+   "id": "polyhaven/rocks-ground-02",
+   "name": "Rocks Ground 02",
+   "kind": "material",
+   "file": "polyhaven/rocks-ground-02/color.jpg",
+   "bytes": 1128933,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "gravel",
+    "stones",
+    "rough",
+    "mud",
+    "rock",
+    "uneven",
+    "rocks",
+    "scattered rocks"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/rocks_ground_02",
+   "maps": {
+    "normal": "polyhaven/rocks-ground-02/normal.jpg",
+    "arm": "polyhaven/rocks-ground-02/arm.jpg",
+    "height": "polyhaven/rocks-ground-02/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/rocks-ground-02.png"
+  },
+  {
+   "id": "polyhaven/rocky-trail-02",
+   "name": "Rocky Trail 02",
+   "kind": "material",
+   "file": "polyhaven/rocky-trail-02/color.jpg",
+   "bytes": 1045612,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "sand",
+    "beach",
+    "stones",
+    "earthy",
+    "rugged",
+    "rough",
+    "gravelly",
+    "pathway",
+    "gritty"
+   ],
+   "author": "Amal Kumar",
+   "origin": "https://polyhaven.com/a/rocky_trail_02",
+   "maps": {
+    "normal": "polyhaven/rocky-trail-02/normal.jpg",
+    "arm": "polyhaven/rocky-trail-02/arm.jpg",
+    "height": "polyhaven/rocky-trail-02/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/rocky-trail-02.png"
+  },
+  {
    "id": "polyhaven/round-wooden-table-01",
    "name": "Round Wooden Table 01",
    "kind": "model",
@@ -3381,11 +1757,44 @@
    "thumb": "polyhaven/thumbs/rubber-duck-toy.png"
   },
   {
+   "id": "polyhaven/sand-01",
+   "name": "Sand 01",
+   "kind": "material",
+   "file": "polyhaven/sand-01/color.jpg",
+   "bytes": 661577,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "sand",
+    "beach",
+    "uneven",
+    "trampled",
+    "clay",
+    "plaster",
+    "dry"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/sand_01",
+   "maps": {
+    "normal": "polyhaven/sand-01/normal.jpg",
+    "arm": "polyhaven/sand-01/arm.jpg",
+    "height": "polyhaven/sand-01/height.jpg"
+   },
+   "tile": 1.5,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/sand-01.png"
+  },
+  {
    "id": "polyhaven/sandstone-cracks",
    "name": "Sandstone Cracks",
    "kind": "material",
    "file": "polyhaven/sandstone-cracks/color.jpg",
-   "bytes": 845461,
+   "bytes": 960872,
    "source": "polyhaven",
    "tags": [
     "road",
@@ -3401,7 +1810,8 @@
    "origin": "https://polyhaven.com/a/sandstone_cracks",
    "maps": {
     "normal": "polyhaven/sandstone-cracks/normal.jpg",
-    "arm": "polyhaven/sandstone-cracks/arm.jpg"
+    "arm": "polyhaven/sandstone-cracks/arm.jpg",
+    "height": "polyhaven/sandstone-cracks/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -3415,7 +1825,7 @@
    "name": "Snow 01",
    "kind": "material",
    "file": "polyhaven/snow-01/color.jpg",
-   "bytes": 699802,
+   "bytes": 827223,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -3432,7 +1842,8 @@
    "origin": "https://polyhaven.com/a/snow_01",
    "maps": {
     "normal": "polyhaven/snow-01/normal.jpg",
-    "arm": "polyhaven/snow-01/arm.jpg"
+    "arm": "polyhaven/snow-01/arm.jpg",
+    "height": "polyhaven/snow-01/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -3446,7 +1857,7 @@
    "name": "Snow 02",
    "kind": "material",
    "file": "polyhaven/snow-02/color.jpg",
-   "bytes": 490185,
+   "bytes": 558486,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -3465,7 +1876,8 @@
    "origin": "https://polyhaven.com/a/snow_02",
    "maps": {
     "normal": "polyhaven/snow-02/normal.jpg",
-    "arm": "polyhaven/snow-02/arm.jpg"
+    "arm": "polyhaven/snow-02/arm.jpg",
+    "height": "polyhaven/snow-02/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -3719,6 +2131,37 @@
     0.081
    ],
    "thumb": "polyhaven/thumbs/wine-bottles-01.png"
+  },
+  {
+   "id": "polyhaven/wood-planks-dirt",
+   "name": "Wood Planks Dirt",
+   "kind": "material",
+   "file": "polyhaven/wood-planks-dirt/color.jpg",
+   "bytes": 407766,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "dirt",
+    "soil",
+    "planks",
+    "even",
+    "weathered"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/wood_planks_dirt",
+   "maps": {
+    "normal": "polyhaven/wood-planks-dirt/normal.jpg",
+    "arm": "polyhaven/wood-planks-dirt/arm.jpg",
+    "height": "polyhaven/wood-planks-dirt/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/wood-planks-dirt.png"
   },
   {
    "id": "polyhaven/wooden-table-02",

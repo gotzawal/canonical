@@ -99,7 +99,7 @@ export function menuDefinitions(
                 { label: 'Open Example: Showcase', action: () => void editor.newScene('showcase') },
                 { label: 'Open Example: Guard (Behavior Tree)', icon: 'behavior', action: () => void editor.newScene('guard') },
                 { label: 'Open Example: Night Laundromat (Full Project)', action: () => void editor.newScene('laundromat') },
-                { label: 'Open Example: Island (Terrain, Grass, Clouds, Weather)', action: () => void editor.newScene('island') },
+                { label: 'Open Example: Island (Terrain, Trees, Weather, Player)', action: () => void editor.newScene('island') },
                 { separator: true },
                 cmd('file.open'),
                 { label: 'Open Link...', icon: 'link', action: () => void openFromLink(editor) },

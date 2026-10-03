@@ -5,11 +5,6 @@ The files under this folder are copies of the open-source asset packs below, mir
 CC0 (public domain dedication): free to use, change and ship, with no attribution required.
 The credits are kept all the same.
 
-- **Starter Kit City Builder** by Kenney, CC0-1.0 (Its README marks the sprites and 3D models CC0 (the project code is MIT); its sounds are left out.): https://github.com/KenneyNL/Starter-Kit-City-Builder at `4535092b740b378b700efd9df9e27a631815b84a`
-- **Mini Arena** by Kenney, CC0-1.0: https://github.com/KenneyNL/Starter-Kit-Basic-Scene at `a6927e66ff8dd8e173660ce4825abe773c65f683`
-- **Starter Kit 3D Platformer** by Kenney, CC0-1.0: https://github.com/KenneyNL/Starter-Kit-3D-Platformer at `3fa8a04b1c01ab23db43123d4ce814a34c3fc7f0`
-- **Starter Kit FPS** by Kenney, CC0-1.0: https://github.com/KenneyNL/Starter-Kit-FPS at `185fd2326d74a5cf858cffc616f87cf9696f9cc0`
-- **Starter Kit Racing** by Kenney, CC0-1.0: https://github.com/KenneyNL/Starter-Kit-Racing at `2f2e5f2646dda89cb21d4e8539bab60c6e955dc8`
 - **Poly Haven** by Poly Haven and its artists, CC0-1.0 (Mirrored through Poly Haven's public API; each asset credits its authors.): https://polyhaven.com
   - polyhaven/lilienstein by Andreas Mischok: https://polyhaven.com/a/lilienstein
   - polyhaven/the-sky-is-on-fire by Greg Zaal and Rico Cilliers: https://polyhaven.com/a/the_sky_is_on_fire
@@ -24,6 +19,12 @@ The credits are kept all the same.
   - polyhaven/rock-face-03 by Dario Barresi and Rico Cilliers: https://polyhaven.com/a/rock_face_03
   - polyhaven/forest-ground-04 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/forest_ground_04
   - polyhaven/snow-01 by Rob Tuytel: https://polyhaven.com/a/snow_01
+  - polyhaven/rocky-trail-02 by Amal Kumar: https://polyhaven.com/a/rocky_trail_02
+  - polyhaven/sand-01 by Rob Tuytel: https://polyhaven.com/a/sand_01
+  - polyhaven/rocks-ground-02 by Rob Tuytel: https://polyhaven.com/a/rocks_ground_02
+  - polyhaven/ganges-river-pebbles by Amal Kumar: https://polyhaven.com/a/ganges_river_pebbles
+  - polyhaven/wood-planks-dirt by Rob Tuytel: https://polyhaven.com/a/wood_planks_dirt
+  - polyhaven/brown-mud-dry by Rob Tuytel: https://polyhaven.com/a/brown_mud_dry
   - polyhaven/red-brick by Rob Tuytel: https://polyhaven.com/a/red_brick
   - polyhaven/red-brick-03 by Rob Tuytel: https://polyhaven.com/a/red_brick_03
   - polyhaven/plywood by Rob Tuytel: https://polyhaven.com/a/plywood

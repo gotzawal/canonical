@@ -5,6 +5,7 @@ import { captureConsole, logInfo } from './core/log';
 import { messages } from './core/messages';
 import { perfMonitorWanted, startPerfMonitor } from './core/perf';
 import { AutoSaver, download, otherTabsOpen, readAutosave, registerTab, unreadableAutosave } from './core/persistence';
+import { editorQuality } from './core/quality';
 import { Store } from './core/store';
 import { UNTITLED_SCENE } from './core/types';
 import { Editor } from './editor';
@@ -160,7 +161,8 @@ async function main() {
     // ----------------------------------------------------------- engine
     let runtime: Runtime;
     try {
-        runtime = await Runtime.create(canvas);
+        // Phones and tablets draw the low tier, as games there do: its shadow maps are sized as the engine starts.
+        runtime = await Runtime.create(canvas, { quality: editorQuality() });
     } catch (e: any) {
         console.error(e);
         unsupported(app, e?.message || String(e));

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { Environment } from '../../src/core/model';
-import { pickQuality, QUALITY, resolveQuality, sunScatterToLine } from '../../src/core/quality';
+import { editorQuality, isMobileDevice, pickQuality, QUALITY, resolveQuality, sunScatterToLine } from '../../src/core/quality';
 import { defaults, InputError, patch, repair, toolSchema } from '../../src/core/schema';
 
 describe('graphics quality', () => {
@@ -27,6 +27,17 @@ describe('graphics quality', () => {
         expect(resolveQuality('low', 'high')).toBe('low');
         expect(resolveQuality('low', 'high', 'medium')).toBe('medium');
         expect(resolveQuality(undefined, 'high')).toBe('high');
+    });
+
+    it('draws the low tier in the editor on phones and tablets, the high one on computers', () => {
+        const phone = { userAgent: 'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 Mobile Safari/537.36', maxTouchPoints: 5 };
+        // An iPad reports a Mac, but has touch.
+        const ipad = { userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 Version/18.0 Safari/605.1.15', maxTouchPoints: 5 };
+        const mac = { userAgent: ipad.userAgent, maxTouchPoints: 0 };
+        expect([phone, ipad, mac].map((nav) => editorQuality(isMobileDevice(nav)))).toEqual(['low', 'low', 'high']);
+        // A scene that leaves the tier to the device gets the editor's; one that names a tier draws it.
+        expect(resolveQuality('auto', editorQuality(true))).toBe('low');
+        expect(resolveQuality('high', editorQuality(true))).toBe('high');
     });
 
     it('keeps the high tier as the editor drew before', () => {

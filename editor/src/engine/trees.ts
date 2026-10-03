@@ -10,8 +10,8 @@
 // is one draw.
 
 import {
-    BoundingBox, GeometryBase, MeshRenderer, Object3D, PassType, Reference, Vector3, VertexAttributeName, type ClusterLightingBuffer, type Material, type RendererPassState,
-    type View3D,
+    BoundingBox, GeometryBase, MeshRenderer, Object3D, PassType, Reference, Vector3, VertexAttributeName, type ClusterLightingBuffer, type Material, type RenderContext,
+    type RendererPassState, type View3D,
 } from '@orillusion/core';
 import { quatRotate, type Quat, type Ray, type Vec3 } from '../core/math';
 import type { ScatterSolid } from '../core/scatter';
@@ -199,7 +199,9 @@ interface Run {
 /**
  * A chunk's renderer: draws its runs of copies, each in one instanced draw
  * per part. Its materials bring their own passes (color and shadow): none
- * are made for it (depth prepass, GI, reflections, point shadows).
+ * are made for it (depth prepass, GI, reflections, point shadows). Its
+ * level of detail only tells shadow maps it changed: what it draws are
+ * the runs, in the view, the shadow maps and the captures of mirrors.
  */
 class TreeRenderer extends MeshRenderer {
     runs: Run[] = [];
@@ -207,6 +209,15 @@ class TreeRenderer extends MeshRenderer {
     protected castNeedPass() {}
 
     public renderPass2(view: View3D, passType: PassType, _state: RendererPassState, _cluster: ClusterLightingBuffer, encoder: GPURenderPassEncoder) {
+        this.drawRuns(view, passType, encoder);
+    }
+
+    /** A mirror's capture (water) draws through here: the same runs, in its pass. */
+    public renderPass(view: View3D, passType: PassType, renderContext: RenderContext) {
+        this.drawRuns(view, passType, renderContext.encoder);
+    }
+
+    private drawRuns(view: View3D, passType: PassType, encoder: GPURenderPassEncoder) {
         if (!this.enable || !this._geometry || !this.runs.length) return;
         if (passType !== PassType.COLOR && passType !== PassType.SHADOW) return;
         const gpu = view.engine3D.context3D.gpuContext;
