@@ -209,7 +209,7 @@ export default class Dog extends Script {
         if (d < 40 && (dx * vx + dz * vz) / d > 0.6) return false;
         const cam = this.camera?.transform.worldPosition;
         const back = (cam ? Math.hypot(cam.x - f[0], cam.z - f[2]) : 0) + 9;
-        for (const turn of [0, 25, -25, 50, -50, 80, -80]) {
+        for (const turn of [0, 25, -25, 50, -50, 80, -80, 110, -110]) {
             const a = (turn * Math.PI) / 180;
             const p = this.land(f[0] - (vx * Math.cos(a) - vz * Math.sin(a)) * back, f[2] - (vx * Math.sin(a) + vz * Math.cos(a)) * back, f[1]);
             if (!p) continue;
