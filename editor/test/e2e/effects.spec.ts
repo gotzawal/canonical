@@ -3,10 +3,11 @@
 // shadows of a lamp next to the sun's. SwiftShader compiles each effect's
 // shaders the first time it draws, so they are turned on together and
 // checked in one go, with the graphics quality tiers that drop some; and
-// likewise the reflections, cascaded shadows, grass and instancing; and the
-// volumetric clouds in a mirror.
+// likewise the reflections, cascaded shadows, grass and instancing; the
+// volumetric clouds in a mirror; rain through Play and Stop; and shadow maps
+// kept while nothing moves.
 import { expect, test, type Page } from '@playwright/test';
-import { sharedEditor } from './editor';
+import { playFrames, sharedEditor } from './editor';
 import { measure } from './measure';
 import { chain, setEnv } from './scenery';
 
@@ -143,6 +144,13 @@ test('draws a mirror, screen-space reflections, cascaded sun shadows, grass and 
     });
     expect((await measure(page, 3)).draws).toBeGreaterThan(0);
 
+    // A group none of whose copies casts a shadow is no shadow caster.
+    await page.evaluate(() => window.__editor.store.commit('No shadows', (d) => {
+        for (const n of d.nodes) if (n.parent === 'copies' && n.mesh) n.mesh.castShadow = false;
+    }));
+    await measure(page, 3);
+    expect(await page.evaluate(() => window.__editor.sync.entries.get('copies')!.instancer!.castShadow)).toBe(false);
+
     // Without instancing they draw on their own again.
     await page.evaluate(() => window.__editor.store.commit('Off', (d) => {
         delete d.nodes.find((n) => n.id === 'copies')!.instancing;
@@ -207,4 +215,58 @@ test('a mirror reflects the volumetric clouds with the sky', async () => {
     await setEnv(page, { clouds: { enable: true, coverage: 0.95 } });
     await measure(page, 3);
     await expect.poll(async () => blue(await captured(page, ground, 0.6, 0.95)), { timeout: 120_000 }).toBeLessThan(blue(clear) * 0.7);
+});
+
+test('plays a scene with rain and stops it, the rain back as it was', async () => {
+    test.setTimeout(240_000);
+    const page = editor.page();
+    await page.evaluate(() => window.__editor.store.commit('Rain', (d) => {
+        d.nodes.push({
+            id: 'rain', name: 'Rain', parent: null, visible: true, position: [0, 3, 0], rotation: [0, 0, 0], scale: [1, 1, 1],
+            rain: { size: [12, 6, 12], amount: 1, spacing: 1, dropWidth: 0.01, streak: 1, speed: 5, wind: 0, density: 8, brightness: 1, color: '#e8f0f8', nearFade: 3, shelter: null, light: null, lightGain: 0.45 },
+        });
+    }));
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
+    await playFrames(page, 3);
+    // Stop rebuilds the scene: the rain's volume goes with the rest and comes back.
+    await page.evaluate(() => window.__editor.stopPlay());
+    expect(await page.evaluate(() => window.__editor.player.state)).toBe('stopped');
+    expect(await page.evaluate(() => !!window.__editor.sync.entries.get('rain')?.rain)).toBe(true);
+});
+
+test('keeps the sun\'s shadow map while nothing moves, with particles and copies a script may move in it', async () => {
+    test.setTimeout(240_000);
+    const page = editor.page();
+    // Smoke, and instanced copies of the cube that cast no shadow, one with a script.
+    await page.evaluate(() => {
+        const ed = window.__editor;
+        ed.createParticles('smoke');
+        ed.store.commit('Copies', (d) => {
+            const cube = d.nodes.find((n) => n.name === 'Cube')!;
+            const copy = (id: string, patch: object) => ({ ...JSON.parse(JSON.stringify(cube)), id, name: id, ...patch });
+            const group = copy('copies', { instancing: {} });
+            delete group.mesh;
+            d.nodes.push(group);
+            for (let i = 0; i < 3; i++) d.nodes.push(copy(`copy${i}`, { parent: 'copies', position: [i * 1.5 - 2, 0.5, -3], mesh: { ...cube.mesh!, castShadow: false } }));
+        });
+        ed.createScript({ name: 'Turn', code: 'export default class Turn extends Script {\n    update(dt) { this.object3D.rotationY += 90 * dt; }\n}\n', attachTo: ['copy0'], open: false });
+    });
+    expect((await measure(page, 3)).draws).toBeGreaterThan(0);
+    // Neither is a caster that changes every frame: the map drawn once is kept.
+    const drawn = await page.evaluate(async () => {
+        const rt = window.__editor.runtime;
+        const pass = rt.view.renderGraph!.getPass('ShadowPass') as any;
+        const out: number[] = [];
+        for (let i = 0; i < 6; i++) {
+            await new Promise<void>((resolve) => {
+                const off = rt.onFrame(() => {
+                    off();
+                    resolve();
+                });
+            });
+            out.push(pass.drawnMaps);
+        }
+        return out;
+    });
+    expect(drawn).toEqual([0, 0, 0, 0, 0, 0]);
 });

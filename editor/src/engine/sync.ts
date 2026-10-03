@@ -1950,6 +1950,9 @@ export class SceneSync extends Emitter<SyncEvents> {
             if (members.length) this.groupMembers.set(id, members);
             else this.groupMembers.delete(id);
             inst?.rebuild(members.map((m) => m.r));
+            // A group none of whose copies casts a shadow is no shadow caster:
+            // its copies moving in Play (scripts) does not draw the shadow maps again.
+            if (inst) inst.castShadow = members.some((m) => m.r.castShadow);
         }
     }
 

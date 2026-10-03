@@ -42,6 +42,9 @@ function range(min: number, max: number): MinMaxCurve {
 /** Adds a particle system for `p` to `obj`, drawing `texture` on each particle. */
 export function buildParticles(obj: Object3D, p: ParticlesDoc, texture: Texture): ParticleSystem {
     const ps = obj.addComponent(ParticleSystem);
+    // Particles cast no shadow (their material draws none). As a caster that
+    // is always drawn, the emitter made the shadow maps draw again every frame.
+    ps.castShadow = false;
     ps.geometry = new PlaneGeometry(1, 1, 1, 1, Vector3.Z_AXIS);
     const mat = new ParticleMaterial();
     mat.baseMap = texture;
