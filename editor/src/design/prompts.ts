@@ -21,11 +21,15 @@ export function startPrompt(request: string, images: number, fresh: boolean): st
     ].filter(Boolean).join(' ');
 }
 
-/** "Keep going": the next part of the current stage, after the user liked the result so far. */
-export function continuePrompt(stage: StageId, approved: boolean): string {
+/**
+ * "Keep going": the next part of the current stage, after the user liked the
+ * result so far. `auto`: nobody answered for a while (AI settings,
+ * Auto-approve), which counts as approved.
+ */
+export function continuePrompt(stage: StageId, approved: boolean, auto = false): string {
     const step = stepOf(stage);
     return [
-        approved ? 'I like how it looks so far.' : 'Keep going where you stopped.',
+        approved ? (auto ? 'I did not answer for a while, so it counts as approved.' : 'I like how it looks so far.') : 'Keep going where you stopped.',
         STAGE_PROMPTS[stage],
         `Keep going through the ${step.title} step (now ${stageDef(stage).title}) and end your turn when it is done, or when you need me to look at something.`,
     ].join(' ');

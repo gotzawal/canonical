@@ -88,6 +88,7 @@ const PATHS: Record<string, string> = {
     home: '<path d="M4 11 12 4l8 7M6 9.5V20h12V9.5"/>',
     dots: '<circle cx="5.5" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18.5" cy="12" r="1.2"/>',
     menu: '<path d="M4 6.5h16M4 12h16M4 17.5h16"/>',
+    clock: '<circle cx="12" cy="12" r="8"/><path d="M12 7.5V12l3 2"/>',
     rocket: '<path d="M9.5 14.5c1-5.5 4.5-9.5 10.5-10.5-1 6-5 9.5-10.5 10.5Z"/><path d="M9.5 14.5 7 12l1.5-3.5h4M9.5 14.5 12 17l3.5-1.5v-4"/><path d="M6.5 16.5c-1.3.5-2 2-2 3.5 1.5 0 3-.7 3.5-2"/>',
     maximize: '<path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/>',
     behavior: '<circle cx="12" cy="5" r="2"/><circle cx="6" cy="18.5" r="2"/><circle cx="18" cy="18.5" r="2"/><path d="M12 7v4M12 11H6v5.5M12 11h6v5.5"/>',

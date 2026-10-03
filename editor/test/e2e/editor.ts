@@ -76,13 +76,15 @@ export interface ScriptedCall {
  * Stands in for OpenRouter: every request of the assistant gets the next
  * turn of `turns` (tool calls, or a text that ends the request), and
  * reports USAGE. `sent` collects the request bodies (their tools and the
- * tool results). The model sees images; screenshots are off.
+ * tool results). The model sees images; screenshots and Auto-approve are
+ * off.
  */
 export async function scriptedAssistant(page: Page): Promise<{ turns: (ScriptedCall[] | string)[]; sent: any[] }> {
     const state = { turns: [] as (ScriptedCall[] | string)[], sent: [] as any[] };
     await page.addInitScript(() => {
         localStorage.setItem('canonical-editor/openrouter-key', 'test-key');
-        localStorage.setItem('canonical-editor/ai', JSON.stringify({ model: 'test/model', memo: false, screenshots: false, allowPlay: false, allowImages: false, limitTools: false }));
+        // Nothing goes on by itself between a test's requests (the test of Auto-approve turns it on).
+        localStorage.setItem('canonical-editor/ai', JSON.stringify({ model: 'test/model', memo: false, screenshots: false, allowPlay: false, allowImages: false, limitTools: false, autoApprove: 0 }));
     });
     await page.route('**/api/v1/models', (route) =>
         route.fulfill({

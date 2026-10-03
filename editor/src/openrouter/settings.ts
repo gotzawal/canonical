@@ -30,7 +30,16 @@ export interface AISettings {
     seeQuality: ImageQuality;
     /** How sharp the images are that the assistant has drawn (concepts, paintovers, swatches): smaller ones cost fewer credits. */
     drawQuality: ImageQuality;
+    /**
+     * Seconds the chat waits for an answer when the assistant stops for the
+     * user (a stage to approve, whether to go on) before it approves and
+     * goes on by itself; 0 never.
+     */
+    autoApprove: number;
 }
+
+/** The waits the AI settings offer for auto-approve, in seconds (0: off). */
+export const AUTO_APPROVE_CHOICES = [20, 60, 0];
 
 const SETTINGS_KEY = 'canonical-editor/ai';
 const API_KEY = 'canonical-editor/openrouter-key';
@@ -50,6 +59,7 @@ function defaults(): AISettings {
         cacheLong: false,
         seeQuality: 'medium',
         drawQuality: 'medium',
+        autoApprove: 20,
     };
 }
 
@@ -68,6 +78,8 @@ class SettingsStore extends Emitter<{ change: AISettings }> {
         } catch { /* ignore */ }
         if (!isImageQuality(this.value.seeQuality)) this.value.seeQuality = 'medium';
         if (!isImageQuality(this.value.drawQuality)) this.value.drawQuality = 'medium';
+        const wait = Number(this.value.autoApprove);
+        this.value.autoApprove = Number.isFinite(wait) ? Math.min(3600, Math.max(0, Math.round(wait))) : 20;
         try {
             this.key = localStorage.getItem(API_KEY) || sessionStorage.getItem(API_KEY) || '';
         } catch { /* ignore */ }

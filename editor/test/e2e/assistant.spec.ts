@@ -1,8 +1,8 @@
 // The assistant in the simple view (the scene and the chat), with OpenRouter
 // scripted: a project starts from one request, the tools change the scene
 // and walk its route, the settings limit them, the user stops a request,
-// approves a stage from the chat, and sees what the work cost, with images
-// at the quality chosen.
+// approves a stage from the chat (or lets it approve itself), and sees what
+// the work cost, with images at the quality chosen.
 
 import { expect, test, type Route } from '@playwright/test';
 import { scriptedAssistant, sharedEditor, toolResults, USAGE, type ScriptedCall } from './editor';
@@ -257,6 +257,49 @@ test('completes the stage the assistant proposes from the chat', async () => {
     await expect(card).toContainText('Brief is complete.');
     // Then the user says whether they like it, and the assistant keeps going.
     await expect(page.locator('.ai-panel .ai-next')).toContainText('Like how it looks?');
+});
+
+/** Auto-approve after `seconds` (0: off) in the AI settings; a test waits less than the 20 s and 1 min they offer. */
+async function autoApprove(seconds: number) {
+    const page = editor.page();
+    await click('.ai-panel .ai-header .icon-btn[aria-label="AI settings"]');
+    await page.waitForSelector('.dialog select[aria-label="Auto-approve"]');
+    await page.evaluate((s) => {
+        const select = document.querySelector<HTMLSelectElement>('.dialog select[aria-label="Auto-approve"]')!;
+        if (![...select.options].some((o) => o.value === String(s))) select.append(new Option(`After ${s} s`, String(s)));
+        select.value = String(s);
+    }, seconds);
+    await click('.dialog button', 'Save');
+}
+
+test('shows the approval under the last answer, and approves and goes on by itself when nobody answers', async () => {
+    const page = editor.page();
+    await autoApprove(5);
+    try {
+        const before = assistant.sent.length;
+        assistant.turns = [[{ name: 'propose_stage_complete', args: { summary: 'The plan is ready.' } }], 'The areas are planned: have a look.'];
+        await page.evaluate(() => window.__editor.askAI('Go on.', true));
+        // The card comes after the assistant's last words, counting down.
+        const card = page.locator('.ai-panel .ai-msg.approval').last();
+        await expect(card.locator('.ai-auto')).toContainText('Approves and goes on in');
+        const order = await page.evaluate(() => [...document.querySelectorAll('.ai-panel .ai-list > .ai-msg')].slice(-2).map((m) => (m.classList.contains('approval') ? 'approval' : m.querySelector('.ai-bubble')?.textContent?.trim())));
+        expect(order).toEqual(['The areas are planned: have a look.', 'approval']);
+        // Nobody answers: the stage is completed and the assistant goes on.
+        await expect.poll(() => page.evaluate(() => window.__editor.store.doc.design.stage), { timeout: 30_000 }).toBe('level');
+        await expect.poll(() => assistant.sent.length, { timeout: 30_000 }).toBe(before + 3);
+        await expect(page.locator('.ai-panel .ai-msg.user').last()).toHaveText('No answer for 5 s: keep going.');
+        expect(JSON.stringify(assistant.sent[before + 2].messages.at(-1))).toContain('it counts as approved');
+        // Its answer waits again, counting down, until the user holds it.
+        const next = page.locator('.ai-panel .ai-next');
+        await expect(next.locator('.ai-auto')).toContainText('Goes on in');
+        await click('.ai-panel .ai-next .ai-auto button', 'Wait');
+        await expect(next.locator('.ai-auto')).toHaveCount(0);
+        await expect(next).toContainText('Like how it looks?');
+        await page.waitForTimeout(6000);
+        expect(assistant.sent.length).toBe(before + 3);
+    } finally {
+        await autoApprove(0);
+    }
 });
 
 test('sends attached images at the quality chosen, and counts what each request spent', async () => {

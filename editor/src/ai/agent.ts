@@ -326,6 +326,8 @@ export class Agent extends Emitter<AgentEvents> {
         let last: AgentTurn | null = null;
         let answer = '';
         const toolLines: string[] = [];
+        /** What the tools asked the user to approve: it comes after the request's last answer, where the user reads on. */
+        const approvals: Omit<AgentTurn, 'id'>[] = [];
         let error = '';
         let stopped = false;
         let limited = false;
@@ -425,7 +427,7 @@ export class Agent extends Emitter<AgentEvents> {
                             toolTurn.tool!.image = shown[0];
                             images.push(...shown);
                         }
-                        if (result.approval) this.push({ role: 'note', text: toolTurn.tool!.summary ?? '', approval: structuredClone(result.approval) });
+                        if (result.approval) approvals.push({ role: 'note', text: toolTurn.tool!.summary ?? '', approval: structuredClone(result.approval) });
                     }
                     toolLines.push(`${call.function.name.replace(/_/g, ' ')}${toolTurn.tool!.summary ? `: ${toolTurn.tool!.summary}` : ''}`);
                     if (content.length > MAX_TOOL_RESULT) content = content.slice(0, MAX_TOOL_RESULT) + '... (truncated)';
@@ -466,12 +468,15 @@ export class Agent extends Emitter<AgentEvents> {
             this.task = null;
             committed = store.squash(batch, label);
             // A conversation left for another project was settled when it was left (see the constructor).
-            if (live()) this.settle(stopped);
+            if (live()) {
+                this.settle(stopped);
+                for (const a of approvals) this.push(a);
+            }
             this.busy = false;
             this.abort = null;
             this.activity = '';
             if (committed && live()) {
-                const turn = [...this.turns].reverse().find((t) => t.role === 'assistant' || t.role === 'note') ?? last;
+                const turn = [...this.turns].reverse().find((t) => (t.role === 'assistant' || t.role === 'note') && !t.approval) ?? last;
                 if (turn) {
                     turn.undoLabel = label;
                     this.emit('update', turn);
