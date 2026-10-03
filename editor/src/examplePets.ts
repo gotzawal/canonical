@@ -56,6 +56,7 @@ export default class Dog extends Script {
         // Markers the tree sends it to: where to sniff, where to run off to.
         this.spot = this.spawn('sphere', { name: 'Dog Sniff Spot', scale: [0.001, 0.001, 0.001] });
         this.roamSpot = this.spawn('sphere', { name: 'Dog Roam Spot', scale: [0.001, 0.001, 0.001] });
+        this.comeSpot = this.spawn('sphere', { name: 'Dog Come Spot', scale: [0.001, 0.001, 0.001] });
         this.roamAt = this.roamEvery * 0.6;
     }
 
@@ -79,11 +80,14 @@ export default class Dog extends Script {
                 this.blackboard.set('player', this.player);
                 this.blackboard.set('sniff_spot', this.spot);
                 this.blackboard.set('roam_spot', this.roamSpot);
+                this.blackboard.set('come_spot', this.comeSpot);
                 this.keyed = true;
             }
             const d = Math.hypot(player.feet[0] - me.feet[0], player.feet[2] - me.feet[2]);
             this.fact('dist', d < 2.5 ? 'near' : d < 9 ? 'mid' : d < this.lostAt ? 'far' : 'lost');
             this.fact('player_moving', player.mode === 'run' ? 'running' : player.mode === 'idle' ? 'still' : 'walking');
+            // Back from popping up behind them, or given up on getting there.
+            if (this.comingAt && this.time.elapsed - this.comingAt > 10) this.welcomed();
             // Now and then, while it is with the player, it runs off to explore.
             if (!this.roaming && d < 9 && this.time.elapsed > this.roamAt) {
                 this.roaming = true;
@@ -219,6 +223,13 @@ export default class Dog extends Script {
             me.motor.vy = 0;
             me.lookAt(f);
             this.back();
+            // It runs up past them to their front right, where they see it.
+            const come = this.land(f[0] + vx * 1.2 - vz * 1.1, f[2] + vz * 1.2 + vx * 1.1, f[1]) ?? [f[0], f[1], f[2]];
+            this.comeSpot.x = come[0];
+            this.comeSpot.y = come[1];
+            this.comeSpot.z = come[2];
+            this.comingAt = this.time.elapsed;
+            this.blackboard?.set('coming', true);
             return true;
         }
         return false;
@@ -232,11 +243,19 @@ export default class Dog extends Script {
     }
 
     /** Glad to be back: a hop and wild wagging. */
-    greet(task) {
+    async greet(task) {
         this.glad = 2.5;
         this.character?.jump();
         if (this.player) this.lookAt(this.player);
-        return this.hold(task, 1.2);
+        const ok = await this.hold(task, 1.2);
+        this.welcomed();
+        return ok;
+    }
+
+    /** Back with the player after popping up. */
+    welcomed() {
+        this.comingAt = 0;
+        this.blackboard?.set('coming', false);
     }
 
     /** Sits by the player, looking up and wagging. */
@@ -294,9 +313,11 @@ const DOG_TREE = [
             { name: 'dist', type: 'enum', owner: 'fact', description: 'How far the player is from the dog', default: 'near', values: [{ value: 'near', description: 'within 2.5 m' }, { value: 'mid', description: '2.5 to 9 m' }, { value: 'far', description: '9 to 28 m' }, { value: 'lost', description: 'further than 28 m' }] },
             { name: 'player_moving', type: 'enum', owner: 'fact', description: 'How the player moves', default: 'still', values: [{ value: 'still', description: 'standing still' }, { value: 'walking', description: 'walking' }, { value: 'running', description: 'running' }] },
             { name: 'roam', type: 'bool', owner: 'fact', description: 'It is off exploring', default: false },
+            { name: 'coming', type: 'bool', owner: 'fact', description: 'It popped up behind the player and runs up to them', default: false },
             { name: 'player', type: 'object', owner: 'fact', description: 'The player, to follow' },
             { name: 'sniff_spot', type: 'object', owner: 'fact', description: 'Somewhere near the player to sniff at' },
             { name: 'roam_spot', type: 'object', owner: 'fact', description: 'Somewhere far off it runs to' },
+            { name: 'come_spot', type: 'object', owner: 'fact', description: 'Beside the player, in their view: where it runs to after popping up' },
         ],
     },
     {
@@ -308,7 +329,17 @@ const DOG_TREE = [
             type: 'selector',
             note: 'The higher branch wins as soon as its conditions pass. Every 20 to 30 seconds the script sets roam: the dog runs off ahead, and once it is far and out of sight it pops up behind the player and comes running.',
             children: [
-                { id: 'reappear', type: 'script', method: 'reappear', note: 'Far away and out of sight: it pops up behind the player\'s back (and catch_up runs it in from there).', decorators: [{ type: 'condition', key: 'dist', op: 'eq', value: 'lost' }, { type: 'cooldown', seconds: 3 }] },
+                { id: 'reappear', type: 'script', method: 'reappear', note: 'Far away and out of sight: it pops up behind the player\'s back.', decorators: [{ type: 'condition', key: 'dist', op: 'eq', value: 'lost' }, { type: 'cooldown', seconds: 3 }] },
+                {
+                    id: 'come_back',
+                    type: 'sequence',
+                    note: 'From behind the player it runs up past them and greets them.',
+                    decorators: [{ type: 'condition', key: 'coming', op: 'eq', value: true }],
+                    children: [
+                        { id: 'dash_back', type: 'move_to', target: 'come_spot', radius: 0.6, run: true },
+                        { id: 'hello', type: 'script', method: 'greet' },
+                    ],
+                },
                 {
                     id: 'explore',
                     type: 'sequence',
