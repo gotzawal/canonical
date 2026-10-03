@@ -36,6 +36,8 @@ export interface AIPanelHooks {
     showDetails(): void;
     /** File > Build & Deploy. */
     build(): void;
+    /** Closes the chat where it is a drawer over the view (narrow windows). */
+    close(): void;
 }
 
 const PLACEHOLDER = 'Ask for a change, a script, a shader... (Enter to send, Shift+Enter for a new line)';
@@ -109,6 +111,7 @@ export class AIPanel {
                     this.render();
                 }),
                 iconButton('gear', 'AI settings', () => void this.openSettings()),
+                iconButton('close', 'Close the chat', () => this.hooks.close(), 'drawer-close'),
             ),
             this.list,
             h(

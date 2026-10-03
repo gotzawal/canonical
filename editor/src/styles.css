@@ -285,6 +285,11 @@ a {
     display: none;
 }
 
+/* Closes a side panel where it is a drawer over the view (narrow windows, below). */
+.icon-btn.drawer-close {
+    display: none;
+}
+
 .workspace {
     display: grid;
     grid-template-columns: var(--left-w) var(--gutter) minmax(0, 1fr) var(--gutter) var(--right-w);
@@ -415,6 +420,20 @@ a {
     color: var(--text-strong);
 }
 
+/* One button for every menu, where the top bar has no room for them (overlays.ts foldMenubar). */
+.menubar-all {
+    display: none;
+}
+
+.menubar.folded > .menubar-item {
+    display: none;
+}
+
+.menubar.folded > .menubar-all {
+    display: inline-flex;
+    align-items: center;
+}
+
 .menu {
     min-width: 210px;
     padding: 5px;
@@ -435,7 +454,9 @@ a {
 .menu.floating {
     position: fixed;
     z-index: 1000;
+    max-width: calc(100vw - 12px);
     max-height: calc(100vh - 12px);
+    max-height: calc(100dvh - 12px);
 }
 
 .menu-item {
@@ -478,6 +499,7 @@ a {
 
 .menu-label {
     flex: 1;
+    min-width: 0;
 }
 
 .menu-shortcut {
@@ -545,7 +567,9 @@ a {
     /* Placed by overlays.ts next to its item. */
     position: fixed;
     z-index: 1001;
+    max-width: calc(100vw - 12px);
     max-height: calc(100vh - 12px);
+    max-height: calc(100dvh - 12px);
     /* The menu around it blurs what is behind it, which makes the menu the
        backdrop root of what it holds: a blur here would only see the menu,
        and nothing where the submenu sticks out of it, leaving it as clear as
@@ -1794,15 +1818,23 @@ a.status-item:hover {
     align-items: center;
     justify-content: center;
     padding: 16px;
+    padding: max(16px, env(safe-area-inset-top)) max(16px, env(safe-area-inset-right)) max(16px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
     background: rgba(5, 6, 8, 0.2);
 }
 
+/* As tall as the backdrop holds it: the visible screen. (100vh is taller than
+   that under a phone browser's bars, and a centered dialog that tall would
+   lose its header, and the button that closes it, above the screen.) */
 .dialog {
     width: min(520px, 100%);
-    max-height: calc(100vh - 32px);
+    max-height: 100%;
     display: flex;
     flex-direction: column;
     border-radius: 14px;
+}
+
+.dialog-header .icon-btn {
+    flex: none;
 }
 
 .dialog-header {
@@ -5057,7 +5089,7 @@ kbd {
 
 .dialog.po-modal {
     width: min(1080px, 100%);
-    height: min(760px, calc(100vh - 32px));
+    height: min(760px, 100%);
 }
 
 .po-modal .dialog-body {
@@ -7452,6 +7484,15 @@ input.text.bt-part-id {
 
     #app.show-right .side.right {
         display: flex !important;
+    }
+
+    .icon-btn.drawer-close {
+        display: inline-flex;
+    }
+
+    /* Over the chat in the full editor, the tab row has one. */
+    #app:not(.simple) .ai-header .drawer-close {
+        display: none;
     }
 }
 
