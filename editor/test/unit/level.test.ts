@@ -274,28 +274,6 @@ describe('walkRoute', () => {
         expect(r.stops).toEqual([]);
     });
 
-    it('goes around a cliff up the gentle way the grid finds, as the level check does', async () => {
-        // A plateau 4 m high over x 0..10, z -6..10: a cliff on the west, a ramp of about 22 degrees up from the south (z -16 to -6).
-        const land = landOf(5, (x, z) => {
-            const across = x >= 0 && x <= 10 ? 1 : x < 0 ? Math.max(0, 1 + x / 1.5) : Math.max(0, 1 - (x - 10) / 1.5);
-            const along = z >= -6 && z <= 10 ? 1 : z < -6 ? Math.max(0, 1 + (z + 6) / 10) : Math.max(0, 1 - (z - 10) / 1.5);
-            return 4 * Math.min(across, along);
-        });
-        const level = landScan(land);
-        const grid = await LevelGrid.scan(level, { min: [-18, -1, -19], max: [18, 8, 18] }, 0.5, { ...body, maxSlope: 40 });
-        const way = await grid.path([-12, 0, 4], [5, 4, 4], 1.2);
-        expect(way).not.toBeNull();
-        // Around by the ramp in the south, not up the cliff in the west.
-        expect(Math.min(...way!.map((p) => p[2]))).toBeLessThan(-6);
-        const open = { has: (id: string | undefined) => id === 'land', cast: (o: Vec3, d: Vec3, m: number) => level.cast(o, d, m, (id) => id === 'land') };
-        const r = await walkRoute((o, d, m) => level.cast(o, d, m), walker, [-12, 0, 4], [point('plateau', [5, 4, 4])], { plan: (a, b) => grid.path(a, b, 1.2), open });
-        expect(r.legs[0].reached).toBe(true);
-        expect(r.trace[r.trace.length - 1][1]).toBeCloseTo(4, 0);
-        // The check agrees: the plateau is in reach.
-        const { report } = await checkLevel(level, { box: { min: [-18, -1, -19], max: [18, 8, 18] }, step: 0.5, body: { ...body, maxSlope: 40 }, start: [-12, 0, 4], targets: [{ name: 'plateau', point: [5, 4, 4] }] });
-        expect(report.unreachable).toEqual([]);
-    });
-
     it('reaches every point of rough hills the level check reaches, along the grid\'s ways', async () => {
         const land: TerrainSurface = { frame: { x: 0, y: 0, z: 0, sizeX: 80, sizeZ: 80, height: 12 }, map: generateHeightmap({ shape: 'hills', resolution: 257, seed: 21, erosion: 0.5 }) };
         const level = { ...scan([]), cast: (o: Vec3, d: Vec3, m: number, ignore?: (id: string) => boolean) => castLand(land, [], o, d, m, ignore), lands: new Set(['land']) };

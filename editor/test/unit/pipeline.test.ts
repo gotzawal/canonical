@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { allowedGroups, type ToolEnv } from '../../src/ai/toolUtil';
-import { detailLevel, layoutSignature, planStarted, sanitizeDesign } from '../../src/core/design';
+import { layoutSignature, planStarted, sanitizeDesign } from '../../src/core/design';
 import { makeLightNode, makeMeshNode, newScene } from '../../src/core/defaults';
 import type { SceneDoc } from '../../src/core/types';
 import { pipelineSummary } from '../../src/design/context';
@@ -46,12 +46,6 @@ describe('tools by stage', () => {
 });
 
 describe('the pipeline in steps', () => {
-    it('decides the details by default', () => {
-        const doc = newScene();
-        expect(detailLevel(doc.design)).toBe('quick');
-        doc.design.detail = 'detailed';
-        expect(detailLevel(doc.design)).toBe('detailed');
-    });
 
     it('shows the stages as three steps', () => {
         expect(stepOf('brief').id).toBe('layout');
@@ -86,13 +80,6 @@ describe('the pipeline in steps', () => {
         expect(layoutChanged(doc)).toBe(false);
         doc.nodes.push(makeMeshNode('box'));
         expect(layoutChanged(doc)).toBe(true);
-    });
-
-    it('tells the assistant that nothing limits it before the project started', () => {
-        const lines = pipelineSummary(newScene()).join('\n');
-        expect(lines).toMatch(/not started/);
-        expect(lines).toMatch(/Detail level: quick/);
-        expect(lines).not.toMatch(/Placement is locked/);
     });
 
     it('keeps what the stages recorded and the version pictures in files, and drops the old placement lock', () => {

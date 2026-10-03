@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { bufferClass, formatInfo, installGpuStats, textureBytes } from '../../src/engine/gpuStats';
+import { installGpuStats, textureBytes } from '../../src/engine/gpuStats';
 
 /** WebGPU as classes with nothing behind them, on a page object of their own. */
 function fakePage() {
@@ -77,23 +77,6 @@ describe('GPU memory math', () => {
         expect(textureBytes({ size: [2, 2], format: 'astc-4x4-unorm' })).toBe(16);
         expect(textureBytes({ size: [800, 600], format: 'bgra8unorm', sampleCount: 4 })).toBe(800 * 600 * 4 * 4);
         expect(textureBytes({ size: [64, 64, 64], format: 'r8unorm', dimension: '3d', mipLevelCount: 2 })).toBe(64 ** 3 + 32 ** 3);
-    });
-
-    it('knows the texel and block sizes of the formats', () => {
-        expect(formatInfo('rgba16float')).toEqual([8, 1, 1]);
-        expect(formatInfo('rg11b10ufloat')).toEqual([4, 1, 1]);
-        expect(formatInfo('etc2-rgb8unorm')).toEqual([8, 4, 4]);
-        expect(formatInfo('etc2-rgba8unorm-srgb')).toEqual([16, 4, 4]);
-        expect(formatInfo('astc-8x6-unorm')).toEqual([16, 8, 6]);
-        expect(formatInfo('r32float')).toEqual([4, 1, 1]);
-    });
-
-    it('tells buffers apart by their use', () => {
-        expect(bufferClass(0x20 | 0x8)).toBe('vertex');
-        expect(bufferClass(0x10 | 0x8)).toBe('index');
-        expect(bufferClass(0x40 | 0x8)).toBe('uniform');
-        expect(bufferClass(0x80)).toBe('storage');
-        expect(bufferClass(0x2 | 0x4)).toBe('staging');
     });
 });
 

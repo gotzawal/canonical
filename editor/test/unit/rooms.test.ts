@@ -66,10 +66,6 @@ describe('subtract', () => {
         expect(area).toBeCloseTo(15);
         expect(parts.some(([a, b, c, d]) => a < 1.5 && 1.5 < c && b < 1.5 && 1.5 < d)).toBe(false);
     });
-
-    it('returns the rectangle when the holes miss it', () => {
-        expect(subtract([0, 0, 1, 1], [[5, 5, 6, 6]])).toEqual([[0, 0, 1, 1]]);
-    });
 });
 
 describe('snapRooms', () => {

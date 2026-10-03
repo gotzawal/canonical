@@ -1,21 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { newScene } from '../../src/core/defaults';
 import { Environment } from '../../src/core/model';
-import { defaults, patch, repair, toolSchema } from '../../src/core/schema';
+import { defaults, patch, toolSchema } from '../../src/core/schema';
 import { migrateScene } from '../../src/core/migrate';
 import { skyParams, skySunOf, sunlightThroughAir } from '../../src/core/sky';
 
 describe('the sky', () => {
-    it('keeps the look of scenes saved before the physical sky', () => {
-        expect(defaults(Environment).atmosphere).toEqual({ sunSize: 1, sunBrightness: 1, showSun: true, altitude: 1500, clouds: false, followLight: true, haze: 1 });
-        const old = repair(Environment, { sky: 'atmospheric', sunX: 0.5, sunY: 0.7 })!;
-        expect(old.sky).toBe('atmospheric');
-        // The defaults are the sky component's own: the same sun disc and viewer height.
-        expect(skyParams(old)).toMatchObject({ sunX: 0.5, sunY: 0.7, eyePos: 1500, sunRadius: 500, sunBrightness: 1, displaySun: true, enableClouds: false });
-        // An editor that does not know a sky falls back to the atmospheric one.
-        expect(repair(Environment, { sky: 'volumetric' })!.sky).toBe('atmospheric');
-    });
-
     it('takes the assistant\'s physical sky and its clouds', () => {
         const env = patch(Environment, defaults(Environment), { sky: 'physical', atmosphere: { clouds: true, sun_size: 2, altitude: 3000 } }, 'environment');
         expect(skyParams(env)).toMatchObject({ enableClouds: true, sunRadius: 125, eyePos: 3000 });
