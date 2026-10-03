@@ -1,16 +1,56 @@
 import { describe, expect, it } from 'vitest';
-import { emptyScene, makeMeshNode, makeNode, newScene } from '../../src/core/defaults';
-import { exampleGuard, exampleShowcase } from '../../src/examples';
+import { defaultMaterial, emptyScene, makeMeshNode, makeNode, newScene, uid } from '../../src/core/defaults';
+import { applyBehaviorOps, writeBehaviorChanges } from '../../src/core/behavior/ops';
+import { defaultCharacter } from '../../src/core/character';
 import { isMobileDevice } from '../../src/core/quality';
 import { sanitize, Store, viewportDefaults } from '../../src/core/store';
-import { SCENE_VERSION, type NodeDoc } from '../../src/core/types';
+import { SCRIPT_TEMPLATES, SHADER_TEMPLATES } from '../../src/core/templates';
+import { SCENE_VERSION, type NodeDoc, type SceneDoc } from '../../src/core/types';
 
 const scene = (...nodes: NodeDoc[]) => ({ ...emptyScene(), nodes });
 const names = (s: Store) => s.doc.nodes.map((n) => n.name);
 
+/** A scene with most of what a document holds: a script with fields, a shader material, a post effect, a character with a behavior tree and memory. */
+function fullScene(): SceneDoc {
+    const doc = emptyScene();
+    const rotator = SCRIPT_TEMPLATES.find((t) => t.id === 'rotator')!;
+    const script = { id: uid('s'), name: 'Rotator.js', code: rotator.code('Rotator') };
+    const shaders = ['unlit', 'vignette'].map((id) => {
+        const t = SHADER_TEMPLATES.find((x) => x.id === id)!;
+        return { id: uid('sh'), name: `${id}.wgsl`, kind: t.kind, lighting: t.lighting, code: t.code };
+    });
+    const box = makeMeshNode('box');
+    box.scripts = [{ script: script.id, enabled: true, props: { speed: 60, axis: 'x' } }];
+    const orb = makeMeshNode('sphere');
+    orb.mesh.material = { ...defaultMaterial('#ffffff'), type: 'shader', shader: shaders[0].id, params: { glow: '#3dd8ff' } };
+    const guard = makeMeshNode('capsule');
+    guard.name = 'Guard';
+    guard.character = defaultCharacter();
+    doc.nodes.push(box, orb, guard);
+    doc.scripts.push(script);
+    doc.shaders.push(...shaders);
+    doc.renderGraph.posts.push({ id: uid('p'), shader: shaders[1].id, enabled: true, params: { strength: 0.5 } });
+    const r = applyBehaviorOps(
+        doc,
+        [
+            { op: 'create_schema', name: 'Guard', keys: [
+                { name: 'dist', type: 'enum', owner: 'fact', default: 'far', values: [{ value: 'near', description: '' }, { value: 'far', description: '' }] },
+                { name: 'threat', type: 'probability', owner: 'ai', description: 'Is the stranger a threat?' },
+            ] },
+            { op: 'create_tree', name: 'Guard', schema: 'Guard', root: { id: 'root', type: 'selector', services: [{ id: 'judge', type: 'ask', triggers: ['facts'], facts: ['dist'], questions: [{ key: 'threat', text: 'Is the stranger a threat?' }] }], children: [{ id: 'look', type: 'wait', seconds: 1.5 }] } },
+            { op: 'set_agent', object: 'Guard', tree: 'Guard' },
+            { op: 'add_memory', item: { id: 'rumor', text: 'A thief was seen near the gate.', tags: ['rumor'] } },
+        ],
+        'strict',
+    );
+    expect(r.errors).toEqual([]);
+    writeBehaviorChanges(doc, r.changes!);
+    return doc;
+}
+
 describe('sanitize', () => {
     it('keeps valid scenes as they are', () => {
-        for (const doc of [newScene(), exampleShowcase(), exampleGuard()]) {
+        for (const doc of [newScene(), fullScene()]) {
             const plain = JSON.parse(JSON.stringify(doc));
             expect(JSON.parse(JSON.stringify(sanitize(plain)))).toEqual(plain);
         }

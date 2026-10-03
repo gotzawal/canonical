@@ -72,7 +72,7 @@ The pieces that make this possible are already in the editor:
 - **It always plays.** A model only ever fills in values the tree reads. Without a model, or before it has downloaded, the world plays with the defaults you set.
 - **You can see every decision.** A decision log shows what each character saw, what it was asked, how sure it was and what it did.
 
-Open **File > Open Example: Guard** in the editor to try it: walk up to the guard, talk to it with keys 1 to 3, and watch its judgment change.
+To try it, ask the assistant for a guard at a gate that judges whoever comes near, or give a character a tree yourself in the **Behavior** tab of edit mode; **Help > Behavior Tree Reference** lists every node.
 
 <p align="center">
   <img src=".github/assets/behavior.png" alt="The guard's behavior tree in the editor, with its Ask node that questions the model" width="100%">
@@ -114,7 +114,7 @@ The [user guide](editor/README.md) explains every part in detail.
 2. Connect the assistant with your [OpenRouter](https://openrouter.ai/) account (**Connect with OpenRouter** in the chat), and choose any model that supports tool calls. Your key stays in your browser.
 3. Answer **What shall we make?**
 
-No account yet? Open **File > Open Example: Showcase** or **File > Open Example: Guard** and press **Play**.
+No account yet? Open **File > Open Example: Night Laundromat** or **File > Open Example: Island** and press **Play**.
 
 Continue with the **[user guide](editor/README.md)**: the assistant, the pipeline, scripting, behavior trees and AI agents, materials, Build & Deploy and all the shortcuts.
 
