@@ -66,12 +66,15 @@ async function build(deviceQuality: 'low' | 'high'): Promise<Store> {
 }
 
 describe('the Island example', () => {
-    it('is the same after a reload: every count within what its components hold', async () => {
+    it('is the same after a reload: every count within what its components hold, the dog and its tree too', async () => {
         serve('http://island.test/');
         for (const tier of ['high', 'low'] as const) {
             const store = await build(tier);
             const doc = JSON.parse(JSON.stringify(store.doc));
-            expect(sanitize(doc).nodes).toEqual(doc.nodes);
+            const again = sanitize(doc);
+            expect(again.nodes).toEqual(doc.nodes);
+            expect(again.behaviors).toEqual(doc.behaviors);
+            expect(doc.nodes.find((n: NodeDoc) => n.name === 'Dog')?.agent?.tree).toBe(doc.behaviors[0].id);
         }
     });
 
