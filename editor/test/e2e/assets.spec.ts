@@ -1,13 +1,14 @@
 // Imported models and textures: compressed and quantized models through the
 // engine's glTF loader (KHR_mesh_quantization, EXT_meshopt_compression,
 // Draco from the decoder that ships with the engine, KTX2 textures
-// transcoded for the device), animation clips, and imports compressed in
-// place, which the editor shows and a built game plays.
+// transcoded for the device), animation clips, imports compressed in
+// place, which the editor shows and a built game plays, and scatters of an
+// imported model whose copies are all made again.
 import { expect, test, type Page } from '@playwright/test';
-import { sharedEditor } from './editor';
+import { playFrames, sharedEditor } from './editor';
 import { measure } from './measure';
 import { buildZip, card, glbJson, playGame, quarterPixels } from './copies';
-import { base64, basisuGlb, dracoGlb, ktx2, meshoptGlb, png, pngGlb, quantizedGltf, solid } from './fixtures';
+import { base64, basisuGlb, dracoGlb, gridGlb, ktx2, meshoptGlb, png, pngGlb, quantizedGltf, solid } from './fixtures';
 import { rigGltf } from './rig';
 
 const problems: string[] = [];
@@ -213,4 +214,81 @@ test('compresses imported files in place, which the editor shows and a built gam
     } finally {
         await page.evaluate(() => window.__editor.store.setPrefs({ compressImports: false }));
     }
+});
+
+/** The shape of a model object's first part and its levels of detail; null before it loaded. */
+function modelShape(page: Page, id: string): Promise<{ alive: boolean; levels: number } | null> {
+    return page.evaluate((id) => {
+        const shapes: any[] = [];
+        const walk = (o: any) => {
+            for (const c of o.components.values()) if (c.geometry) shapes.push(c.geometry);
+            for (const child of o.entityChildren) walk(child);
+        };
+        const obj = window.__editor.sync.modelState(id)?.obj;
+        if (obj) walk(obj);
+        const g = shapes[0];
+        return g ? { alive: !!g.subGeometries, levels: g.subGeometries?.[0]?.lodLevels.length ?? 0 } : null;
+    }, id);
+}
+
+test('keeps the simpler levels of a model drawing when Play stops', async () => {
+    const page = editor.page();
+    const model = await importModel(page, 'Grid.glb', gridGlb());
+    // Far away it draws simpler levels, made once it loaded.
+    await expect.poll(() => modelShape(page, model), { timeout: 60_000 }).toEqual({ alive: true, levels: 3 });
+    // Stop builds the scene again: the object goes with its renderers (the last to draw the simpler shape), and a new
+    // one draws the shape again.
+    await playFrames(page, 3);
+    await page.evaluate(() => window.__editor.stopPlay());
+    await expect.poll(() => modelShape(page, model), { timeout: 30_000 }).toEqual({ alive: true, levels: 3 });
+});
+
+test('keeps a scatter of a model drawing after all its copies went, and when Play stops', async () => {
+    test.setTimeout(300_000);
+    const page = editor.page();
+    const model = await importModel(page, 'Grid.glb', gridGlb());
+    // A scatter of the model around the view, and the model object deleted: its copies are all that draw it, as a
+    // scatter of a model from the Library.
+    const scatter = await page.evaluate((id) => {
+        const ed = window.__editor;
+        ed.store.select([id]);
+        const scatter = ed.newScatter();
+        ed.store.select([id]);
+        ed.deleteSelection();
+        return scatter;
+    }, model);
+    const placed = () => page.waitForFunction((id) => (window.__editor.sync.scatterView(id)?.count ?? 0) > 0, scatter, { polling: 100, timeout: 120_000 });
+    await placed();
+    // The shape its copies draw, with its simpler levels.
+    const shape = () => page.evaluate((id) => {
+        const ed = window.__editor;
+        const g = ed.sync.scatterModelOf(ed.store.node(id)!.scatter!.sources[0].model!)!.pieces[0].parts[0].geometry;
+        return { alive: !!g.subGeometries, levels: g.subGeometries?.[0]?.lodLevels.length ?? 0 };
+    }, scatter);
+    expect(await shape()).toEqual({ alive: true, levels: 3 });
+
+    // Every copy goes, and its renderers are destroyed once the GPU is done with them (Play's Stop builds them all
+    // again the same way): the shape stays, and copies placed again draw it.
+    const count = (n: number) => page.evaluate(([id, n]) => window.__editor.store.commit('Count', (d) => {
+        d.nodes.find((x) => x.id === id)!.scatter!.count = n;
+    }), [scatter, n] as const);
+    await count(0);
+    await page.waitForFunction((id) => window.__editor.sync.scatterView(id)?.count === 0, scatter, { polling: 100, timeout: 60_000 });
+    const without = (await measure(page, 3)).triangles;
+    expect(await shape()).toEqual({ alive: true, levels: 3 });
+    // 200 copies of 512 triangles, the far ones simpler.
+    await count(200);
+    await placed();
+    expect((await measure(page, 3)).triangles).toBeGreaterThan(without + 5000);
+
+    // A level a shape does not have (one that could not be simplified) draws its own triangles.
+    await page.evaluate((id) => {
+        for (const cell of (window.__editor.sync.scatterView(id) as any).cells) for (const r of cell.renderers) r.lodLevel = 7;
+    }, scatter);
+    expect((await measure(page, 3)).triangles).toBeGreaterThan(without + 5000);
+
+    await playFrames(page, 3);
+    await page.evaluate(() => window.__editor.stopPlay());
+    await placed();
+    expect((await measure(page, 3)).triangles).toBeGreaterThan(without + 5000);
 });

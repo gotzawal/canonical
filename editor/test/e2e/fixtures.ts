@@ -108,6 +108,46 @@ const asset = { version: '2.0', generator: 'morglay tests' };
 const oneNode = (extra: object = {}) => ({ scene: 0, scenes: [{ nodes: [0] }], nodes: [{ name: 'Part', mesh: 0, ...extra }] });
 
 /**
+ * A flat 2 x 2 m grid of n x n squares (2 n² triangles), as a GLB: a shape
+ * the simplifier makes much simpler levels of detail of.
+ */
+export function gridGlb(n = 16): Uint8Array {
+    const positions: number[] = [];
+    const normals: number[] = [];
+    for (let j = 0; j <= n; j++) {
+        for (let i = 0; i <= n; i++) {
+            positions.push((i / n) * 2 - 1, 0, (j / n) * 2 - 1);
+            normals.push(0, 1, 0);
+        }
+    }
+    const indices: number[] = [];
+    for (let j = 0; j < n; j++) {
+        for (let i = 0; i < n; i++) {
+            const a = j * (n + 1) + i, b = a + 1, c = a + n + 1, d = c + 1;
+            indices.push(a, c, b, b, c, d);
+        }
+    }
+    const pos = new Float32Array(positions), nor = new Float32Array(normals), idx = new Uint16Array(indices);
+    const { bytes, at } = pack([bytesOf(pos), bytesOf(nor), bytesOf(idx)]);
+    return glb({
+        asset,
+        ...oneNode(),
+        meshes: [{ primitives: [{ attributes: { POSITION: 0, NORMAL: 1 }, indices: 2 }] }],
+        accessors: [
+            { bufferView: 0, componentType: 5126, count: pos.length / 3, type: 'VEC3', min: [-1, 0, -1], max: [1, 0, 1] },
+            { bufferView: 1, componentType: 5126, count: nor.length / 3, type: 'VEC3' },
+            { bufferView: 2, componentType: 5123, count: idx.length, type: 'SCALAR' },
+        ],
+        bufferViews: [
+            { buffer: 0, byteOffset: at[0], byteLength: pos.byteLength, target: 34962 },
+            { buffer: 0, byteOffset: at[1], byteLength: nor.byteLength, target: 34962 },
+            { buffer: 0, byteOffset: at[2], byteLength: idx.byteLength, target: 34963 },
+        ],
+        buffers: [{ byteLength: bytes.byteLength }],
+    }, bytes);
+}
+
+/**
  * A 2 x 1 x 0.5 m box in KHR_mesh_quantization: SHORT positions scaled by
  * the node, BYTE normalized normals and USHORT normalized UVs, as an
  * embedded .gltf.

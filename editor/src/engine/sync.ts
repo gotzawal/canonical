@@ -599,6 +599,8 @@ export class SceneSync extends Emitter<SyncEvents> {
     reloadAsset(id: string) {
         this.prefabs.delete(id);
         this.scatterModels.delete(id);
+        // Its shapes go once the scatters drawing them are placed anew with the new model.
+        this.scatterModelsLoaded.get(id)?.dispose((res) => this.disposeLater(res));
         this.scatterModelsLoaded.delete(id);
         // Group copies are made again too; the models showing them let go as they reload.
         for (const key of Array.from(this.groupPrefabs.keys())) if (key.endsWith(`|${id}`)) this.groupPrefabs.delete(key);
@@ -1636,7 +1638,8 @@ export class SceneSync extends Emitter<SyncEvents> {
             p = made;
             this.scatterModels.set(assetId, made);
             void made.then((m) => {
-                if (this.scatterModels.get(assetId) !== made) return;
+                // Loaded again meanwhile (its file was replaced): this one is not kept.
+                if (this.scatterModels.get(assetId) !== made) return m?.dispose((res) => this.disposeLater(res));
                 this.scatterModelsLoaded.set(assetId, m);
                 this.schedulePlaceScatters();
             });

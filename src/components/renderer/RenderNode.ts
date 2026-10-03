@@ -470,7 +470,8 @@ export class RenderNode extends ComponentBase {
     }
 
     public renderPass(view: View3D, passType: PassType, renderContext: RenderContext) {
-        if (!this._geometry)
+        // A destroyed geometry has no sub-meshes left to draw.
+        if (!this._geometry?.subGeometries)
             return;
         let renderNode = this;
         let worldMatrix = renderNode.transform._worldMatrix;
@@ -517,7 +518,8 @@ export class RenderNode extends ComponentBase {
                     }
                     let subGeometry = i >= renderNode._geometry.subGeometries.length ? renderNode._geometry.subGeometries[0] : renderNode._geometry.subGeometries[i];
                     let lodInfos = subGeometry.lodLevels;
-                    let lodInfo = lodInfos[renderNode.lodLevel];
+                    // A level the shape does not have (it could not be simplified) draws its own triangles.
+                    let lodInfo = lodInfos[renderNode.lodLevel] ?? lodInfos[0];
 
                     if (renderNode.instanceCount > 0) {
                         ProfilerUtil.viewCount_instance(view, PassType[passType], renderNode.instanceCount);
@@ -545,7 +547,8 @@ export class RenderNode extends ComponentBase {
         if (!this.enable)
             return;
         // this.nodeUpdate(view, passType, rendererPassState, clusterLightingBuffer);
-        if (!this._geometry)
+        // A destroyed geometry has no sub-meshes left to draw.
+        if (!this._geometry?.subGeometries)
             return;
 
         let node = this;
@@ -584,7 +587,8 @@ export class RenderNode extends ComponentBase {
                         gpu.bindPipeline(encoder, matPass);
                         const subGeometry = i >= subGeometries.length ? subGeometries[0] : subGeometries[i];
                         let lodInfos = subGeometry.lodLevels;
-                        let lodInfo = lodInfos[node.lodLevel];
+                        // A level the shape does not have (it could not be simplified) draws its own triangles.
+                        let lodInfo = lodInfos[node.lodLevel] ?? lodInfos[0];
                         if (this.instanceCount > 0) {
                             gpu.drawIndexed(encoder, lodInfo.indexCount, this.instanceCount, lodInfo.indexStart, 0, 0);
                         } else {
@@ -600,7 +604,7 @@ export class RenderNode extends ComponentBase {
     }
 
     public recordRenderPass2(view: View3D, passType: PassType, rendererPassState: RendererPassState, clusterLightingBuffer: ClusterLightingBuffer, encoder: GPURenderPassEncoder, useBundle: boolean = false) {
-        if (!this.enable) return;
+        if (!this.enable || !this._geometry?.subGeometries) return;
         // this.nodeUpdate(view, passType, rendererPassState, clusterLightingBuffer);
 
         let node = this;
@@ -622,7 +626,7 @@ export class RenderNode extends ComponentBase {
                 gpu.bindPipeline(encoder, renderShader);
                 const subGeometry = i >= subGeometries.length ? subGeometries[0] : subGeometries[i];
                 let lodInfos = subGeometry.lodLevels;
-                let lodInfo = lodInfos[node.lodLevel];
+                let lodInfo = lodInfos[node.lodLevel] ?? lodInfos[0];
                 gpu.drawIndexed(encoder, lodInfo.indexCount, 1, lodInfo.indexStart, 0, worldMatrix.index);
             }
         }
