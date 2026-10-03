@@ -19,6 +19,12 @@ The credits are kept all the same.
   - polyhaven/rock-face-03 by Dario Barresi and Rico Cilliers: https://polyhaven.com/a/rock_face_03
   - polyhaven/forest-ground-04 by Rob Tuytel and Rico Cilliers: https://polyhaven.com/a/forest_ground_04
   - polyhaven/snow-01 by Rob Tuytel: https://polyhaven.com/a/snow_01
+  - polyhaven/rocky-trail-02 by Amal Kumar: https://polyhaven.com/a/rocky_trail_02
+  - polyhaven/sand-01 by Rob Tuytel: https://polyhaven.com/a/sand_01
+  - polyhaven/rocks-ground-02 by Rob Tuytel: https://polyhaven.com/a/rocks_ground_02
+  - polyhaven/ganges-river-pebbles by Amal Kumar: https://polyhaven.com/a/ganges_river_pebbles
+  - polyhaven/wood-planks-dirt by Rob Tuytel: https://polyhaven.com/a/wood_planks_dirt
+  - polyhaven/brown-mud-dry by Rob Tuytel: https://polyhaven.com/a/brown_mud_dry
   - polyhaven/red-brick by Rob Tuytel: https://polyhaven.com/a/red_brick
   - polyhaven/red-brick-03 by Rob Tuytel: https://polyhaven.com/a/red_brick_03
   - polyhaven/plywood by Rob Tuytel: https://polyhaven.com/a/plywood

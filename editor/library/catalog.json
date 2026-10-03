@@ -76,6 +76,36 @@
      "origin": "https://polyhaven.com/a/snow_01"
     },
     {
+     "id": "polyhaven/rocky-trail-02",
+     "author": "Amal Kumar",
+     "origin": "https://polyhaven.com/a/rocky_trail_02"
+    },
+    {
+     "id": "polyhaven/sand-01",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/sand_01"
+    },
+    {
+     "id": "polyhaven/rocks-ground-02",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/rocks_ground_02"
+    },
+    {
+     "id": "polyhaven/ganges-river-pebbles",
+     "author": "Amal Kumar",
+     "origin": "https://polyhaven.com/a/ganges_river_pebbles"
+    },
+    {
+     "id": "polyhaven/wood-planks-dirt",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/wood_planks_dirt"
+    },
+    {
+     "id": "polyhaven/brown-mud-dry",
+     "author": "Rob Tuytel",
+     "origin": "https://polyhaven.com/a/brown_mud_dry"
+    },
+    {
      "id": "polyhaven/red-brick",
      "author": "Rob Tuytel",
      "origin": "https://polyhaven.com/a/red_brick"
@@ -337,7 +367,7 @@
    "name": "Asphalt 02",
    "kind": "material",
    "file": "polyhaven/asphalt-02/color.jpg",
-   "bytes": 924894,
+   "bytes": 1120875,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -356,7 +386,8 @@
    "origin": "https://polyhaven.com/a/asphalt_02",
    "maps": {
     "normal": "polyhaven/asphalt-02/normal.jpg",
-    "arm": "polyhaven/asphalt-02/arm.jpg"
+    "arm": "polyhaven/asphalt-02/arm.jpg",
+    "height": "polyhaven/asphalt-02/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -370,7 +401,7 @@
    "name": "Beige Wall 001",
    "kind": "material",
    "file": "polyhaven/beige-wall-001/color.jpg",
-   "bytes": 207631,
+   "bytes": 345247,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -386,7 +417,8 @@
    "origin": "https://polyhaven.com/a/beige_wall_001",
    "maps": {
     "normal": "polyhaven/beige-wall-001/normal.jpg",
-    "arm": "polyhaven/beige-wall-001/arm.jpg"
+    "arm": "polyhaven/beige-wall-001/arm.jpg",
+    "height": "polyhaven/beige-wall-001/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -424,11 +456,42 @@
    "thumb": "polyhaven/thumbs/boulder-01.png"
   },
   {
+   "id": "polyhaven/brown-mud-dry",
+   "name": "Brown Mud Dry",
+   "kind": "material",
+   "file": "polyhaven/brown-mud-dry/color.jpg",
+   "bytes": 1205021,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "dirt",
+    "soil",
+    "mud",
+    "stones",
+    "dry"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/brown_mud_dry",
+   "maps": {
+    "normal": "polyhaven/brown-mud-dry/normal.jpg",
+    "arm": "polyhaven/brown-mud-dry/arm.jpg",
+    "height": "polyhaven/brown-mud-dry/height.jpg"
+   },
+   "tile": 1.3,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/brown-mud-dry.png"
+  },
+  {
    "id": "polyhaven/brown-mud-leaves-01",
    "name": "Brown Mud Leaves 01",
    "kind": "material",
    "file": "polyhaven/brown-mud-leaves-01/color.jpg",
-   "bytes": 1019147,
+   "bytes": 1204671,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -445,7 +508,8 @@
    "origin": "https://polyhaven.com/a/brown_mud_leaves_01",
    "maps": {
     "normal": "polyhaven/brown-mud-leaves-01/normal.jpg",
-    "arm": "polyhaven/brown-mud-leaves-01/arm.jpg"
+    "arm": "polyhaven/brown-mud-leaves-01/arm.jpg",
+    "height": "polyhaven/brown-mud-leaves-01/height.jpg"
    },
    "tile": 1.3,
    "pixels": [
@@ -568,7 +632,7 @@
    "name": "Concrete Floor 02",
    "kind": "material",
    "file": "polyhaven/concrete-floor-02/color.jpg",
-   "bytes": 589226,
+   "bytes": 709657,
    "source": "polyhaven",
    "tags": [
     "concrete",
@@ -582,7 +646,8 @@
    "origin": "https://polyhaven.com/a/concrete_floor_02",
    "maps": {
     "normal": "polyhaven/concrete-floor-02/normal.jpg",
-    "arm": "polyhaven/concrete-floor-02/arm.jpg"
+    "arm": "polyhaven/concrete-floor-02/arm.jpg",
+    "height": "polyhaven/concrete-floor-02/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -596,7 +661,7 @@
    "name": "Concrete Floor Worn 001",
    "kind": "material",
    "file": "polyhaven/concrete-floor-worn-001/color.jpg",
-   "bytes": 285901,
+   "bytes": 425292,
    "source": "polyhaven",
    "tags": [
     "concrete",
@@ -614,7 +679,8 @@
    "origin": "https://polyhaven.com/a/concrete_floor_worn_001",
    "maps": {
     "normal": "polyhaven/concrete-floor-worn-001/normal.jpg",
-    "arm": "polyhaven/concrete-floor-worn-001/arm.jpg"
+    "arm": "polyhaven/concrete-floor-worn-001/arm.jpg",
+    "height": "polyhaven/concrete-floor-worn-001/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -741,7 +807,7 @@
    "name": "Factory Wall",
    "kind": "material",
    "file": "polyhaven/factory-wall/color.jpg",
-   "bytes": 301758,
+   "bytes": 357934,
    "source": "polyhaven",
    "tags": [
     "roof",
@@ -754,7 +820,8 @@
    "origin": "https://polyhaven.com/a/factory_wall",
    "maps": {
     "normal": "polyhaven/factory-wall/normal.jpg",
-    "arm": "polyhaven/factory-wall/arm.jpg"
+    "arm": "polyhaven/factory-wall/arm.jpg",
+    "height": "polyhaven/factory-wall/height.jpg"
    },
    "tile": 3,
    "pixels": [
@@ -796,7 +863,7 @@
    "name": "Forest Ground 04",
    "kind": "material",
    "file": "polyhaven/forest-ground-04/color.jpg",
-   "bytes": 876823,
+   "bytes": 921598,
    "source": "polyhaven",
    "tags": [
     "rock",
@@ -814,7 +881,8 @@
    "origin": "https://polyhaven.com/a/forest_ground_04",
    "maps": {
     "normal": "polyhaven/forest-ground-04/normal.jpg",
-    "arm": "polyhaven/forest-ground-04/arm.jpg"
+    "arm": "polyhaven/forest-ground-04/arm.jpg",
+    "height": "polyhaven/forest-ground-04/height.jpg"
    },
    "tile": 3.15,
    "pixels": [
@@ -828,7 +896,7 @@
    "name": "Forest Ground 01",
    "kind": "material",
    "file": "polyhaven/forrest-ground-01/color.jpg",
-   "bytes": 1010232,
+   "bytes": 1185481,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -847,7 +915,8 @@
    "origin": "https://polyhaven.com/a/forrest_ground_01",
    "maps": {
     "normal": "polyhaven/forrest-ground-01/normal.jpg",
-    "arm": "polyhaven/forrest-ground-01/arm.jpg"
+    "arm": "polyhaven/forrest-ground-01/arm.jpg",
+    "height": "polyhaven/forrest-ground-01/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -855,6 +924,42 @@
     1024
    ],
    "thumb": "polyhaven/thumbs/forrest-ground-01.png"
+  },
+  {
+   "id": "polyhaven/ganges-river-pebbles",
+   "name": "Ganges River Pebbles",
+   "kind": "material",
+   "file": "polyhaven/ganges-river-pebbles/color.jpg",
+   "bytes": 891341,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "gravel",
+    "stones",
+    "rough",
+    "uneven",
+    "rock",
+    "pebbles",
+    "pebble",
+    "scattered pebbles",
+    "scattered",
+    "river"
+   ],
+   "author": "Amal Kumar",
+   "origin": "https://polyhaven.com/a/ganges_river_pebbles",
+   "maps": {
+    "normal": "polyhaven/ganges-river-pebbles/normal.jpg",
+    "arm": "polyhaven/ganges-river-pebbles/arm.jpg",
+    "height": "polyhaven/ganges-river-pebbles/height.jpg"
+   },
+   "tile": 2.16,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/ganges-river-pebbles.png"
   },
   {
    "id": "polyhaven/grass-bermuda-01",
@@ -964,7 +1069,7 @@
    "name": "Laminate Floor 02",
    "kind": "material",
    "file": "polyhaven/laminate-floor-02/color.jpg",
-   "bytes": 268902,
+   "bytes": 416666,
    "source": "polyhaven",
    "tags": [
     "wood",
@@ -981,7 +1086,8 @@
    "origin": "https://polyhaven.com/a/laminate_floor_02",
    "maps": {
     "normal": "polyhaven/laminate-floor-02/normal.jpg",
-    "arm": "polyhaven/laminate-floor-02/arm.jpg"
+    "arm": "polyhaven/laminate-floor-02/arm.jpg",
+    "height": "polyhaven/laminate-floor-02/height.jpg"
    },
    "tile": 1.7,
    "pixels": [
@@ -1047,7 +1153,7 @@
    "name": "Metal Plate",
    "kind": "material",
    "file": "polyhaven/metal-plate/color.jpg",
-   "bytes": 537629,
+   "bytes": 643151,
    "source": "polyhaven",
    "tags": [
     "metal",
@@ -1064,7 +1170,8 @@
    "origin": "https://polyhaven.com/a/metal_plate",
    "maps": {
     "normal": "polyhaven/metal-plate/normal.jpg",
-    "arm": "polyhaven/metal-plate/arm.jpg"
+    "arm": "polyhaven/metal-plate/arm.jpg",
+    "height": "polyhaven/metal-plate/height.jpg"
    },
    "tile": 0.5,
    "pixels": [
@@ -1244,7 +1351,7 @@
    "name": "Plywood",
    "kind": "material",
    "file": "polyhaven/plywood/color.jpg",
-   "bytes": 477063,
+   "bytes": 674486,
    "source": "polyhaven",
    "tags": [
     "wood",
@@ -1259,7 +1366,8 @@
    "origin": "https://polyhaven.com/a/plywood",
    "maps": {
     "normal": "polyhaven/plywood/normal.jpg",
-    "arm": "polyhaven/plywood/arm.jpg"
+    "arm": "polyhaven/plywood/arm.jpg",
+    "height": "polyhaven/plywood/height.jpg"
    },
    "tile": 0.5,
    "pixels": [
@@ -1383,7 +1491,7 @@
    "name": "Red Brick",
    "kind": "material",
    "file": "polyhaven/red-brick/color.jpg",
-   "bytes": 556339,
+   "bytes": 639833,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -1398,7 +1506,8 @@
    "origin": "https://polyhaven.com/a/red_brick",
    "maps": {
     "normal": "polyhaven/red-brick/normal.jpg",
-    "arm": "polyhaven/red-brick/arm.jpg"
+    "arm": "polyhaven/red-brick/arm.jpg",
+    "height": "polyhaven/red-brick/height.jpg"
    },
    "tile": 1.4,
    "pixels": [
@@ -1412,7 +1521,7 @@
    "name": "Red Brick 03",
    "kind": "material",
    "file": "polyhaven/red-brick-03/color.jpg",
-   "bytes": 656689,
+   "bytes": 756230,
    "source": "polyhaven",
    "tags": [
     "wall",
@@ -1426,7 +1535,8 @@
    "origin": "https://polyhaven.com/a/red_brick_03",
    "maps": {
     "normal": "polyhaven/red-brick-03/normal.jpg",
-    "arm": "polyhaven/red-brick-03/arm.jpg"
+    "arm": "polyhaven/red-brick-03/arm.jpg",
+    "height": "polyhaven/red-brick-03/height.jpg"
    },
    "tile": 1,
    "pixels": [
@@ -1440,7 +1550,7 @@
    "name": "Rock Face 03",
    "kind": "material",
    "file": "polyhaven/rock-face-03/color.jpg",
-   "bytes": 670525,
+   "bytes": 738681,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -1459,7 +1569,8 @@
    "origin": "https://polyhaven.com/a/rock_face_03",
    "maps": {
     "normal": "polyhaven/rock-face-03/normal.jpg",
-    "arm": "polyhaven/rock-face-03/arm.jpg"
+    "arm": "polyhaven/rock-face-03/arm.jpg",
+    "height": "polyhaven/rock-face-03/height.jpg"
    },
    "tile": 2.7,
    "pixels": [
@@ -1521,6 +1632,75 @@
    "thumb": "polyhaven/thumbs/rock-moss-set-02.png"
   },
   {
+   "id": "polyhaven/rocks-ground-02",
+   "name": "Rocks Ground 02",
+   "kind": "material",
+   "file": "polyhaven/rocks-ground-02/color.jpg",
+   "bytes": 1128933,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "gravel",
+    "stones",
+    "rough",
+    "mud",
+    "rock",
+    "uneven",
+    "rocks",
+    "scattered rocks"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/rocks_ground_02",
+   "maps": {
+    "normal": "polyhaven/rocks-ground-02/normal.jpg",
+    "arm": "polyhaven/rocks-ground-02/arm.jpg",
+    "height": "polyhaven/rocks-ground-02/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/rocks-ground-02.png"
+  },
+  {
+   "id": "polyhaven/rocky-trail-02",
+   "name": "Rocky Trail 02",
+   "kind": "material",
+   "file": "polyhaven/rocky-trail-02/color.jpg",
+   "bytes": 1045612,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "sand",
+    "beach",
+    "stones",
+    "earthy",
+    "rugged",
+    "rough",
+    "gravelly",
+    "pathway",
+    "gritty"
+   ],
+   "author": "Amal Kumar",
+   "origin": "https://polyhaven.com/a/rocky_trail_02",
+   "maps": {
+    "normal": "polyhaven/rocky-trail-02/normal.jpg",
+    "arm": "polyhaven/rocky-trail-02/arm.jpg",
+    "height": "polyhaven/rocky-trail-02/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/rocky-trail-02.png"
+  },
+  {
    "id": "polyhaven/round-wooden-table-01",
    "name": "Round Wooden Table 01",
    "kind": "model",
@@ -1577,11 +1757,44 @@
    "thumb": "polyhaven/thumbs/rubber-duck-toy.png"
   },
   {
+   "id": "polyhaven/sand-01",
+   "name": "Sand 01",
+   "kind": "material",
+   "file": "polyhaven/sand-01/color.jpg",
+   "bytes": 661577,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "sand",
+    "beach",
+    "uneven",
+    "trampled",
+    "clay",
+    "plaster",
+    "dry"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/sand_01",
+   "maps": {
+    "normal": "polyhaven/sand-01/normal.jpg",
+    "arm": "polyhaven/sand-01/arm.jpg",
+    "height": "polyhaven/sand-01/height.jpg"
+   },
+   "tile": 1.5,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/sand-01.png"
+  },
+  {
    "id": "polyhaven/sandstone-cracks",
    "name": "Sandstone Cracks",
    "kind": "material",
    "file": "polyhaven/sandstone-cracks/color.jpg",
-   "bytes": 845461,
+   "bytes": 960872,
    "source": "polyhaven",
    "tags": [
     "road",
@@ -1597,7 +1810,8 @@
    "origin": "https://polyhaven.com/a/sandstone_cracks",
    "maps": {
     "normal": "polyhaven/sandstone-cracks/normal.jpg",
-    "arm": "polyhaven/sandstone-cracks/arm.jpg"
+    "arm": "polyhaven/sandstone-cracks/arm.jpg",
+    "height": "polyhaven/sandstone-cracks/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -1611,7 +1825,7 @@
    "name": "Snow 01",
    "kind": "material",
    "file": "polyhaven/snow-01/color.jpg",
-   "bytes": 699802,
+   "bytes": 827223,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -1628,7 +1842,8 @@
    "origin": "https://polyhaven.com/a/snow_01",
    "maps": {
     "normal": "polyhaven/snow-01/normal.jpg",
-    "arm": "polyhaven/snow-01/arm.jpg"
+    "arm": "polyhaven/snow-01/arm.jpg",
+    "height": "polyhaven/snow-01/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -1642,7 +1857,7 @@
    "name": "Snow 02",
    "kind": "material",
    "file": "polyhaven/snow-02/color.jpg",
-   "bytes": 490185,
+   "bytes": 558486,
    "source": "polyhaven",
    "tags": [
     "ground",
@@ -1661,7 +1876,8 @@
    "origin": "https://polyhaven.com/a/snow_02",
    "maps": {
     "normal": "polyhaven/snow-02/normal.jpg",
-    "arm": "polyhaven/snow-02/arm.jpg"
+    "arm": "polyhaven/snow-02/arm.jpg",
+    "height": "polyhaven/snow-02/height.jpg"
    },
    "tile": 2,
    "pixels": [
@@ -1915,6 +2131,37 @@
     0.081
    ],
    "thumb": "polyhaven/thumbs/wine-bottles-01.png"
+  },
+  {
+   "id": "polyhaven/wood-planks-dirt",
+   "name": "Wood Planks Dirt",
+   "kind": "material",
+   "file": "polyhaven/wood-planks-dirt/color.jpg",
+   "bytes": 407766,
+   "source": "polyhaven",
+   "tags": [
+    "ground",
+    "terrain",
+    "natural",
+    "dirt",
+    "soil",
+    "planks",
+    "even",
+    "weathered"
+   ],
+   "author": "Rob Tuytel",
+   "origin": "https://polyhaven.com/a/wood_planks_dirt",
+   "maps": {
+    "normal": "polyhaven/wood-planks-dirt/normal.jpg",
+    "arm": "polyhaven/wood-planks-dirt/arm.jpg",
+    "height": "polyhaven/wood-planks-dirt/height.jpg"
+   },
+   "tile": 2,
+   "pixels": [
+    1024,
+    1024
+   ],
+   "thumb": "polyhaven/thumbs/wood-planks-dirt.png"
   },
   {
    "id": "polyhaven/wooden-table-02",
