@@ -1,5 +1,6 @@
 import { SceneCaptureCameraComponent } from '../../../../components/SceneCaptureCameraComponent';
 import { RenderNode } from '../../../../components/renderer/RenderNode';
+import { SkyRenderer } from '../../../../components/renderer/SkyRenderer';
 import { Camera3D } from '../../../../core/Camera3D';
 import { View3D } from '../../../../core/View3D';
 import { GlobalBindGroup } from '../../../graphics/webGpu/core/bindGroups/GlobalBindGroup';
@@ -155,10 +156,15 @@ export class SceneCapturePass extends RenderGraphPass {
             const sky = EntityCollect.instance.getSky(view.scene);
             if (sky) {
                 gpu.bindCamera(opaqueEncoder, camera);
-                if (!sky.preInit(this._passType)) {
-                    sky.nodeUpdate(view, this._passType, rendererPassState, cluster);
+                // The sky reflections see: with volumetric clouds, the sky with the clouds in it.
+                if (sky instanceof SkyRenderer) {
+                    sky.renderReflected(view, this._passType, rendererPassState, cluster, opaqueEncoder);
+                } else {
+                    if (!sky.preInit(this._passType)) {
+                        sky.nodeUpdate(view, this._passType, rendererPassState, cluster);
+                    }
+                    sky.renderPass2(view, this._passType, rendererPassState, cluster, opaqueEncoder);
                 }
-                sky.renderPass2(view, this._passType, rendererPassState, cluster, opaqueEncoder);
             }
         }
 
