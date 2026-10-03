@@ -1,58 +1,34 @@
-// Pets of the examples, made of primitives: the Island's dog. Each walks with
-// a Character, a behavior tree decides what it does and a script carries out
-// the tree's tasks and keeps it lively (legs, tail, ears, head).
+// Pets of the examples: the Island's dog, "Shiba" by zixisun02 (CC BY 4.0). It walks with a
+// Character, a behavior tree decides what it does and a script carries out the
+// tree's tasks and keeps it lively (it bounds along, sits, sniffs and hops).
 
 import { applyBehaviorOps, writeBehaviorChanges } from './core/behavior/ops';
 import { defaultCharacter } from './core/character';
-import { defaultMaterial, makeMeshNode, makeNode, uid } from './core/defaults';
-import type { GeometryDoc, NodeDoc, SceneDoc, ScriptDoc, Vec3 } from './core/types';
-
-/** A part of a pet: a primitive under `parent`, at `at` in the parent's space. */
-function part(name: string, parent: string, geometry: GeometryDoc, color: string, at: Vec3, opts: { rotation?: Vec3; scale?: Vec3; glow?: number; shadow?: boolean; roughness?: number; metallic?: number } = {}): NodeDoc {
-    const n = makeMeshNode(geometry.type, parent);
-    n.name = name;
-    n.mesh.geometry = geometry;
-    n.mesh.material = { ...defaultMaterial(color), roughness: opts.roughness ?? 0.95, metallic: opts.metallic ?? 0, ...(opts.glow ? { emissive: color, emissiveIntensity: opts.glow } : {}) };
-    n.mesh.castShadow = opts.shadow ?? true;
-    n.position = at;
-    if (opts.rotation) n.rotation = opts.rotation;
-    if (opts.scale) n.scale = opts.scale;
-    return n;
-}
-
-const sphere = (radius: number): GeometryDoc => ({ type: 'sphere', radius, segments: 20 });
+import { makeNode, uid } from './core/defaults';
+import type { NodeDoc, SceneDoc, ScriptDoc, Vec3 } from './core/types';
 
 const DOG_SCRIPT = `// The island's dog: it trots after the player, sits when they stop and
 // sniffs around them. Now and then it runs off to explore, and once it is
 // far away and out of sight it pops up behind the player's back and comes
 // running, again and again. Its behavior tree (Behavior tab) decides what
 // it does; this script writes what it notices into fact keys, carries out
-// the tasks the tree names and keeps it lively: legs trot, the tail wags,
-// the ears flap, it blinks, sniffs and looks up at the player.
+// the tasks the tree names and keeps it lively: it bounds along as it runs,
+// sits back on its haunches, puts its nose down to sniff and hops and
+// wriggles when it is glad (the model is one piece: it moves it whole).
 export default class Dog extends Script {
-    wag = 9;            // tail wags a second when it is glad
     lostAt = 28;        // meters away from which it may pop up behind the player
     roamEvery = 20;     // seconds with the player before it runs off to explore (up to 60% more, at random)
 
     start() {
         this.player = this.find('Player');
-        const part = (n) => this.find('Dog ' + n);
-        this.head = part('Head');
-        this.bodyPart = part('Body');
-        this.tail = part('Tail Root');
-        this.legs = ['Leg FL', 'Leg FR', 'Leg BL', 'Leg BR'].map(part);
-        this.ears = [part('Ear L'), part('Ear R')];
-        this.eyes = [part('Eye L'), part('Eye R')];
-        // Each part's rest pose, which the animation moves around.
-        this.rest = new Map();
-        for (const o of [this.head, this.bodyPart, this.tail, ...this.legs, ...this.ears, ...this.eyes]) {
-            if (o) this.rest.set(o, { y: o.y, rx: o.rotationX, ry: o.rotationY, rz: o.rotationZ, sy: o.scaleY });
-        }
+        this.figure = this.find('Dog Model');
+        const f = this.figure;
+        // Its rest pose, which the animation moves around.
+        this.rest = f ? { y: f.y, rx: f.rotationX, ry: f.rotationY, rz: f.rotationZ, sy: f.scaleY } : null;
         this.pose = 'stand';    // stand, sit or sniff
         this.glad = 0;          // seconds of wild wagging left
         this.phase = 0;
         this.clock = 0;
-        this.blinkAt = 2;
         // Markers the tree sends it to: where to sniff, where to run off to.
         this.spot = this.spawn('sphere', { name: 'Dog Sniff Spot', scale: [0.001, 0.001, 0.001] });
         this.roamSpot = this.spawn('sphere', { name: 'Dog Roam Spot', scale: [0.001, 0.001, 0.001] });
@@ -99,48 +75,45 @@ export default class Dog extends Script {
     }
 
     animate(dt) {
+        const f = this.figure;
+        const r = this.rest;
+        if (!f || !r) return;
         const speed = this.character ? this.character.speed : 0;
         const moving = speed > 0.15;
         const k = 1 - Math.exp(-dt * 12);
-        const ease = (o, key, to) => { if (o) o[key] += (to - o[key]) * k; };
-        const rest = (o) => this.rest.get(o);
-        const sitting = this.pose === 'sit' && !moving;
+        const ease = (key, to) => { f[key] += (to - f[key]) * k; };
         const glad = this.glad > 0;
         if (glad) this.glad -= dt;
-        // Legs: the diagonal pairs lift in turn, quicker and higher at a run; sitting folds the back ones.
-        this.phase += dt * (moving ? 6 + speed * 2.4 : 0);
-        this.legs.forEach((leg, i) => {
-            if (!leg) return;
-            const lift = moving ? Math.max(0, Math.sin(this.phase + (i === 0 || i === 3 ? 0 : Math.PI))) * Math.min(0.07, 0.03 + speed * 0.007) : 0;
-            ease(leg, 'y', rest(leg).y + lift - (sitting && i >= 2 ? 0.06 : 0));
-        });
-        // The body tips back to sit.
-        if (this.bodyPart) ease(this.bodyPart, 'rotationX', rest(this.bodyPart).rx - (sitting ? 18 : 0));
-        // The head: nose to the ground to sniff, tilted up at the player to sit, a bob at each step.
-        if (this.head) {
-            const r = rest(this.head);
-            const sniffing = this.pose === 'sniff' && !moving;
-            ease(this.head, 'rotationX', r.rx + (sniffing ? 35 + Math.sin(this.clock * 16) * 6 : sitting ? -12 : moving ? Math.sin(this.phase * 2) * 5 : 0));
-            ease(this.head, 'rotationZ', r.rz + (sitting ? Math.sin(this.clock * 0.8) * 14 : 0));
-            ease(this.head, 'y', r.y + (sniffing ? -0.1 : 0) + (moving ? Math.abs(Math.sin(this.phase)) * 0.02 : 0));
+        this.phase += dt * (moving ? 7 + speed * 1.6 : 0);
+        let y = 0, rx = 0, ry = 0, rz = 0, sy = 1;
+        if (moving) {
+            // Bounding along: up and down, rocking nose to tail, faster and higher at a run.
+            y = Math.abs(Math.sin(this.phase)) * Math.min(0.06, 0.012 + speed * 0.006);
+            rx = Math.sin(this.phase * 2) * Math.min(7, 2 + speed);
+            rz = Math.sin(this.phase) * 2;
+        } else if (glad) {
+            // Glad: little hops and a wriggle from nose to tail.
+            y = Math.abs(Math.sin(this.clock * 11)) * 0.05;
+            ry = Math.sin(this.clock * 18) * 9;
+            rz = Math.sin(this.clock * 18 + 1) * 5;
+        } else if (this.pose === 'sit') {
+            // Back on its haunches, a slow sway.
+            rx = -15;
+            y = 0.02;
+            rz = Math.sin(this.clock * 0.8) * 3;
+        } else if (this.pose === 'sniff') {
+            // Nose to the ground, snuffling.
+            rx = 11 + Math.sin(this.clock * 16) * 1.5;
+            ry = Math.sin(this.clock * 3) * 6;
+        } else {
+            // Standing: breathing.
+            sy = 1 + Math.sin(this.clock * 2.2) * 0.012;
         }
-        // The tail: wild wagging when glad, brisk when sitting, a slow sway otherwise.
-        if (this.tail) {
-            const rate = glad ? this.wag * 1.6 : sitting ? this.wag : 4;
-            const swing = glad ? 40 : sitting ? 28 : 15;
-            this.tail.rotationY = rest(this.tail).ry + Math.sin(this.clock * rate) * swing;
-        }
-        // The ears flap out with each step, more at a run.
-        this.ears.forEach((ear, i) => {
-            if (!ear) return;
-            const side = i === 0 ? 1 : -1;
-            const flap = moving ? (8 + speed * 2) * (1 + Math.sin(this.phase * 2 + i)) : glad ? 12 : 0;
-            ease(ear, 'rotationZ', rest(ear).rz + side * flap);
-        });
-        // It blinks now and then.
-        if (this.clock > this.blinkAt + 0.14) this.blinkAt = this.clock + 2.5 + Math.random() * 4;
-        const open = this.clock > this.blinkAt ? 0.12 : 1;
-        for (const eye of this.eyes) if (eye) ease(eye, 'scaleY', rest(eye).sy * open);
+        ease('y', r.y + y);
+        ease('rotationX', r.rx + rx);
+        ease('rotationY', r.ry + ry);
+        ease('rotationZ', r.rz + rz);
+        ease('scaleY', r.sy * sy);
     }
 
     // Tasks of the tree (Script Task nodes name these methods).
@@ -387,57 +360,32 @@ const DOG_TREE = [
 ];
 
 /**
- * Adds the dog to a scene: a soft puppy of primitives (a wide round head
- * with small dot eyes and floppy ears, a red collar) standing at `at` (its
- * feet) facing `facing` degrees, with Dog.js and its behavior tree. It
- * follows the node named Player.
+ * Where the dog model is served (editor/examples/island) and where it came
+ * from: "Shiba" by zixisun02 (https://sketchfab.com/3d-models/shiba-faef9fe5ace445e7b2989d1c1ece361c),
+ * CC BY 4.0, lit and with a smaller texture for the example.
  */
-export function addDog(doc: SceneDoc, at: Vec3, facing: number) {
-    const fur = '#f2c58a';
-    const cream = '#fff4e6';
-    const ears = '#c08550';
-    const pink = '#ffaabb';
-    const side = (s: number) => (s > 0 ? 'L' : 'R');
+export const DOG_MODEL = {
+    url: 'examples/island/shiba.glb',
+    name: 'shiba.glb',
+    source: { url: 'https://sketchfab.com/3d-models/shiba-faef9fe5ace445e7b2989d1c1ece361c', license: 'CC-BY-4.0', author: 'zixisun02', origin: 'https://sketchfab.com/zixisun51' },
+};
+
+/**
+ * Adds the dog to a scene: the Shiba model (asset `model`, 0.6 m tall,
+ * facing +z) standing at `at` (its feet) facing `facing` degrees,
+ * with Dog.js and its behavior tree. It follows the node named Player.
+ */
+export function addDog(doc: SceneDoc, at: Vec3, facing: number, model: string) {
     const root: NodeDoc = {
         ...makeNode('Dog', null, at),
         rotation: [0, facing, 0],
-        character: { ...defaultCharacter(), height: 0.6, radius: 0.18, eyeHeight: 0.45, stepHeight: 0.25, speed: 3.4, runSpeed: 7, jump: 3.2 },
+        character: { ...defaultCharacter(), height: 0.6, radius: 0.22, eyeHeight: 0.45, stepHeight: 0.25, speed: 3.4, runSpeed: 7, jump: 3.2 },
     };
-    const id = root.id;
-    const legs = ([['FL', 0.085, 0.12], ['FR', -0.085, 0.12], ['BL', 0.085, -0.12], ['BR', -0.085, -0.12]] as const).flatMap(([name, x, z]) => {
-        const leg = part(`Dog Leg ${name}`, id, { type: 'capsule', radius: 0.045, height: 0.13, segments: 12 }, fur, [x, 0.065, z]);
-        return [leg, part(`Dog Paw ${name}`, leg.id, sphere(0.048), cream, [0, -0.04, 0.012], { scale: [1, 0.55, 1.2] })];
-    });
-    // The head is a pivot the script turns; its wide round shape and the face sit on it.
-    const head = makeNode('Dog Head', id, [0, 0.44, 0.17]);
-    const eye = (s: number) => {
-        const e = part(`Dog Eye ${side(s)}`, head.id, sphere(0.022), '#2b211c', [0.075 * s, 0.01, 0.151], { scale: [0.85, 1.15, 0.45], rotation: [0, 21 * s, 0], roughness: 0.6, shadow: false });
-        return [e, part(`Dog Eye Shine ${side(s)}`, e.id, sphere(0.007), '#ffffff', [-0.0074, 0.009, 0.021], { glow: 0.25, shadow: false })];
-    };
-    // Floppy ears hang at the sides of the head (the script flaps them).
-    const ear = (s: number) => part(`Dog Ear ${side(s)}`, head.id, sphere(0.08), ears, [0.18 * s, 0.04, -0.01], { scale: [0.4, 1, 0.75], rotation: [0, 0, 15 * s] });
-    const tail = makeNode('Dog Tail Root', id, [0, 0.3, -0.22]);
+    const figure: NodeDoc = { ...makeNode('Dog Model', root.id, [0, 0, 0]), model: { asset: model } };
     const script: ScriptDoc = { id: uid('s'), name: 'Dog.js', code: DOG_SCRIPT };
     root.scripts = [{ script: script.id, enabled: true, props: {} }];
     doc.scripts.push(script);
-    doc.nodes.push(
-        root,
-        ...legs,
-        part('Dog Body', id, sphere(0.18), fur, [0, 0.22, -0.03], { scale: [0.85, 0.72, 1.2] }),
-        part('Dog Chest', id, sphere(0.08), cream, [0, 0.2, 0.14]),
-        part('Dog Collar', id, { type: 'torus', radius: 0.1, tube: 0.02, segments: 24 }, '#e0453a', [0, 0.3, 0.13], { rotation: [30, 0, 0] }),
-        part('Dog Tag', id, sphere(0.018), '#ffd34d', [0, 0.235, 0.225], { roughness: 0.35, metallic: 0.6 }),
-        head,
-        part('Dog Skull', head.id, sphere(0.17), fur, [0, 0, 0], { scale: [1.12, 0.95, 0.98] }),
-        part('Dog Muzzle', head.id, sphere(0.06), cream, [0, -0.06, 0.122], { scale: [1.3, 0.85, 0.9] }),
-        part('Dog Nose', head.id, sphere(0.022), '#3a2a22', [0, -0.035, 0.166], { scale: [1.35, 0.9, 0.8], roughness: 0.5, shadow: false }),
-        ...eye(1), ...eye(-1),
-        part('Dog Blush L', head.id, sphere(0.028), pink, [0.125, -0.045, 0.1145], { scale: [1.25, 0.6, 0.35], rotation: [18, 39.5, 0], shadow: false }),
-        part('Dog Blush R', head.id, sphere(0.028), pink, [-0.125, -0.045, 0.1145], { scale: [1.25, 0.6, 0.35], rotation: [18, -39.5, 0], shadow: false }),
-        ear(1), ear(-1),
-        tail,
-        part('Dog Tail', tail.id, { type: 'capsule', radius: 0.032, height: 0.16, segments: 12 }, fur, [0, 0.06, -0.02], { rotation: [-30, 0, 0] }),
-    );
+    doc.nodes.push(root, figure);
     const r = applyBehaviorOps(doc, DOG_TREE, 'strict');
     if (!r.ok || !r.changes) throw new Error(`The dog's tree is not valid: ${r.errors.map((e) => e.message).join('; ')}`);
     writeBehaviorChanges(doc, r.changes);

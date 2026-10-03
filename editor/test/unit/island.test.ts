@@ -60,6 +60,7 @@ async function build(deviceQuality: 'low' | 'high'): Promise<Store> {
         createScatter: (scatter, opts = {}) => add({ ...makeNode(opts.name ?? 'Scatter', null, opts.at), scatter }),
         addLibraryMaterial: async () => ({}),
         addFromLibrary: async (item) => ({ asset: { id: `asset:${item.id}` } }),
+        importUrl: async (url) => ({ asset: { id: `asset:${url}` } }),
     };
     await buildIsland(editor);
     return store;

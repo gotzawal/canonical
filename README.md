@@ -72,7 +72,7 @@ The pieces that make this possible are already in the editor:
 - **It always plays.** A model only ever fills in values the tree reads. Without a model, or before it has downloaded, the world plays with the defaults you set.
 - **You can see every decision.** A decision log shows what each character saw, what it was asked, how sure it was and what it did.
 
-To see one, open **File > Open Example: Night Laundromat** and press **Play**. Its cat runs on a behavior tree: it naps by the heater, watches the washers turn, comes over to rub against a visitor it trusts and dashes under the bench when someone runs past. Buy a can from the vending machine and give it to the cat, and it does the OIIA spin. On the **Island**, a dog follows you around, runs off to explore and keeps popping up behind you. Ask the assistant for characters of your own, or give one a tree yourself in the **Behavior** tab of edit mode; **Help > Behavior Tree Reference** lists every node.
+To see one, open **File > Open Example: Night Laundromat** and press **Play**. Its cat runs on a behavior tree: it naps by the heater, watches the washers turn, comes over to rub against a visitor it trusts and dashes under the bench when someone runs past. Buy a can from the vending machine and give it to the cat, and it does the OIIA spin. On the **Island**, a shiba follows you around, runs off to explore and keeps popping up behind you. Ask the assistant for characters of your own, or give one a tree yourself in the **Behavior** tab of edit mode; **Help > Behavior Tree Reference** lists every node.
 
 <p align="center">
   <img src=".github/assets/behavior.webp" alt="The laundromat cat's behavior tree in edit mode: the OIIA spin when given a can, hide when someone runs close by, come over to a visitor it trusts, watch one who stands still, otherwise nap, watch the washers or look out at the rain. Its Ask service asks the model whether the cat trusts the visitor." width="100%">
@@ -150,7 +150,8 @@ Issues and pull requests are welcome. Commit messages follow the [commit convent
 
 ## Credits
 
-The Night Laundromat's cat is ["Oiiaioooooiai Cat"](https://sketchfab.com/3d-models/oiiaioooooiai-cat-30d27bf7fb224849b76e208a6eccdb36) by [Zhuier](https://sketchfab.com/Zhuier), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the example has it with a smaller texture. Its song and the can's clunk are synthesized for the example.
+- The Night Laundromat's cat is ["Oiiaioooooiai Cat"](https://sketchfab.com/3d-models/oiiaioooooiai-cat-30d27bf7fb224849b76e208a6eccdb36) by [Zhuier](https://sketchfab.com/Zhuier), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the example has it with a smaller texture. Its song and the can's clunk are synthesized for the example.
+- The Island's dog is ["Shiba"](https://sketchfab.com/3d-models/shiba-faef9fe5ace445e7b2989d1c1ece361c) by [zixisun02](https://sketchfab.com/zixisun51), licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/); the example has it lit and with a smaller texture.
 
 ## License
 
