@@ -75,7 +75,7 @@ The pieces that make this possible are already in the editor:
 To see one, open **File > Open Example: Night Laundromat** and press **Play**. Its cat runs on a behavior tree: it naps by the heater, watches the washers turn, comes over to rub against a visitor it trusts and dashes under the bench when someone runs past. Press the vending machine's button for a can, pick it up and put it down on the floor, and the cat runs for it and does the OIIA spin, turning only while its oiia sound plays. On the **Island**, a shiba follows you around, runs off to explore and keeps popping up behind you. Ask the assistant for characters of your own, or give one a tree yourself in the **Behavior** tab of edit mode; **Help > Behavior Tree Reference** lists every node.
 
 <p align="center">
-  <img src=".github/assets/behavior.webp" alt="The laundromat cat's behavior tree in edit mode: the OIIA spin when given a can, hide when someone runs close by, come over to a visitor it trusts, watch one who stands still, otherwise nap, watch the washers or look out at the rain. Its Ask service asks the model whether the cat trusts the visitor." width="100%">
+  <img src=".github/assets/behavior.webp" alt="The laundromat cat's behavior tree in edit mode: the OIIA spin once it has a can, run for a can put down on the floor, hide when someone runs close by, come over to a visitor it trusts, watch one who stands still, otherwise nap, watch the washers or look out at the rain. Its Ask service asks the model whether the cat trusts the visitor." width="100%">
 </p>
 
 The goal is a new kind of game: worlds whose people notice you, remember you and respond to you, built by one person with an AI assistant, and still directed by that person's hand.
