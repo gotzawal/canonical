@@ -46,6 +46,7 @@ const MEMBERS: [string, string][] = [
     ['this.spawn(shape, options?)', "Creates 'box', 'sphere', 'plane', 'cylinder', 'cone', 'torus', 'ramp', 'stairs' or 'capsule'. Options: position, rotation, scale, color, parent, name, body (true or body settings for a dynamic body). Spawned objects are removed when Play stops; this.spawned lists them."],
     ['this.destroy(obj?, seconds?)', 'Removes an object (this one by default), optionally after a delay.'],
     ['this.setColor(hex, obj?) / this.setEmissive(hex, intensity, obj?)', 'Changes the material of this or another object.'],
+    ['this.setCollision(on, obj?)', 'Turns the collisions of this or another object and the objects under it off, or back on. Off, characters walk through it, bodies pass through it and rays miss it, while it still shows and takes clicks: for something picked up and carried, which is in the way otherwise.'],
     ['this.lookAt(objOrPoint)', 'Turns the object toward another object or a point.'],
     ['this.after(seconds, fn) / this.every(seconds, fn)', 'Timers. Both return a function that cancels them.'],
     ['this.log / warn / error(...args)', 'Writes to the console. Click a message location to jump to the line.'],

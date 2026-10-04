@@ -332,7 +332,8 @@ export class Characters {
     private terrains = new Set<string>();
     private readonly land = (id: string | undefined) => !!id && this.terrains.has(id);
 
-    constructor(picker: Picker, private sync: SceneSync, store: Store) {
+    /** `off`: nodes whose collisions scripts turned off (this.setCollision); invalidate the rays when it changes. */
+    constructor(picker: Picker, private sync: SceneSync, store: Store, off: ReadonlySet<string> = new Set()) {
         this.terrains = new Set(sync.terrains().map((t) => t.id));
         // Triggers (physics bodies that only detect) do not stop anyone.
         const trigger = (id: string) => {
@@ -340,7 +341,7 @@ export class Characters {
             return false;
         };
         // It follows the level as scripts and physics move it (only what moved is boxed again).
-        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id) || trigger(id), { track: true });
+        this.rays = new LevelRays(picker, sync, store, (id) => this.own.has(id) || off.has(id) || trigger(id), { track: true });
     }
 
     /** Leaves these nodes out of the level (the characters' own): add all of them before the characters, so the level is collected once. */
