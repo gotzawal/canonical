@@ -366,6 +366,14 @@ export class Physics implements PhysicsApi {
         else this.moves.watch(it.obj, it);
     }
 
+    /** Turns the colliders of these objects' bodies off (nothing touches them, rays miss them) or back on; characters keep theirs. */
+    collide(objs: Set<Object3D>, on: boolean) {
+        for (const it of this.items.values()) {
+            if (it.character || !objs.has(it.obj)) continue;
+            for (let i = 0; i < it.body.numColliders(); i++) it.body.collider(i).setEnabled(on);
+        }
+    }
+
     /** Destroyed objects take their bodies with them. */
     remove(gone: Set<Object3D>) {
         for (const it of Array.from(this.items.values())) {

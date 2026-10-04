@@ -91,6 +91,7 @@ export interface PlayApi {
     spawn(owner: Script, shape: Shape, opts?: SpawnOptions): Object3D;
     destroy(owner: Script, obj: Object3D, delay?: number): void;
     setColor(obj: Object3D, color: string, emissive: boolean, intensity: number): void;
+    setCollision(obj: Object3D, on: boolean): void;
     timer(owner: Script, seconds: number, fn: () => void, repeat: boolean): () => void;
     spawned(owner: Script): Object3D[];
     blackboard(target: Object3D | string): BlackboardApi | null;
@@ -251,6 +252,16 @@ export class Script {
     /** Makes the object's meshes glow. */
     setEmissive(color: string, intensity = 1, obj?: Object3D) {
         this.api.setColor(obj ?? this.object3D, color, true, intensity);
+    }
+
+    /**
+     * Turns the collisions of the object (this one by default) and the
+     * objects under it off, or back on: off, characters walk through it,
+     * bodies pass through it and rays miss it, while it still shows and
+     * takes clicks (a thing picked up and carried along).
+     */
+    setCollision(on: boolean, obj?: Object3D) {
+        this.api.setCollision(obj ?? this.object3D, !!on);
     }
 
     /** Turns this object so its forward axis points at a position or another object (a character turns its body). */

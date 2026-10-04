@@ -117,6 +117,8 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private chats = new Set<AbortController>();
     /** The characters of this session, and the player's control of one of them. */
     private characters: Characters | null = null;
+    /** Nodes whose collisions scripts turned off (this.setCollision): out of the level the characters walk. */
+    private noCollision = new Set<string>();
     /** The physics world of the session (play/physics.ts). */
     private world: Physics | null = null;
     /** The animated models of the session (play/animation.ts). */
@@ -283,6 +285,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         }
         this.spawnedAll.clear();
         this.sync.detached.clear();
+        this.noCollision.clear();
         const checkpoint = this.checkpointState;
         this.checkpointState = null;
         // Code written while playing (Apply in the code panel, the assistant) is
@@ -371,7 +374,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
     private setupCharacters() {
         const nodes = this.store.doc.nodes.filter((n) => n.character && this.sync.entries.get(n.id)?.visible && !this.sync.detached.has(n.id));
         if (!nodes.length) return;
-        const chars = (this.characters = new Characters(this.picker, this.sync, this.store));
+        const chars = (this.characters = new Characters(this.picker, this.sync, this.store, this.noCollision));
         const own = nodes.map((n) => [n.id, ...this.store.descendants(n.id).map((d) => d.id)]);
         // Every character's own nodes leave the level before the first is placed: the level is collected once.
         chars.exclude(own.flat());
@@ -881,6 +884,26 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
         visit(obj);
     }
 
+    setCollision(obj: Object3D, on: boolean) {
+        if (!obj) return;
+        // A document object and the nodes under it leave the level the characters walk and agents see, or come back.
+        const id = this.sync.nodeIdOf(obj);
+        if (id && this.sync.entries.get(id)?.obj === obj) {
+            const ids = [id, ...this.store.descendants(id).map((d) => d.id)];
+            if (ids.some((n) => this.noCollision.has(n) === on)) {
+                for (const n of ids) {
+                    if (on) this.noCollision.delete(n);
+                    else this.noCollision.add(n);
+                }
+                this.characters?.rays.invalidate();
+            }
+        }
+        // Bodies under it (the level's meshes have fixed ones) stop touching anything, or touch again.
+        const objs = new Set<Object3D>();
+        obj.traverse((o: Object3D) => objs.add(o));
+        this.world?.collide(objs, on);
+    }
+
     // ------------------------------------------------------------ agents
 
     doc() {
@@ -988,7 +1011,7 @@ export class Player extends Emitter<PlayerEvents> implements PlayApi, AgentHost 
 
     castLevel(origin: Vec3, dir: Vec3, max: number, own: Set<string>): number | null {
         // Without characters the senses get the level on their own (it follows what moves).
-        this.characters ??= new Characters(this.picker, this.sync, this.store);
+        this.characters ??= new Characters(this.picker, this.sync, this.store, this.noCollision);
         return this.characters.rays.cast(origin, dir, max, (id) => own.has(id))?.distance ?? null;
     }
 
